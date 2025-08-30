@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.2
+ * Version: 1.0.7
  */
 
 // Import Lit from CDN for standalone usage
@@ -12,13 +12,17 @@ class MediaCard extends LitElement {
     hass: { attribute: false },
     config: { attribute: false },
     _mediaUrl: { state: true },
-    _mediaType: { state: true }
+    _mediaType: { state: true },
+    _lastModified: { state: true },
+    _refreshInterval: { state: true }
   };
 
   constructor() {
     super();
     this._mediaUrl = '';
     this._mediaType = 'image';
+    this._lastModified = null;
+    this._refreshInterval = null;
   }
 
   static styles = css`
@@ -34,8 +38,11 @@ class MediaCard extends LitElement {
       overflow: hidden;
     }
     
-    .media-container {
-      position: relative;
+    .media-containeconsole.info(
+  '%c  MEDIA-CARD  %c  1.0.7  ',
+  'color: orange; font-weight: bold; background: black',
+  'color: white; font-weight: bold; background: dimgray'
+);     position: relative;
       width: 100%;
       border-radius: 8px;
       overflow: hidden;
@@ -91,6 +98,26 @@ class MediaCard extends LitElement {
       font-size: 0.85em;
       color: var(--secondary-text-color);
     }
+
+    .refresh-button {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background 0.2s;
+      z-index: 10;
+    }
+
+    .refresh-button:hover {
+      background: rgba(0, 0, 0, 0.9);
+    }
   `;
 
   setConfig(config) {
@@ -98,9 +125,154 @@ class MediaCard extends LitElement {
       throw new Error('Invalid configuration');
     }
     
+    const oldConfig = this.config;
     this.config = config;
     this._mediaUrl = ''; // Reset URL, will be resolved in updated()
     this._mediaType = config.media_type || 'image';
+    
+    // Set up auto-refresh if config changed
+    if (!oldConfig || oldConfig.auto_refresh_seconds !== config.auto_refresh_seconds) {
+      this._setupAutoRefresh();
+    }
+  }
+
+  _setupAutoRefresh() {
+    // Clear any existing interval
+    if (this._refreshInterval) {
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
+
+    // Set up auto-refresh if enabled in config
+    const refreshSeconds = this.config?.auto_refresh_seconds;
+    if (refreshSeconds && refreshSeconds > 0) {
+      console.log(`Setting up auto-refresh every ${refreshSeconds} seconds`);
+      this._refreshInterval = setInterval(() => {
+        console.log('Auto-refresh timer triggered');
+        this._checkForMediaUpdates();
+      }, refreshSeconds * 1000);
+    } else {
+      console.log('Auto-refresh disabled or not configured');
+    }
+  }
+
+  async _checkForMediaUpdates() {
+    if (!this.config?.media_path) {
+      console.log('No media path configured for auto-refresh');
+      return;
+    }
+    
+    console.log('Checking for media updates...', this.config.media_path);
+    
+    try {
+      // For media-source URLs, always get a fresh resolved URL
+      if (this.config.media_path.startsWith('media-source://')) {
+        console.log('Media-source URL detected, getting fresh resolved URL');
+        const freshUrl = await this._resolveMediaPath(this.config.media_path);
+        if (freshUrl && freshUrl !== this._mediaUrl) {
+          console.log('Got fresh media URL:', freshUrl);
+          this._mediaUrl = freshUrl;
+          this._forceMediaReload();
+        } else if (freshUrl) {
+          console.log('URL unchanged, forcing reload anyway for media-source');
+          this._forceMediaReload();
+        }
+        return;
+      }
+
+      // For direct URLs (/local/, /media/, etc.), check Last-Modified header
+      const checkUrl = this.config.media_path.startsWith('/') ? this.config.media_path : this._mediaUrl;
+      if (checkUrl) {
+        console.log('Checking Last-Modified for:', checkUrl);
+        const baseCheckUrl = checkUrl.split('?')[0]; // Remove any existing timestamp
+        
+        const response = await fetch(baseCheckUrl, { 
+          method: 'HEAD',
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache'
+          }
+        });
+        
+        if (response.ok) {
+          const lastModified = response.headers.get('Last-Modified');
+          console.log('Last-Modified check - Current:', lastModified, 'Stored:', this._lastModified);
+          
+          if (!this._lastModified) {
+            // First time checking, store the timestamp
+            this._lastModified = lastModified;
+            console.log('Stored initial Last-Modified timestamp');
+          } else if (lastModified && lastModified !== this._lastModified) {
+            console.log('Media file modified, reloading!');
+            this._lastModified = lastModified;
+            this._forceMediaReload();
+          } else {
+            console.log('No changes detected');
+          }
+        } else {
+          console.log('HEAD request failed:', response.status, response.statusText);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking for media updates:', error);
+    }
+  }
+
+  _forceMediaReload() {
+    if (!this._mediaUrl) {
+      console.log('No media URL to reload');
+      return;
+    }
+    
+    console.log('Force reloading media:', this._mediaUrl);
+    
+    // For media-source URLs, we should have already gotten a fresh URL
+    // For direct URLs, we can use cache-busting
+    const useUrl = this.config?.media_path?.startsWith('media-source://') 
+      ? this._mediaUrl  // Use the fresh resolved URL as-is
+      : `${this._mediaUrl.split('?')[0]}?_refresh=${Date.now()}`; // Add cache-busting for direct URLs
+    
+    console.log('Using URL for reload:', useUrl);
+    
+    // For images, update src directly
+    if (this._mediaType === 'image') {
+      const img = this.shadowRoot?.querySelector('img');
+      if (img) {
+        console.log('Refreshing image element');
+        img.src = useUrl;
+        // Don't update this._mediaUrl for media-source URLs since they're already fresh
+        if (!this.config?.media_path?.startsWith('media-source://')) {
+          this._mediaUrl = useUrl;
+        }
+      }
+    } else if (this._mediaType === 'video') {
+      const video = this.shadowRoot?.querySelector('video');
+      if (video) {
+        console.log('Refreshing video element');
+        
+        // Store current playback state
+        const currentTime = video.currentTime;
+        const wasPaused = video.paused;
+        
+        // Reload video with fresh URL
+        video.src = useUrl;
+        video.load();
+        
+        // Don't update this._mediaUrl for media-source URLs since they're already fresh
+        if (!this.config?.media_path?.startsWith('media-source://')) {
+          this._mediaUrl = useUrl;
+        }
+        
+        // Restore playback state if needed
+        if (!wasPaused && this.config.video_autoplay) {
+          video.addEventListener('loadedmetadata', () => {
+            video.currentTime = currentTime;
+            video.play().catch(() => {}); // Ignore autoplay errors
+          }, { once: true });
+        }
+      }
+    }
   }
 
   _fetchMediaItem(hass, mediaItemPath) {
@@ -143,9 +315,68 @@ class MediaCard extends LitElement {
         
         <div class="media-container">
           ${this._renderMedia()}
+          ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
         </div>
       </div>
     `;
+  }
+
+  _renderRefreshButton() {
+    return html`
+      <button 
+        class="refresh-button" 
+        @click=${this._manualRefresh}
+        title="Refresh media"
+      >
+        🔄
+      </button>
+    `;
+  }
+
+  async _manualRefresh() {
+    console.log('Manual refresh triggered');
+    
+    // For media-source URLs, get a fresh resolved URL first
+    if (this.config?.media_path?.startsWith('media-source://')) {
+      console.log('Getting fresh media-source URL for manual refresh');
+      const freshUrl = await this._resolveMediaPath(this.config.media_path);
+      if (freshUrl) {
+        this._mediaUrl = freshUrl;
+      }
+    }
+    
+    // Then force reload the media
+    this._forceMediaReload();
+  }
+
+  async _resolveAndUpdate() {
+    console.log('Re-resolving media path:', this.config.media_path);
+    try {
+      let freshUrl = '';
+      
+      // Handle different path types
+      if (this.config.media_path.startsWith('media-source://')) {
+        freshUrl = await this._resolveMediaPath(this.config.media_path);
+      } else if (this.config.media_path.startsWith('/')) {
+        // For direct paths, use them as-is
+        freshUrl = this.config.media_path;
+      }
+      
+      if (freshUrl) {
+        console.log('Got fresh URL:', freshUrl);
+        this._mediaUrl = freshUrl;
+        this.requestUpdate();
+        
+        // Force reload the media element
+        setTimeout(() => {
+          this._forceMediaReload();
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Failed to refresh media:', error);
+      // Fallback to simple reload
+      this._forceMediaReload();
+    }
   }
 
   _renderMedia() {
@@ -231,9 +462,12 @@ class MediaCard extends LitElement {
     // Resolve media URL when config changes or hass becomes available
     if ((changedProps.has('config') || changedProps.has('hass')) && this.config?.media_path) {
       const resolvedUrl = await this._resolveMediaPath(this.config.media_path);
-      if (resolvedUrl !== this._mediaUrl) {
+      if (resolvedUrl && resolvedUrl !== this._mediaUrl) {
         this._mediaUrl = resolvedUrl;
         this.requestUpdate();
+        
+        // Get initial last-modified timestamp
+        this._getInitialTimestamp();
       }
     }
     
@@ -243,6 +477,24 @@ class MediaCard extends LitElement {
       if (!isValid) {
         console.warn('Media file may not be accessible:', this._mediaUrl);
       }
+    }
+  }
+
+  async _getInitialTimestamp() {
+    try {
+      const checkUrl = this._mediaUrl || this.config.media_path;
+      if (checkUrl) {
+        const response = await fetch(checkUrl, { 
+          method: 'HEAD',
+          cache: 'no-cache'
+        });
+        
+        if (response.ok) {
+          this._lastModified = response.headers.get('Last-Modified');
+        }
+      }
+    } catch (error) {
+      console.log('Could not get initial timestamp:', error);
     }
   }
 
@@ -300,6 +552,15 @@ class MediaCard extends LitElement {
         }
       }
     }, 100);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // Clean up the refresh interval when component is removed
+    if (this._refreshInterval) {
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
   }
 
   _fireConfigChanged() {
@@ -506,6 +767,34 @@ class MediaCardEditor extends LitElement {
             ${this._renderValidationStatus()}
           </div>
         </div>
+
+        <div class="config-row">
+          <label>Auto Refresh</label>
+          <div>
+            <input
+              type="number"
+              .value=${this._config.auto_refresh_seconds || ''}
+              @input=${this._autoRefreshChanged}
+              placeholder="0"
+              min="0"
+              max="3600"
+              step="1"
+            />
+            <div class="help-text">Automatically check for media updates every N seconds (0 = disabled)</div>
+          </div>
+        </div>
+
+        <div class="config-row">
+          <label>Refresh Button</label>
+          <div>
+            <input
+              type="checkbox"
+              .checked=${this._config.show_refresh_button || false}
+              @change=${this._refreshButtonChanged}
+            />
+            <div class="help-text">Show manual refresh button on the card</div>
+          </div>
+        </div>
         
         ${this._config.media_type === 'video' ? html`
           <div class="section">
@@ -660,6 +949,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _autoRefreshChanged(ev) {
+    const seconds = parseInt(ev.target.value) || 0;
+    this._config = { ...this._config, auto_refresh_seconds: seconds };
+    this._fireConfigChanged();
+  }
+
+  _refreshButtonChanged(ev) {
+    this._config = { ...this._config, show_refresh_button: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
   _fireConfigChanged() {
     const event = new CustomEvent('config-changed', {
       detail: { config: this._config },
@@ -678,14 +978,14 @@ customElements.define('media-card-editor', MediaCardEditor);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'media-card',
-  name: 'Media Card v1.0.2',
-  description: 'Display images and videos with GUI media browser',
+  name: 'Media Card v1.0.7',
+  description: 'Display images and videos with GUI media browser and auto-refresh',
   preview: true,
   documentationURL: 'https://github.com/your-username/ha-media-card'
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.2  ',
+  '%c  MEDIA-CARD  %c  1.0.7  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
