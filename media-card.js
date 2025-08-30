@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.7
+ * Version: 1.0.19
  */
 
 // Import Lit from CDN for standalone usage
@@ -23,6 +23,7 @@ class MediaCard extends LitElement {
     this._mediaType = 'image';
     this._lastModified = null;
     this._refreshInterval = null;
+    this._mediaLoadedLogged = false;
   }
 
   static styles = css`
@@ -38,11 +39,8 @@ class MediaCard extends LitElement {
       overflow: hidden;
     }
     
-    .media-containeconsole.info(
-  '%c  MEDIA-CARD  %c  1.0.7  ',
-  'color: orange; font-weight: bold; background: black',
-  'color: white; font-weight: bold; background: dimgray'
-);     position: relative;
+    .media-container {
+      position: relative;
       width: 100%;
       border-radius: 8px;
       overflow: hidden;
@@ -129,6 +127,7 @@ class MediaCard extends LitElement {
     this.config = config;
     this._mediaUrl = ''; // Reset URL, will be resolved in updated()
     this._mediaType = config.media_type || 'image';
+    this._mediaLoadedLogged = false; // Reset logging flag for new config
     
     // Set up auto-refresh if config changed
     if (!oldConfig || oldConfig.auto_refresh_seconds !== config.auto_refresh_seconds) {
@@ -268,7 +267,18 @@ class MediaCard extends LitElement {
         if (!wasPaused && this.config.video_autoplay) {
           video.addEventListener('loadedmetadata', () => {
             video.currentTime = currentTime;
+            // Ensure muted state is preserved during reload
+            if (this.config.video_muted) {
+              video.muted = true;
+            }
             video.play().catch(() => {}); // Ignore autoplay errors
+          }, { once: true });
+        } else {
+          // Just ensure muted state is preserved even if not autoplaying
+          video.addEventListener('loadedmetadata', () => {
+            if (this.config.video_muted) {
+              video.muted = true;
+            }
           }, { once: true });
         }
       }
@@ -383,10 +393,10 @@ class MediaCard extends LitElement {
     if (!this._mediaUrl) {
       return html`
         <div class="placeholder">
-          <div style="font-size: 48px; margin-bottom: 16px;">📁</div>
-          <div>No media selected</div>
-          <div style="font-size: 0.85em; margin-top: 8px; opacity: 0.7;">
-            Configure this card to select a media file
+          <div style="font-size: 64px; margin-bottom: 24px; opacity: 0.3;">🎬</div>
+          <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">No Media Selected</div>
+          <div style="font-size: 0.9em; opacity: 0.8; line-height: 1.4;">
+            Click the configure button below to select an image or video
           </div>
         </div>
       `;
@@ -406,6 +416,7 @@ class MediaCard extends LitElement {
           @loadeddata=${this._onMediaLoaded}
           @error=${this._onMediaError}
           @canplay=${this._onVideoCanPlay}
+          @loadedmetadata=${this._onVideoLoadedMetadata}
           style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
         >
           <source src="${this._mediaUrl}" type="video/mp4">
@@ -429,6 +440,11 @@ class MediaCard extends LitElement {
   }
 
   _renderVideoInfo() {
+    // Check if we should hide video controls display
+    if (this.config.hide_video_controls_display) {
+      return '';
+    }
+    
     const options = [];
     if (this.config.video_autoplay) options.push('Autoplay');
     if (this.config.video_loop) options.push('Loop');
@@ -506,8 +522,26 @@ class MediaCard extends LitElement {
     console.log('Video can start playing:', this._mediaUrl);
   }
 
+  _onVideoLoadedMetadata() {
+    const video = this.shadowRoot?.querySelector('video');
+    if (video && this.config.video_muted) {
+      // Ensure video is actually muted and the mute icon is visible
+      video.muted = true;
+      // Force the video controls to update by toggling muted state
+      setTimeout(() => {
+        video.muted = false;
+        video.muted = true;
+      }, 50);
+      console.log('Video muted state applied:', video.muted);
+    }
+  }
+
   _onMediaLoaded() {
-    console.log('Media loaded successfully:', this._mediaUrl);
+    // Only log once when media initially loads, not during auto-refresh cycles
+    if (!this._mediaLoadedLogged) {
+      console.log('Media loaded successfully:', this._mediaUrl);
+      this._mediaLoadedLogged = true;
+    }
     // Clear any previous error states
     this.requestUpdate();
   }
@@ -586,8 +620,8 @@ class MediaCard extends LitElement {
     return {
       type: 'custom:media-card',
       media_type: 'image',
-      media_path: '/local/images/example.jpg',
-      title: 'Media Card'
+      media_path: '',
+      title: 'My Media'
     };
   }
 }
@@ -835,6 +869,18 @@ class MediaCardEditor extends LitElement {
                 <div class="help-text">Start video without sound</div>
               </div>
             </div>
+            
+            <div class="config-row">
+              <label>Hide Options Display</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.hide_video_controls_display || false}
+                  @change=${this._hideVideoControlsDisplayChanged}
+                />
+                <div class="help-text">Hide the "Video options: ..." text below the video</div>
+              </div>
+            </div>
           </div>
         ` : ''}
       </div>
@@ -844,10 +890,9 @@ class MediaCardEditor extends LitElement {
   _renderValidationStatus() {
     if (!this._config.media_path) return '';
     
-    // Updated validation for media-source format
-    if (this._config.media_path.startsWith('media-source://media_source/local/') || 
-        this._config.media_path.startsWith('/local/') || 
-        this._config.media_path.startsWith('/media/')) {
+    // More flexible validation - just check if it starts with media-source:// or /
+    if (this._config.media_path.startsWith('media-source://') || 
+        this._config.media_path.startsWith('/')) {
       return html`
         <div class="validation-status validation-success">
           ✅ Valid media path format
@@ -856,7 +901,7 @@ class MediaCardEditor extends LitElement {
     } else {
       return html`
         <div class="validation-status validation-error">
-          ❌ Path should start with media-source://media_source/local/ or /local/
+          ❌ Path should start with media-source:// or /
         </div>
       `;
     }
@@ -877,8 +922,29 @@ class MediaCardEditor extends LitElement {
 
     console.log('Opening media browser...');
     
-    // For now, use a simple prompt with helpful guidance
-    // This ensures the card is functional while we work on proper media browser integration
+    try {
+      // Try to use the native Home Assistant media browser dialog
+      const pickedMedia = await this._showMediaBrowserDialog();
+      if (pickedMedia) {
+        this._handleMediaPicked(pickedMedia.media_content_id);
+        return;
+      }
+    } catch (error) {
+      console.log('Native media browser not available, using fallback:', error);
+    }
+    
+    // Fallback: Try to browse media and create our own simple dialog
+    try {
+      const mediaContent = await this._fetchMediaContents(this.hass, '');
+      if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
+        this._showCustomMediaBrowser(mediaContent);
+        return;
+      }
+    } catch (error) {
+      console.log('Could not fetch media contents, using prompt fallback:', error);
+    }
+    
+    // Final fallback: use a simple prompt with helpful guidance
     const currentPath = this._config.media_path || '';
     
     const helpText = `Enter the path to your media file:
@@ -900,6 +966,368 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     } else {
       console.log('No media path entered');
     }
+  }
+
+  async _showMediaBrowserDialog() {
+    return new Promise((resolve, reject) => {
+      // Try to use Home Assistant's native media browser
+      const event = new CustomEvent('show-dialog', {
+        detail: {
+          dialogTag: 'dialog-media-browser',
+          dialogImport: () => import('./dialogs/dialog-media-browser'),
+          dialogParams: {
+            action: 'play',
+            entityId: undefined,
+            mediaContentId: '',
+            mediaContentType: 'app',
+            navigateIds: [],
+            currentItem: undefined,
+            prefer_item_labels: false,
+            restrict: undefined,
+          },
+        },
+        bubbles: true,
+        composed: true,
+      });
+
+      // Listen for the result
+      const mediaPickedHandler = (e) => {
+        if (e.detail && e.detail.media_content_id) {
+          document.removeEventListener('media-picked', mediaPickedHandler);
+          resolve(e.detail);
+        }
+      };
+
+      const dialogClosedHandler = (e) => {
+        document.removeEventListener('dialog-closed', dialogClosedHandler);
+        document.removeEventListener('media-picked', mediaPickedHandler);
+        reject(new Error('Dialog closed without selection'));
+      };
+
+      document.addEventListener('media-picked', mediaPickedHandler);
+      document.addEventListener('dialog-closed', dialogClosedHandler);
+
+      // Dispatch the event
+      this.dispatchEvent(event);
+
+      // Timeout after 1 second if no dialog appears
+      setTimeout(() => {
+        document.removeEventListener('media-picked', mediaPickedHandler);
+        document.removeEventListener('dialog-closed', dialogClosedHandler);
+        reject(new Error('Native dialog timeout'));
+      }, 1000);
+    });
+  }
+
+  _showCustomMediaBrowser(mediaContent) {
+    console.log('Creating custom media browser with', mediaContent.children.length, 'items');
+    
+    // Force remove any existing dialogs first
+    const existingDialogs = document.querySelectorAll('[data-media-browser-dialog="true"]');
+    existingDialogs.forEach(d => d.remove());
+    
+    // Create a custom dialog element with proper event isolation
+    const dialog = document.createElement('div');
+    dialog.setAttribute('data-media-browser-dialog', 'true');
+    
+    // Remove any inert attributes and force interactive state
+    dialog.removeAttribute('inert');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('role', 'dialog');
+    
+    dialog.style.cssText = `
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      background: rgba(0, 0, 0, 0.9) !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      z-index: 2147483647 !important;
+      backdrop-filter: blur(3px) !important;
+      font-family: system-ui, -apple-system, sans-serif !important;
+      pointer-events: auto !important;
+    `;
+
+    const dialogContent = document.createElement('div');
+    dialogContent.setAttribute('aria-labelledby', 'media-browser-title');
+    dialogContent.style.cssText = `
+      background: var(--card-background-color, #fff) !important;
+      border-radius: 8px !important;
+      padding: 20px !important;
+      max-width: 600px !important;
+      max-height: 80vh !important;
+      overflow-y: auto !important;
+      color: var(--primary-text-color, #333) !important;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+      position: relative !important;
+      margin: 20px !important;
+      pointer-events: auto !important;
+      transform: scale(1) !important;
+    `;
+
+    const title = document.createElement('h3');
+    title.id = 'media-browser-title';
+    title.textContent = 'Select Media File';
+    title.style.cssText = `
+      margin-top: 0 !important;
+      margin-bottom: 16px !important;
+      color: var(--primary-text-color, #333) !important;
+      border-bottom: 1px solid var(--divider-color, #ddd) !important;
+      padding-bottom: 8px !important;
+      font-size: 18px !important;
+      pointer-events: none !important;
+    `;
+
+    const fileList = document.createElement('div');
+    fileList.style.cssText = `
+      display: grid !important;
+      gap: 8px !important;
+      margin: 16px 0 !important;
+      max-height: 400px !important;
+      overflow-y: auto !important;
+      pointer-events: auto !important;
+    `;
+
+    // Add media files to the list
+    this._addMediaFilesToBrowser(fileList, mediaContent, dialog);
+
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = `
+      display: flex !important;
+      justify-content: flex-end !important;
+      gap: 8px !important;
+      margin-top: 16px !important;
+      border-top: 1px solid var(--divider-color, #ddd) !important;
+      padding-top: 16px !important;
+      pointer-events: auto !important;
+    `;
+
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Cancel';
+    closeButton.style.cssText = `
+      padding: 8px 16px !important;
+      background: var(--primary-color, #007bff) !important;
+      border: none !important;
+      border-radius: 4px !important;
+      cursor: pointer !important;
+      color: white !important;
+      font-size: 14px !important;
+      pointer-events: auto !important;
+      z-index: 999999999 !important;
+    `;
+
+    // Dialog close function with debugging
+    const closeDialog = () => {
+      console.log('Closing media browser dialog');
+      if (dialog && dialog.parentNode) {
+        document.body.removeChild(dialog);
+        console.log('Dialog closed successfully');
+      }
+    };
+
+    // Close button handler with debugging and force event handling
+    closeButton.onclick = (e) => {
+      console.log('Cancel button clicked via onclick');
+      closeDialog();
+      return false;
+    };
+
+    // Backdrop click handler - use onclick to force event handling
+    dialog.onclick = (e) => {
+      console.log('Dialog backdrop clicked via onclick', e.target === dialog);
+      if (e.target === dialog) {
+        closeDialog();
+      }
+    };
+
+    // Escape key to close
+    const handleKeydown = (e) => {
+      if (e.key === 'Escape') {
+        console.log('Escape key pressed');
+        closeDialog();
+        document.removeEventListener('keydown', handleKeydown);
+      }
+    };
+    document.addEventListener('keydown', handleKeydown);
+
+    buttonContainer.appendChild(closeButton);
+    dialogContent.appendChild(title);
+    dialogContent.appendChild(fileList);
+    dialogContent.appendChild(buttonContainer);
+    dialog.appendChild(dialogContent);
+    
+    console.log('Appending dialog to document.body');
+    document.body.appendChild(dialog);
+    
+    // Force focus, remove inert, and log status
+    requestAnimationFrame(() => {
+      // Force remove inert state from all elements
+      dialog.removeAttribute('inert');
+      dialogContent.removeAttribute('inert');
+      document.querySelectorAll('[inert]').forEach(el => el.removeAttribute('inert'));
+      
+      dialog.focus();
+      dialog.setAttribute('tabindex', '0');
+      
+      console.log('Media browser dialog opened and focused');
+      console.log('Dialog element:', dialog);
+      console.log('Dialog inert?', dialog.hasAttribute('inert'));
+      console.log('Dialog position:', dialog.getBoundingClientRect());
+      console.log('Dialog z-index:', window.getComputedStyle(dialog).zIndex);
+      console.log('Dialog pointer-events:', window.getComputedStyle(dialog).pointerEvents);
+    });
+  }
+
+  async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
+    console.log('Adding media files to browser:', mediaContent.children.length, 'items');
+    
+    for (const item of mediaContent.children || []) {
+      const fileItem = document.createElement('div');
+      fileItem.style.cssText = `
+        padding: 12px 16px !important;
+        border: 1px solid var(--divider-color, #ddd) !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        transition: all 0.2s ease !important;
+        background: var(--card-background-color, #fff) !important;
+        user-select: none !important;
+        position: relative !important;
+        pointer-events: auto !important;
+        z-index: 999999999 !important;
+      `;
+
+      // Use onmouseenter/onmouseleave instead of addEventListener
+      fileItem.onmouseenter = (e) => {
+        console.log('Mouse entered item:', item.title);
+        fileItem.style.background = 'var(--secondary-background-color, #f5f5f5)';
+        fileItem.style.borderColor = 'var(--primary-color, #007bff)';
+        fileItem.style.transform = 'translateY(-1px)';
+        fileItem.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.1)';
+      };
+
+      fileItem.onmouseleave = (e) => {
+        console.log('Mouse left item:', item.title);
+        fileItem.style.background = 'var(--card-background-color, #fff)';
+        fileItem.style.borderColor = 'var(--divider-color, #ddd)';
+        fileItem.style.transform = 'translateY(0)';
+        fileItem.style.boxShadow = 'none';
+      };
+
+      const icon = document.createElement('span');
+      icon.style.cssText = `
+        font-size: 24px !important;
+        flex-shrink: 0 !important;
+        user-select: none !important;
+        pointer-events: none !important;
+      `;
+      
+      const name = document.createElement('span');
+      name.textContent = item.title || item.media_content_id;
+      name.style.cssText = `
+        flex: 1 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        user-select: none !important;
+        pointer-events: none !important;
+        color: var(--primary-text-color, #333) !important;
+      `;
+
+      if (item.can_expand) {
+        // This is a folder
+        icon.textContent = '📁';
+        // Use onclick instead of addEventListener
+        fileItem.onclick = async (e) => {
+          console.log('FOLDER CLICKED VIA ONCLICK:', item.media_content_id);
+          
+          try {
+            const subContent = await this._fetchMediaContents(this.hass, item.media_content_id);
+            container.innerHTML = '';
+            
+            // Add back button
+            const backButton = document.createElement('div');
+            backButton.style.cssText = `
+              padding: 12px 16px !important;
+              border: 1px solid var(--divider-color, #ddd) !important;
+              border-radius: 6px !important;
+              cursor: pointer !important;
+              display: flex !important;
+              align-items: center !important;
+              gap: 12px !important;
+              transition: all 0.2s ease !important;
+              background: var(--secondary-background-color, #f5f5f5) !important;
+              margin-bottom: 8px !important;
+              user-select: none !important;
+              pointer-events: auto !important;
+              z-index: 999999999 !important;
+            `;
+            
+            backButton.innerHTML = '<span style="font-size: 24px; pointer-events: none;">⬅️</span><span style="font-weight: 500; pointer-events: none; color: var(--primary-text-color, #333);">Back</span>';
+            
+            // Use onclick for back button too
+            backButton.onclick = (e) => {
+              console.log('BACK BUTTON CLICKED VIA ONCLICK');
+              container.innerHTML = '';
+              this._addMediaFilesToBrowser(container, mediaContent, dialog, currentPath);
+              return false;
+            };
+
+            backButton.onmouseenter = () => {
+              backButton.style.background = 'var(--primary-color, #007bff)';
+              backButton.style.color = 'white';
+              backButton.style.transform = 'translateY(-1px)';
+            };
+
+            backButton.onmouseleave = () => {
+              backButton.style.background = 'var(--secondary-background-color, #f5f5f5)';
+              backButton.style.color = 'var(--primary-text-color, #333)';
+              backButton.style.transform = 'translateY(0)';
+            };
+            
+            container.appendChild(backButton);
+            this._addMediaFilesToBrowser(container, subContent, dialog, item.media_content_id);
+          } catch (error) {
+            console.error('Error browsing folder:', error);
+          }
+          return false;
+        };
+      } else {
+        // This is a media file
+        const ext = item.media_content_id.split('.').pop()?.toLowerCase();
+        if (['mp4', 'webm', 'ogg', 'avi', 'mov'].includes(ext)) {
+          icon.textContent = '🎬';
+        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+          icon.textContent = '🖼️';
+        } else {
+          icon.textContent = '📄';
+        }
+
+        // Use onclick for file selection
+        fileItem.onclick = (e) => {
+          console.log('FILE CLICKED VIA ONCLICK:', item.media_content_id);
+          
+          this._handleMediaPicked(item.media_content_id);
+          // Close the dialog
+          if (dialog && dialog.parentNode) {
+            console.log('Closing dialog after file selection');
+            document.body.removeChild(dialog);
+          }
+          return false;
+        };
+      }
+
+      fileItem.appendChild(icon);
+      fileItem.appendChild(name);
+      container.appendChild(fileItem);
+    }
+    
+    console.log('Added all items to browser container');
   }
 
   _handleMediaPicked(mediaContentId) {
@@ -960,6 +1388,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _hideVideoControlsDisplayChanged(ev) {
+    this._config = { ...this._config, hide_video_controls_display: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
   _fireConfigChanged() {
     const event = new CustomEvent('config-changed', {
       detail: { config: this._config },
@@ -978,14 +1411,14 @@ customElements.define('media-card-editor', MediaCardEditor);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'media-card',
-  name: 'Media Card v1.0.7',
+  name: 'Media Card',
   description: 'Display images and videos with GUI media browser and auto-refresh',
   preview: true,
-  documentationURL: 'https://github.com/your-username/ha-media-card'
+  documentationURL: 'https://github.com/markaggar/ha-media-card'
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.7  ',
+  '%c  MEDIA-CARD  %c  1.0.19  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

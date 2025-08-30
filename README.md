@@ -1,181 +1,227 @@
 # Home Assistant Media Card
 
-A custom Home Assistant Lovelace card that displays images and MP4 videos from the media folder with a GUI editor for file selection.
+A custom Home Assistant Lovelace card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots, dashcam footage, family photos, or any media files stored in your Home Assistant media folder.
 
-## Features
+![Media Card Example](https://via.placeholder.com/600x300/1f1f1f/ffffff?text=Media+Card+Demo)
 
-- �� Display images (JPG, PNG, GIF, etc.) from Home Assistant media folder
-- 🎬 Play MP4 videos with full controls (play, pause, seek, volume)
-- 🎛️ GUI editor for easy media file selection and browsing
-- 🎨 Responsive design that adapts to different screen sizes
-- ⚙️ Video options: autoplay, loop, muted
-- 📱 Touch-friendly interface
-- 🏠 Full Home Assistant theme integration
+## ✨ Features
 
-## Installation
+### 🎬 **Media Display**
+- **Images**: JPG, PNG, GIF, WebP, SVG, BMP
+- **Videos**: MP4, WebM, OGG with full HTML5 controls
+- Responsive design that adapts to container size
+- Theme-aware styling (light/dark mode support)
 
-### HACS (Recommended)
-1. Go to HACS in your Home Assistant
-2. Click on "Frontend" 
-3. Click the "+" button in the bottom right
-4. Search for "Media Card"
-5. Install the card
-6. Add the resource to your Lovelace configuration (see below)
+### 📁 **Built-in Media Browser** 
+- **GUI file selection** - No more typing file paths!
+- Browse through your Home Assistant media folders
+- Navigate subfolders with intuitive back/forward navigation
+- File type icons (🎬 for videos, 🖼️ for images, 📁 for folders)
+- **Auto-detection** of media type based on file extension
 
-### Manual Installation
-1. Download `media-card.js` from the latest release
-2. Copy it to your `www` folder in Home Assistant config directory
-3. Add the resource to your Lovelace configuration:
+### 🔄 **Auto-Refresh System**
+- **Automatic updates** - Monitor files for changes every N seconds
+- **Smart caching** - Uses Last-Modified headers for efficient updates
+- **Manual refresh button** - Force immediate reload when needed
+- **Media-source URL support** - Works with Home Assistant's authenticated media URLs
 
-```yaml
-resources:
-  - url: /local/media-card.js
-    type: module
-```
+### 🎮 **Video Controls**
+- **Autoplay** - Start playing automatically
+- **Loop** - Continuous playbook 
+- **Muted** - Start without sound
+- **Hide controls display** - Clean presentation mode
 
-Or via UI: Settings -> Dashboards -> Resources -> Add Resource
+### 🎨 **Customization**
+- **Custom titles** for your media cards
+- **Flexible path formats** - Support for both direct paths and media-source URLs
+- **Theme integration** - Seamlessly matches your Home Assistant theme
 
-## Configuration
+## 📥 Installation
 
-### Basic Configuration
+### Method 1: Manual Installation
+
+1. **Download the card file**:
+   ```bash
+   wget https://github.com/your-username/ha-media-card/releases/latest/download/media-card.js
+   ```
+
+2. **Copy to your Home Assistant**:
+   - Place `media-card.js` in `/config/www/` or `/config/www/cards/`
+
+3. **Add to Lovelace resources**:
+   - Go to **Settings** → **Dashboards** → **Resources**
+   - Click **Add Resource**
+   - **URL**: `/local/media-card.js` (or `/local/cards/media-card.js`)
+   - **Resource Type**: `JavaScript Module`
+   - Click **Create**
+
+4. **Add the card to your dashboard**:
+   - Edit your dashboard
+   - Click **Add Card** → **Manual Card**
+   - Add the YAML configuration (see examples below)
+
+### Method 2: HACS (Community Store)
+
+> **Note**: This card is not yet available in HACS. Manual installation required for now.
+
+## 🚀 Quick Start
+
+Add this basic configuration to get started:
+
 ```yaml
 type: custom:media-card
+title: "Security Camera"
 media_type: image
-media_path: /local/images/sunset.jpg
-title: "Beautiful Sunset"
+media_path: media-source://media_source/local/cameras/front_door.jpg
 ```
-
-### Video Configuration
-```yaml
-type: custom:media-card
-media_type: video
-media_path: /local/videos/family-vacation.mp4
-title: "Family Vacation"
-video_autoplay: false
-video_loop: true
-video_muted: false
-```
-
-### Configuration Options
+## ⚙️ Configuration Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `type` | string | **Required** | Must be `custom:media-card` |
-| `media_type` | string | `image` | Type of media: `image` or `video` |
-| `media_path` | string | | Path to the media file (e.g., `/local/image.jpg`) |
-| `title` | string | | Optional title displayed above the media |
-| `video_autoplay` | boolean | `false` | Auto-play videos when card loads |
-| `video_loop` | boolean | `false` | Loop videos when they finish |
-| `video_muted` | boolean | `false` | Start videos muted |
+| `type` | string | **Required** | `custom:media-card` |
+| `title` | string | `none` | Display title above media |
+| `media_type` | string | `image` | `image` or `video` |
+| `media_path` | string | **Required** | Path to your media file |
+| `auto_refresh_seconds` | number | `0` | Auto-refresh interval (0 = disabled) |
+| `show_refresh_button` | boolean | `false` | Show manual refresh button |
+| `video_autoplay` | boolean | `false` | Auto-start video playbook |
+| `video_loop` | boolean | `false` | Loop video continuously |
+| `video_muted` | boolean | `false` | Start video muted |
+| `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
 
-## Usage
+## 📝 Configuration Examples
 
-### Using the GUI Editor
-1. Add the card to your dashboard
-2. Click "Browse Media" button
-3. Select from available media files
-4. Configure video options if needed
-5. The card will update automatically
-
-### Media File Organization
-For best results, organize your media files in the `www` directory:
-
-```
-config/
-└── www/
-    ├── images/
-    │   ├── sunset.jpg
-    │   ├── vacation.png
-    │   └── family-photo.jpg
-    └── videos/
-        ├── pets.mp4
-        ├── travel.mp4
-        └── events.mp4
+### 📸 Security Camera Snapshot
+```yaml
+type: custom:media-card
+title: "Front Door Camera"
+media_type: image
+media_path: media-source://media_source/local/cameras/front_door.jpg
+auto_refresh_seconds: 30
+show_refresh_button: true
 ```
 
-Access them in the card using paths like:
-- `/local/images/sunset.jpg`
-- `/local/videos/pets.mp4`
-
-## Development
-
-### Prerequisites
-- Node.js 16+ and npm
-- Home Assistant instance for testing
-
-### Setup
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-### Development Commands
-```bash
-# Build for production
-npm run build
-
-# Build and watch for changes
-npm run dev
-
-# Serve built files locally
-npm run serve
+### 🎬 Dashcam Video
+```yaml
+type: custom:media-card
+title: "Latest Dashcam Footage"
+media_type: video
+media_path: media-source://media_source/local/dashcam/latest.mp4
+video_autoplay: true
+video_muted: true
+video_loop: true
+hide_video_controls_display: true
 ```
 
-### Project Structure
-```
-ha-media-card/
-├── src/
-│   ├── media-card.js          # Main card component
-│   ├── media-card-editor.js   # Configuration editor
-│   └── index.js               # Entry point
-├── dist/                      # Built files
-├── package.json
-├── rollup.config.js          # Build configuration
-└── README.md
+### 🖼️ Family Photos
+```yaml
+type: custom:media-card
+title: "Today's Memories"
+media_type: image
+media_path: /local/photos/daily_photo.jpg
+auto_refresh_seconds: 3600  # Update hourly
 ```
 
-## Technical Details
+## 🛣️ Supported Path Formats
 
-### Based On
-- **Home Assistant picture-entity-card**: Core structure and styling patterns
-- **Gallery card**: Video playback implementation and media handling
-- **Lit Element**: Modern web components framework
+The card supports multiple path formats for maximum flexibility:
 
-### Browser Support
-- Chrome 63+
-- Firefox 63+
-- Safari 12+
-- Edge 79+
+### Media Source URLs (Recommended)
+```yaml
+media_path: media-source://media_source/local/folder/file.mp4
+media_path: media-source://media_source/camera/snapshot.jpg
+```
 
-### Home Assistant Compatibility
-- Home Assistant 2021.12+
-- Lovelace dashboards
-- All themes supported
+### Direct Paths
+```yaml
+media_path: /local/images/photo.jpg
+media_path: /media/videos/movie.mp4
+media_path: /config/www/custom/file.png
+```
 
-## Contributing
+## 🎯 Use Cases
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+### 🏠 **Home Security**
+- Display latest camera snapshots
+- Monitor dashcam footage
+- Security system alerts
 
-## Issues & Support
+### 📱 **Smart Home Dashboard**
+- Weather radar images
+- Traffic camera feeds
+- Package delivery photos
 
-- Report bugs and feature requests on GitHub Issues
-- Check existing issues before creating new ones
-- Include Home Assistant version and card version in bug reports
+### 👨‍👩‍👧‍👦 **Family & Entertainment**
+- Photo of the day
+- Kids' latest artwork
+- Pet monitoring cameras
 
-## License
+### 🏢 **Business & Monitoring**
+- Server room cameras
+- Manufacturing process videos
+- Equipment status displays
 
-MIT License - see LICENSE file for details
+## 🔧 Advanced Configuration
 
-## Changelog
+### Auto-Refresh for Security Cameras
+```yaml
+type: custom:media-card
+title: "Live Camera Feed"
+media_type: image
+media_path: media-source://media_source/local/cameras/live_feed.jpg
+auto_refresh_seconds: 5  # Update every 5 seconds
+show_refresh_button: true
+```
 
-### Version 1.0.0
-- Initial release
-- Image and video display support
-- GUI media browser
-- Video controls and options
-- Home Assistant theme integration
+### Silent Background Video
+```yaml
+type: custom:media-card
+media_type: video
+media_path: /local/videos/background.mp4
+video_autoplay: true
+video_loop: true
+video_muted: true
+hide_video_controls_display: true
+```
+
+## 🐛 Troubleshooting
+
+### Media Not Loading?
+1. **Check file path** - Use the built-in media browser to verify
+2. **File permissions** - Ensure Home Assistant can read the file
+3. **File format** - Verify the format is supported
+4. **Browser console** - Check for error messages
+
+### Auto-Refresh Not Working?
+1. **Check interval** - Must be > 0 to enable
+2. **File changes** - System detects Last-Modified header changes
+3. **Media-source URLs** - Always refresh regardless of headers
+
+### Media Browser Issues?
+1. **Refresh the page** - Sometimes needed after installation
+2. **Check resource URL** - Verify the JavaScript file is loaded correctly
+3. **Console errors** - Look for JavaScript errors in browser console
+
+## 🤝 Contributing
+
+Found a bug or want to contribute? Great! 
+
+1. **Issues**: [Report bugs or request features](https://github.com/your-username/ha-media-card/issues)
+2. **Pull Requests**: Contributions are welcome!
+3. **Discussions**: [Share your setups and ideas](https://github.com/your-username/ha-media-card/discussions)
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Home Assistant community for inspiration and support
+- Lit Element for the excellent web component framework
+- All users who provide feedback and suggestions
+
+---
+
+**Enjoy your new Media Card!** 🎉 
+
+If you find this card useful, please consider giving it a ⭐ on GitHub!
