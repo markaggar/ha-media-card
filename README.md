@@ -1,8 +1,8 @@
 # Home Assistant Media Card
 
-A custom Home Assistant Lovelace card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots, dashcam footage, family photos, or any media files stored in your Home Assistant media folder.
+A custom Home Assistant Dashboard card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots, dashcam footage, family photos, or any media files stored in your Home Assistant media folder.  100% developed in VS Code by me directing GitHub Copilot with Claude Sonnet 4.0.
 
-![Media Card Example](https://via.placeholder.com/600x300/1f1f1f/ffffff?text=Media+Card+Demo)
+<img width="700" height="685" alt="image" src="https://github.com/user-attachments/assets/45dfe2cb-645e-4eb7-9042-994faf89273e" />
 
 ## ✨ Features
 
@@ -41,32 +41,32 @@ A custom Home Assistant Lovelace card that displays images and videos with a bui
 ### Method 1: Manual Installation
 
 1. **Download the card file**:
-   ```bash
-   wget https://github.com/your-username/ha-media-card/releases/latest/download/media-card.js
-   ```
+   Download the zip file or copy the contents of the media-card.js from the repo
 
 2. **Copy to your Home Assistant**:
-   - Place `media-card.js` in `/config/www/` or `/config/www/cards/`
+   - Place (or create) `media-card.js` in `/config/www/` or `/config/www/cards/` (and copy the repo media-card.js contents to the file you just created)
 
-3. **Add to Lovelace resources**:
+3. **Add to Dashboard resources**:
    - Go to **Settings** → **Dashboards** → **Resources**
    - Click **Add Resource**
-   - **URL**: `/local/media-card.js` (or `/local/cards/media-card.js`)
+   - **URL**: `/local/media-card.js?v1.0.19` (or `/local/cards/media-card.js?v1.0.19`) (if you download a new version of media card in the future, increment the version number)
    - **Resource Type**: `JavaScript Module`
    - Click **Create**
+  
+4. **Refresh your browser cache (e.g. CTRL-F5, or restart the Home Assistant app on your phone).**
 
-4. **Add the card to your dashboard**:
+5. **Add the card to your dashboard**:
    - Edit your dashboard
-   - Click **Add Card** → **Manual Card**
-   - Add the YAML configuration (see examples below)
+   - Click **Add Card**
+   - Search for Media Card
 
-### Method 2: HACS (Community Store)
+### Method 2: HACS (Community Store) - COMING SOON (after my vacation! - seriously this was a last second project).
 
 > **Note**: This card is not yet available in HACS. Manual installation required for now.
 
 ## 🚀 Quick Start
 
-Add this basic configuration to get started:
+YAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
 
 ```yaml
 type: custom:media-card
@@ -118,7 +118,7 @@ hide_video_controls_display: true
 type: custom:media-card
 title: "Today's Memories"
 media_type: image
-media_path: /local/photos/daily_photo.jpg
+media_path: media-source://synology_dsm/daily_photo.jpg_shared
 auto_refresh_seconds: 3600  # Update hourly
 ```
 
@@ -132,7 +132,7 @@ media_path: media-source://media_source/local/folder/file.mp4
 media_path: media-source://media_source/camera/snapshot.jpg
 ```
 
-### Direct Paths
+### Direct Paths (NOT TESTED, NOT RECOMMENDED, FRANKLY DOESN'T SEEM TO WORK AND I WILL NOT SPEND TIME ON THIS)
 ```yaml
 media_path: /local/images/photo.jpg
 media_path: /media/videos/movie.mp4
@@ -177,12 +177,51 @@ show_refresh_button: true
 ```yaml
 type: custom:media-card
 media_type: video
-media_path: /local/videos/background.mp4
+media_path: media-source://media_source/local/videos/background.mp4
 video_autoplay: true
 video_loop: true
 video_muted: true
 hide_video_controls_display: true
 ```
+
+## HA Media Path config
+Home Assistant media path setup has always been a bit confusing to me.  This is what I have in my configuration.yaml on my HA Dev instance.
+
+```
+homeassistant:
+  media_dirs:
+    media: /media
+    camera: /config/camera
+    local: /config/www/local
+  allowlist_external_dirs:
+    - "/config/www/local"
+    - "/media"
+```
+
+When browsing, this provides a 'My Media' folder, which has media, camera and local folders.
+
+### Referring to files outside of Media Card
+If you want to use the camera.snapshot action to save an image you will display later with Media card, your path can be:
+
+/config/www/local/filename1.jpg (you can create a folder between the '/local/' and the filename).
+
+If you want to upload this image to an AI service such as Google Gemini via the AI Tasks action, you need to refer to the files as so:
+
+```
+      service: ai_task.generate_data
+      data:
+        task_name: "[task title]"
+        instructions: >
+          [Your instructions]
+        attachments:
+          - media_content_id: media-source://media_source/local/filename1.jpg
+            media_content_type: image/jpeg
+          - media_content_id: media-source://media_source/local/filename2.jpg
+            media_content_type: image/jpeg
+        entity_id: ai_task.google_ai_task
+      response_variable: family_room_ai_response
+```
+Note: For video - the media_content_type is video/mp4
 
 ## 🐛 Troubleshooting
 
@@ -190,7 +229,7 @@ hide_video_controls_display: true
 1. **Check file path** - Use the built-in media browser to verify
 2. **File permissions** - Ensure Home Assistant can read the file
 3. **File format** - Verify the format is supported
-4. **Browser console** - Check for error messages
+4. **Browser console** - Check for error messages (F12 in the browser, click Console messages)
 
 ### Auto-Refresh Not Working?
 1. **Check interval** - Must be > 0 to enable
@@ -198,7 +237,7 @@ hide_video_controls_display: true
 3. **Media-source URLs** - Always refresh regardless of headers
 
 ### Media Browser Issues?
-1. **Refresh the page** - Sometimes needed after installation
+1. **Refresh the page** - Sometimes needed after installation (CTRL-F5 to force cache to reload)
 2. **Check resource URL** - Verify the JavaScript file is loaded correctly
 3. **Console errors** - Look for JavaScript errors in browser console
 
