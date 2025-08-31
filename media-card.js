@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.19
+ * Version: 1.0.20
  */
 
 // Import Lit from CDN for standalone usage
@@ -38,6 +38,10 @@ class MediaCard extends LitElement {
       padding: 16px;
       overflow: hidden;
     }
+
+    .card.no-title {
+      padding: 0;
+    }
     
     .media-container {
       position: relative;
@@ -46,6 +50,11 @@ class MediaCard extends LitElement {
       overflow: hidden;
       background: #000;
       margin-bottom: 16px;
+    }
+
+    .media-container.no-title {
+      margin-bottom: 0;
+      border-radius: var(--ha-card-border-radius);
     }
     
     img, video {
@@ -319,11 +328,13 @@ class MediaCard extends LitElement {
   render() {
     if (!this.config) return html``;
     
+    const hasTitle = this.config.title && this.config.title.trim();
+    
     return html`
-      <div class="card">
-        ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
+      <div class="card ${!hasTitle ? 'no-title' : ''}">
+        ${hasTitle ? html`<div class="title">${this.config.title}</div>` : ''}
         
-        <div class="media-container">
+        <div class="media-container ${!hasTitle ? 'no-title' : ''}">
           ${this._renderMedia()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
         </div>
@@ -1418,7 +1429,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.19  ',
+  '%c  MEDIA-CARD  %c  1.0.20  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
