@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.22] - 2025-08-31
+
+### Fixed
+- **CRITICAL**: Removed problematic dynamic imports that were causing Home Assistant interface to become unresponsive
+- Fixed media browser dialog attempting to import non-existent HA internal modules
+- Removed voice assistant action option (not supported in custom cards)
+
+### Changed
+- Media browser now uses custom dialog fallback by default (more reliable)
+- Removed voice assistant from interaction options in editor UI
+
 ## [1.0.21] - 2025-08-31
 
 ### Added
@@ -12,11 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tap action configuration (single tap/click)
 - Hold action configuration (tap and hold for 0.5+ seconds)
 - Double tap action configuration (quick double tap/click)
-- Action types: more-info, toggle, perform-action, navigate, url, assist, none
+- Action types: more-info, toggle, perform-action, navigate, url, none
 - Service call support with entity targeting and JSON data
 - Navigation support with path specification
-- External URL opening capability
-- Voice assistant integration
+- External URL opening capability  
 - Confirmation dialog support for destructive actions
 - Visual cursor feedback when interactions are configured
 
