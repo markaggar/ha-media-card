@@ -36,6 +36,16 @@ A custom Home Assistant Dashboard card that displays images and videos with a bu
 - **Flexible path formats** - Support for both direct paths and media-source URLs
 - **Theme integration** - Seamlessly matches your Home Assistant theme
 
+### 👆 **Interactive Actions**
+- **Tap Action** - Single tap/click actions
+- **Hold Action** - Tap and hold (0.5+ seconds) actions  
+- **Double Tap Action** - Quick double tap/click actions
+- **Action Types**: more-info, toggle, perform-action, navigate, url, assist, none
+- **Service Calls** - Call any Home Assistant service with data
+- **Navigation** - Jump to other dashboard views
+- **External URLs** - Open websites in new tabs
+- **Confirmation Dialogs** - Optional confirmations for destructive actions
+
 ## 📥 Installation
 
 ### Method 1: Manual Installation
@@ -88,6 +98,9 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | `video_loop` | boolean | `false` | Loop video continuously |
 | `video_muted` | boolean | `false` | Start video muted |
 | `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
+| `tap_action` | object | `none` | Action on single tap |
+| `hold_action` | object | `none` | Action on tap and hold (0.5s+) |
+| `double_tap_action` | object | `none` | Action on double tap |
 
 ## 📝 Configuration Examples
 
@@ -120,6 +133,28 @@ title: "Today's Memories"
 media_type: image
 media_path: media-source://synology_dsm/daily_photo.jpg_shared
 auto_refresh_seconds: 3600  # Update hourly
+```
+
+### 👆 Interactive Media Card
+```yaml
+type: custom:media-card
+title: "Front Door Camera"
+media_type: image
+media_path: media-source://media_source/local/cameras/front_door.jpg
+auto_refresh_seconds: 30
+tap_action:
+  action: more-info
+  entity: camera.front_door
+hold_action:
+  action: perform-action
+  perform_action: camera.snapshot
+  target:
+    entity_id: camera.front_door
+  data:
+    filename: "/config/www/local/snapshots/manual_{{ now().strftime('%Y%m%d_%H%M%S') }}.jpg"
+double_tap_action:
+  action: navigate
+  navigation_path: /lovelace/security
 ```
 
 ## 🛣️ Supported Path Formats
