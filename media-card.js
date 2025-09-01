@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.22
+ * Version: 1.0.23
  */
 
 // Import Lit from CDN for standalone usage
@@ -1602,6 +1602,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _hideVideoControlsDisplayChanged(ev) {
+    this._config = { ...this._config, hide_video_controls_display: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
   _renderActionConfig(actionType) {
     const action = this._config[actionType];
     if (!action || action.action === 'none') return '';
@@ -1778,7 +1783,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.22  ',
+  '%c  MEDIA-CARD  %c  1.0.23  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
