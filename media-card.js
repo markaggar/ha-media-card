@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.21
+ * Version: 1.0.22
  */
 
 // Import Lit from CDN for standalone usage
@@ -801,19 +801,10 @@ class MediaCard extends LitElement {
   }
 
   _performAssist(action) {
-    const event = new CustomEvent('show-dialog', {
-      detail: {
-        dialogTag: 'dialog-voice-command',
-        dialogImport: () => import('./dialogs/dialog-voice-command'),
-        dialogParams: {
-          pipeline_id: action.pipeline_id,
-          start_listening: action.start_listening
-        }
-      },
-      bubbles: true,
-      composed: true
-    });
-    this.dispatchEvent(event);
+    // Voice assistant requires internal HA modules that aren't available to custom cards
+    // Show a user-friendly message instead
+    console.warn('Voice Assistant action not available in custom cards');
+    alert('Voice Assistant actions are not supported in custom cards. Please use the main Home Assistant interface for voice commands.');
   }
 
   async _showConfirmation(confirmation) {
@@ -1124,7 +1115,6 @@ class MediaCardEditor extends LitElement {
                 <option value="perform-action">Call Service</option>
                 <option value="navigate">Navigate</option>
                 <option value="url">Open URL</option>
-                <option value="assist">Voice Assistant</option>
               </select>
               <div class="help-text">Action when card is tapped</div>
               ${this._renderActionConfig('tap_action')}
@@ -1141,7 +1131,6 @@ class MediaCardEditor extends LitElement {
                 <option value="perform-action">Call Service</option>
                 <option value="navigate">Navigate</option>
                 <option value="url">Open URL</option>
-                <option value="assist">Voice Assistant</option>
               </select>
               <div class="help-text">Action when card is held (0.5+ seconds)</div>
               ${this._renderActionConfig('hold_action')}
@@ -1158,7 +1147,6 @@ class MediaCardEditor extends LitElement {
                 <option value="perform-action">Call Service</option>
                 <option value="navigate">Navigate</option>
                 <option value="url">Open URL</option>
-                <option value="assist">Voice Assistant</option>
               </select>
               <div class="help-text">Action when card is double-tapped</div>
               ${this._renderActionConfig('double_tap_action')}
@@ -1204,18 +1192,7 @@ class MediaCardEditor extends LitElement {
 
     console.log('Opening media browser...');
     
-    try {
-      // Try to use the native Home Assistant media browser dialog
-      const pickedMedia = await this._showMediaBrowserDialog();
-      if (pickedMedia) {
-        this._handleMediaPicked(pickedMedia.media_content_id);
-        return;
-      }
-    } catch (error) {
-      console.log('Native media browser not available, using fallback:', error);
-    }
-    
-    // Fallback: Try to browse media and create our own simple dialog
+    // Try to browse media and create our own simple dialog
     try {
       const mediaContent = await this._fetchMediaContents(this.hass, '');
       if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
@@ -1251,54 +1228,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   async _showMediaBrowserDialog() {
-    return new Promise((resolve, reject) => {
-      // Try to use Home Assistant's native media browser
-      const event = new CustomEvent('show-dialog', {
-        detail: {
-          dialogTag: 'dialog-media-browser',
-          dialogImport: () => import('./dialogs/dialog-media-browser'),
-          dialogParams: {
-            action: 'play',
-            entityId: undefined,
-            mediaContentId: '',
-            mediaContentType: 'app',
-            navigateIds: [],
-            currentItem: undefined,
-            prefer_item_labels: false,
-            restrict: undefined,
-          },
-        },
-        bubbles: true,
-        composed: true,
-      });
-
-      // Listen for the result
-      const mediaPickedHandler = (e) => {
-        if (e.detail && e.detail.media_content_id) {
-          document.removeEventListener('media-picked', mediaPickedHandler);
-          resolve(e.detail);
-        }
-      };
-
-      const dialogClosedHandler = (e) => {
-        document.removeEventListener('dialog-closed', dialogClosedHandler);
-        document.removeEventListener('media-picked', mediaPickedHandler);
-        reject(new Error('Dialog closed without selection'));
-      };
-
-      document.addEventListener('media-picked', mediaPickedHandler);
-      document.addEventListener('dialog-closed', dialogClosedHandler);
-
-      // Dispatch the event
-      this.dispatchEvent(event);
-
-      // Timeout after 1 second if no dialog appears
-      setTimeout(() => {
-        document.removeEventListener('media-picked', mediaPickedHandler);
-        document.removeEventListener('dialog-closed', dialogClosedHandler);
-        reject(new Error('Native dialog timeout'));
-      }, 1000);
-    });
+    // Skip trying to use native HA media browser since it requires internal modules
+    // that aren't available to custom cards
+    throw new Error('Native media browser not available for custom cards');
   }
 
   _showCustomMediaBrowser(mediaContent) {
@@ -1846,7 +1778,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.21  ',
+  '%c  MEDIA-CARD  %c  1.0.22  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
