@@ -1,7 +1,4 @@
 {
   "name": "Home Assistant Media Card",
-  "render_readme": true,
-  "domains": [],
-  "iot_class": "Local Polling",
   "homeassistant": "2021.12.0"
 }
