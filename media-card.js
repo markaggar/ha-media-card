@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.20
+ * Version: 1.0.21
  */
 
 // Import Lit from CDN for standalone usage
@@ -334,7 +334,14 @@ class MediaCard extends LitElement {
       <div class="card ${!hasTitle ? 'no-title' : ''}">
         ${hasTitle ? html`<div class="title">${this.config.title}</div>` : ''}
         
-        <div class="media-container ${!hasTitle ? 'no-title' : ''}">
+        <div class="media-container ${!hasTitle ? 'no-title' : ''}"
+             @click=${this._handleTap}
+             @dblclick=${this._handleDoubleTap}
+             @pointerdown=${this._handlePointerDown}
+             @pointerup=${this._handlePointerUp}
+             @pointercancel=${this._handlePointerCancel}
+             @contextmenu=${this._handleContextMenu}
+             style="cursor: ${this._hasAnyAction() ? 'pointer' : 'default'};">
           ${this._renderMedia()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
         </div>
@@ -606,6 +613,215 @@ class MediaCard extends LitElement {
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
+    // Clean up hold timer
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+  }
+
+  // Interaction handling methods
+  _hasAnyAction() {
+    return this.config.tap_action || this.config.hold_action || this.config.double_tap_action;
+  }
+
+  _handleTap(e) {
+    if (!this.config.tap_action) return;
+    
+    // Prevent default if we have a tap action
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Don't trigger tap if this was part of a double-tap sequence
+    if (this._doubleTapTimer) return;
+    
+    // Set a small delay to check for double-tap
+    this._doubleTapTimer = setTimeout(() => {
+      this._doubleTapTimer = null;
+      this._performAction(this.config.tap_action);
+    }, 250);
+  }
+
+  _handleDoubleTap(e) {
+    if (!this.config.double_tap_action) return;
+    
+    // Clear single tap timer if double tap occurs
+    if (this._doubleTapTimer) {
+      clearTimeout(this._doubleTapTimer);
+      this._doubleTapTimer = null;
+    }
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    this._performAction(this.config.double_tap_action);
+  }
+
+  _handlePointerDown(e) {
+    if (!this.config.hold_action) return;
+    
+    // Start hold timer (500ms like standard HA cards)
+    this._holdTimer = setTimeout(() => {
+      this._performAction(this.config.hold_action);
+      this._holdTriggered = true;
+    }, 500);
+    
+    this._holdTriggered = false;
+  }
+
+  _handlePointerUp(e) {
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+  }
+
+  _handlePointerCancel(e) {
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+  }
+
+  _handleContextMenu(e) {
+    // Prevent context menu if we have hold action
+    if (this.config.hold_action) {
+      e.preventDefault();
+    }
+  }
+
+  async _performAction(action) {
+    if (!action || !this.hass) return;
+    
+    console.log('Performing action:', action);
+    
+    try {
+      switch (action.action) {
+        case 'more-info':
+          this._showMoreInfo(action);
+          break;
+        case 'toggle':
+          this._performToggle(action);
+          break;
+        case 'perform-action':
+          this._performServiceCall(action);
+          break;
+        case 'navigate':
+          this._performNavigation(action);
+          break;
+        case 'url':
+          this._performUrlOpen(action);
+          break;
+        case 'assist':
+          this._performAssist(action);
+          break;
+        case 'none':
+          // Do nothing
+          break;
+        default:
+          console.warn('Unknown action type:', action.action);
+      }
+    } catch (error) {
+      console.error('Error performing action:', error);
+    }
+  }
+
+  _showMoreInfo(action) {
+    const entityId = action.entity || this.config.entity;
+    if (entityId) {
+      const event = new CustomEvent('hass-more-info', {
+        detail: { entityId },
+        bubbles: true,
+        composed: true
+      });
+      this.dispatchEvent(event);
+    } else {
+      console.warn('No entity specified for more-info action');
+    }
+  }
+
+  _performToggle(action) {
+    const entityId = action.entity || this.config.entity;
+    if (entityId && this.hass.states[entityId]) {
+      this.hass.callService('homeassistant', 'toggle', {
+        entity_id: entityId
+      });
+    } else {
+      console.warn('No entity specified or entity not found for toggle action');
+    }
+  }
+
+  async _performServiceCall(action) {
+    if (!action.perform_action) {
+      console.warn('No service specified for perform-action');
+      return;
+    }
+
+    // Check for confirmation if required
+    if (action.confirmation && !await this._showConfirmation(action.confirmation)) {
+      return;
+    }
+
+    const [domain, service] = action.perform_action.split('.');
+    const serviceData = action.data || {};
+    const target = action.target || {};
+
+    this.hass.callService(domain, service, serviceData, target);
+  }
+
+  _performNavigation(action) {
+    if (!action.navigation_path) {
+      console.warn('No navigation path specified');
+      return;
+    }
+
+    const path = action.navigation_path;
+    if (action.navigation_replace) {
+      history.replaceState(null, '', path);
+    } else {
+      history.pushState(null, '', path);
+    }
+    
+    // Trigger navigation event
+    const event = new CustomEvent('location-changed', {
+      detail: { replace: action.navigation_replace },
+      bubbles: true,
+      composed: true
+    });
+    this.dispatchEvent(event);
+  }
+
+  _performUrlOpen(action) {
+    if (!action.url_path) {
+      console.warn('No URL specified for url action');
+      return;
+    }
+
+    window.open(action.url_path, '_blank');
+  }
+
+  _performAssist(action) {
+    const event = new CustomEvent('show-dialog', {
+      detail: {
+        dialogTag: 'dialog-voice-command',
+        dialogImport: () => import('./dialogs/dialog-voice-command'),
+        dialogParams: {
+          pipeline_id: action.pipeline_id,
+          start_listening: action.start_listening
+        }
+      },
+      bubbles: true,
+      composed: true
+    });
+    this.dispatchEvent(event);
+  }
+
+  async _showConfirmation(confirmation) {
+    const text = typeof confirmation === 'object' 
+      ? confirmation.text || 'Are you sure?' 
+      : 'Are you sure?';
+    
+    return confirm(text);
   }
 
   _fireConfigChanged() {
@@ -894,6 +1110,61 @@ class MediaCardEditor extends LitElement {
             </div>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">👆 Interactions</div>
+          
+          <div class="config-row">
+            <label>Tap Action</label>
+            <div>
+              <select @change=${this._tapActionChanged} .value=${this._config.tap_action?.action || 'none'}>
+                <option value="none">No Action</option>
+                <option value="more-info">More Info</option>
+                <option value="toggle">Toggle Entity</option>
+                <option value="perform-action">Call Service</option>
+                <option value="navigate">Navigate</option>
+                <option value="url">Open URL</option>
+                <option value="assist">Voice Assistant</option>
+              </select>
+              <div class="help-text">Action when card is tapped</div>
+              ${this._renderActionConfig('tap_action')}
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Hold Action</label>
+            <div>
+              <select @change=${this._holdActionChanged} .value=${this._config.hold_action?.action || 'none'}>
+                <option value="none">No Action</option>
+                <option value="more-info">More Info</option>
+                <option value="toggle">Toggle Entity</option>
+                <option value="perform-action">Call Service</option>
+                <option value="navigate">Navigate</option>
+                <option value="url">Open URL</option>
+                <option value="assist">Voice Assistant</option>
+              </select>
+              <div class="help-text">Action when card is held (0.5+ seconds)</div>
+              ${this._renderActionConfig('hold_action')}
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Double Tap Action</label>
+            <div>
+              <select @change=${this._doubleTapActionChanged} .value=${this._config.double_tap_action?.action || 'none'}>
+                <option value="none">No Action</option>
+                <option value="more-info">More Info</option>
+                <option value="toggle">Toggle Entity</option>
+                <option value="perform-action">Call Service</option>
+                <option value="navigate">Navigate</option>
+                <option value="url">Open URL</option>
+                <option value="assist">Voice Assistant</option>
+              </select>
+              <div class="help-text">Action when card is double-tapped</div>
+              ${this._renderActionConfig('double_tap_action')}
+            </div>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1399,8 +1670,154 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
-  _hideVideoControlsDisplayChanged(ev) {
-    this._config = { ...this._config, hide_video_controls_display: ev.target.checked };
+  _renderActionConfig(actionType) {
+    const action = this._config[actionType];
+    if (!action || action.action === 'none') return '';
+    
+    return html`
+      <div style="margin-top: 8px; padding: 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--secondary-background-color);">
+        ${action.action === 'more-info' || action.action === 'toggle' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Entity ID:</label>
+            <input
+              type="text"
+              .value=${action.entity || ''}
+              @input=${(e) => this._updateActionField(actionType, 'entity', e.target.value)}
+              placeholder="light.living_room"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        ${action.action === 'perform-action' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Service:</label>
+            <input
+              type="text"
+              .value=${action.perform_action || ''}
+              @input=${(e) => this._updateActionField(actionType, 'perform_action', e.target.value)}
+              placeholder="light.turn_on"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Entity ID:</label>
+            <input
+              type="text"
+              .value=${action.target?.entity_id || ''}
+              @input=${(e) => this._updateActionTarget(actionType, 'entity_id', e.target.value)}
+              placeholder="light.living_room"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Data (JSON):</label>
+            <input
+              type="text"
+              .value=${JSON.stringify(action.data || {})}
+              @input=${(e) => this._updateActionData(actionType, e.target.value)}
+              placeholder='{"brightness": 255}'
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        ${action.action === 'navigate' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Navigation Path:</label>
+            <input
+              type="text"
+              .value=${action.navigation_path || ''}
+              @input=${(e) => this._updateActionField(actionType, 'navigation_path', e.target.value)}
+              placeholder="/lovelace/dashboard"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        ${action.action === 'url' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">URL:</label>
+            <input
+              type="text"
+              .value=${action.url_path || ''}
+              @input=${(e) => this._updateActionField(actionType, 'url_path', e.target.value)}
+              placeholder="https://www.example.com"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        <div style="margin-top: 8px;">
+          <label style="display: flex; align-items: center; font-size: 12px;">
+            <input
+              type="checkbox"
+              .checked=${action.confirmation || false}
+              @change=${(e) => this._updateActionField(actionType, 'confirmation', e.target.checked)}
+              style="margin-right: 4px;"
+            />
+            Require confirmation
+          </label>
+        </div>
+      </div>
+    `;
+  }
+
+  _updateActionField(actionType, field, value) {
+    const currentAction = this._config[actionType] || { action: 'none' };
+    const updatedAction = { ...currentAction, [field]: value };
+    this._config = { ...this._config, [actionType]: updatedAction };
+    this._fireConfigChanged();
+  }
+
+  _updateActionTarget(actionType, field, value) {
+    const currentAction = this._config[actionType] || { action: 'none' };
+    const currentTarget = currentAction.target || {};
+    const updatedTarget = { ...currentTarget, [field]: value };
+    const updatedAction = { ...currentAction, target: updatedTarget };
+    this._config = { ...this._config, [actionType]: updatedAction };
+    this._fireConfigChanged();
+  }
+
+  _updateActionData(actionType, jsonString) {
+    try {
+      const data = jsonString.trim() ? JSON.parse(jsonString) : {};
+      this._updateActionField(actionType, 'data', data);
+    } catch (error) {
+      console.warn('Invalid JSON for action data:', error);
+    }
+  }
+
+  _tapActionChanged(ev) {
+    const action = ev.target.value;
+    if (action === 'none') {
+      const { tap_action, ...configWithoutTapAction } = this._config;
+      this._config = configWithoutTapAction;
+    } else {
+      this._config = { ...this._config, tap_action: { action } };
+    }
+    this._fireConfigChanged();
+  }
+
+  _holdActionChanged(ev) {
+    const action = ev.target.value;
+    if (action === 'none') {
+      const { hold_action, ...configWithoutHoldAction } = this._config;
+      this._config = configWithoutHoldAction;
+    } else {
+      this._config = { ...this._config, hold_action: { action } };
+    }
+    this._fireConfigChanged();
+  }
+
+  _doubleTapActionChanged(ev) {
+    const action = ev.target.value;
+    if (action === 'none') {
+      const { double_tap_action, ...configWithoutDoubleTapAction } = this._config;
+      this._config = configWithoutDoubleTapAction;
+    } else {
+      this._config = { ...this._config, double_tap_action: { action } };
+    }
     this._fireConfigChanged();
   }
 
@@ -1429,7 +1846,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.20  ',
+  '%c  MEDIA-CARD  %c  1.0.21  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

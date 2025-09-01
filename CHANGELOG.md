@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.21] - 2025-08-31
+
+### Added
+- Full interaction support matching Home Assistant picture card standards
+- Tap action configuration (single tap/click)
+- Hold action configuration (tap and hold for 0.5+ seconds)
+- Double tap action configuration (quick double tap/click)
+- Action types: more-info, toggle, perform-action, navigate, url, assist, none
+- Service call support with entity targeting and JSON data
+- Navigation support with path specification
+- External URL opening capability
+- Voice assistant integration
+- Confirmation dialog support for destructive actions
+- Visual cursor feedback when interactions are configured
+
 ## [1.0.20] - 2025-08-31
 
 ### Changed
