@@ -51,15 +51,15 @@ A custom Home Assistant Dashboard card that displays images and videos with a bu
 ### Method 1: Manual Installation
 
 1. **Download the card file**:
-   Download the zip file or copy the contents of the media-card.js from the repo
+   Download the zip file or copy the contents of the ha-media-card.js from the repo
 
 2. **Copy to your Home Assistant**:
-   - Place (or create) `media-card.js` in `/config/www/` or `/config/www/cards/` (and copy the repo media-card.js contents to the file you just created)
+   - Place (or create) `ha-media-card.js` in `/config/www/` or `/config/www/cards/` (and copy the repo ha-media-card.js contents to the file you just created)
 
 3. **Add to Dashboard resources**:
    - Go to **Settings** → **Dashboards** → **Resources**
    - Click **Add Resource**
-   - **URL**: `/local/media-card.js?v1.0.19` (or `/local/cards/media-card.js?v1.0.19`) (if you download a new version of media card in the future, increment the version number)
+   - **URL**: `/local/ha-media-card.js?v1.0.19` (or `/local/cards/ha-media-card.js?v1.0.19`) (if you download a new version of media card in the future, increment the version number)
    - **Resource Type**: `JavaScript Module`
    - Click **Create**
   

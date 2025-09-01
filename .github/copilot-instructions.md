@@ -5,7 +5,7 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 ## Project Structure
 - `src/` - Source JavaScript files using Lit Element
 - `dist/` - Built distribution files  
-- `media-card.js` - Standalone card implementation (no build required)
+- `ha-media-card.js` - Standalone card implementation (no build required)
 - `package.json` - Dependencies and build scripts
 - `rollup.config.js` - Build configuration
 - `README.md` - Comprehensive documentation
@@ -39,6 +39,6 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 
 ## Next Steps
 Since Node.js is not available in this environment, the project is ready to use as-is with the source files. Users can either:
-1. Use the source files directly (src/media-card.js, src/media-card-editor.js, src/index.js)
+1. Use the source files directly (src/ha-media-card.js, src/media-card-editor.js, src/index.js)
 2. Install Node.js and run npm build process locally
 3. Use the files as a starting point for further customization

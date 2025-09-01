@@ -51,12 +51,12 @@ cards:
 ## Installation Steps
 
 1. **Download the Card**
-   - Copy `media-card.js` to your `config/www/` directory
+   - Copy `ha-media-card.js` to your `config/www/` directory
 
 2. **Add Resource to Lovelace**
    ```yaml
    resources:
-     - url: /local/media-card.js
+     - url: /local/ha-media-card.js
        type: module
    ```
 
