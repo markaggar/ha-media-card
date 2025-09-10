@@ -70,9 +70,8 @@ A custom Home Assistant Dashboard card that displays images and videos with a bu
    - Click **Add Card**
    - Search for Media Card
 
-### Method 2: HACS (Community Store) - COMING SOON (after my vacation! - seriously this was a last second project).
+### Install via HACS
 
-> **Note**: This card is not yet available in HACS. Manual installation required for now.
 
 ## 🚀 Quick Start
 
