@@ -162,16 +162,13 @@ double_tap_action:
   navigation_path: /lovelace/security
 ```
 
-## 🛣️ Supported Path Formats
+## 🛣️ Supported Path Format
 
-The card supports multiple path formats for maximum flexibility:
-
-### Media Source URLs (Recommended)
+### Media Source URLs
 ```yaml
 media_path: media-source://media_source/local/folder/file.mp4
 media_path: media-source://media_source/camera/snapshot.jpg
 ```
-
 
 ## 🎯 Example Use Cases
 
@@ -214,7 +211,7 @@ hide_video_controls_display: true
 ```
 
 ## HA Media Path config
-Home Assistant media path setup has always been a bit confusing to me.  This is what I have in my configuration.yaml on my HA Dev instance.
+Home Assistant media path setup can be quite confusing.  You need to have something similar to following in configuration.yaml
 
 ```
 homeassistant:
