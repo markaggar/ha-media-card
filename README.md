@@ -1,11 +1,9 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
-# HA Media Card
-[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
 
 # HA Media Card
 
-A custom Home Assistant Dashboard card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots, dashcam footage, family photos, or any media files stored in your Home Assistant media folder.  100% developed in VS Code by me directing GitHub Copilot with Claude Sonnet 4.0.
+A custom Home Assistant Dashboard card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots, dashcam footage, family photos, or any media files stored in your Home Assistant media folder.  100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
 <img width="700" height="685" alt="image" src="https://github.com/user-attachments/assets/45dfe2cb-645e-4eb7-9042-994faf89273e" />
 
@@ -53,7 +51,11 @@ A custom Home Assistant Dashboard card that displays images and videos with a bu
 
 ## 📥 Installation
 
-### Method 1: Manual Installation
+### Install via HACS
+
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
+
+### Manual Installation
 
 1. **Download the card file**:
    Download the zip file or copy the contents of the ha-media-card.js from the repo
@@ -64,7 +66,7 @@ A custom Home Assistant Dashboard card that displays images and videos with a bu
 3. **Add to Dashboard resources**:
    - Go to **Settings** → **Dashboards** → **Resources**
    - Click **Add Resource**
-   - **URL**: `/local/ha-media-card.js?v1.0.19` (or `/local/cards/ha-media-card.js?v1.0.19`) (if you download a new version of media card in the future, increment the version number)
+   - **URL**: `/local/ha-media-card.js?v1xxx` (or `/local/cards/ha-media-card.js?vxxx`) (if you download a new version of media card in the future, increment the version number)
    - **Resource Type**: `JavaScript Module`
    - Click **Create**
   
@@ -75,7 +77,6 @@ A custom Home Assistant Dashboard card that displays images and videos with a bu
    - Click **Add Card**
    - Search for Media Card
 
-### Install via HACS
 
 
 ## 🚀 Quick Start
@@ -171,34 +172,23 @@ media_path: media-source://media_source/local/folder/file.mp4
 media_path: media-source://media_source/camera/snapshot.jpg
 ```
 
-### Direct Paths (NOT TESTED, NOT RECOMMENDED, FRANKLY DOESN'T SEEM TO WORK AND I WILL NOT SPEND TIME ON THIS)
-```yaml
-media_path: /local/images/photo.jpg
-media_path: /media/videos/movie.mp4
-media_path: /config/www/custom/file.png
-```
 
-## 🎯 Use Cases
+## 🎯 Example Use Cases
 
 ### 🏠 **Home Security**
 - Display latest camera snapshots
-- Monitor dashcam footage
-- Security system alerts
+- Monitor dashcam clips
+- Security system alerts - actionable notification pointing to media card with latest video clip
 
 ### 📱 **Smart Home Dashboard**
 - Weather radar images
-- Traffic camera feeds
+- Traffic camera feeds (mp4 or jpg)
 - Package delivery photos
 
 ### 👨‍👩‍👧‍👦 **Family & Entertainment**
 - Photo of the day
 - Kids' latest artwork
 - Pet monitoring cameras
-
-### 🏢 **Business & Monitoring**
-- Server room cameras
-- Manufacturing process videos
-- Equipment status displays
 
 ## 🔧 Advanced Configuration
 
