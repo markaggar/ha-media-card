@@ -3,7 +3,7 @@
 
 # HA Media Card
 
-A custom Home Assistant Dashboard card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots, dashcam footage, family photos, or any media files stored in your Home Assistant media folder.  100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
+A custom Home Assistant Dashboard card that displays images and videos with a built-in media browser for easy file selection. Perfect for displaying security camera snapshots or clips, family photos, or any media files accessible via your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
 <img width="700" height="685" alt="image" src="https://github.com/user-attachments/assets/45dfe2cb-645e-4eb7-9042-994faf89273e" />
 
