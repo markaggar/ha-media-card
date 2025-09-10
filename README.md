@@ -1,7 +1,6 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
-# Water Monitor
-
+# HA Media Card
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
 
 # HA Media Card
