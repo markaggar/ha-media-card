@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.0
+ * Version: 1.1.1
  */
 
 // Import Lit from CDN for standalone usage
@@ -2911,7 +2911,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.1.0  ',
+  '%c  MEDIA-CARD  %c  1.1.1  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
