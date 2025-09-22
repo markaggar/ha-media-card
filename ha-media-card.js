@@ -1321,7 +1321,7 @@ class MediaCard extends LitElement {
       
       // Update current media
       this._mediaUrl = mediaUrl;
-      this._mediaType = this._getMediaType(item.title);
+      this._mediaType = this._detectFileType(item.title) || 'image'; // Default to image if unknown
       this._currentMediaIndex = index;
       
       // Force re-render
