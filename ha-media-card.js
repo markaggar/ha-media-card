@@ -30,6 +30,7 @@ class MediaCard extends LitElement {
     this._folderContents = null;
     this._currentMediaIndex = 0;
     this._lastRefreshTime = 0;
+    this._pausedForNavigation = false;
   }
 
   static styles = css`
@@ -293,14 +294,18 @@ class MediaCard extends LitElement {
 
     // Set up auto-refresh if enabled in config
     const refreshSeconds = this.config?.auto_refresh_seconds;
-    if (refreshSeconds && refreshSeconds > 0) {
-      console.log(`Setting up auto-refresh every ${refreshSeconds} seconds`);
+    if (refreshSeconds && refreshSeconds > 0 && this.hass) {
+      console.log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
       this._refreshInterval = setInterval(() => {
-        console.log('Auto-refresh timer triggered');
+        console.log('🔄 Auto-refresh timer triggered');
         this._checkForMediaUpdates();
       }, refreshSeconds * 1000);
     } else {
-      console.log('Auto-refresh disabled or not configured');
+      console.log('🔄 Auto-refresh disabled or not configured:', {
+        refreshSeconds,
+        hasHass: !!this.hass,
+        hasConfig: !!this.config
+      });
     }
   }
 
@@ -1158,6 +1163,17 @@ class MediaCard extends LitElement {
     }, 100);
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    // Ensure auto-refresh is set up when component is connected/reconnected
+    if (this.config && this.hass) {
+      console.log('🔌 Component connected - setting up auto-refresh');
+      this._setupAutoRefresh();
+      // Also try to resume if it was paused for navigation
+      this._resumeAutoRefreshIfNeeded();
+    }
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
     // Clean up the refresh interval when component is removed
@@ -1169,6 +1185,21 @@ class MediaCard extends LitElement {
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
+    }
+  }
+
+  updated(changedProperties) {
+    super.updated(changedProperties);
+    
+    // Set up auto-refresh when hass becomes available or config changes
+    if ((changedProperties.has('hass') || changedProperties.has('config')) && 
+        this.config && this.hass && this.config.auto_refresh_seconds > 0) {
+      
+      // Only set up if we don't already have an interval running
+      if (!this._refreshInterval) {
+        console.log('🔄 Setting up auto-refresh after property update');
+        this._setupAutoRefresh();
+      }
     }
   }
 
@@ -1314,6 +1345,8 @@ class MediaCard extends LitElement {
           console.log('🔄 Pausing auto-refresh due to manual navigation');
           clearInterval(this._refreshInterval);
           this._refreshInterval = null;
+          // Mark that we paused due to navigation (for potential resume)
+          this._pausedForNavigation = true;
         }
         break;
         
@@ -1329,6 +1362,18 @@ class MediaCard extends LitElement {
         // Restart the timer
         this._setupAutoRefresh();
         break;
+    }
+  }
+
+  _resumeAutoRefreshIfNeeded() {
+    // Resume auto-refresh if it was paused for navigation and should be running
+    if (this._pausedForNavigation && 
+        this.config?.auto_refresh_seconds > 0 && 
+        !this._refreshInterval && 
+        this.hass) {
+      console.log('🔄 Resuming auto-refresh after being paused for navigation');
+      this._setupAutoRefresh();
+      this._pausedForNavigation = false;
     }
   }
 
