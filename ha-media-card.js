@@ -766,10 +766,13 @@ class MediaCard extends LitElement {
   render() {
     if (!this.config) return html``;
     
-    // Set navigation attribute based on folder mode and content
+    // Set navigation attribute based on folder mode, content, and configuration
     const hasNavigation = this.config.is_folder && 
                          this._folderContents && 
-                         this._folderContents.length > 1;
+                         this._folderContents.length > 1 &&
+                         (this.config.enable_navigation_zones !== false ||
+                          this.config.show_position_indicator !== false ||
+                          this.config.show_dots_indicator !== false);
     
     if (hasNavigation) {
       this.setAttribute('data-has-folder-navigation', '');
@@ -926,8 +929,11 @@ class MediaCard extends LitElement {
   }
 
   _renderNavigationZones() {
-    // Only show navigation zones if in folder mode and have multiple items
-    if (!this.config.is_folder || !this._folderContents || this._folderContents.length <= 1) {
+    // Only show navigation zones if enabled, in folder mode and have multiple items
+    if (!this.config.is_folder || 
+        !this._folderContents || 
+        this._folderContents.length <= 1 ||
+        this.config.enable_navigation_zones === false) {
       return html``;
     }
 
@@ -935,14 +941,14 @@ class MediaCard extends LitElement {
       <div class="navigation-zones">
         <div class="nav-zone nav-zone-left"
              @click=${this._handlePrevClick}
-             @keydown=${this._handleKeyDown}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Previous image">
         </div>
         <div class="nav-zone nav-zone-center"></div>
         <div class="nav-zone nav-zone-right"  
              @click=${this._handleNextClick}
-             @keydown=${this._handleKeyDown}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Next image">
         </div>
@@ -959,16 +965,19 @@ class MediaCard extends LitElement {
     const currentIndex = this._getCurrentMediaIndex();
     const totalCount = this._folderContents.length;
 
-    // Show position indicator (always)
-    const positionIndicator = html`
-      <div class="position-indicator">
-        ${currentIndex + 1} of ${totalCount}
-      </div>
-    `;
+    // Show position indicator if enabled
+    let positionIndicator = html``;
+    if (this.config.show_position_indicator !== false) {
+      positionIndicator = html`
+        <div class="position-indicator">
+          ${currentIndex + 1} of ${totalCount}
+        </div>
+      `;
+    }
 
-    // Show dots indicator only if not too many items (limit to 15)
+    // Show dots indicator if enabled and not too many items (limit to 15)
     let dotsIndicator = html``;
-    if (totalCount <= 15) {
+    if (this.config.show_dots_indicator !== false && totalCount <= 15) {
       const dots = [];
       for (let i = 0; i < totalCount; i++) {
         dots.push(html`
@@ -1270,6 +1279,10 @@ class MediaCard extends LitElement {
     const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
     
     console.log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
+    
+    // Handle auto-advance mode
+    this._handleAutoAdvanceMode();
+    
     await this._loadMediaAtIndex(newIndex);
   }
 
@@ -1280,7 +1293,43 @@ class MediaCard extends LitElement {
     const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
     
     console.log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
+    
+    // Handle auto-advance mode
+    this._handleAutoAdvanceMode();
+    
     await this._loadMediaAtIndex(newIndex);
+  }
+
+  _handleAutoAdvanceMode() {
+    if (!this.config.auto_refresh_seconds || this.config.auto_refresh_seconds <= 0) {
+      return; // No auto-refresh configured
+    }
+
+    const mode = this.config.auto_advance_mode || 'pause';
+    
+    switch (mode) {
+      case 'pause':
+        // Pause auto-refresh by clearing the interval
+        if (this._refreshInterval) {
+          console.log('🔄 Pausing auto-refresh due to manual navigation');
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+        break;
+        
+      case 'continue':
+        // Do nothing - let auto-refresh continue normally
+        console.log('🔄 Continuing auto-refresh during manual navigation');
+        break;
+        
+      case 'reset':
+        // Reset the auto-refresh timer
+        console.log('🔄 Resetting auto-refresh timer due to manual navigation');
+        this._lastRefreshTime = Date.now();
+        // Restart the timer
+        this._setupAutoRefresh();
+        break;
+    }
   }
 
   _getCurrentMediaIndex() {
@@ -1480,7 +1529,13 @@ class MediaCard extends LitElement {
       type: 'custom:media-card',
       media_type: 'all',
       media_path: '',
-      title: 'My Media'
+      title: 'My Media',
+      // Navigation defaults (enabled by default)
+      enable_navigation_zones: true,
+      show_position_indicator: true, 
+      show_dots_indicator: true,
+      enable_keyboard_navigation: true,
+      auto_advance_mode: 'pause'
     };
   }
 }
@@ -1755,6 +1810,72 @@ class MediaCardEditor extends LitElement {
                   @change=${this._hideVideoControlsDisplayChanged}
                 />
                 <div class="help-text">Hide the "Video options: ..." text below the video</div>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        ${this._config.is_folder ? html`
+          <div class="section">
+            <div class="section-title">🧭 Navigation Options</div>
+            
+            <div class="config-row">
+              <label>Enable Navigation Zones</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.enable_navigation_zones !== false}
+                  @change=${this._navigationZonesChanged}
+                />
+                <div class="help-text">Show clickable left/right zones for navigation (25% left, 25% right)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Show Position Indicator</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_position_indicator !== false}
+                  @change=${this._positionIndicatorChanged}
+                />
+                <div class="help-text">Display "X of Y" counter in bottom right corner</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Show Dots Indicator</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_dots_indicator !== false}
+                  @change=${this._dotsIndicatorChanged}
+                />
+                <div class="help-text">Show dot indicators in bottom center (for ≤15 items)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Keyboard Navigation</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.enable_keyboard_navigation !== false}
+                  @change=${this._keyboardNavigationChanged}
+                />
+                <div class="help-text">Enable left/right arrow keys for navigation</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Auto-Advance on Navigate</label>
+              <div>
+                <select @change=${this._autoAdvanceModeChanged} .value=${this._config.auto_advance_mode || 'pause'}>
+                  <option value="pause">Pause auto-refresh when navigating manually</option>
+                  <option value="continue">Continue auto-refresh during manual navigation</option>
+                  <option value="reset">Reset auto-refresh timer on manual navigation</option>
+                </select>
+                <div class="help-text">How auto-refresh behaves when navigating manually</div>
               </div>
             </div>
           </div>
@@ -2482,6 +2603,32 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _hideVideoControlsDisplayChanged(ev) {
     this._config = { ...this._config, hide_video_controls_display: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  // Navigation configuration handlers
+  _navigationZonesChanged(ev) {
+    this._config = { ...this._config, enable_navigation_zones: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _positionIndicatorChanged(ev) {
+    this._config = { ...this._config, show_position_indicator: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _dotsIndicatorChanged(ev) {
+    this._config = { ...this._config, show_dots_indicator: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _keyboardNavigationChanged(ev) {
+    this._config = { ...this._config, enable_keyboard_navigation: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _autoAdvanceModeChanged(ev) {
+    this._config = { ...this._config, auto_advance_mode: ev.target.value };
     this._fireConfigChanged();
   }
 
