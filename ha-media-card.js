@@ -131,6 +131,119 @@ class MediaCard extends LitElement {
     .refresh-button:hover {
       background: rgba(0, 0, 0, 0.9);
     }
+
+    /* Navigation Zones */
+    .navigation-zones {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .nav-zone {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      pointer-events: auto;
+      user-select: none;
+    }
+
+    .nav-zone-left {
+      width: 25%;
+      cursor: w-resize;
+    }
+
+    .nav-zone-center {
+      width: 50%;
+      cursor: inherit;
+    }
+
+    .nav-zone-right {
+      width: 25%;
+      cursor: e-resize;
+    }
+
+    .nav-zone:hover {
+      background: rgba(0, 0, 0, 0.1);
+    }
+
+    .nav-zone-left:hover::after {
+      content: '◀';
+      color: white;
+      font-size: 2em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.8;
+    }
+
+    .nav-zone-right:hover::after {
+      content: '▶';
+      color: white;
+      font-size: 2em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.8;
+    }
+
+    /* Hide navigation zones when not in folder mode */
+    :host(:not([data-has-folder-navigation])) .navigation-zones {
+      display: none;
+    }
+
+    /* Position indicator */
+    .position-indicator {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.8em;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 15;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+
+    /* Dots indicator */
+    .dots-indicator {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      pointer-events: none;
+      z-index: 15;
+      max-width: 200px;
+      overflow: hidden;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.4);
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .dot.active {
+      background: rgba(255, 255, 255, 0.9);
+      transform: scale(1.2);
+    }
+
+    /* Hide indicators when not in folder mode */
+    :host(:not([data-has-folder-navigation])) .position-indicator,
+    :host(:not([data-has-folder-navigation])) .dots-indicator {
+      display: none;
+    }
   `;
 
   setConfig(config) {
@@ -156,9 +269,18 @@ class MediaCard extends LitElement {
     this._mediaType = config.media_type || 'all';
     this._mediaLoadedLogged = false; // Reset logging flag for new config
     
-    // Set up auto-refresh if config changed
-    if (!oldConfig || oldConfig.auto_refresh_seconds !== config.auto_refresh_seconds) {
+    // Set up auto-refresh if config changed or if folder mode is enabled
+    if (!oldConfig || 
+        oldConfig.auto_refresh_seconds !== config.auto_refresh_seconds ||
+        (isFolder && !wasFolder) ||
+        (isFolder && oldConfig?.folder_mode !== config.folder_mode)) {
       this._setupAutoRefresh();
+    }
+    
+    // Initialize folder mode if needed
+    if (isFolder && this.hass) {
+      console.log('🔧 Config set with folder mode - triggering initialization');
+      setTimeout(() => this._handleFolderMode(), 50);
     }
   }
 
@@ -192,23 +314,32 @@ class MediaCard extends LitElement {
       if (!this._folderContents || this._folderContents.length === 0) {
         console.warn('No media files found in folder:', this.config.media_path);
         this._mediaUrl = '';
+        this._currentMediaIndex = 0;
         return;
       }
 
       // Select media based on mode
       let selectedFile;
+      let selectedIndex = 0;
+      
       if (this.config.folder_mode === 'latest') {
         selectedFile = this._getLatestFile();
+        // Find index of latest file
+        selectedIndex = this._folderContents.findIndex(item => item === selectedFile);
       } else if (this.config.folder_mode === 'random') {
-        selectedFile = this._getRandomFile();
+        const randomResult = this._getRandomFileWithIndex();
+        selectedFile = randomResult.file;
+        selectedIndex = randomResult.index;
       }
 
-      if (selectedFile) {
+      if (selectedFile && selectedIndex >= 0) {
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
         if (resolvedUrl !== this._mediaUrl) {
           this._mediaUrl = resolvedUrl;
+          this._currentMediaIndex = selectedIndex;
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = Date.now(); // Set initial refresh time
+          console.log(`📂 Selected media at index ${selectedIndex}:`, selectedFile.title);
           this.requestUpdate();
         }
       }
@@ -257,10 +388,12 @@ class MediaCard extends LitElement {
         }
       } else if (this.config.folder_mode === 'random') {
         // Get a different random file (avoid showing the same file repeatedly)
-        selectedFile = this._getRandomFile(true); // Pass true to avoid current file
+        const randomResult = this._getRandomFileWithIndex(true); // Pass true to avoid current file
+        selectedFile = randomResult.file;
         shouldUpdate = selectedFile != null;
         
         if (shouldUpdate) {
+          this._currentMediaIndex = randomResult.index;
           console.log('Selected new random file:', selectedFile.title || selectedFile.media_content_id);
         } else {
           console.log('No different random file available');
@@ -404,6 +537,32 @@ class MediaCard extends LitElement {
     
     this._currentMediaIndex = randomIndex;
     return this._folderContents[randomIndex];
+  }
+
+  _getRandomFileWithIndex(avoidCurrent = false) {
+    if (!this._folderContents || this._folderContents.length === 0) {
+      return { file: null, index: 0 };
+    }
+    
+    // If we only have one file, return it
+    if (this._folderContents.length === 1) {
+      return { file: this._folderContents[0], index: 0 };
+    }
+    
+    let randomIndex;
+    let attempts = 0;
+    const maxAttempts = 10; // Prevent infinite loop
+    
+    do {
+      randomIndex = Math.floor(Math.random() * this._folderContents.length);
+      attempts++;
+    } while (
+      avoidCurrent && 
+      randomIndex === this._currentMediaIndex && 
+      attempts < maxAttempts
+    );
+    
+    return { file: this._folderContents[randomIndex], index: randomIndex };
   }
 
   _detectMediaType(filePath) {
@@ -607,6 +766,17 @@ class MediaCard extends LitElement {
   render() {
     if (!this.config) return html``;
     
+    // Set navigation attribute based on folder mode and content
+    const hasNavigation = this.config.is_folder && 
+                         this._folderContents && 
+                         this._folderContents.length > 1;
+    
+    if (hasNavigation) {
+      this.setAttribute('data-has-folder-navigation', '');
+    } else {
+      this.removeAttribute('data-has-folder-navigation');
+    }
+    
     const hasTitle = this.config.title && this.config.title.trim();
     
     return html`
@@ -622,6 +792,8 @@ class MediaCard extends LitElement {
              @contextmenu=${this._handleContextMenu}
              style="cursor: ${this._hasAnyAction() ? 'pointer' : 'default'};">
           ${this._renderMedia()}
+          ${this._renderNavigationZones()}
+          ${this._renderNavigationIndicators()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
         </div>
       </div>
@@ -750,6 +922,69 @@ class MediaCard extends LitElement {
         @load=${this._onMediaLoaded}
         style="width: 100%; height: auto; display: block;"
       />
+    `;
+  }
+
+  _renderNavigationZones() {
+    // Only show navigation zones if in folder mode and have multiple items
+    if (!this.config.is_folder || !this._folderContents || this._folderContents.length <= 1) {
+      return html``;
+    }
+
+    return html`
+      <div class="navigation-zones">
+        <div class="nav-zone nav-zone-left"
+             @click=${this._handlePrevClick}
+             @keydown=${this._handleKeyDown}
+             tabindex="0"
+             title="Previous image">
+        </div>
+        <div class="nav-zone nav-zone-center"></div>
+        <div class="nav-zone nav-zone-right"  
+             @click=${this._handleNextClick}
+             @keydown=${this._handleKeyDown}
+             tabindex="0"
+             title="Next image">
+        </div>
+      </div>
+    `;
+  }
+
+  _renderNavigationIndicators() {
+    // Only show indicators if in folder mode and have multiple items
+    if (!this.config.is_folder || !this._folderContents || this._folderContents.length <= 1) {
+      return html``;
+    }
+
+    const currentIndex = this._getCurrentMediaIndex();
+    const totalCount = this._folderContents.length;
+
+    // Show position indicator (always)
+    const positionIndicator = html`
+      <div class="position-indicator">
+        ${currentIndex + 1} of ${totalCount}
+      </div>
+    `;
+
+    // Show dots indicator only if not too many items (limit to 15)
+    let dotsIndicator = html``;
+    if (totalCount <= 15) {
+      const dots = [];
+      for (let i = 0; i < totalCount; i++) {
+        dots.push(html`
+          <div class="dot ${i === currentIndex ? 'active' : ''}"></div>
+        `);
+      }
+      dotsIndicator = html`
+        <div class="dots-indicator">
+          ${dots}
+        </div>
+      `;
+    }
+
+    return html`
+      ${positionIndicator}
+      ${dotsIndicator}
     `;
   }
 
@@ -995,6 +1230,104 @@ class MediaCard extends LitElement {
     // Prevent context menu if we have hold action
     if (this.config.hold_action) {
       e.preventDefault();
+    }
+  }
+
+  // Navigation zone event handlers
+  _handlePrevClick(e) {
+    e.stopPropagation();
+    this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+  }
+
+  _handleNextClick(e) {
+    e.stopPropagation(); 
+    this._navigateNext().catch(err => console.error('Navigation error:', err));
+  }
+
+  _handleKeyDown(e) {
+    // Handle keyboard navigation
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      this._navigateNext().catch(err => console.error('Navigation error:', err));
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      // Space or Enter on navigation zones acts like a click
+      if (e.target.classList.contains('nav-zone-left')) {
+        this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+      } else if (e.target.classList.contains('nav-zone-right')) {
+        this._navigateNext().catch(err => console.error('Navigation error:', err));
+      }
+    }
+  }
+
+  async _navigatePrevious() {
+    if (!this._folderContents || this._folderContents.length <= 1) return;
+    
+    const currentIndex = this._getCurrentMediaIndex();
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
+    
+    console.log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
+    await this._loadMediaAtIndex(newIndex);
+  }
+
+  async _navigateNext() {
+    if (!this._folderContents || this._folderContents.length <= 1) return;
+    
+    const currentIndex = this._getCurrentMediaIndex();
+    const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
+    
+    console.log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
+    await this._loadMediaAtIndex(newIndex);
+  }
+
+  _getCurrentMediaIndex() {
+    if (!this._folderContents || !this._mediaUrl) return 0;
+    
+    // First try to use the stored current index if it's valid
+    if (this._currentMediaIndex >= 0 && 
+        this._currentMediaIndex < this._folderContents.length) {
+      // For efficiency, trust the stored index if it exists and is valid
+      return this._currentMediaIndex;
+    }
+    
+    // Fallback: Find current media in folder contents by comparing media_content_id
+    // Extract the base path from the current media URL for comparison
+    const currentIndex = this._folderContents.findIndex(item => {
+      // Try to match using the media_content_id portion
+      return this._mediaUrl.includes(item.media_content_id.split('/').pop());
+    });
+    
+    // Update stored index if we found it
+    if (currentIndex >= 0) {
+      this._currentMediaIndex = currentIndex;
+      return currentIndex;
+    }
+    
+    return 0;
+  }
+
+  async _loadMediaAtIndex(index) {
+    if (!this._folderContents || index < 0 || index >= this._folderContents.length) return;
+    
+    const item = this._folderContents[index];
+    
+    console.log(`📂 Loading media at index ${index}:`, item.title);
+    
+    try {
+      const mediaUrl = await this._resolveMediaPath(item.media_content_id);
+      
+      // Update current media
+      this._mediaUrl = mediaUrl;
+      this._mediaType = this._getMediaType(item.title);
+      this._currentMediaIndex = index;
+      
+      // Force re-render
+      this.requestUpdate();
+    } catch (error) {
+      console.error('Error loading media at index:', index, error);
     }
   }
 
@@ -1373,7 +1706,7 @@ class MediaCardEditor extends LitElement {
           </div>
         </div>
         
-        ${this._config.media_type === 'video' ? html`
+        ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
           <div class="section">
             <div class="section-title">🎬 Video Options</div>
             
