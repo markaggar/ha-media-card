@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.31
+ * Version: 1.1.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -2190,10 +2190,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
-    console.log('�🚀🚀 LATEST VERSION 1.0.28-FIXED LOADED 🚀🚀🚀');
-    console.log('�🔥 NEW VERSION - Adding media files to browser:', mediaContent.children.length, 'items');
-    console.log('🔥 Current path:', currentPath);
-    console.log('🔥 Media content ID:', mediaContent.media_content_id);
+    console.log('Adding media files to browser:', mediaContent.children.length, 'items');
+    console.log('Current path:', currentPath);
+    console.log('Media content ID:', mediaContent.media_content_id);
     
     // Check if this folder contains media files (not just subfolders)
     // For performance with large folders, just check the first 50 items
@@ -2204,13 +2203,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       const fileName = item.title || item.media_content_id;
       const isMedia = !isFolder && this._isMediaFile(fileName);
       if (!isFolder && itemsToCheck.length < 10) {
-        console.log('🔥 Checking file:', fileName, 'isMedia:', isMedia);
+        console.log('Checking file:', fileName, 'isMedia:', isMedia);
       }
       return isMedia;
     });
     
-    console.log('🔥 Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
-    console.log('🔥 Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
+    console.log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
+    console.log('Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
     
     // If we're in a folder (not root) with media files, add special folder options at the top
     if ((currentPath && currentPath !== '') && hasMediaFiles) {
@@ -2237,7 +2236,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       return this._isMediaFile(fileName);
     });
     
-    console.log('🔥 Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
+    console.log('Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
     
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
@@ -2832,7 +2831,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.23  ',
+  '%c  MEDIA-CARD  %c  1.1.0  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
