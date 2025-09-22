@@ -434,6 +434,8 @@ class MediaCard extends LitElement {
         media_content_id: this.config.media_path
       });
 
+      console.log('📊 Raw media browser API response:', JSON.stringify(mediaContent, null, 2));
+
       if (mediaContent && mediaContent.children) {
         // Filter for media files only, respecting the configured media type
         this._folderContents = mediaContent.children
@@ -452,14 +454,41 @@ class MediaCard extends LitElement {
             
             return true;
           })
-          .map(item => ({
-            ...item,
-            // Try to extract timestamp from filename or use current time as fallback
-            estimated_mtime: this._extractTimestampFromFilename(item.title || item.media_content_id) || Date.now()
-          }))
-          .sort((a, b) => b.estimated_mtime - a.estimated_mtime); // Sort by newest first
+          .map((item, index) => {
+            // Log the full structure of the first few items to understand available data
+            if (index < 3) {
+              console.log(`📄 Media item ${index + 1} structure:`, JSON.stringify(item, null, 2));
+            }
+            
+            return {
+              ...item,
+              // Try to extract timestamp from filename for sorting
+              estimated_mtime: this._extractTimestampFromFilename(item.title || item.media_content_id),
+              sort_name: (item.title || item.media_content_id).toLowerCase()
+            };
+          })
+          .sort((a, b) => {
+            // If we have timestamps for both files, sort by timestamp (newest first)
+            if (a.estimated_mtime && b.estimated_mtime) {
+              return b.estimated_mtime - a.estimated_mtime;
+            }
+            // If only one has a timestamp, prioritize it
+            if (a.estimated_mtime && !b.estimated_mtime) return -1;
+            if (!a.estimated_mtime && b.estimated_mtime) return 1;
+            // Otherwise sort by filename (newest/highest alphabetically first - often corresponds to date order)
+            return b.sort_name.localeCompare(a.sort_name);
+          });
 
         console.log('Found', this._folderContents.length, 'media files in folder (filtered by type:', this.config.media_type, ')');
+        
+        // Debug logging for sorting
+        if (this._folderContents.length > 0) {
+          console.log('📁 First few files after sorting:');
+          this._folderContents.slice(0, 3).forEach((file, idx) => {
+            const timestamp = file.estimated_mtime ? new Date(file.estimated_mtime).toISOString() : 'no timestamp';
+            console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
+          });
+        }
       } else {
         this._folderContents = [];
       }
@@ -514,7 +543,7 @@ class MediaCard extends LitElement {
   _getLatestFile() {
     if (!this._folderContents || this._folderContents.length === 0) return null;
     
-    // Already sorted by newest first in _scanFolderContents
+    // Already sorted by timestamp (if available) or filename in _scanFolderContents
     return this._folderContents[0];
   }
 
