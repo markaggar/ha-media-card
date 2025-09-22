@@ -2031,20 +2031,47 @@ class MediaCardEditor extends LitElement {
 
     console.log('Opening media browser...');
     
+    // Determine the starting path for the browser
+    let startPath = '';
+    const configuredPath = this._config.media_path || '';
+    
+    if (configuredPath) {
+      // If we have a current path, try to start from its parent folder
+      if (configuredPath.includes('/')) {
+        // Extract the parent folder from the current path
+        const pathParts = configuredPath.split('/');
+        pathParts.pop(); // Remove the filename
+        startPath = pathParts.join('/');
+        console.log('Starting browser from current folder:', startPath);
+      }
+    }
+    
     // Try to browse media and create our own simple dialog
     try {
-      const mediaContent = await this._fetchMediaContents(this.hass, '');
+      const mediaContent = await this._fetchMediaContents(this.hass, startPath);
       if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
         this._showCustomMediaBrowser(mediaContent);
         return;
       }
     } catch (error) {
-      console.log('Could not fetch media contents, using prompt fallback:', error);
+      console.log('Could not fetch media contents for path:', startPath, 'Error:', error);
+      
+      // If starting from a specific folder failed, try from root
+      if (startPath !== '') {
+        console.log('Retrying from root...');
+        try {
+          const mediaContent = await this._fetchMediaContents(this.hass, '');
+          if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
+            this._showCustomMediaBrowser(mediaContent);
+            return;
+          }
+        } catch (rootError) {
+          console.log('Could not fetch root media contents either:', rootError);
+        }
+      }
     }
     
     // Final fallback: use a simple prompt with helpful guidance
-    const currentPath = this._config.media_path || '';
-    
     const helpText = `Enter the path to your media file:
 
 Format options:
@@ -2052,11 +2079,11 @@ Format options:
 • /local/images/photo.jpg
 • /media/videos/movie.mp4
 
-Your current path: ${currentPath}
+Your current path: ${configuredPath}
 
 Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
-    const mediaPath = prompt(helpText, currentPath);
+    const mediaPath = prompt(helpText, configuredPath);
     
     if (mediaPath && mediaPath.trim()) {
       console.log('Media path entered:', mediaPath);
@@ -2592,6 +2619,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Store the full media-source path for configuration
     this._config = { ...this._config, media_path: mediaContentId };
     
+    // Clear folder-specific options when selecting a single file
+    // (since this is no longer a folder-based configuration)
+    this._config = { 
+      ...this._config, 
+      is_folder: false,
+      folder_mode: undefined
+    };
+    
     // Auto-detect media type from extension
     const extension = mediaContentId.split('.').pop()?.toLowerCase();
     if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
@@ -2601,7 +2636,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     }
     
     this._fireConfigChanged();
-    console.log('Config updated:', this._config);
+    console.log('Config updated (file selected, folder options cleared):', this._config);
   }
 
   _titleChanged(ev) {
