@@ -464,7 +464,8 @@ class MediaCard extends LitElement {
               ...item,
               // Try to extract timestamp from filename for sorting
               estimated_mtime: this._extractTimestampFromFilename(item.title || item.media_content_id),
-              sort_name: (item.title || item.media_content_id).toLowerCase()
+              sort_name: (item.title || item.media_content_id).toLowerCase(),
+              original_index: index // Preserve original API order
             };
           })
           .sort((a, b) => {
@@ -475,7 +476,14 @@ class MediaCard extends LitElement {
             // If only one has a timestamp, prioritize it
             if (a.estimated_mtime && !b.estimated_mtime) return -1;
             if (!a.estimated_mtime && b.estimated_mtime) return 1;
-            // Otherwise sort by filename (newest/highest alphabetically first - often corresponds to date order)
+            
+            // For "Show Latest", try to preserve the original API order first
+            // Home Assistant might return files in modification time order
+            if (this.config.folder_mode === 'latest') {
+              return a.original_index - b.original_index;
+            }
+            
+            // Otherwise sort by filename (newest/highest alphabetically first)
             return b.sort_name.localeCompare(a.sort_name);
           });
 
@@ -483,10 +491,10 @@ class MediaCard extends LitElement {
         
         // Debug logging for sorting
         if (this._folderContents.length > 0) {
-          console.log('📁 First few files after sorting:');
+          console.log('📁 First few files after sorting (mode:', this.config.folder_mode, '):');
           this._folderContents.slice(0, 3).forEach((file, idx) => {
             const timestamp = file.estimated_mtime ? new Date(file.estimated_mtime).toISOString() : 'no timestamp';
-            console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
+            console.log(`  ${idx + 1}. ${file.title} (${timestamp}) [original position: ${file.original_index + 1}]`);
           });
         }
       } else {
