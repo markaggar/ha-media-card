@@ -6,7 +6,7 @@
 
 A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
-<img width="700" height="685" alt="image" src="https://github.com/user-attachments/assets/45dfe2cb-645e-4eb7-9042-994faf89273e" />
+<img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
 ## ✨ Features
 
