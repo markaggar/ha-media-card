@@ -392,6 +392,12 @@ class MediaCard extends LitElement {
       this._refreshInterval = null;
     }
 
+    // Don't set up auto-refresh if paused
+    if (this._isPaused) {
+      this._log('🔄 Auto-refresh setup skipped - currently paused');
+      return;
+    }
+
     // Set up auto-refresh if enabled in config
     const refreshSeconds = this.config?.auto_refresh_seconds;
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
@@ -473,12 +479,6 @@ class MediaCard extends LitElement {
     const now = Date.now();
     const configuredInterval = (this.config.auto_refresh_seconds || 30) * 1000;
     const timeSinceLastRefresh = now - this._lastRefreshTime;
-    
-    // Check if paused (only applies to random mode)
-    if (this._isPaused && this._isRandomMode()) {
-      this._log('🎮 Folder mode refresh paused in random mode');
-      return;
-    }
     
     this._log('Refreshing folder mode:', this.config.folder_mode);
     this._log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
@@ -859,12 +859,6 @@ class MediaCard extends LitElement {
   async _checkForMediaUpdates() {
     if (!this.config?.media_path) {
       this._log('No media path configured for auto-refresh');
-      return;
-    }
-    
-    // Check if paused (only applies to random mode)
-    if (this._isPaused && this._isRandomMode()) {
-      this._log('🎮 Auto-refresh paused in random mode');
       return;
     }
 
@@ -1682,6 +1676,19 @@ class MediaCard extends LitElement {
     if (this._isRandomMode()) {
       this._isPaused = !this._isPaused;
       this._log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode`);
+      
+      // Actually pause/resume the auto-refresh timer
+      if (this._isPaused) {
+        // Pause: Clear the interval
+        if (this._refreshInterval) {
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+      } else {
+        // Resume: Restart the auto-refresh
+        this._setupAutoRefresh();
+      }
+      
       this.requestUpdate();
     }
   }
@@ -1728,6 +1735,19 @@ class MediaCard extends LitElement {
           e.preventDefault();
           this._isPaused = !this._isPaused;
           this._log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode (keyboard)`);
+          
+          // Actually pause/resume the auto-refresh timer
+          if (this._isPaused) {
+            // Pause: Clear the interval
+            if (this._refreshInterval) {
+              clearInterval(this._refreshInterval);
+              this._refreshInterval = null;
+            }
+          } else {
+            // Resume: Restart the auto-refresh
+            this._setupAutoRefresh();
+          }
+          
           this.requestUpdate();
         }
         break;
