@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.8
+ * Version: 1.1.9
  */
 
 // Import Lit from CDN for standalone usage
@@ -33,6 +33,7 @@ class MediaCard extends LitElement {
     this._lastRefreshTime = 0;
     this._pausedForNavigation = false;
     this._isPaused = false;
+    this._urlCreatedTime = 0; // Track when current URL was created
   }
 
   static styles = css`
@@ -413,7 +414,7 @@ class MediaCard extends LitElement {
       if (selectedFile && selectedIndex >= 0) {
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
         if (resolvedUrl !== this._mediaUrl) {
-          this._mediaUrl = resolvedUrl;
+          this._setMediaUrl(resolvedUrl);
           this._currentMediaIndex = selectedIndex;
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = Date.now(); // Set initial refresh time
@@ -432,7 +433,7 @@ class MediaCard extends LitElement {
     try {
       const resolvedUrl = await this._resolveMediaPath(this.config.media_path);
       if (resolvedUrl !== this._mediaUrl) {
-        this._mediaUrl = resolvedUrl;
+        this._setMediaUrl(resolvedUrl);
         this._detectMediaType(this.config.media_path);
         console.log('📄 Loaded single file:', resolvedUrl);
         this.requestUpdate();
@@ -504,7 +505,7 @@ class MediaCard extends LitElement {
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
         if (resolvedUrl) {
           console.log('UPDATING media URL and setting refresh time');
-          this._mediaUrl = resolvedUrl;
+          this._setMediaUrl(resolvedUrl);
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = now;
           this._forceMediaReload();
@@ -840,6 +841,18 @@ class MediaCard extends LitElement {
       console.log('🎮 Auto-refresh paused in random mode');
       return;
     }
+
+    // Proactive URL refresh if current URL is getting old (before expiry)
+    if (this._mediaUrl && this._isUrlExpired()) {
+      console.log('⏰ Current media URL is approaching expiry, refreshing proactively');
+      const refreshSuccess = await this._attemptUrlRefresh();
+      if (refreshSuccess) {
+        console.log('✅ Proactive URL refresh successful');
+        return; // Skip normal refresh cycle since we just refreshed
+      } else {
+        console.warn('⚠️ Proactive URL refresh failed, continuing with normal refresh');
+      }
+    }
     
     console.log('Checking for media updates...', this.config.media_path);
     
@@ -856,7 +869,7 @@ class MediaCard extends LitElement {
         const freshUrl = await this._resolveMediaPath(this.config.media_path);
         if (freshUrl && freshUrl !== this._mediaUrl) {
           console.log('Got fresh media URL:', freshUrl);
-          this._mediaUrl = freshUrl;
+          this._setMediaUrl(freshUrl);
           this._forceMediaReload();
         } else if (freshUrl) {
           console.log('URL unchanged, forcing reload anyway for media-source');
@@ -1002,6 +1015,21 @@ class MediaCard extends LitElement {
     return mediaPath;
   }
 
+  _setMediaUrl(newUrl) {
+    if (newUrl !== this._mediaUrl) {
+      this._mediaUrl = newUrl;
+      this._urlCreatedTime = Date.now();
+      console.log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
+    }
+  }
+
+  _isUrlExpired() {
+    // Consider URL expired after 45 minutes (before typical 1-hour timeout)
+    const URL_EXPIRY_TIME = 45 * 60 * 1000; // 45 minutes in ms
+    const urlAge = Date.now() - this._urlCreatedTime;
+    return urlAge > URL_EXPIRY_TIME;
+  }
+
   render() {
     if (!this.config) return html``;
     
@@ -1099,7 +1127,7 @@ class MediaCard extends LitElement {
       
       if (freshUrl) {
         console.log('Got fresh URL:', freshUrl);
-        this._mediaUrl = freshUrl;
+        this._setMediaUrl(freshUrl);
         this.requestUpdate();
         
         // Force reload the media element
@@ -1414,17 +1442,69 @@ class MediaCard extends LitElement {
       }
     }
     
+    // Attempt URL refresh for expired URLs (common issue after ~1 hour)
+    this._attemptUrlRefresh()
+      .then(refreshed => {
+        if (!refreshed) {
+          // If refresh failed, show error state
+          this._showMediaError(errorMessage);
+        }
+      })
+      .catch(err => {
+        console.error('URL refresh attempt failed:', err);
+        this._showMediaError(errorMessage);
+      });
+  }
+
+  async _attemptUrlRefresh() {
+    console.log('🔄 Attempting URL refresh due to media load failure');
+    
+    try {
+      let refreshedUrl = null;
+      
+      if (this.config.is_folder && this.config.folder_mode) {
+        // For folder mode, refresh the current file
+        if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
+          const currentFile = this._folderContents[this._currentMediaIndex];
+          refreshedUrl = await this._resolveMediaPath(currentFile.media_content_id);
+          console.log('🔄 Refreshed folder media URL:', refreshedUrl);
+        }
+      } else if (this.config.media_path) {
+        // For single file mode, refresh the configured path
+        refreshedUrl = await this._resolveMediaPath(this.config.media_path);
+        console.log('🔄 Refreshed single file URL:', refreshedUrl);
+      }
+      
+      if (refreshedUrl && refreshedUrl !== this._mediaUrl) {
+        this._setMediaUrl(refreshedUrl);
+        console.log('✅ URL refresh successful, updating media');
+        this.requestUpdate();
+        return true;
+      } else {
+        console.warn('⚠️ URL refresh returned same/empty URL');
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ URL refresh failed:', error);
+      return false;
+    }
+  }
+
+  _showMediaError(errorMessage) {
     // Force re-render to show error state
     setTimeout(() => {
       if (this.shadowRoot) {
         const container = this.shadowRoot.querySelector('.media-container');
-        if (container && container.innerHTML.includes('video') || container.innerHTML.includes('img')) {
+        if (container && (container.innerHTML.includes('video') || container.innerHTML.includes('img'))) {
           container.innerHTML = `
             <div class="placeholder" style="border-color: var(--error-color, #f44336); background: rgba(244, 67, 54, 0.1);">
               <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
               <div style="color: var(--error-color, #f44336); font-weight: 500;">${errorMessage}</div>
               <div style="font-size: 0.85em; margin-top: 8px; opacity: 0.7; word-break: break-all;">
                 ${this._mediaUrl}
+              </div>
+              <div style="font-size: 0.8em; margin-top: 12px; opacity: 0.6;">
+                Attempted URL refresh - check Home Assistant logs for more details
               </div>
             </div>
           `;
@@ -3290,7 +3370,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.1.8  ',
+  '%c  MEDIA-CARD  %c  1.1.9  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
