@@ -1,9 +1,10 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
+
 # HA Media Card v1.1.6
 
-A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, dashcam clips, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
+A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
 <img width="700" height="685" alt="image" src="https://github.com/user-attachments/assets/45dfe2cb-645e-4eb7-9042-994faf89273e" />
 
@@ -38,9 +39,6 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - **Folder Mode Selection** - Choose between single file, latest, or random display
 - Browse through your Home Assistant media folders
 - Navigate subfolders with intuitive back/forward navigation
-- File type icons (🎬 for videos, 🖼️ for images, 📁 for folders)
-- **Auto-detection** of media type based on file extension
-- **Smart Browse Navigation** - Starts from current folder location
 
 ### 🔄 **Auto-Refresh System**
 - **Automatic updates** - Monitor files for changes every N seconds
@@ -54,20 +52,11 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - **Muted** - Start without sound
 - **Hide controls display** - Clean presentation mode
 
-### 🎨 **Customization**
-- **Custom titles** for your media cards
-- **Flexible path formats** - Support for both direct paths and media-source URLs
-- **Theme integration** - Seamlessly matches your Home Assistant theme
-
 ### 👆 **Interactive Actions**
 - **Tap Action** - Single tap/click actions
 - **Hold Action** - Tap and hold (0.5+ seconds) actions  
 - **Double Tap Action** - Quick double tap/click actions
 - **Action Types**: more-info, toggle, perform-action, navigate, url, assist, none
-- **Service Calls** - Call any Home Assistant service with data
-- **Navigation** - Jump to other dashboard views
-- **External URLs** - Open websites in new tabs
-- **Confirmation Dialogs** - Optional confirmations for destructive actions
 
 ## 📥 Installation
 
@@ -96,8 +85,6 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
    - Edit your dashboard
    - Click **Add Card**
    - Search for Media Card
-
-
 
 ## 🚀 Quick Start
 
@@ -288,7 +275,7 @@ double_tap_action:
 
 ## 📅 **Filename Conventions for "Show Latest" Mode**
 
-For the **Show Latest** folder mode to work correctly, your files should include timestamps in their names. The card can automatically detect and sort by various timestamp formats:
+For the **Show Latest** folder mode to work correctly, your files should include timestamps in their names as the Media Browser in Home Assistant does not expose file creation times. The card can automatically detect and sort by various timestamp formats:
 
 ### ✅ **Supported Filename Formats**
 
@@ -312,6 +299,7 @@ For the **Show Latest** folder mode to work correctly, your files should include
 ### 🛠️ **Home Assistant Integration Examples**
 
 #### Camera Snapshot Automation
+
 ```yaml
 automation:
   - alias: "Motion Detection Snapshot"
