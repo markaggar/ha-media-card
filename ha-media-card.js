@@ -476,6 +476,12 @@ class MediaCard extends LitElement {
   }
 
   async _handleFolderModeRefresh() {
+    // Exit immediately if paused
+    if (this._isPaused) {
+      this._log('🔄 Folder mode refresh skipped - currently paused');
+      return;
+    }
+
     const now = Date.now();
     const configuredInterval = (this.config.auto_refresh_seconds || 30) * 1000;
     const timeSinceLastRefresh = now - this._lastRefreshTime;
@@ -859,6 +865,12 @@ class MediaCard extends LitElement {
   async _checkForMediaUpdates() {
     if (!this.config?.media_path) {
       this._log('No media path configured for auto-refresh');
+      return;
+    }
+
+    // Exit immediately if paused
+    if (this._isPaused) {
+      this._log('🔄 Auto-refresh skipped - currently paused');
       return;
     }
 
@@ -1536,11 +1548,13 @@ class MediaCard extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     // Ensure auto-refresh is set up when component is connected/reconnected
-    if (this.config && this.hass) {
+    if (this.config && this.hass && !this._isPaused) {
       this._log('🔌 Component connected - setting up auto-refresh');
       this._setupAutoRefresh();
       // Also try to resume if it was paused for navigation
       this._resumeAutoRefreshIfNeeded();
+    } else if (this._isPaused) {
+      this._log('🔌 Component connected but paused - skipping auto-refresh setup');
     }
   }
 
@@ -1578,13 +1592,15 @@ class MediaCard extends LitElement {
     
     // Set up auto-refresh when hass becomes available or config changes
     if ((changedProperties.has('hass') || changedProperties.has('config')) && 
-        this.config && this.hass && this.config.auto_refresh_seconds > 0) {
+        this.config && this.hass && this.config.auto_refresh_seconds > 0 && !this._isPaused) {
       
       // Only set up if we don't already have an interval running
       if (!this._refreshInterval) {
         this._log('🔄 Setting up auto-refresh after property update');
         this._setupAutoRefresh();
       }
+    } else if (this._isPaused) {
+      this._log('🔄 Auto-refresh setup skipped - currently paused');
     }
   }
 
@@ -1853,9 +1869,11 @@ class MediaCard extends LitElement {
 
   _resumeAutoRefreshIfNeeded() {
     // Resume auto-refresh if it was paused for navigation and should be running
+    // But don't resume if manually paused
     if (this._pausedForNavigation && 
         this.config?.auto_refresh_seconds > 0 && 
         !this._refreshInterval && 
+        !this._isPaused &&
         this.hass) {
       this._log('🔄 Resuming auto-refresh after being paused for navigation');
       this._setupAutoRefresh();

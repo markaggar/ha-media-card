@@ -520,6 +520,27 @@ Found a bug or want to contribute? Great!
 2. **Pull Requests**: Contributions are welcome!
 3. **Discussions**: [Share your setups and ideas](https://github.com/your-username/ha-media-card/discussions)
 
+## 🧪 Testing & Development
+
+For development and testing, the card should be tested within the Home Assistant environment since it depends on HA's WebSocket API and media resolution services.
+
+**Testing in Home Assistant:**
+
+1. Copy `ha-media-card.js` to your Home Assistant `www` folder
+2. Add it as a resource in your dashboard
+3. Create test cards with various configurations
+4. Test functionality with real media files and folders
+
+**Note**: Standalone HTML testing is limited due to Home Assistant dependencies.
+
+### Recent Optimizations (v1.1.9)
+
+- ✅ **Conditional Logging**: 50+ console.log statements optimized for production
+- ✅ **String Utilities**: 15+ duplicate patterns consolidated into helper methods
+- ✅ **Folder Mode Logic**: 15+ scattered checks unified with semantic helpers  
+- ✅ **Pause/Resume Fixed**: Timer now properly stops/starts in random mode
+- 📊 **Result**: 198 lines smaller (5.9% reduction), improved maintainability
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -532,6 +553,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Enjoy your new Media Card!** 🎉 
+**Enjoy your new Media Card!** 🎉
 
 If you find this card useful, please consider giving it a ⭐ on GitHub!
