@@ -76,6 +76,33 @@ class MediaCard extends LitElement {
       display: block;
     }
     
+    /* Smart aspect ratio handling for panel layouts */
+    :host([data-aspect-mode="viewport-fit"]) img {
+      max-height: 100vh;
+      max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: 0 auto;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) img {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      margin: 0;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) img {
+      max-height: 90vh;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: 0 auto;
+      display: block;
+    }
+    
     video {
       max-height: 400px;
       object-fit: contain;
@@ -265,6 +292,14 @@ class MediaCard extends LitElement {
     console.log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
     
     this.config = config;
+    
+    // Set aspect ratio mode data attribute for CSS styling
+    const aspectMode = config.aspect_mode || 'default';
+    if (aspectMode !== 'default') {
+      this.setAttribute('data-aspect-mode', aspectMode);
+    } else {
+      this.removeAttribute('data-aspect-mode');
+    }
     
     // Only reset URL if switching between folder/file modes or if it's a new config
     if (!oldConfig || (wasFolder !== isFolder)) {
@@ -1759,6 +1794,7 @@ class MediaCard extends LitElement {
       media_type: 'all',
       media_path: '',
       title: 'My Media',
+      aspect_mode: 'default',
       // Navigation defaults (enabled by default)
       enable_navigation_zones: true,
       show_position_indicator: true, 
@@ -1938,6 +1974,19 @@ class MediaCardEditor extends LitElement {
               <option value="video">Videos Only (MP4, WebM, etc.)</option>
             </select>
             <div class="help-text">What types of media to display</div>
+          </div>
+        </div>
+
+        <div class="config-row">
+          <label>Image Scaling</label>
+          <div>
+            <select @change=${this._aspectModeChanged} .value=${this._config.aspect_mode || 'default'}>
+              <option value="default">Default (fit to card width)</option>
+              <option value="smart-scale">Smart Scale (limit height, prevent scrolling)</option>
+              <option value="viewport-fit">Viewport Fit (fit entire image in viewport)</option>
+              <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
+            </select>
+            <div class="help-text">How images should be scaled, especially useful for panel layouts with mixed portrait/landscape images</div>
           </div>
         </div>
         
@@ -2830,6 +2879,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _mediaTypeChanged(ev) {
     this._config = { ...this._config, media_type: ev.target.value };
+    this._fireConfigChanged();
+  }
+
+  _aspectModeChanged(ev) {
+    this._config = { ...this._config, aspect_mode: ev.target.value };
     this._fireConfigChanged();
   }
 

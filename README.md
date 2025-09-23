@@ -111,12 +111,14 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 ## ⚙️ Configuration Options
 
 ### Basic Configuration
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `type` | string | **Required** | `custom:media-card` |
 | `title` | string | `none` | Display title above media |
 | `media_type` | string | `image` | `image`, `video`, or `all` |
 | `media_path` | string | **Required** | Path to your media file or folder |
+| `aspect_mode` | string | `default` | `default`, `smart-scale`, `viewport-fit`, or `viewport-fill` |
 | `auto_refresh_seconds` | number | `0` | Auto-refresh interval (0 = disabled) |
 | `show_refresh_button` | boolean | `false` | Show manual refresh button |
 
@@ -149,7 +151,42 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | `hold_action` | object | `none` | Action on tap and hold (0.5s+) |
 | `double_tap_action` | object | `none` | Action on double tap |
 
-## 📝 Configuration Examples
+## � **Image Aspect Ratio Modes**
+
+The `aspect_mode` configuration helps optimize image display for different layouts, especially useful in panel layouts with mixed portrait and landscape images:
+
+### **Available Modes**
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| `default` | Images scale to 100% card width, height adjusts automatically | Standard card layouts |
+| `smart-scale` | Limits image height to 90% viewport, prevents scrolling | Panel layouts with mixed orientations |
+| `viewport-fit` | Scales image to fit entirely within viewport | Fullscreen panel layouts |
+| `viewport-fill` | Scales image to fill entire viewport (may crop) | Background/wallpaper displays |
+
+### **Panel Layout Examples**
+
+#### Smart Scale (Recommended for Panels)
+```yaml
+type: custom:media-card
+title: "Security Camera Feed"
+media_path: media-source://media_source/local/cameras/
+folder_mode: latest
+aspect_mode: smart-scale  # Prevents scrolling on tall images
+auto_refresh_seconds: 30
+```
+
+#### Viewport Fit (Full Panel Coverage)
+```yaml
+type: custom:media-card
+media_path: media-source://media_source/local/wallpapers/
+folder_mode: random
+aspect_mode: viewport-fit  # Fits entire image in viewport
+hide_title: true
+auto_refresh_seconds: 300
+```
+
+## �📝 Configuration Examples
 
 ### � **Folder Mode Examples**
 
