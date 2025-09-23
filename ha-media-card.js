@@ -34,6 +34,32 @@ class MediaCard extends LitElement {
     this._pausedForNavigation = false;
     this._isPaused = false;
     this._urlCreatedTime = 0; // Track when current URL was created
+    this._debugMode = false; // Enable debug logging in development
+  }
+
+  // Debug logging utility
+  _log(...args) {
+    if (this._debugMode || window.location.hostname === 'localhost') {
+      console.log(...args);
+    }
+  }
+
+  // String utility helpers
+  _getItemDisplayName(item) {
+    return item.title || item.media_content_id;
+  }
+
+  // Folder mode utility helpers
+  _isFolderMode(mode) {
+    return this.config.folder_mode === mode;
+  }
+
+  _isLatestMode() {
+    return this._isFolderMode('latest');
+  }
+
+  _isRandomMode() {
+    return this._isFolderMode('random');
   }
 
   static styles = css`
@@ -318,7 +344,7 @@ class MediaCard extends LitElement {
     const wasFolder = oldConfig?.is_folder && oldConfig?.folder_mode;
     const isFolder = config.is_folder && config.folder_mode;
     
-    console.log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
+    this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
     
     this.config = config;
     
@@ -332,7 +358,7 @@ class MediaCard extends LitElement {
     
     // Only reset URL if switching between folder/file modes or if it's a new config
     if (!oldConfig || (wasFolder !== isFolder)) {
-      console.log('🔧 Resetting media URL due to mode change');
+      this._log('🔧 Resetting media URL due to mode change');
       this._mediaUrl = '';
       this._folderContents = null; // Reset folder contents when mode changes
     }
@@ -350,11 +376,11 @@ class MediaCard extends LitElement {
     
     // Initialize folder mode if needed
     if (isFolder && this.hass) {
-      console.log('🔧 Config set with folder mode - triggering initialization');
+      this._log('🔧 Config set with folder mode - triggering initialization');
       setTimeout(() => this._handleFolderMode(), 50);
     } else if (!isFolder && config.media_path && this.hass) {
       // For single file mode, ensure media loads even if auto-refresh is disabled
-      console.log('🔧 Config set with single file mode - loading media');
+      this._log('🔧 Config set with single file mode - loading media');
       setTimeout(() => this._loadSingleFile(), 50);
     }
   }
@@ -369,13 +395,13 @@ class MediaCard extends LitElement {
     // Set up auto-refresh if enabled in config
     const refreshSeconds = this.config?.auto_refresh_seconds;
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
-      console.log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
+      this._log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
       this._refreshInterval = setInterval(() => {
-        console.log('🔄 Auto-refresh timer triggered');
+        this._log('🔄 Auto-refresh timer triggered');
         this._checkForMediaUpdates();
       }, refreshSeconds * 1000);
     } else {
-      console.log('🔄 Auto-refresh disabled or not configured:', {
+      this._log('🔄 Auto-refresh disabled or not configured:', {
         refreshSeconds,
         hasHass: !!this.hass,
         hasConfig: !!this.config
@@ -384,7 +410,7 @@ class MediaCard extends LitElement {
   }
 
   async _handleFolderMode() {
-    console.log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
+    this._log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
     
     try {
       // Scan folder contents
@@ -401,11 +427,11 @@ class MediaCard extends LitElement {
       let selectedFile;
       let selectedIndex = 0;
       
-      if (this.config.folder_mode === 'latest') {
+      if (this._isLatestMode()) {
         selectedFile = this._getLatestFile();
         // Find index of latest file
         selectedIndex = this._folderContents.findIndex(item => item === selectedFile);
-      } else if (this.config.folder_mode === 'random') {
+      } else if (this._isRandomMode()) {
         const randomResult = this._getRandomFileWithIndex();
         selectedFile = randomResult.file;
         selectedIndex = randomResult.index;
@@ -418,7 +444,7 @@ class MediaCard extends LitElement {
           this._currentMediaIndex = selectedIndex;
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = Date.now(); // Set initial refresh time
-          console.log(`📂 Selected media at index ${selectedIndex}:`, selectedFile.title);
+          this._log(`📂 Selected media at index ${selectedIndex}:`, selectedFile.title);
           this.requestUpdate();
         }
       }
@@ -428,14 +454,14 @@ class MediaCard extends LitElement {
   }
 
   async _loadSingleFile() {
-    console.log('Loading single file:', this.config.media_path);
+    this._log('Loading single file:', this.config.media_path);
     
     try {
       const resolvedUrl = await this._resolveMediaPath(this.config.media_path);
       if (resolvedUrl !== this._mediaUrl) {
         this._setMediaUrl(resolvedUrl);
         this._detectMediaType(this.config.media_path);
-        console.log('📄 Loaded single file:', resolvedUrl);
+        this._log('📄 Loaded single file:', resolvedUrl);
         this.requestUpdate();
       }
     } catch (error) {
@@ -449,17 +475,17 @@ class MediaCard extends LitElement {
     const timeSinceLastRefresh = now - this._lastRefreshTime;
     
     // Check if paused (only applies to random mode)
-    if (this._isPaused && this.config.folder_mode === 'random') {
-      console.log('🎮 Folder mode refresh paused in random mode');
+    if (this._isPaused && this._isRandomMode()) {
+      this._log('🎮 Folder mode refresh paused in random mode');
       return;
     }
     
-    console.log('Refreshing folder mode:', this.config.folder_mode);
-    console.log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
+    this._log('Refreshing folder mode:', this.config.folder_mode);
+    this._log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
     
     // Check if enough time has passed since last refresh (prevent rapid-fire refreshing)
     if (this._lastRefreshTime > 0 && timeSinceLastRefresh < configuredInterval * 0.8) { // Use 80% to be more conservative
-      console.log('SKIPPING refresh - not enough time passed. Need to wait:', (configuredInterval * 0.8 - timeSinceLastRefresh), 'ms more');
+      this._log('SKIPPING refresh - not enough time passed. Need to wait:', (configuredInterval * 0.8 - timeSinceLastRefresh), 'ms more');
       return;
     }
     
@@ -475,7 +501,7 @@ class MediaCard extends LitElement {
       let selectedFile;
       let shouldUpdate = false;
       
-      if (this.config.folder_mode === 'latest') {
+      if (this._isLatestMode()) {
         // Check if there's a newer file
         selectedFile = this._getLatestFile();
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
@@ -483,11 +509,11 @@ class MediaCard extends LitElement {
         shouldUpdate = resolvedUrl && resolvedUrl !== this._mediaUrl;
         
         if (shouldUpdate) {
-          console.log('Found newer file:', selectedFile.title || selectedFile.media_content_id);
+          this._log('Found newer file:', this._getItemDisplayName(selectedFile));
         } else {
-          console.log('No newer files found');
+          this._log('No newer files found');
         }
-      } else if (this.config.folder_mode === 'random') {
+      } else if (this._isRandomMode()) {
         // Get a different random file (avoid showing the same file repeatedly)
         const randomResult = this._getRandomFileWithIndex(true); // Pass true to avoid current file
         selectedFile = randomResult.file;
@@ -495,23 +521,23 @@ class MediaCard extends LitElement {
         
         if (shouldUpdate) {
           this._currentMediaIndex = randomResult.index;
-          console.log('Selected new random file:', selectedFile.title || selectedFile.media_content_id);
+          this._log('Selected new random file:', this._getItemDisplayName(selectedFile));
         } else {
-          console.log('No different random file available');
+          this._log('No different random file available');
         }
       }
 
       if (shouldUpdate && selectedFile) {
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
         if (resolvedUrl) {
-          console.log('UPDATING media URL and setting refresh time');
+          this._log('UPDATING media URL and setting refresh time');
           this._setMediaUrl(resolvedUrl);
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = now;
           this._forceMediaReload();
         }
       } else {
-        console.log('No update needed, but updating refresh time to prevent rapid retries');
+        this._log('No update needed, but updating refresh time to prevent rapid retries');
         this._lastRefreshTime = now; // Update time even if no change to prevent rapid retries
       }
     } catch (error) {
@@ -522,7 +548,7 @@ class MediaCard extends LitElement {
   async _scanFolderContents() {
     if (!this.hass) return;
 
-    console.log('Scanning folder contents for:', this.config.media_path);
+    this._log('Scanning folder contents for:', this.config.media_path);
     
     try {
       const mediaContent = await this.hass.callWS({
@@ -530,7 +556,7 @@ class MediaCard extends LitElement {
         media_content_id: this.config.media_path
       });
 
-      console.log('📊 Raw media browser API response:', JSON.stringify(mediaContent, null, 2));
+      this._log('📊 Raw media browser API response:', JSON.stringify(mediaContent, null, 2));
 
       if (mediaContent && mediaContent.children) {
         // Filter for media files only, respecting the configured media type
@@ -538,7 +564,7 @@ class MediaCard extends LitElement {
           .filter(item => {
             if (item.can_expand) return false; // Skip folders
             
-            const fileName = item.title || item.media_content_id;
+            const fileName = this._getItemDisplayName(item);
             const isMediaFile = this._isMediaFile(fileName);
             if (!isMediaFile) return false;
             
@@ -556,7 +582,7 @@ class MediaCard extends LitElement {
           filteredItems.map(async (item, index) => {
             // Log the full structure of the first few items to understand available data
             if (index < 3) {
-              console.log(`📄 Media item ${index + 1} structure:`, JSON.stringify(item, null, 2));
+              this._log(`📄 Media item ${index + 1} structure:`, JSON.stringify(item, null, 2));
             }
             
             let actualMtime = null;
@@ -564,12 +590,12 @@ class MediaCard extends LitElement {
             
             // Only extract timestamp from filename if we're in 'latest' mode
             // This saves processing cycles in 'random' mode where timestamps aren't needed
-            if (this.config.folder_mode === 'latest') {
-              estimatedMtime = this._extractTimestampFromFilename(item.title || item.media_content_id);
+            if (this._isLatestMode()) {
+              estimatedMtime = this._extractTimestampFromFilename(this._getItemDisplayName(item));
             } else {
               // Skip timestamp extraction for random mode - saves processing cycles
               if (index === 0) { // Log once to avoid spam
-                console.log('⚡ Skipping timestamp extraction in "' + this.config.folder_mode + '" mode for performance');
+                this._log('⚡ Skipping timestamp extraction in "' + this.config.folder_mode + '" mode for performance');
               }
             }
             
@@ -579,7 +605,7 @@ class MediaCard extends LitElement {
             return {
               ...item,
               estimated_mtime: estimatedMtime,
-              sort_name: (item.title || item.media_content_id).toLowerCase(),
+              sort_name: (this._getItemDisplayName(item)).toLowerCase(),
               original_index: index, // Preserve original API order
               actual_mtime: actualMtime // Will be null for now
             };
@@ -587,7 +613,7 @@ class MediaCard extends LitElement {
         );
 
         // Only sort if we're in 'latest' mode - random mode doesn't need sorting
-        if (this.config.folder_mode === 'latest') {
+        if (this._isLatestMode()) {
           // Sort based on available timing information
           this._folderContents.sort((a, b) => {
             // Prioritize items with actual modification times
@@ -608,22 +634,22 @@ class MediaCard extends LitElement {
             return b.sort_name.localeCompare(a.sort_name); // Z to A
           });
 
-          console.log('📁 Sorted', this._folderContents.length, 'files for "latest" mode');
+          this._log('📁 Sorted', this._folderContents.length, 'files for "latest" mode');
           
           // Debug logging for sorting
           if (this._folderContents.length > 0) {
-            console.log('📁 First few files after sorting:');
+            this._log('📁 First few files after sorting:');
             this._folderContents.slice(0, 3).forEach((file, idx) => {
               const timestamp = file.actual_mtime 
                 ? `📅 REAL: ${new Date(file.actual_mtime).toISOString()}` 
                 : file.estimated_mtime 
                   ? `📄 FILENAME: ${new Date(file.estimated_mtime).toISOString()}`
                   : 'no timestamp';
-              console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
+              this._log(`  ${idx + 1}. ${file.title} (${timestamp})`);
             });
           }
         } else {
-          console.log('📁 Found', this._folderContents.length, 'files for "' + this.config.folder_mode + '" mode (skipping sort)');
+          this._log('📁 Found', this._folderContents.length, 'files for "' + this.config.folder_mode + '" mode (skipping sort)');
         }
       } else {
         this._folderContents = [];
@@ -665,7 +691,7 @@ class MediaCard extends LitElement {
         const value = match[1];
         let timestamp;
         
-        console.log(`🔍 Found timestamp pattern in ${filename}: "${value}"`);
+        this._log(`🔍 Found timestamp pattern in ${filename}: "${value}"`);
         
         try {
           if (value.length === 13 && /^\d{13}$/.test(value)) {
@@ -726,17 +752,17 @@ class MediaCard extends LitElement {
           }
           
           if (timestamp && !isNaN(timestamp) && timestamp > 0) {
-            console.log(`✅ Extracted timestamp from ${filename}:`, new Date(timestamp).toISOString());
+            this._log(`✅ Extracted timestamp from ${filename}:`, new Date(timestamp).toISOString());
             return timestamp;
           }
         } catch (e) {
-          console.log(`❌ Failed to parse timestamp "${value}" from ${filename}:`, e.message);
+          this._log(`❌ Failed to parse timestamp "${value}" from ${filename}:`, e.message);
           continue;
         }
       }
     }
     
-    console.log(`⚠️ No timestamp found in filename: ${filename}`);
+    this._log(`⚠️ No timestamp found in filename: ${filename}`);
     return null;
   }
 
@@ -812,7 +838,7 @@ class MediaCard extends LitElement {
     const extension = fileName.split('.').pop()?.toLowerCase();
     const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
     if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
-      console.log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
+      this._log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
     }
     return isMedia;
   }
@@ -832,29 +858,29 @@ class MediaCard extends LitElement {
 
   async _checkForMediaUpdates() {
     if (!this.config?.media_path) {
-      console.log('No media path configured for auto-refresh');
+      this._log('No media path configured for auto-refresh');
       return;
     }
     
     // Check if paused (only applies to random mode)
-    if (this._isPaused && this.config.folder_mode === 'random') {
-      console.log('🎮 Auto-refresh paused in random mode');
+    if (this._isPaused && this._isRandomMode()) {
+      this._log('🎮 Auto-refresh paused in random mode');
       return;
     }
 
     // Proactive URL refresh if current URL is getting old (before expiry)
     if (this._mediaUrl && this._isUrlExpired()) {
-      console.log('⏰ Current media URL is approaching expiry, refreshing proactively');
+      this._log('⏰ Current media URL is approaching expiry, refreshing proactively');
       const refreshSuccess = await this._attemptUrlRefresh();
       if (refreshSuccess) {
-        console.log('✅ Proactive URL refresh successful');
+        this._log('✅ Proactive URL refresh successful');
         return; // Skip normal refresh cycle since we just refreshed
       } else {
         console.warn('⚠️ Proactive URL refresh failed, continuing with normal refresh');
       }
     }
     
-    console.log('Checking for media updates...', this.config.media_path);
+    this._log('Checking for media updates...', this.config.media_path);
     
     // Handle folder mode updates
     if (this.config.is_folder && this.config.folder_mode) {
@@ -865,14 +891,14 @@ class MediaCard extends LitElement {
     try {
       // For media-source URLs, always get a fresh resolved URL
       if (this.config.media_path.startsWith('media-source://')) {
-        console.log('Media-source URL detected, getting fresh resolved URL');
+        this._log('Media-source URL detected, getting fresh resolved URL');
         const freshUrl = await this._resolveMediaPath(this.config.media_path);
         if (freshUrl && freshUrl !== this._mediaUrl) {
-          console.log('Got fresh media URL:', freshUrl);
+          this._log('Got fresh media URL:', freshUrl);
           this._setMediaUrl(freshUrl);
           this._forceMediaReload();
         } else if (freshUrl) {
-          console.log('URL unchanged, forcing reload anyway for media-source');
+          this._log('URL unchanged, forcing reload anyway for media-source');
           this._forceMediaReload();
         }
         return;
@@ -881,7 +907,7 @@ class MediaCard extends LitElement {
       // For direct URLs (/local/, /media/, etc.), check Last-Modified header
       const checkUrl = this.config.media_path.startsWith('/') ? this.config.media_path : this._mediaUrl;
       if (checkUrl) {
-        console.log('Checking Last-Modified for:', checkUrl);
+        this._log('Checking Last-Modified for:', checkUrl);
         const baseCheckUrl = checkUrl.split('?')[0]; // Remove any existing timestamp
         
         const response = await fetch(baseCheckUrl, { 
@@ -895,21 +921,21 @@ class MediaCard extends LitElement {
         
         if (response.ok) {
           const lastModified = response.headers.get('Last-Modified');
-          console.log('Last-Modified check - Current:', lastModified, 'Stored:', this._lastModified);
+          this._log('Last-Modified check - Current:', lastModified, 'Stored:', this._lastModified);
           
           if (!this._lastModified) {
             // First time checking, store the timestamp
             this._lastModified = lastModified;
-            console.log('Stored initial Last-Modified timestamp');
+            this._log('Stored initial Last-Modified timestamp');
           } else if (lastModified && lastModified !== this._lastModified) {
-            console.log('Media file modified, reloading!');
+            this._log('Media file modified, reloading!');
             this._lastModified = lastModified;
             this._forceMediaReload();
           } else {
-            console.log('No changes detected');
+            this._log('No changes detected');
           }
         } else {
-          console.log('HEAD request failed:', response.status, response.statusText);
+          this._log('HEAD request failed:', response.status, response.statusText);
         }
       }
     } catch (error) {
@@ -919,11 +945,11 @@ class MediaCard extends LitElement {
 
   _forceMediaReload() {
     if (!this._mediaUrl) {
-      console.log('No media URL to reload');
+      this._log('No media URL to reload');
       return;
     }
     
-    console.log('Force reloading media:', this._mediaUrl);
+    this._log('Force reloading media:', this._mediaUrl);
     
     // For media-source URLs, we should have already gotten a fresh URL
     // For direct URLs, we can use cache-busting
@@ -931,13 +957,13 @@ class MediaCard extends LitElement {
       ? this._mediaUrl  // Use the fresh resolved URL as-is
       : `${this._mediaUrl.split('?')[0]}?_refresh=${Date.now()}`; // Add cache-busting for direct URLs
     
-    console.log('Using URL for reload:', useUrl);
+    this._log('Using URL for reload:', useUrl);
     
     // For images, update src directly
     if (this._mediaType === 'image') {
       const img = this.shadowRoot?.querySelector('img');
       if (img) {
-        console.log('Refreshing image element');
+        this._log('Refreshing image element');
         img.src = useUrl;
         // Don't update this._mediaUrl for media-source URLs since they're already fresh
         if (!this.config?.media_path?.startsWith('media-source://')) {
@@ -947,7 +973,7 @@ class MediaCard extends LitElement {
     } else if (this._mediaType === 'video') {
       const video = this.shadowRoot?.querySelector('video');
       if (video) {
-        console.log('Refreshing video element');
+        this._log('Refreshing video element');
         
         // Store current playback state
         const currentTime = video.currentTime;
@@ -1019,7 +1045,7 @@ class MediaCard extends LitElement {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
-      console.log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
+      this._log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
     }
   }
 
@@ -1097,11 +1123,11 @@ class MediaCard extends LitElement {
   }
 
   async _manualRefresh() {
-    console.log('Manual refresh triggered');
+    this._log('Manual refresh triggered');
     
     // For media-source URLs, get a fresh resolved URL first
     if (this.config?.media_path?.startsWith('media-source://')) {
-      console.log('Getting fresh media-source URL for manual refresh');
+      this._log('Getting fresh media-source URL for manual refresh');
       const freshUrl = await this._resolveMediaPath(this.config.media_path);
       if (freshUrl) {
         this._mediaUrl = freshUrl;
@@ -1113,7 +1139,7 @@ class MediaCard extends LitElement {
   }
 
   async _resolveAndUpdate() {
-    console.log('Re-resolving media path:', this.config.media_path);
+    this._log('Re-resolving media path:', this.config.media_path);
     try {
       let freshUrl = '';
       
@@ -1126,7 +1152,7 @@ class MediaCard extends LitElement {
       }
       
       if (freshUrl) {
-        console.log('Got fresh URL:', freshUrl);
+        this._log('Got fresh URL:', freshUrl);
         this._setMediaUrl(freshUrl);
         this.requestUpdate();
         
@@ -1145,7 +1171,7 @@ class MediaCard extends LitElement {
   _renderMedia() {
     // Handle folder mode that hasn't been initialized yet
     if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass) {
-      console.log('🔧 No media URL but have folder config - triggering initialization');
+      this._log('🔧 No media URL but have folder config - triggering initialization');
       // Trigger folder mode initialization asynchronously
       setTimeout(() => this._handleFolderMode(), 10);
       
@@ -1162,7 +1188,7 @@ class MediaCard extends LitElement {
 
     // Handle single file mode that hasn't been initialized yet
     if (!this._mediaUrl && this.config?.media_path && !this.config?.is_folder && this.hass) {
-      console.log('🔧 No media URL but have single file config - triggering initialization');
+      this._log('🔧 No media URL but have single file config - triggering initialization');
       // Trigger single file loading asynchronously
       setTimeout(() => this._loadSingleFile(), 10);
       
@@ -1342,10 +1368,10 @@ class MediaCard extends LitElement {
         // This is a folder configuration - scan for media files
         // Initialize if we don't have folder contents, config changed, or no media URL set
         if (!this._folderContents || changedProps.has('config') || !this._mediaUrl) {
-          console.log('Initializing folder mode - contents:', !!this._folderContents, 'config changed:', changedProps.has('config'), 'has media URL:', !!this._mediaUrl);
+          this._log('Initializing folder mode - contents:', !!this._folderContents, 'config changed:', changedProps.has('config'), 'has media URL:', !!this._mediaUrl);
           await this._handleFolderMode();
         } else {
-          console.log('Skipping folder mode refresh - already initialized and hass updated');
+          this._log('Skipping folder mode refresh - already initialized and hass updated');
         }
       } else {
         // This is a regular file configuration
@@ -1383,16 +1409,16 @@ class MediaCard extends LitElement {
         }
       }
     } catch (error) {
-      console.log('Could not get initial timestamp:', error);
+      this._log('Could not get initial timestamp:', error);
     }
   }
 
   _onVideoLoadStart() {
-    console.log('Video started loading:', this._mediaUrl);
+    this._log('Video started loading:', this._mediaUrl);
   }
 
   _onVideoCanPlay() {
-    console.log('Video can start playing:', this._mediaUrl);
+    this._log('Video can start playing:', this._mediaUrl);
   }
 
   _onVideoLoadedMetadata() {
@@ -1405,14 +1431,14 @@ class MediaCard extends LitElement {
         video.muted = false;
         video.muted = true;
       }, 50);
-      console.log('Video muted state applied:', video.muted);
+      this._log('Video muted state applied:', video.muted);
     }
   }
 
   _onMediaLoaded() {
     // Only log once when media initially loads, not during auto-refresh cycles
     if (!this._mediaLoadedLogged) {
-      console.log('Media loaded successfully:', this._mediaUrl);
+      this._log('Media loaded successfully:', this._mediaUrl);
       this._mediaLoadedLogged = true;
     }
     // Clear any previous error states
@@ -1457,7 +1483,7 @@ class MediaCard extends LitElement {
   }
 
   async _attemptUrlRefresh() {
-    console.log('🔄 Attempting URL refresh due to media load failure');
+    this._log('🔄 Attempting URL refresh due to media load failure');
     
     try {
       let refreshedUrl = null;
@@ -1467,17 +1493,17 @@ class MediaCard extends LitElement {
         if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
           const currentFile = this._folderContents[this._currentMediaIndex];
           refreshedUrl = await this._resolveMediaPath(currentFile.media_content_id);
-          console.log('🔄 Refreshed folder media URL:', refreshedUrl);
+          this._log('🔄 Refreshed folder media URL:', refreshedUrl);
         }
       } else if (this.config.media_path) {
         // For single file mode, refresh the configured path
         refreshedUrl = await this._resolveMediaPath(this.config.media_path);
-        console.log('🔄 Refreshed single file URL:', refreshedUrl);
+        this._log('🔄 Refreshed single file URL:', refreshedUrl);
       }
       
       if (refreshedUrl && refreshedUrl !== this._mediaUrl) {
         this._setMediaUrl(refreshedUrl);
-        console.log('✅ URL refresh successful, updating media');
+        this._log('✅ URL refresh successful, updating media');
         this.requestUpdate();
         return true;
       } else {
@@ -1517,7 +1543,7 @@ class MediaCard extends LitElement {
     super.connectedCallback();
     // Ensure auto-refresh is set up when component is connected/reconnected
     if (this.config && this.hass) {
-      console.log('🔌 Component connected - setting up auto-refresh');
+      this._log('🔌 Component connected - setting up auto-refresh');
       this._setupAutoRefresh();
       // Also try to resume if it was paused for navigation
       this._resumeAutoRefreshIfNeeded();
@@ -1547,11 +1573,11 @@ class MediaCard extends LitElement {
       
       if (isFolder) {
         // Folder mode - trigger folder handling
-        console.log('🔄 Hass available - initializing folder mode');
+        this._log('🔄 Hass available - initializing folder mode');
         setTimeout(() => this._handleFolderMode(), 50);
       } else if (this.config.media_path) {
         // Single file mode - ensure media loads even if auto-refresh is disabled
-        console.log('🔄 Hass available - loading single file');
+        this._log('🔄 Hass available - loading single file');
         setTimeout(() => this._loadSingleFile(), 50);
       }
     }
@@ -1562,7 +1588,7 @@ class MediaCard extends LitElement {
       
       // Only set up if we don't already have an interval running
       if (!this._refreshInterval) {
-        console.log('🔄 Setting up auto-refresh after property update');
+        this._log('🔄 Setting up auto-refresh after property update');
         this._setupAutoRefresh();
       }
     }
@@ -1653,9 +1679,9 @@ class MediaCard extends LitElement {
     e.stopPropagation();
     
     // Only allow pause/resume in random mode
-    if (this.config.folder_mode === 'random') {
+    if (this._isRandomMode()) {
       this._isPaused = !this._isPaused;
-      console.log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode`);
+      this._log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode`);
       this.requestUpdate();
     }
   }
@@ -1698,10 +1724,10 @@ class MediaCard extends LitElement {
       case 'p':
       case 'P':
         // Pause/Resume auto-refresh in random mode
-        if (this.config.folder_mode === 'random') {
+        if (this._isRandomMode()) {
           e.preventDefault();
           this._isPaused = !this._isPaused;
-          console.log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode (keyboard)`);
+          this._log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode (keyboard)`);
           this.requestUpdate();
         }
         break;
@@ -1733,7 +1759,7 @@ class MediaCard extends LitElement {
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
     
-    console.log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
+    this._log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
@@ -1747,7 +1773,7 @@ class MediaCard extends LitElement {
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
     
-    console.log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
+    this._log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
@@ -1763,7 +1789,7 @@ class MediaCard extends LitElement {
       return;
     }
     
-    console.log(`🔄 Navigate to index: ${this._getCurrentMediaIndex()} -> ${targetIndex}`);
+    this._log(`🔄 Navigate to index: ${this._getCurrentMediaIndex()} -> ${targetIndex}`);
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
@@ -1782,7 +1808,7 @@ class MediaCard extends LitElement {
       case 'pause':
         // Pause auto-refresh by clearing the interval
         if (this._refreshInterval) {
-          console.log('🔄 Pausing auto-refresh due to manual navigation');
+          this._log('🔄 Pausing auto-refresh due to manual navigation');
           clearInterval(this._refreshInterval);
           this._refreshInterval = null;
           // Mark that we paused due to navigation (for potential resume)
@@ -1792,12 +1818,12 @@ class MediaCard extends LitElement {
         
       case 'continue':
         // Do nothing - let auto-refresh continue normally
-        console.log('🔄 Continuing auto-refresh during manual navigation');
+        this._log('🔄 Continuing auto-refresh during manual navigation');
         break;
         
       case 'reset':
         // Reset the auto-refresh timer
-        console.log('🔄 Resetting auto-refresh timer due to manual navigation');
+        this._log('🔄 Resetting auto-refresh timer due to manual navigation');
         this._lastRefreshTime = Date.now();
         // Restart the timer
         this._setupAutoRefresh();
@@ -1811,7 +1837,7 @@ class MediaCard extends LitElement {
         this.config?.auto_refresh_seconds > 0 && 
         !this._refreshInterval && 
         this.hass) {
-      console.log('🔄 Resuming auto-refresh after being paused for navigation');
+      this._log('🔄 Resuming auto-refresh after being paused for navigation');
       this._setupAutoRefresh();
       this._pausedForNavigation = false;
     }
@@ -1848,7 +1874,7 @@ class MediaCard extends LitElement {
     
     const item = this._folderContents[index];
     
-    console.log(`📂 Loading media at index ${index}:`, item.title);
+    this._log(`📂 Loading media at index ${index}:`, item.title);
     
     try {
       const mediaUrl = await this._resolveMediaPath(item.media_content_id);
@@ -1868,7 +1894,7 @@ class MediaCard extends LitElement {
   async _performAction(action) {
     if (!action || !this.hass) return;
     
-    console.log('Performing action:', action);
+    this._log('Performing action:', action);
     
     try {
       switch (action.action) {
@@ -2483,7 +2509,7 @@ class MediaCardEditor extends LitElement {
       return;
     }
 
-    console.log('Opening media browser...');
+    this._log('Opening media browser...');
     
     // Determine the starting path for the browser
     let startPath = '';
@@ -2496,7 +2522,7 @@ class MediaCardEditor extends LitElement {
         const pathParts = configuredPath.split('/');
         pathParts.pop(); // Remove the filename
         startPath = pathParts.join('/');
-        console.log('Starting browser from current folder:', startPath);
+        this._log('Starting browser from current folder:', startPath);
       }
     }
     
@@ -2508,11 +2534,11 @@ class MediaCardEditor extends LitElement {
         return;
       }
     } catch (error) {
-      console.log('Could not fetch media contents for path:', startPath, 'Error:', error);
+      this._log('Could not fetch media contents for path:', startPath, 'Error:', error);
       
       // If starting from a specific folder failed, try from root
       if (startPath !== '') {
-        console.log('Retrying from root...');
+        this._log('Retrying from root...');
         try {
           const mediaContent = await this._fetchMediaContents(this.hass, '');
           if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
@@ -2520,7 +2546,7 @@ class MediaCardEditor extends LitElement {
             return;
           }
         } catch (rootError) {
-          console.log('Could not fetch root media contents either:', rootError);
+          this._log('Could not fetch root media contents either:', rootError);
         }
       }
     }
@@ -2540,10 +2566,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     const mediaPath = prompt(helpText, configuredPath);
     
     if (mediaPath && mediaPath.trim()) {
-      console.log('Media path entered:', mediaPath);
+      this._log('Media path entered:', mediaPath);
       this._handleMediaPicked(mediaPath.trim());
     } else {
-      console.log('No media path entered');
+      this._log('No media path entered');
     }
   }
 
@@ -2554,7 +2580,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _showCustomMediaBrowser(mediaContent) {
-    console.log('Creating custom media browser with', mediaContent.children.length, 'items');
+    this._log('Creating custom media browser with', mediaContent.children.length, 'items');
     
     // Force remove any existing dialogs first
     const existingDialogs = document.querySelectorAll('[data-media-browser-dialog="true"]');
@@ -2655,23 +2681,23 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
     // Dialog close function with debugging
     const closeDialog = () => {
-      console.log('Closing media browser dialog');
+      this._log('Closing media browser dialog');
       if (dialog && dialog.parentNode) {
         document.body.removeChild(dialog);
-        console.log('Dialog closed successfully');
+        this._log('Dialog closed successfully');
       }
     };
 
     // Close button handler with debugging and force event handling
     closeButton.onclick = (e) => {
-      console.log('Cancel button clicked via onclick');
+      this._log('Cancel button clicked via onclick');
       closeDialog();
       return false;
     };
 
     // Backdrop click handler - use onclick to force event handling
     dialog.onclick = (e) => {
-      console.log('Dialog backdrop clicked via onclick', e.target === dialog);
+      this._log('Dialog backdrop clicked via onclick', e.target === dialog);
       if (e.target === dialog) {
         closeDialog();
       }
@@ -2680,7 +2706,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Escape key to close
     const handleKeydown = (e) => {
       if (e.key === 'Escape') {
-        console.log('Escape key pressed');
+        this._log('Escape key pressed');
         closeDialog();
         document.removeEventListener('keydown', handleKeydown);
       }
@@ -2693,7 +2719,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     dialogContent.appendChild(buttonContainer);
     dialog.appendChild(dialogContent);
     
-    console.log('Appending dialog to document.body');
+    this._log('Appending dialog to document.body');
     document.body.appendChild(dialog);
     
     // Force focus, remove inert, and log status
@@ -2706,19 +2732,19 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       dialog.focus();
       dialog.setAttribute('tabindex', '0');
       
-      console.log('Media browser dialog opened and focused');
-      console.log('Dialog element:', dialog);
-      console.log('Dialog inert?', dialog.hasAttribute('inert'));
-      console.log('Dialog position:', dialog.getBoundingClientRect());
-      console.log('Dialog z-index:', window.getComputedStyle(dialog).zIndex);
-      console.log('Dialog pointer-events:', window.getComputedStyle(dialog).pointerEvents);
+      this._log('Media browser dialog opened and focused');
+      this._log('Dialog element:', dialog);
+      this._log('Dialog inert?', dialog.hasAttribute('inert'));
+      this._log('Dialog position:', dialog.getBoundingClientRect());
+      this._log('Dialog z-index:', window.getComputedStyle(dialog).zIndex);
+      this._log('Dialog pointer-events:', window.getComputedStyle(dialog).pointerEvents);
     });
   }
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
-    console.log('Adding media files to browser:', mediaContent.children.length, 'items');
-    console.log('Current path:', currentPath);
-    console.log('Media content ID:', mediaContent.media_content_id);
+    this._log('Adding media files to browser:', mediaContent.children.length, 'items');
+    this._log('Current path:', currentPath);
+    this._log('Media content ID:', mediaContent.media_content_id);
     
     // Check if this folder contains media files (not just subfolders)
     // For performance with large folders, just check the first 50 items
@@ -2726,23 +2752,23 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     const hasMediaFiles = itemsToCheck.some(item => {
       const isFolder = item.can_expand;
       // Use item.title (display name) if available, fallback to media_content_id
-      const fileName = item.title || item.media_content_id;
+      const fileName = this._getItemDisplayName(item);
       const isMedia = !isFolder && this._isMediaFile(fileName);
       if (!isFolder && itemsToCheck.length < 10) {
-        console.log('Checking file:', fileName, 'isMedia:', isMedia);
+        this._log('Checking file:', fileName, 'isMedia:', isMedia);
       }
       return isMedia;
     });
     
-    console.log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
-    console.log('Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
+    this._log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
+    this._log('Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
     
     // If we're in a folder (not root) with media files, add special folder options at the top
     if ((currentPath && currentPath !== '') && hasMediaFiles) {
-      console.log('Adding folder options for path:', currentPath);
+      this._log('Adding folder options for path:', currentPath);
       this._addFolderOptions(container, dialog, currentPath);
     } else {
-      console.log('Not adding folder options - currentPath:', currentPath, 'hasMediaFiles:', hasMediaFiles);
+      this._log('Not adding folder options - currentPath:', currentPath, 'hasMediaFiles:', hasMediaFiles);
     }
     
     // Filter items to display based on media type configuration
@@ -2752,17 +2778,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       
       // For files, check media type filter
       if (this._config.media_type && this._config.media_type !== 'all') {
-        const fileName = item.title || item.media_content_id;
+        const fileName = this._getItemDisplayName(item);
         const fileType = this._detectFileType(fileName);
         return fileType === this._config.media_type;
       }
       
       // Show all media files if no specific filter or "all" is selected
-      const fileName = item.title || item.media_content_id;
+      const fileName = this._getItemDisplayName(item);
       return this._isMediaFile(fileName);
     });
     
-    console.log('Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
+    this._log('Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
     
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
@@ -2784,7 +2810,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
       // Use onmouseenter/onmouseleave instead of addEventListener
       fileItem.onmouseenter = (e) => {
-        console.log('Mouse entered item:', item.title);
+        this._log('Mouse entered item:', item.title);
         fileItem.style.background = 'var(--secondary-background-color, #f5f5f5)';
         fileItem.style.borderColor = 'var(--primary-color, #007bff)';
         fileItem.style.transform = 'translateY(-1px)';
@@ -2792,7 +2818,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       };
 
       fileItem.onmouseleave = (e) => {
-        console.log('Mouse left item:', item.title);
+        this._log('Mouse left item:', item.title);
         fileItem.style.background = 'var(--card-background-color, #fff)';
         fileItem.style.borderColor = 'var(--divider-color, #ddd)';
         fileItem.style.transform = 'translateY(0)';
@@ -2808,7 +2834,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       `;
       
       const name = document.createElement('span');
-      name.textContent = item.title || item.media_content_id;
+      name.textContent = this._getItemDisplayName(item);
       name.style.cssText = `
         flex: 1 !important;
         overflow: hidden !important;
@@ -2824,7 +2850,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         icon.textContent = '📁';
         // Use onclick instead of addEventListener
         fileItem.onclick = async (e) => {
-          console.log('FOLDER CLICKED VIA ONCLICK:', item.media_content_id);
+          this._log('FOLDER CLICKED VIA ONCLICK:', item.media_content_id);
           
           try {
             const subContent = await this._fetchMediaContents(this.hass, item.media_content_id);
@@ -2852,7 +2878,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             
             // Use onclick for back button too
             backButton.onclick = (e) => {
-              console.log('BACK BUTTON CLICKED VIA ONCLICK');
+              this._log('BACK BUTTON CLICKED VIA ONCLICK');
               container.innerHTML = '';
               this._addMediaFilesToBrowser(container, mediaContent, dialog, currentPath);
               return false;
@@ -2890,12 +2916,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         // Use onclick for file selection
         fileItem.onclick = (e) => {
-          console.log('FILE CLICKED VIA ONCLICK:', item.media_content_id);
+          this._log('FILE CLICKED VIA ONCLICK:', item.media_content_id);
           
           this._handleMediaPicked(item.media_content_id);
           // Close the dialog
           if (dialog && dialog.parentNode) {
-            console.log('Closing dialog after file selection');
+            this._log('Closing dialog after file selection');
             document.body.removeChild(dialog);
           }
           return false;
@@ -2907,11 +2933,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       container.appendChild(fileItem);
     }
     
-    console.log('Added all items to browser container');
+    this._log('Added all items to browser container');
   }
 
   _addFolderOptions(container, dialog, folderPath) {
-    console.log('Adding folder options for:', folderPath);
+    this._log('Adding folder options for:', folderPath);
     
     // Create a separator/header for folder options
     const optionsHeader = document.createElement('div');
@@ -3001,7 +3027,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     };
 
     option.onclick = (e) => {
-      console.log('Folder option clicked:', title);
+      this._log('Folder option clicked:', title);
       clickHandler();
       return false;
     };
@@ -3048,7 +3074,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _handleFolderModeSelected(folderPath, mode, dialog) {
-    console.log('Folder mode selected:', mode, 'for path:', folderPath);
+    this._log('Folder mode selected:', mode, 'for path:', folderPath);
     
     // Store the folder configuration
     this._config = { 
@@ -3063,13 +3089,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     // Close the dialog
     if (dialog && dialog.parentNode) {
-      console.log('Closing dialog after folder mode selection');
+      this._log('Closing dialog after folder mode selection');
       document.body.removeChild(dialog);
     }
   }
 
   _handleMediaPicked(mediaContentId) {
-    console.log('Media picked:', mediaContentId);
+    this._log('Media picked:', mediaContentId);
     // Store the full media-source path for configuration
     this._config = { ...this._config, media_path: mediaContentId };
     
@@ -3090,7 +3116,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     }
     
     this._fireConfigChanged();
-    console.log('Config updated (file selected, folder options cleared):', this._config);
+    this._log('Config updated (file selected, folder options cleared):', this._config);
   }
 
   _titleChanged(ev) {
@@ -3336,7 +3362,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     const extension = fileName.split('.').pop()?.toLowerCase();
     const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
     if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
-      console.log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
+      this._log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
     }
     return isMedia;
   }
@@ -3369,8 +3395,11 @@ window.customCards.push({
   documentationURL: 'https://github.com/markaggar/ha-media-card'
 });
 
-console.info(
-  '%c  MEDIA-CARD  %c  1.1.9  ',
-  'color: orange; font-weight: bold; background: black',
-  'color: white; font-weight: bold; background: dimgray'
-);
+// Only show version info in development
+if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
+  console.info(
+    '%c  MEDIA-CARD  %c  1.1.9  ',
+    'color: orange; font-weight: bold; background: black',
+    'color: white; font-weight: bold; background: dimgray'
+  );
+}
