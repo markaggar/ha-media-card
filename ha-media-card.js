@@ -438,7 +438,7 @@ class MediaCard extends LitElement {
 
       if (mediaContent && mediaContent.children) {
         // Filter for media files only, respecting the configured media type
-        this._folderContents = mediaContent.children
+        const filteredItems = mediaContent.children
           .filter(item => {
             if (item.can_expand) return false; // Skip folders
             
@@ -453,39 +453,56 @@ class MediaCard extends LitElement {
             }
             
             return true;
-          })
-          .map((item, index) => {
+          });
+
+        // Try to get actual file modification times for better sorting
+        this._folderContents = await Promise.all(
+          filteredItems.map(async (item, index) => {
             // Log the full structure of the first few items to understand available data
             if (index < 3) {
               console.log(`📄 Media item ${index + 1} structure:`, JSON.stringify(item, null, 2));
             }
             
+            let actualMtime = null;
+            
+            // For now, focus on better filename timestamp extraction
+            // In the future, could explore file system APIs if they become available
+            
             return {
               ...item,
-              // Try to extract timestamp from filename for sorting
+              // Try to extract timestamp from filename
               estimated_mtime: this._extractTimestampFromFilename(item.title || item.media_content_id),
               sort_name: (item.title || item.media_content_id).toLowerCase(),
-              original_index: index // Preserve original API order
+              original_index: index, // Preserve original API order
+              actual_mtime: actualMtime // Will be null for now
             };
           })
-          .sort((a, b) => {
-            // If we have timestamps for both files, sort by timestamp (newest first)
-            if (a.estimated_mtime && b.estimated_mtime) {
-              return b.estimated_mtime - a.estimated_mtime;
-            }
-            // If only one has a timestamp, prioritize it
-            if (a.estimated_mtime && !b.estimated_mtime) return -1;
-            if (!a.estimated_mtime && b.estimated_mtime) return 1;
-            
-            // For "Show Latest", try to preserve the original API order first
-            // Home Assistant might return files in modification time order
-            if (this.config.folder_mode === 'latest') {
-              return a.original_index - b.original_index;
-            }
-            
-            // Otherwise sort by filename (newest/highest alphabetically first)
-            return b.sort_name.localeCompare(a.sort_name);
-          });
+        );
+
+        // Sort based on available timing information
+        this._folderContents.sort((a, b) => {
+          // Prioritize items with actual modification times
+          if (a.actual_mtime && b.actual_mtime) {
+            return b.actual_mtime - a.actual_mtime; // Newest first
+          }
+          if (a.actual_mtime && !b.actual_mtime) return -1;
+          if (!a.actual_mtime && b.actual_mtime) return 1;
+          
+          // Fall back to filename timestamp parsing
+          if (a.estimated_mtime && b.estimated_mtime) {
+            return b.estimated_mtime - a.estimated_mtime;
+          }
+          if (a.estimated_mtime && !b.estimated_mtime) return -1;
+          if (!a.estimated_mtime && b.estimated_mtime) return 1;
+          
+          // Final fallback: for "latest" mode, try reverse alphabetical (often newer files have higher names)
+          // For other modes, use regular alphabetical
+          if (this.config.folder_mode === 'latest') {
+            return b.sort_name.localeCompare(a.sort_name); // Z to A
+          } else {
+            return a.sort_name.localeCompare(b.sort_name); // A to Z
+          }
+        });
 
         console.log('Found', this._folderContents.length, 'media files in folder (filtered by type:', this.config.media_type, ')');
         
@@ -493,8 +510,12 @@ class MediaCard extends LitElement {
         if (this._folderContents.length > 0) {
           console.log('📁 First few files after sorting (mode:', this.config.folder_mode, '):');
           this._folderContents.slice(0, 3).forEach((file, idx) => {
-            const timestamp = file.estimated_mtime ? new Date(file.estimated_mtime).toISOString() : 'no timestamp';
-            console.log(`  ${idx + 1}. ${file.title} (${timestamp}) [original position: ${file.original_index + 1}]`);
+            const timestamp = file.actual_mtime 
+              ? `📅 REAL: ${new Date(file.actual_mtime).toISOString()}` 
+              : file.estimated_mtime 
+                ? `📄 FILENAME: ${new Date(file.estimated_mtime).toISOString()}`
+                : 'no timestamp';
+            console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
           });
         }
       } else {
@@ -508,12 +529,22 @@ class MediaCard extends LitElement {
 
   _extractTimestampFromFilename(filename) {
     // Try to extract timestamp from common filename patterns
-    // Format: YYYY-MM-DD, YYYYMMDD, timestamp, etc.
+    // Enhanced patterns for better detection
     const patterns = [
-      /(\d{4}-\d{2}-\d{2})/,     // YYYY-MM-DD
-      /(\d{8})/,                  // YYYYMMDD
-      /(\d{13})/,                 // 13-digit timestamp
-      /(\d{10})/                  // 10-digit timestamp
+      // ISO date formats
+      /(\d{4}-\d{2}-\d{2}[T_\s]\d{2}[:\-]\d{2}[:\-]\d{2})/,  // 2024-01-15T10:30:45 or 2024-01-15_10-30-45
+      /(\d{4}-\d{2}-\d{2})/,                                    // YYYY-MM-DD
+      /(\d{2}-\d{2}-\d{4})/,                                    // MM-DD-YYYY or DD-MM-YYYY
+      /(\d{4}\d{2}\d{2}_?\d{6})/,                              // YYYYMMDD_HHMMSS or YYYYMMDDHHMMSS
+      /(\d{8})/,                                                // YYYYMMDD
+      /(\d{13})/,                                               // 13-digit milliseconds timestamp
+      /(\d{10})/,                                               // 10-digit seconds timestamp
+      // Camera/device specific patterns
+      /IMG[_\-](\d{8}_\d{6})/,                                 // IMG_20240115_103045
+      /VID[_\-](\d{8}_\d{6})/,                                 // VID_20240115_103045
+      /(\d{4}\d{2}\d{2}\d{2}\d{2}\d{2})/,                      // YYYYMMDDHHMMSS
+      // Home Assistant snapshot patterns
+      /snapshot[_\-](\d{4}-\d{2}-\d{2}[T_]\d{2}[:\-]\d{2}[:\-]\d{2})/i, // snapshot_2024-01-15T10:30:45
     ];
 
     for (const pattern of patterns) {
@@ -522,29 +553,63 @@ class MediaCard extends LitElement {
         const value = match[1];
         let timestamp;
         
-        if (value.length === 13) {
-          // Milliseconds timestamp
-          timestamp = parseInt(value);
-        } else if (value.length === 10) {
-          // Seconds timestamp
-          timestamp = parseInt(value) * 1000;
-        } else if (value.length === 8) {
-          // YYYYMMDD format
-          const year = value.substring(0, 4);
-          const month = value.substring(4, 6);
-          const day = value.substring(6, 8);
-          timestamp = new Date(`${year}-${month}-${day}`).getTime();
-        } else if (value.includes('-')) {
-          // YYYY-MM-DD format
-          timestamp = new Date(value).getTime();
-        }
+        console.log(`🔍 Found timestamp pattern in ${filename}: "${value}"`);
         
-        if (timestamp && !isNaN(timestamp)) {
-          return timestamp;
+        try {
+          if (value.length === 13 && /^\d{13}$/.test(value)) {
+            // Milliseconds timestamp
+            timestamp = parseInt(value);
+          } else if (value.length === 10 && /^\d{10}$/.test(value)) {
+            // Seconds timestamp
+            timestamp = parseInt(value) * 1000;
+          } else if (value.length === 8 && /^\d{8}$/.test(value)) {
+            // YYYYMMDD format
+            const year = value.substring(0, 4);
+            const month = value.substring(4, 6);
+            const day = value.substring(6, 8);
+            timestamp = new Date(`${year}-${month}-${day}`).getTime();
+          } else if (value.length === 15 && /^\d{8}_\d{6}$/.test(value)) {
+            // YYYYMMDD_HHMMSS format (camera files)
+            const datePart = value.substring(0, 8);
+            const timePart = value.substring(9);
+            const year = datePart.substring(0, 4);
+            const month = datePart.substring(4, 6);
+            const day = datePart.substring(6, 8);
+            const hour = timePart.substring(0, 2);
+            const minute = timePart.substring(2, 4);
+            const second = timePart.substring(4, 6);
+            timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+          } else if (value.length === 14 && /^\d{14}$/.test(value)) {
+            // YYYYMMDDHHMMSS format
+            const year = value.substring(0, 4);
+            const month = value.substring(4, 6);
+            const day = value.substring(6, 8);
+            const hour = value.substring(8, 10);
+            const minute = value.substring(10, 12);
+            const second = value.substring(12, 14);
+            timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+          } else if (value.includes('-') || value.includes('T') || value.includes('_')) {
+            // Various date-time formats
+            let dateStr = value.replace(/_/g, 'T').replace(/-/g, ':');
+            // Fix common format issues
+            if (dateStr.match(/^\d{4}:\d{2}:\d{2}$/)) {
+              dateStr = dateStr.replace(/:/g, '-'); // YYYY-MM-DD format
+            }
+            timestamp = new Date(dateStr).getTime();
+          }
+          
+          if (timestamp && !isNaN(timestamp) && timestamp > 0) {
+            console.log(`✅ Extracted timestamp from ${filename}:`, new Date(timestamp).toISOString());
+            return timestamp;
+          }
+        } catch (e) {
+          console.log(`❌ Failed to parse timestamp "${value}" from ${filename}:`, e.message);
+          continue;
         }
       }
     }
     
+    console.log(`⚠️ No timestamp found in filename: ${filename}`);
     return null;
   }
 
