@@ -529,22 +529,27 @@ class MediaCard extends LitElement {
 
   _extractTimestampFromFilename(filename) {
     // Try to extract timestamp from common filename patterns
-    // Enhanced patterns for better detection
+    // Enhanced patterns for better detection - ORDER MATTERS: specific patterns first!
     const patterns = [
-      // ISO date formats
+      // ISO date formats with time
       /(\d{4}-\d{2}-\d{2}[T_\s]\d{2}[:\-]\d{2}[:\-]\d{2})/,  // 2024-01-15T10:30:45 or 2024-01-15_10-30-45
-      /(\d{4}-\d{2}-\d{2})/,                                    // YYYY-MM-DD
-      /(\d{2}-\d{2}-\d{4})/,                                    // MM-DD-YYYY or DD-MM-YYYY
-      /(\d{4}\d{2}\d{2}_?\d{6})/,                              // YYYYMMDD_HHMMSS or YYYYMMDDHHMMSS
-      /(\d{8})/,                                                // YYYYMMDD
-      /(\d{13})/,                                               // 13-digit milliseconds timestamp
-      /(\d{10})/,                                               // 10-digit seconds timestamp
-      // Camera/device specific patterns
+      // Camera/device specific patterns with time
       /IMG[_\-](\d{8}_\d{6})/,                                 // IMG_20240115_103045
       /VID[_\-](\d{8}_\d{6})/,                                 // VID_20240115_103045
-      /(\d{4}\d{2}\d{2}\d{2}\d{2}\d{2})/,                      // YYYYMMDDHHMMSS
+      /(\d{8}_\d{6})/,                                         // YYYYMMDD_HHMMSS (generic)
+      /(\d{4}\d{2}\d{2}_?\d{6})/,                              // YYYYMMDD_HHMMSS or YYYYMMDDHHMMSS
+      /(\d{4}\d{2}\d{2}\d{2}\d{2}\d{2})/,                      // YYYYMMDDHHMMSS (14 digits)
       // Home Assistant snapshot patterns
       /snapshot[_\-](\d{4}-\d{2}-\d{2}[T_]\d{2}[:\-]\d{2}[:\-]\d{2})/i, // snapshot_2024-01-15T10:30:45
+      /(\w+_snapshot_\d{8}_\d{6})/,                            // entity_snapshot_YYYYMMDD_HHMMSS
+      /.*_(\d{8}_\d{6})\.?\w*/,                                // Any filename ending with _YYYYMMDD_HHMMSS.ext
+      // Timestamps (high precision)
+      /(\d{13})/,                                               // 13-digit milliseconds timestamp
+      /(\d{10})/,                                               // 10-digit seconds timestamp
+      // Date only formats (less specific, so last)
+      /(\d{4}-\d{2}-\d{2})/,                                    // YYYY-MM-DD
+      /(\d{2}-\d{2}-\d{4})/,                                    // MM-DD-YYYY or DD-MM-YYYY
+      /(\d{8})/,                                                // YYYYMMDD (date only, lowest priority)
     ];
 
     for (const pattern of patterns) {
@@ -588,6 +593,21 @@ class MediaCard extends LitElement {
             const minute = value.substring(10, 12);
             const second = value.substring(12, 14);
             timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+          } else if (value.includes('_snapshot_') && /_(\d{8}_\d{6})/.test(value)) {
+            // Handle entity_snapshot_YYYYMMDD_HHMMSS format
+            const timeMatch = value.match(/_(\d{8}_\d{6})/);
+            if (timeMatch) {
+              const timeValue = timeMatch[1];
+              const datePart = timeValue.substring(0, 8);
+              const timePart = timeValue.substring(9);
+              const year = datePart.substring(0, 4);
+              const month = datePart.substring(4, 6);
+              const day = datePart.substring(6, 8);
+              const hour = timePart.substring(0, 2);
+              const minute = timePart.substring(2, 4);
+              const second = timePart.substring(4, 6);
+              timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+            }
           } else if (value.includes('-') || value.includes('T') || value.includes('_')) {
             // Various date-time formats
             let dateStr = value.replace(/_/g, 'T').replace(/-/g, ':');
