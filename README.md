@@ -1,7 +1,7 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card v1.1.2+
+# HA Media Card v1.1.5
 
 A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, dashcam clips, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
@@ -429,12 +429,17 @@ Note: For video - the media_content_type is video/mp4
 - **Center Click**: No navigation action (preserves other click actions)
 
 ### **Keyboard Controls**
+
+**⚠️ Important**: Click on the card first to focus it, then use these keys:
+
 - **← Left Arrow**: Previous file
 - **→ Right Arrow**: Next file  
 - **↑ Up Arrow**: First file in folder
 - **↓ Down Arrow**: Last file in folder
 - **Space**: Next file
 - **Enter**: Refresh current file
+
+> **💡 Tip**: You'll see a subtle outline around the card when it's focused and ready for keyboard input.
 
 ### **Visual Indicators**
 - **Navigation Zones**: Subtle overlay hints showing clickable areas
@@ -462,10 +467,12 @@ Note: For video - the media_content_type is video/mp4
 4. **File modification** - Without filename timestamps, alphabetical sorting is used
 
 ### Navigation Not Working?
+
 1. **Enable features** - Set `enable_navigation_zones: true` and/or `enable_keyboard_navigation: true`
-2. **Multiple files** - Navigation requires multiple files (folder mode or multiple visits)
-3. **Focus required** - Click on the card first for keyboard navigation to work
+2. **Multiple files** - Navigation requires multiple files (folder mode or multiple visits)  
+3. **Focus required** - **Click on the card first** to focus it for keyboard navigation
 4. **Browser compatibility** - Modern browsers required for keyboard events
+5. **Folder mode** - Navigation only works with folder modes (`latest` or `random`)
 
 ### Auto-Refresh Not Working?
 1. **Check interval** - Must be > 0 to enable

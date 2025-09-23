@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.2
+ * Version: 1.1.5
  */
 
 // Import Lit from CDN for standalone usage
@@ -44,6 +44,12 @@ class MediaCard extends LitElement {
       box-shadow: var(--ha-card-box-shadow);
       padding: 16px;
       overflow: hidden;
+      outline: none;
+    }
+
+    .card:focus {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
     }
 
     .card.no-title {
@@ -910,7 +916,9 @@ class MediaCard extends LitElement {
     const hasTitle = this.config.title && this.config.title.trim();
     
     return html`
-      <div class="card ${!hasTitle ? 'no-title' : ''}">
+      <div class="card ${!hasTitle ? 'no-title' : ''}"
+           @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleGlobalKeyDown : null}
+           tabindex="0">
         ${hasTitle ? html`<div class="title">${this.config.title}</div>` : ''}
         
         <div class="media-container ${!hasTitle ? 'no-title' : ''}"
@@ -1406,6 +1414,44 @@ class MediaCard extends LitElement {
     this._navigateNext().catch(err => console.error('Navigation error:', err));
   }
 
+  _handleGlobalKeyDown(e) {
+    // Only handle keyboard navigation if enabled and we have navigable content
+    if (this.config.enable_keyboard_navigation === false || 
+        !this.config.is_folder || 
+        !this._folderContents || 
+        this._folderContents.length <= 1) {
+      return;
+    }
+
+    // Handle keyboard navigation
+    switch (e.key) {
+      case 'ArrowLeft':
+        e.preventDefault();
+        this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+        break;
+      case 'ArrowRight':
+      case ' ': // Space bar for next
+        e.preventDefault();
+        this._navigateNext().catch(err => console.error('Navigation error:', err));
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        // Go to first file
+        this._navigateToIndex(0).catch(err => console.error('Navigation error:', err));
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        // Go to last file
+        this._navigateToIndex(this._folderContents.length - 1).catch(err => console.error('Navigation error:', err));
+        break;
+      case 'Enter':
+        e.preventDefault();
+        // Refresh current file
+        this._manualRefresh().catch(err => console.error('Refresh error:', err));
+        break;
+    }
+  }
+
   _handleKeyDown(e) {
     // Handle keyboard navigation
     if (e.key === 'ArrowLeft') {
@@ -1451,6 +1497,22 @@ class MediaCard extends LitElement {
     this._handleAutoAdvanceMode();
     
     await this._loadMediaAtIndex(newIndex);
+  }
+
+  async _navigateToIndex(targetIndex) {
+    if (!this._folderContents || 
+        this._folderContents.length <= 1 || 
+        targetIndex < 0 || 
+        targetIndex >= this._folderContents.length) {
+      return;
+    }
+    
+    console.log(`🔄 Navigate to index: ${this._getCurrentMediaIndex()} -> ${targetIndex}`);
+    
+    // Handle auto-advance mode
+    this._handleAutoAdvanceMode();
+    
+    await this._loadMediaAtIndex(targetIndex);
   }
 
   _handleAutoAdvanceMode() {
@@ -3033,7 +3095,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.1.2  ',
+  '%c  MEDIA-CARD  %c  1.1.5  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
