@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.0.23
+ * Version: 1.1.6
  */
 
 // Import Lit from CDN for standalone usage
@@ -14,7 +14,11 @@ class MediaCard extends LitElement {
     _mediaUrl: { state: true },
     _mediaType: { state: true },
     _lastModified: { state: true },
-    _refreshInterval: { state: true }
+    _refreshInterval: { state: true },
+    _folderContents: { state: true },
+    _currentMediaIndex: { state: true },
+    _lastRefreshTime: { state: true },
+    _isPaused: { state: true }
   };
 
   constructor() {
@@ -24,6 +28,11 @@ class MediaCard extends LitElement {
     this._lastModified = null;
     this._refreshInterval = null;
     this._mediaLoadedLogged = false;
+    this._folderContents = null;
+    this._currentMediaIndex = 0;
+    this._lastRefreshTime = 0;
+    this._pausedForNavigation = false;
+    this._isPaused = false;
   }
 
   static styles = css`
@@ -37,6 +46,12 @@ class MediaCard extends LitElement {
       box-shadow: var(--ha-card-box-shadow);
       padding: 16px;
       overflow: hidden;
+      outline: none;
+    }
+
+    .card:focus {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
     }
 
     .card.no-title {
@@ -60,6 +75,33 @@ class MediaCard extends LitElement {
     img, video {
       width: 100%;
       height: auto;
+      display: block;
+    }
+    
+    /* Smart aspect ratio handling for panel layouts */
+    :host([data-aspect-mode="viewport-fit"]) img {
+      max-height: 100vh;
+      max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: 0 auto;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) img {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      margin: 0;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) img {
+      max-height: 90vh;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: 0 auto;
       display: block;
     }
     
@@ -125,6 +167,145 @@ class MediaCard extends LitElement {
     .refresh-button:hover {
       background: rgba(0, 0, 0, 0.9);
     }
+
+    /* Pause indicator */
+    .pause-indicator {
+      position: absolute;
+      top: 8px;
+      right: 50px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 12;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Navigation Zones */
+    .navigation-zones {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .nav-zone {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      pointer-events: auto;
+      user-select: none;
+    }
+
+    .nav-zone-left {
+      width: 25%;
+      cursor: w-resize;
+    }
+
+    .nav-zone-center {
+      width: 50%;
+      cursor: inherit;
+    }
+
+    .nav-zone-right {
+      width: 25%;
+      cursor: e-resize;
+    }
+
+    .nav-zone:hover {
+      background: rgba(0, 0, 0, 0.1);
+    }
+
+    .nav-zone-left:hover::after {
+      content: '◀';
+      color: white;
+      font-size: 2em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.8;
+    }
+
+    .nav-zone-right:hover::after {
+      content: '▶';
+      color: white;
+      font-size: 2em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.8;
+    }
+
+    /* Hide navigation zones when not in folder mode */
+    :host(:not([data-has-folder-navigation])) .navigation-zones {
+      display: none;
+    }
+
+    /* Position indicator */
+    .position-indicator {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.8em;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 15;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+
+    /* Dots indicator */
+    .dots-indicator {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      pointer-events: none;
+      z-index: 15;
+      max-width: 200px;
+      overflow: hidden;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.4);
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .dot.active {
+      background: rgba(255, 255, 255, 0.9);
+      transform: scale(1.2);
+    }
+
+    /* Hide indicators when not in folder mode */
+    :host(:not([data-has-folder-navigation])) .position-indicator,
+    :host(:not([data-has-folder-navigation])) .dots-indicator {
+      display: none;
+    }
   `;
 
   setConfig(config) {
@@ -133,14 +314,43 @@ class MediaCard extends LitElement {
     }
     
     const oldConfig = this.config;
+    const wasFolder = oldConfig?.is_folder && oldConfig?.folder_mode;
+    const isFolder = config.is_folder && config.folder_mode;
+    
+    console.log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
+    
     this.config = config;
-    this._mediaUrl = ''; // Reset URL, will be resolved in updated()
-    this._mediaType = config.media_type || 'image';
+    
+    // Set aspect ratio mode data attribute for CSS styling
+    const aspectMode = config.aspect_mode || 'default';
+    if (aspectMode !== 'default') {
+      this.setAttribute('data-aspect-mode', aspectMode);
+    } else {
+      this.removeAttribute('data-aspect-mode');
+    }
+    
+    // Only reset URL if switching between folder/file modes or if it's a new config
+    if (!oldConfig || (wasFolder !== isFolder)) {
+      console.log('🔧 Resetting media URL due to mode change');
+      this._mediaUrl = '';
+      this._folderContents = null; // Reset folder contents when mode changes
+    }
+    
+    this._mediaType = config.media_type || 'all';
     this._mediaLoadedLogged = false; // Reset logging flag for new config
     
-    // Set up auto-refresh if config changed
-    if (!oldConfig || oldConfig.auto_refresh_seconds !== config.auto_refresh_seconds) {
+    // Set up auto-refresh if config changed or if folder mode is enabled
+    if (!oldConfig || 
+        oldConfig.auto_refresh_seconds !== config.auto_refresh_seconds ||
+        (isFolder && !wasFolder) ||
+        (isFolder && oldConfig?.folder_mode !== config.folder_mode)) {
       this._setupAutoRefresh();
+    }
+    
+    // Initialize folder mode if needed
+    if (isFolder && this.hass) {
+      console.log('🔧 Config set with folder mode - triggering initialization');
+      setTimeout(() => this._handleFolderMode(), 50);
     }
   }
 
@@ -153,15 +363,439 @@ class MediaCard extends LitElement {
 
     // Set up auto-refresh if enabled in config
     const refreshSeconds = this.config?.auto_refresh_seconds;
-    if (refreshSeconds && refreshSeconds > 0) {
-      console.log(`Setting up auto-refresh every ${refreshSeconds} seconds`);
+    if (refreshSeconds && refreshSeconds > 0 && this.hass) {
+      console.log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
       this._refreshInterval = setInterval(() => {
-        console.log('Auto-refresh timer triggered');
+        console.log('🔄 Auto-refresh timer triggered');
         this._checkForMediaUpdates();
       }, refreshSeconds * 1000);
     } else {
-      console.log('Auto-refresh disabled or not configured');
+      console.log('🔄 Auto-refresh disabled or not configured:', {
+        refreshSeconds,
+        hasHass: !!this.hass,
+        hasConfig: !!this.config
+      });
     }
+  }
+
+  async _handleFolderMode() {
+    console.log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
+    
+    try {
+      // Scan folder contents
+      await this._scanFolderContents();
+      
+      if (!this._folderContents || this._folderContents.length === 0) {
+        console.warn('No media files found in folder:', this.config.media_path);
+        this._mediaUrl = '';
+        this._currentMediaIndex = 0;
+        return;
+      }
+
+      // Select media based on mode
+      let selectedFile;
+      let selectedIndex = 0;
+      
+      if (this.config.folder_mode === 'latest') {
+        selectedFile = this._getLatestFile();
+        // Find index of latest file
+        selectedIndex = this._folderContents.findIndex(item => item === selectedFile);
+      } else if (this.config.folder_mode === 'random') {
+        const randomResult = this._getRandomFileWithIndex();
+        selectedFile = randomResult.file;
+        selectedIndex = randomResult.index;
+      }
+
+      if (selectedFile && selectedIndex >= 0) {
+        const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+        if (resolvedUrl !== this._mediaUrl) {
+          this._mediaUrl = resolvedUrl;
+          this._currentMediaIndex = selectedIndex;
+          this._detectMediaType(selectedFile.media_content_id);
+          this._lastRefreshTime = Date.now(); // Set initial refresh time
+          console.log(`📂 Selected media at index ${selectedIndex}:`, selectedFile.title);
+          this.requestUpdate();
+        }
+      }
+    } catch (error) {
+      console.error('Error handling folder mode:', error);
+    }
+  }
+
+  async _handleFolderModeRefresh() {
+    const now = Date.now();
+    const configuredInterval = (this.config.auto_refresh_seconds || 30) * 1000;
+    const timeSinceLastRefresh = now - this._lastRefreshTime;
+    
+    // Check if paused (only applies to random mode)
+    if (this._isPaused && this.config.folder_mode === 'random') {
+      console.log('🎮 Folder mode refresh paused in random mode');
+      return;
+    }
+    
+    console.log('Refreshing folder mode:', this.config.folder_mode);
+    console.log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
+    
+    // Check if enough time has passed since last refresh (prevent rapid-fire refreshing)
+    if (this._lastRefreshTime > 0 && timeSinceLastRefresh < configuredInterval * 0.8) { // Use 80% to be more conservative
+      console.log('SKIPPING refresh - not enough time passed. Need to wait:', (configuredInterval * 0.8 - timeSinceLastRefresh), 'ms more');
+      return;
+    }
+    
+    try {
+      // Rescan folder contents
+      await this._scanFolderContents();
+      
+      if (!this._folderContents || this._folderContents.length === 0) {
+        console.warn('No media files found during refresh');
+        return;
+      }
+
+      let selectedFile;
+      let shouldUpdate = false;
+      
+      if (this.config.folder_mode === 'latest') {
+        // Check if there's a newer file
+        selectedFile = this._getLatestFile();
+        const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+        // Only update if we have a different file
+        shouldUpdate = resolvedUrl && resolvedUrl !== this._mediaUrl;
+        
+        if (shouldUpdate) {
+          console.log('Found newer file:', selectedFile.title || selectedFile.media_content_id);
+        } else {
+          console.log('No newer files found');
+        }
+      } else if (this.config.folder_mode === 'random') {
+        // Get a different random file (avoid showing the same file repeatedly)
+        const randomResult = this._getRandomFileWithIndex(true); // Pass true to avoid current file
+        selectedFile = randomResult.file;
+        shouldUpdate = selectedFile != null;
+        
+        if (shouldUpdate) {
+          this._currentMediaIndex = randomResult.index;
+          console.log('Selected new random file:', selectedFile.title || selectedFile.media_content_id);
+        } else {
+          console.log('No different random file available');
+        }
+      }
+
+      if (shouldUpdate && selectedFile) {
+        const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+        if (resolvedUrl) {
+          console.log('UPDATING media URL and setting refresh time');
+          this._mediaUrl = resolvedUrl;
+          this._detectMediaType(selectedFile.media_content_id);
+          this._lastRefreshTime = now;
+          this._forceMediaReload();
+        }
+      } else {
+        console.log('No update needed, but updating refresh time to prevent rapid retries');
+        this._lastRefreshTime = now; // Update time even if no change to prevent rapid retries
+      }
+    } catch (error) {
+      console.error('Error refreshing folder mode:', error);
+    }
+  }
+
+  async _scanFolderContents() {
+    if (!this.hass) return;
+
+    console.log('Scanning folder contents for:', this.config.media_path);
+    
+    try {
+      const mediaContent = await this.hass.callWS({
+        type: "media_source/browse_media",
+        media_content_id: this.config.media_path
+      });
+
+      console.log('📊 Raw media browser API response:', JSON.stringify(mediaContent, null, 2));
+
+      if (mediaContent && mediaContent.children) {
+        // Filter for media files only, respecting the configured media type
+        const filteredItems = mediaContent.children
+          .filter(item => {
+            if (item.can_expand) return false; // Skip folders
+            
+            const fileName = item.title || item.media_content_id;
+            const isMediaFile = this._isMediaFile(fileName);
+            if (!isMediaFile) return false;
+            
+            // Filter by configured media type if specified
+            if (this.config.media_type && this.config.media_type !== 'all') {
+              const fileType = this._detectFileType(fileName);
+              return fileType === this.config.media_type;
+            }
+            
+            return true;
+          });
+
+        // Try to get actual file modification times for better sorting
+        this._folderContents = await Promise.all(
+          filteredItems.map(async (item, index) => {
+            // Log the full structure of the first few items to understand available data
+            if (index < 3) {
+              console.log(`📄 Media item ${index + 1} structure:`, JSON.stringify(item, null, 2));
+            }
+            
+            let actualMtime = null;
+            
+            // For now, focus on better filename timestamp extraction
+            // In the future, could explore file system APIs if they become available
+            
+            return {
+              ...item,
+              // Try to extract timestamp from filename
+              estimated_mtime: this._extractTimestampFromFilename(item.title || item.media_content_id),
+              sort_name: (item.title || item.media_content_id).toLowerCase(),
+              original_index: index, // Preserve original API order
+              actual_mtime: actualMtime // Will be null for now
+            };
+          })
+        );
+
+        // Sort based on available timing information
+        this._folderContents.sort((a, b) => {
+          // Prioritize items with actual modification times
+          if (a.actual_mtime && b.actual_mtime) {
+            return b.actual_mtime - a.actual_mtime; // Newest first
+          }
+          if (a.actual_mtime && !b.actual_mtime) return -1;
+          if (!a.actual_mtime && b.actual_mtime) return 1;
+          
+          // Fall back to filename timestamp parsing
+          if (a.estimated_mtime && b.estimated_mtime) {
+            return b.estimated_mtime - a.estimated_mtime;
+          }
+          if (a.estimated_mtime && !b.estimated_mtime) return -1;
+          if (!a.estimated_mtime && b.estimated_mtime) return 1;
+          
+          // Final fallback: for "latest" mode, try reverse alphabetical (often newer files have higher names)
+          // For other modes, use regular alphabetical
+          if (this.config.folder_mode === 'latest') {
+            return b.sort_name.localeCompare(a.sort_name); // Z to A
+          } else {
+            return a.sort_name.localeCompare(b.sort_name); // A to Z
+          }
+        });
+
+        console.log('Found', this._folderContents.length, 'media files in folder (filtered by type:', this.config.media_type, ')');
+        
+        // Debug logging for sorting
+        if (this._folderContents.length > 0) {
+          console.log('📁 First few files after sorting (mode:', this.config.folder_mode, '):');
+          this._folderContents.slice(0, 3).forEach((file, idx) => {
+            const timestamp = file.actual_mtime 
+              ? `📅 REAL: ${new Date(file.actual_mtime).toISOString()}` 
+              : file.estimated_mtime 
+                ? `📄 FILENAME: ${new Date(file.estimated_mtime).toISOString()}`
+                : 'no timestamp';
+            console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
+          });
+        }
+      } else {
+        this._folderContents = [];
+      }
+    } catch (error) {
+      console.error('Error scanning folder contents:', error);
+      this._folderContents = [];
+    }
+  }
+
+  _extractTimestampFromFilename(filename) {
+    // Try to extract timestamp from common filename patterns
+    // Enhanced patterns for better detection - ORDER MATTERS: specific patterns first!
+    const patterns = [
+      // ISO date formats with time
+      /(\d{4}-\d{2}-\d{2}[T_\s]\d{2}[:\-]\d{2}[:\-]\d{2})/,  // 2024-01-15T10:30:45 or 2024-01-15_10-30-45
+      // Camera/device specific patterns with time
+      /IMG[_\-](\d{8}_\d{6})/,                                 // IMG_20240115_103045
+      /VID[_\-](\d{8}_\d{6})/,                                 // VID_20240115_103045
+      /(\d{8}_\d{6})/,                                         // YYYYMMDD_HHMMSS (generic)
+      /(\d{4}\d{2}\d{2}_?\d{6})/,                              // YYYYMMDD_HHMMSS or YYYYMMDDHHMMSS
+      /(\d{4}\d{2}\d{2}\d{2}\d{2}\d{2})/,                      // YYYYMMDDHHMMSS (14 digits)
+      // Home Assistant snapshot patterns
+      /snapshot[_\-](\d{4}-\d{2}-\d{2}[T_]\d{2}[:\-]\d{2}[:\-]\d{2})/i, // snapshot_2024-01-15T10:30:45
+      /(\w+_snapshot_\d{8}_\d{6})/,                            // entity_snapshot_YYYYMMDD_HHMMSS
+      /.*_(\d{8}_\d{6})\.?\w*/,                                // Any filename ending with _YYYYMMDD_HHMMSS.ext
+      // Timestamps (high precision)
+      /(\d{13})/,                                               // 13-digit milliseconds timestamp
+      /(\d{10})/,                                               // 10-digit seconds timestamp
+      // Date only formats (less specific, so last)
+      /(\d{4}-\d{2}-\d{2})/,                                    // YYYY-MM-DD
+      /(\d{2}-\d{2}-\d{4})/,                                    // MM-DD-YYYY or DD-MM-YYYY
+      /(\d{8})/,                                                // YYYYMMDD (date only, lowest priority)
+    ];
+
+    for (const pattern of patterns) {
+      const match = filename.match(pattern);
+      if (match) {
+        const value = match[1];
+        let timestamp;
+        
+        console.log(`🔍 Found timestamp pattern in ${filename}: "${value}"`);
+        
+        try {
+          if (value.length === 13 && /^\d{13}$/.test(value)) {
+            // Milliseconds timestamp
+            timestamp = parseInt(value);
+          } else if (value.length === 10 && /^\d{10}$/.test(value)) {
+            // Seconds timestamp
+            timestamp = parseInt(value) * 1000;
+          } else if (value.length === 8 && /^\d{8}$/.test(value)) {
+            // YYYYMMDD format
+            const year = value.substring(0, 4);
+            const month = value.substring(4, 6);
+            const day = value.substring(6, 8);
+            timestamp = new Date(`${year}-${month}-${day}`).getTime();
+          } else if (value.length === 15 && /^\d{8}_\d{6}$/.test(value)) {
+            // YYYYMMDD_HHMMSS format (camera files)
+            const datePart = value.substring(0, 8);
+            const timePart = value.substring(9);
+            const year = datePart.substring(0, 4);
+            const month = datePart.substring(4, 6);
+            const day = datePart.substring(6, 8);
+            const hour = timePart.substring(0, 2);
+            const minute = timePart.substring(2, 4);
+            const second = timePart.substring(4, 6);
+            timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+          } else if (value.length === 14 && /^\d{14}$/.test(value)) {
+            // YYYYMMDDHHMMSS format
+            const year = value.substring(0, 4);
+            const month = value.substring(4, 6);
+            const day = value.substring(6, 8);
+            const hour = value.substring(8, 10);
+            const minute = value.substring(10, 12);
+            const second = value.substring(12, 14);
+            timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+          } else if (value.includes('_snapshot_') && /_(\d{8}_\d{6})/.test(value)) {
+            // Handle entity_snapshot_YYYYMMDD_HHMMSS format
+            const timeMatch = value.match(/_(\d{8}_\d{6})/);
+            if (timeMatch) {
+              const timeValue = timeMatch[1];
+              const datePart = timeValue.substring(0, 8);
+              const timePart = timeValue.substring(9);
+              const year = datePart.substring(0, 4);
+              const month = datePart.substring(4, 6);
+              const day = datePart.substring(6, 8);
+              const hour = timePart.substring(0, 2);
+              const minute = timePart.substring(2, 4);
+              const second = timePart.substring(4, 6);
+              timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+            }
+          } else if (value.includes('-') || value.includes('T') || value.includes('_')) {
+            // Various date-time formats
+            let dateStr = value.replace(/_/g, 'T').replace(/-/g, ':');
+            // Fix common format issues
+            if (dateStr.match(/^\d{4}:\d{2}:\d{2}$/)) {
+              dateStr = dateStr.replace(/:/g, '-'); // YYYY-MM-DD format
+            }
+            timestamp = new Date(dateStr).getTime();
+          }
+          
+          if (timestamp && !isNaN(timestamp) && timestamp > 0) {
+            console.log(`✅ Extracted timestamp from ${filename}:`, new Date(timestamp).toISOString());
+            return timestamp;
+          }
+        } catch (e) {
+          console.log(`❌ Failed to parse timestamp "${value}" from ${filename}:`, e.message);
+          continue;
+        }
+      }
+    }
+    
+    console.log(`⚠️ No timestamp found in filename: ${filename}`);
+    return null;
+  }
+
+  _getLatestFile() {
+    if (!this._folderContents || this._folderContents.length === 0) return null;
+    
+    // Already sorted by timestamp (if available) or filename in _scanFolderContents
+    return this._folderContents[0];
+  }
+
+  _getRandomFile(avoidCurrent = false) {
+    if (!this._folderContents || this._folderContents.length === 0) return null;
+    
+    // If we only have one file, return it
+    if (this._folderContents.length === 1) {
+      this._currentMediaIndex = 0;
+      return this._folderContents[0];
+    }
+    
+    let randomIndex;
+    let attempts = 0;
+    const maxAttempts = 10; // Prevent infinite loop
+    
+    do {
+      randomIndex = Math.floor(Math.random() * this._folderContents.length);
+      attempts++;
+    } while (
+      avoidCurrent && 
+      randomIndex === this._currentMediaIndex && 
+      attempts < maxAttempts
+    );
+    
+    this._currentMediaIndex = randomIndex;
+    return this._folderContents[randomIndex];
+  }
+
+  _getRandomFileWithIndex(avoidCurrent = false) {
+    if (!this._folderContents || this._folderContents.length === 0) {
+      return { file: null, index: 0 };
+    }
+    
+    // If we only have one file, return it
+    if (this._folderContents.length === 1) {
+      return { file: this._folderContents[0], index: 0 };
+    }
+    
+    let randomIndex;
+    let attempts = 0;
+    const maxAttempts = 10; // Prevent infinite loop
+    
+    do {
+      randomIndex = Math.floor(Math.random() * this._folderContents.length);
+      attempts++;
+    } while (
+      avoidCurrent && 
+      randomIndex === this._currentMediaIndex && 
+      attempts < maxAttempts
+    );
+    
+    return { file: this._folderContents[randomIndex], index: randomIndex };
+  }
+
+  _detectMediaType(filePath) {
+    const fileType = this._detectFileType(filePath);
+    if (fileType) {
+      this._mediaType = fileType;
+    }
+  }
+
+  _isMediaFile(filePath) {
+    // Extract filename from the full path and get extension  
+    const fileName = filePath.split('/').pop() || filePath;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+    if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
+      console.log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
+    }
+    return isMedia;
+  }
+
+  _detectFileType(filePath) {
+    const fileName = filePath.split('/').pop() || filePath;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    
+    if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
+      return 'video';
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+      return 'image';
+    }
+    
+    return null;
   }
 
   async _checkForMediaUpdates() {
@@ -170,7 +804,19 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // Check if paused (only applies to random mode)
+    if (this._isPaused && this.config.folder_mode === 'random') {
+      console.log('🎮 Auto-refresh paused in random mode');
+      return;
+    }
+    
     console.log('Checking for media updates...', this.config.media_path);
+    
+    // Handle folder mode updates
+    if (this.config.is_folder && this.config.folder_mode) {
+      await this._handleFolderModeRefresh();
+      return;
+    }
     
     try {
       // For media-source URLs, always get a fresh resolved URL
@@ -328,10 +974,26 @@ class MediaCard extends LitElement {
   render() {
     if (!this.config) return html``;
     
+    // Set navigation attribute based on folder mode, content, and configuration
+    const hasNavigation = this.config.is_folder && 
+                         this._folderContents && 
+                         this._folderContents.length > 1 &&
+                         (this.config.enable_navigation_zones !== false ||
+                          this.config.show_position_indicator !== false ||
+                          this.config.show_dots_indicator !== false);
+    
+    if (hasNavigation) {
+      this.setAttribute('data-has-folder-navigation', '');
+    } else {
+      this.removeAttribute('data-has-folder-navigation');
+    }
+    
     const hasTitle = this.config.title && this.config.title.trim();
     
     return html`
-      <div class="card ${!hasTitle ? 'no-title' : ''}">
+      <div class="card ${!hasTitle ? 'no-title' : ''}"
+           @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleGlobalKeyDown : null}
+           tabindex="0">
         ${hasTitle ? html`<div class="title">${this.config.title}</div>` : ''}
         
         <div class="media-container ${!hasTitle ? 'no-title' : ''}"
@@ -343,7 +1005,10 @@ class MediaCard extends LitElement {
              @contextmenu=${this._handleContextMenu}
              style="cursor: ${this._hasAnyAction() ? 'pointer' : 'default'};">
           ${this._renderMedia()}
+          ${this._renderNavigationZones()}
+          ${this._renderNavigationIndicators()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
+          ${this._renderPauseIndicator()}
         </div>
       </div>
     `;
@@ -358,6 +1023,17 @@ class MediaCard extends LitElement {
       >
         🔄
       </button>
+    `;
+  }
+
+  _renderPauseIndicator() {
+    // Only show pause indicator when paused in random mode
+    if (!this._isPaused || this.config.folder_mode !== 'random') {
+      return html``;
+    }
+
+    return html`
+      <div class="pause-indicator">⏸</div>
     `;
   }
 
@@ -408,6 +1084,23 @@ class MediaCard extends LitElement {
   }
 
   _renderMedia() {
+    // Handle folder mode that hasn't been initialized yet
+    if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass) {
+      console.log('🔧 No media URL but have folder config - triggering initialization');
+      // Trigger folder mode initialization asynchronously
+      setTimeout(() => this._handleFolderMode(), 10);
+      
+      return html`
+        <div class="placeholder">
+          <div style="font-size: 64px; margin-bottom: 24px; opacity: 0.3;">📁</div>
+          <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">Loading Folder...</div>
+          <div style="font-size: 0.9em; opacity: 0.8; line-height: 1.4;">
+            Scanning for media files in folder
+          </div>
+        </div>
+      `;
+    }
+    
     if (!this._mediaUrl) {
       return html`
         <div class="placeholder">
@@ -457,6 +1150,80 @@ class MediaCard extends LitElement {
     `;
   }
 
+  _renderNavigationZones() {
+    // Only show navigation zones if enabled, in folder mode and have multiple items
+    if (!this.config.is_folder || 
+        !this._folderContents || 
+        this._folderContents.length <= 1 ||
+        this.config.enable_navigation_zones === false) {
+      return html``;
+    }
+
+    return html`
+      <div class="navigation-zones">
+        <div class="nav-zone nav-zone-left"
+             @click=${this._handlePrevClick}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
+             title="Previous image">
+        </div>
+        <div class="nav-zone nav-zone-center"
+             @click=${this._handleCenterClick}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
+             title="Pause/Resume auto-refresh">
+        </div>
+        <div class="nav-zone nav-zone-right"  
+             @click=${this._handleNextClick}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
+             title="Next image">
+        </div>
+      </div>
+    `;
+  }
+
+  _renderNavigationIndicators() {
+    // Only show indicators if in folder mode and have multiple items
+    if (!this.config.is_folder || !this._folderContents || this._folderContents.length <= 1) {
+      return html``;
+    }
+
+    const currentIndex = this._getCurrentMediaIndex();
+    const totalCount = this._folderContents.length;
+
+    // Show position indicator if enabled
+    let positionIndicator = html``;
+    if (this.config.show_position_indicator !== false) {
+      positionIndicator = html`
+        <div class="position-indicator">
+          ${currentIndex + 1} of ${totalCount}
+        </div>
+      `;
+    }
+
+    // Show dots indicator if enabled and not too many items (limit to 15)
+    let dotsIndicator = html``;
+    if (this.config.show_dots_indicator !== false && totalCount <= 15) {
+      const dots = [];
+      for (let i = 0; i < totalCount; i++) {
+        dots.push(html`
+          <div class="dot ${i === currentIndex ? 'active' : ''}"></div>
+        `);
+      }
+      dotsIndicator = html`
+        <div class="dots-indicator">
+          ${dots}
+        </div>
+      `;
+    }
+
+    return html`
+      ${positionIndicator}
+      ${dotsIndicator}
+    `;
+  }
+
   _renderVideoInfo() {
     // Check if we should hide video controls display
     if (this.config.hide_video_controls_display) {
@@ -493,15 +1260,27 @@ class MediaCard extends LitElement {
   async updated(changedProps) {
     super.updated(changedProps);
     
-    // Resolve media URL when config changes or hass becomes available
+    // Handle folder vs file mode
     if ((changedProps.has('config') || changedProps.has('hass')) && this.config?.media_path) {
-      const resolvedUrl = await this._resolveMediaPath(this.config.media_path);
-      if (resolvedUrl && resolvedUrl !== this._mediaUrl) {
-        this._mediaUrl = resolvedUrl;
-        this.requestUpdate();
-        
-        // Get initial last-modified timestamp
-        this._getInitialTimestamp();
+      if (this.config.is_folder && this.config.folder_mode) {
+        // This is a folder configuration - scan for media files
+        // Initialize if we don't have folder contents, config changed, or no media URL set
+        if (!this._folderContents || changedProps.has('config') || !this._mediaUrl) {
+          console.log('Initializing folder mode - contents:', !!this._folderContents, 'config changed:', changedProps.has('config'), 'has media URL:', !!this._mediaUrl);
+          await this._handleFolderMode();
+        } else {
+          console.log('Skipping folder mode refresh - already initialized and hass updated');
+        }
+      } else {
+        // This is a regular file configuration
+        const resolvedUrl = await this._resolveMediaPath(this.config.media_path);
+        if (resolvedUrl && resolvedUrl !== this._mediaUrl) {
+          this._mediaUrl = resolvedUrl;
+          this.requestUpdate();
+          
+          // Get initial last-modified timestamp
+          this._getInitialTimestamp();
+        }
       }
     }
     
@@ -606,6 +1385,17 @@ class MediaCard extends LitElement {
     }, 100);
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    // Ensure auto-refresh is set up when component is connected/reconnected
+    if (this.config && this.hass) {
+      console.log('🔌 Component connected - setting up auto-refresh');
+      this._setupAutoRefresh();
+      // Also try to resume if it was paused for navigation
+      this._resumeAutoRefreshIfNeeded();
+    }
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
     // Clean up the refresh interval when component is removed
@@ -617,6 +1407,21 @@ class MediaCard extends LitElement {
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
+    }
+  }
+
+  updated(changedProperties) {
+    super.updated(changedProperties);
+    
+    // Set up auto-refresh when hass becomes available or config changes
+    if ((changedProperties.has('hass') || changedProperties.has('config')) && 
+        this.config && this.hass && this.config.auto_refresh_seconds > 0) {
+      
+      // Only set up if we don't already have an interval running
+      if (!this._refreshInterval) {
+        console.log('🔄 Setting up auto-refresh after property update');
+        this._setupAutoRefresh();
+      }
     }
   }
 
@@ -687,6 +1492,233 @@ class MediaCard extends LitElement {
     // Prevent context menu if we have hold action
     if (this.config.hold_action) {
       e.preventDefault();
+    }
+  }
+
+  // Navigation zone event handlers
+  _handlePrevClick(e) {
+    e.stopPropagation();
+    this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+  }
+
+  _handleNextClick(e) {
+    e.stopPropagation(); 
+    this._navigateNext().catch(err => console.error('Navigation error:', err));
+  }
+
+  _handleCenterClick(e) {
+    e.stopPropagation();
+    
+    // Only allow pause/resume in random mode
+    if (this.config.folder_mode === 'random') {
+      this._isPaused = !this._isPaused;
+      console.log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode`);
+      this.requestUpdate();
+    }
+  }
+
+  _handleGlobalKeyDown(e) {
+    // Only handle keyboard navigation if enabled and we have navigable content
+    if (this.config.enable_keyboard_navigation === false || 
+        !this.config.is_folder || 
+        !this._folderContents || 
+        this._folderContents.length <= 1) {
+      return;
+    }
+
+    // Handle keyboard navigation
+    switch (e.key) {
+      case 'ArrowLeft':
+        e.preventDefault();
+        this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+        break;
+      case 'ArrowRight':
+      case ' ': // Space bar for next
+        e.preventDefault();
+        this._navigateNext().catch(err => console.error('Navigation error:', err));
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        // Go to first file
+        this._navigateToIndex(0).catch(err => console.error('Navigation error:', err));
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        // Go to last file
+        this._navigateToIndex(this._folderContents.length - 1).catch(err => console.error('Navigation error:', err));
+        break;
+      case 'Enter':
+        e.preventDefault();
+        // Refresh current file
+        this._manualRefresh().catch(err => console.error('Refresh error:', err));
+        break;
+      case 'p':
+      case 'P':
+        // Pause/Resume auto-refresh in random mode
+        if (this.config.folder_mode === 'random') {
+          e.preventDefault();
+          this._isPaused = !this._isPaused;
+          console.log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode (keyboard)`);
+          this.requestUpdate();
+        }
+        break;
+    }
+  }
+
+  _handleKeyDown(e) {
+    // Handle keyboard navigation
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      this._navigateNext().catch(err => console.error('Navigation error:', err));
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      // Space or Enter on navigation zones acts like a click
+      if (e.target.classList.contains('nav-zone-left')) {
+        this._navigatePrevious().catch(err => console.error('Navigation error:', err));
+      } else if (e.target.classList.contains('nav-zone-right')) {
+        this._navigateNext().catch(err => console.error('Navigation error:', err));
+      }
+    }
+  }
+
+  async _navigatePrevious() {
+    if (!this._folderContents || this._folderContents.length <= 1) return;
+    
+    const currentIndex = this._getCurrentMediaIndex();
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
+    
+    console.log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
+    
+    // Handle auto-advance mode
+    this._handleAutoAdvanceMode();
+    
+    await this._loadMediaAtIndex(newIndex);
+  }
+
+  async _navigateNext() {
+    if (!this._folderContents || this._folderContents.length <= 1) return;
+    
+    const currentIndex = this._getCurrentMediaIndex();
+    const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
+    
+    console.log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
+    
+    // Handle auto-advance mode
+    this._handleAutoAdvanceMode();
+    
+    await this._loadMediaAtIndex(newIndex);
+  }
+
+  async _navigateToIndex(targetIndex) {
+    if (!this._folderContents || 
+        this._folderContents.length <= 1 || 
+        targetIndex < 0 || 
+        targetIndex >= this._folderContents.length) {
+      return;
+    }
+    
+    console.log(`🔄 Navigate to index: ${this._getCurrentMediaIndex()} -> ${targetIndex}`);
+    
+    // Handle auto-advance mode
+    this._handleAutoAdvanceMode();
+    
+    await this._loadMediaAtIndex(targetIndex);
+  }
+
+  _handleAutoAdvanceMode() {
+    if (!this.config.auto_refresh_seconds || this.config.auto_refresh_seconds <= 0) {
+      return; // No auto-refresh configured
+    }
+
+    const mode = this.config.auto_advance_mode || 'pause';
+    
+    switch (mode) {
+      case 'pause':
+        // Pause auto-refresh by clearing the interval
+        if (this._refreshInterval) {
+          console.log('🔄 Pausing auto-refresh due to manual navigation');
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+          // Mark that we paused due to navigation (for potential resume)
+          this._pausedForNavigation = true;
+        }
+        break;
+        
+      case 'continue':
+        // Do nothing - let auto-refresh continue normally
+        console.log('🔄 Continuing auto-refresh during manual navigation');
+        break;
+        
+      case 'reset':
+        // Reset the auto-refresh timer
+        console.log('🔄 Resetting auto-refresh timer due to manual navigation');
+        this._lastRefreshTime = Date.now();
+        // Restart the timer
+        this._setupAutoRefresh();
+        break;
+    }
+  }
+
+  _resumeAutoRefreshIfNeeded() {
+    // Resume auto-refresh if it was paused for navigation and should be running
+    if (this._pausedForNavigation && 
+        this.config?.auto_refresh_seconds > 0 && 
+        !this._refreshInterval && 
+        this.hass) {
+      console.log('🔄 Resuming auto-refresh after being paused for navigation');
+      this._setupAutoRefresh();
+      this._pausedForNavigation = false;
+    }
+  }
+
+  _getCurrentMediaIndex() {
+    if (!this._folderContents || !this._mediaUrl) return 0;
+    
+    // First try to use the stored current index if it's valid
+    if (this._currentMediaIndex >= 0 && 
+        this._currentMediaIndex < this._folderContents.length) {
+      // For efficiency, trust the stored index if it exists and is valid
+      return this._currentMediaIndex;
+    }
+    
+    // Fallback: Find current media in folder contents by comparing media_content_id
+    // Extract the base path from the current media URL for comparison
+    const currentIndex = this._folderContents.findIndex(item => {
+      // Try to match using the media_content_id portion
+      return this._mediaUrl.includes(item.media_content_id.split('/').pop());
+    });
+    
+    // Update stored index if we found it
+    if (currentIndex >= 0) {
+      this._currentMediaIndex = currentIndex;
+      return currentIndex;
+    }
+    
+    return 0;
+  }
+
+  async _loadMediaAtIndex(index) {
+    if (!this._folderContents || index < 0 || index >= this._folderContents.length) return;
+    
+    const item = this._folderContents[index];
+    
+    console.log(`📂 Loading media at index ${index}:`, item.title);
+    
+    try {
+      const mediaUrl = await this._resolveMediaPath(item.media_content_id);
+      
+      // Update current media
+      this._mediaUrl = mediaUrl;
+      this._mediaType = this._detectFileType(item.title) || 'image'; // Default to image if unknown
+      this._currentMediaIndex = index;
+      
+      // Force re-render
+      this.requestUpdate();
+    } catch (error) {
+      console.error('Error loading media at index:', index, error);
     }
   }
 
@@ -837,9 +1869,16 @@ class MediaCard extends LitElement {
   static getStubConfig() {
     return {
       type: 'custom:media-card',
-      media_type: 'image',
+      media_type: 'all',
       media_path: '',
-      title: 'My Media'
+      title: 'My Media',
+      aspect_mode: 'default',
+      // Navigation defaults (enabled by default)
+      enable_navigation_zones: true,
+      show_position_indicator: true, 
+      show_dots_indicator: true,
+      enable_keyboard_navigation: true,
+      auto_advance_mode: 'pause'
     };
   }
 }
@@ -965,6 +2004,19 @@ class MediaCardEditor extends LitElement {
     .validation-error {
       color: var(--error-color, red);
     }
+
+    .folder-mode-status {
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: var(--secondary-background-color, #f5f5f5);
+      border-radius: 6px;
+      border-left: 4px solid var(--primary-color, #007bff);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--primary-text-color);
+    }
   `;
 
   setConfig(config) {
@@ -994,10 +2046,25 @@ class MediaCardEditor extends LitElement {
         <div class="config-row">
           <label>Media Type</label>
           <div>
-            <select @change=${this._mediaTypeChanged} .value=${this._config.media_type || 'image'}>
-              <option value="image">Image (JPG, PNG, GIF)</option>
-              <option value="video">Video (MP4)</option>
+            <select @change=${this._mediaTypeChanged} .value=${this._config.media_type || 'all'}>
+              <option value="all">All Media (Images + Videos)</option>
+              <option value="image">Images Only (JPG, PNG, GIF)</option>
+              <option value="video">Videos Only (MP4, WebM, etc.)</option>
             </select>
+            <div class="help-text">What types of media to display</div>
+          </div>
+        </div>
+
+        <div class="config-row">
+          <label>Image Scaling</label>
+          <div>
+            <select @change=${this._aspectModeChanged} .value=${this._config.aspect_mode || 'default'}>
+              <option value="default">Default (fit to card width)</option>
+              <option value="smart-scale">Smart Scale (limit height, prevent scrolling)</option>
+              <option value="viewport-fit">Viewport Fit (fit entire image in viewport)</option>
+              <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
+            </select>
+            <div class="help-text">How images should be scaled, especially useful for panel layouts with mixed portrait/landscape images</div>
           </div>
         </div>
         
@@ -1015,8 +2082,9 @@ class MediaCardEditor extends LitElement {
                 📁 Browse
               </button>
             </div>
-            <div class="help-text">Path to media file using media-source format</div>
+            <div class="help-text">Path to media file or folder using media-source format</div>
             ${this._renderValidationStatus()}
+            ${this._renderFolderModeStatus()}
           </div>
         </div>
 
@@ -1032,7 +2100,8 @@ class MediaCardEditor extends LitElement {
               max="3600"
               step="1"
             />
-            <div class="help-text">Automatically check for media updates every N seconds (0 = disabled)</div>
+            <div class="help-text">Automatically check for media updates every N seconds (0 = disabled)<br>
+              <em>For folder modes: controls how often to scan for new files and switch random images</em></div>
           </div>
         </div>
 
@@ -1048,7 +2117,7 @@ class MediaCardEditor extends LitElement {
           </div>
         </div>
         
-        ${this._config.media_type === 'video' ? html`
+        ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
           <div class="section">
             <div class="section-title">🎬 Video Options</div>
             
@@ -1097,6 +2166,72 @@ class MediaCardEditor extends LitElement {
                   @change=${this._hideVideoControlsDisplayChanged}
                 />
                 <div class="help-text">Hide the "Video options: ..." text below the video</div>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        ${this._config.is_folder ? html`
+          <div class="section">
+            <div class="section-title">🧭 Navigation Options</div>
+            
+            <div class="config-row">
+              <label>Enable Navigation Zones</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.enable_navigation_zones !== false}
+                  @change=${this._navigationZonesChanged}
+                />
+                <div class="help-text">Show clickable left/right zones for navigation (25% left, 25% right)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Show Position Indicator</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_position_indicator !== false}
+                  @change=${this._positionIndicatorChanged}
+                />
+                <div class="help-text">Display "X of Y" counter in bottom right corner</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Show Dots Indicator</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_dots_indicator !== false}
+                  @change=${this._dotsIndicatorChanged}
+                />
+                <div class="help-text">Show dot indicators in bottom center (for ≤15 items)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Keyboard Navigation</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.enable_keyboard_navigation !== false}
+                  @change=${this._keyboardNavigationChanged}
+                />
+                <div class="help-text">Enable left/right arrow keys for navigation</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Auto-Advance on Navigate</label>
+              <div>
+                <select @change=${this._autoAdvanceModeChanged} .value=${this._config.auto_advance_mode || 'pause'}>
+                  <option value="pause">Pause auto-refresh when navigating manually</option>
+                  <option value="continue">Continue auto-refresh during manual navigation</option>
+                  <option value="reset">Reset auto-refresh timer on manual navigation</option>
+                </select>
+                <div class="help-text">How auto-refresh behaves when navigating manually</div>
               </div>
             </div>
           </div>
@@ -1177,6 +2312,21 @@ class MediaCardEditor extends LitElement {
     }
   }
 
+  _renderFolderModeStatus() {
+    if (!this._config.is_folder || !this._config.folder_mode) return '';
+    
+    const mode = this._config.folder_mode;
+    const modeText = mode === 'latest' ? 'Show Latest File' : 'Show Random Files';
+    const modeIcon = mode === 'latest' ? '📅' : '🎲';
+    
+    return html`
+      <div class="folder-mode-status">
+        <span>${modeIcon}</span>
+        <strong>Folder Mode:</strong> ${modeText}
+      </div>
+    `;
+  }
+
   _fetchMediaContents(hass, contentId) {
     return hass.callWS({
       type: "media_source/browse_media",
@@ -1192,20 +2342,47 @@ class MediaCardEditor extends LitElement {
 
     console.log('Opening media browser...');
     
+    // Determine the starting path for the browser
+    let startPath = '';
+    const configuredPath = this._config.media_path || '';
+    
+    if (configuredPath) {
+      // If we have a current path, try to start from its parent folder
+      if (configuredPath.includes('/')) {
+        // Extract the parent folder from the current path
+        const pathParts = configuredPath.split('/');
+        pathParts.pop(); // Remove the filename
+        startPath = pathParts.join('/');
+        console.log('Starting browser from current folder:', startPath);
+      }
+    }
+    
     // Try to browse media and create our own simple dialog
     try {
-      const mediaContent = await this._fetchMediaContents(this.hass, '');
+      const mediaContent = await this._fetchMediaContents(this.hass, startPath);
       if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
         this._showCustomMediaBrowser(mediaContent);
         return;
       }
     } catch (error) {
-      console.log('Could not fetch media contents, using prompt fallback:', error);
+      console.log('Could not fetch media contents for path:', startPath, 'Error:', error);
+      
+      // If starting from a specific folder failed, try from root
+      if (startPath !== '') {
+        console.log('Retrying from root...');
+        try {
+          const mediaContent = await this._fetchMediaContents(this.hass, '');
+          if (mediaContent && mediaContent.children && mediaContent.children.length > 0) {
+            this._showCustomMediaBrowser(mediaContent);
+            return;
+          }
+        } catch (rootError) {
+          console.log('Could not fetch root media contents either:', rootError);
+        }
+      }
     }
     
     // Final fallback: use a simple prompt with helpful guidance
-    const currentPath = this._config.media_path || '';
-    
     const helpText = `Enter the path to your media file:
 
 Format options:
@@ -1213,11 +2390,11 @@ Format options:
 • /local/images/photo.jpg
 • /media/videos/movie.mp4
 
-Your current path: ${currentPath}
+Your current path: ${configuredPath}
 
 Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
-    const mediaPath = prompt(helpText, currentPath);
+    const mediaPath = prompt(helpText, configuredPath);
     
     if (mediaPath && mediaPath.trim()) {
       console.log('Media path entered:', mediaPath);
@@ -1306,7 +2483,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
 
     // Add media files to the list
-    this._addMediaFilesToBrowser(fileList, mediaContent, dialog);
+    this._addMediaFilesToBrowser(fileList, mediaContent, dialog, mediaContent.media_content_id || '');
 
     const buttonContainer = document.createElement('div');
     buttonContainer.style.cssText = `
@@ -1397,8 +2574,54 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
     console.log('Adding media files to browser:', mediaContent.children.length, 'items');
+    console.log('Current path:', currentPath);
+    console.log('Media content ID:', mediaContent.media_content_id);
     
-    for (const item of mediaContent.children || []) {
+    // Check if this folder contains media files (not just subfolders)
+    // For performance with large folders, just check the first 50 items
+    const itemsToCheck = (mediaContent.children || []).slice(0, 50);
+    const hasMediaFiles = itemsToCheck.some(item => {
+      const isFolder = item.can_expand;
+      // Use item.title (display name) if available, fallback to media_content_id
+      const fileName = item.title || item.media_content_id;
+      const isMedia = !isFolder && this._isMediaFile(fileName);
+      if (!isFolder && itemsToCheck.length < 10) {
+        console.log('Checking file:', fileName, 'isMedia:', isMedia);
+      }
+      return isMedia;
+    });
+    
+    console.log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
+    console.log('Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
+    
+    // If we're in a folder (not root) with media files, add special folder options at the top
+    if ((currentPath && currentPath !== '') && hasMediaFiles) {
+      console.log('Adding folder options for path:', currentPath);
+      this._addFolderOptions(container, dialog, currentPath);
+    } else {
+      console.log('Not adding folder options - currentPath:', currentPath, 'hasMediaFiles:', hasMediaFiles);
+    }
+    
+    // Filter items to display based on media type configuration
+    const itemsToShow = (mediaContent.children || []).filter(item => {
+      // Always show folders
+      if (item.can_expand) return true;
+      
+      // For files, check media type filter
+      if (this._config.media_type && this._config.media_type !== 'all') {
+        const fileName = item.title || item.media_content_id;
+        const fileType = this._detectFileType(fileName);
+        return fileType === this._config.media_type;
+      }
+      
+      // Show all media files if no specific filter or "all" is selected
+      const fileName = item.title || item.media_content_id;
+      return this._isMediaFile(fileName);
+    });
+    
+    console.log('Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
+    
+    for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
       fileItem.style.cssText = `
         padding: 12px 16px !important;
@@ -1544,10 +2767,176 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     console.log('Added all items to browser container');
   }
 
+  _addFolderOptions(container, dialog, folderPath) {
+    console.log('Adding folder options for:', folderPath);
+    
+    // Create a separator/header for folder options
+    const optionsHeader = document.createElement('div');
+    optionsHeader.style.cssText = `
+      padding: 8px 16px !important;
+      background: var(--secondary-background-color, #f5f5f5) !important;
+      border-radius: 6px !important;
+      margin-bottom: 8px !important;
+      font-weight: 500 !important;
+      color: var(--primary-text-color, #333) !important;
+      border-left: 4px solid var(--primary-color, #007bff) !important;
+      font-size: 14px !important;
+      user-select: none !important;
+    `;
+    optionsHeader.textContent = 'Folder Display Options';
+    container.appendChild(optionsHeader);
+
+    // Show Latest option
+    const latestOption = this._createFolderOption(
+      '📅',
+      'Show Latest',
+      'Always display the newest file from this folder',
+      () => this._handleFolderModeSelected(folderPath, 'latest', dialog)
+    );
+    container.appendChild(latestOption);
+
+    // Show Random option
+    const randomOption = this._createFolderOption(
+      '🎲',
+      'Show Random',
+      'Randomly cycle through files in this folder',
+      () => this._handleFolderModeSelected(folderPath, 'random', dialog)
+    );
+    container.appendChild(randomOption);
+
+    // Add separator line before individual files
+    const separator = document.createElement('div');
+    separator.style.cssText = `
+      height: 1px !important;
+      background: var(--divider-color, #ddd) !important;
+      margin: 16px 0 !important;
+    `;
+    container.appendChild(separator);
+
+    const filesHeader = document.createElement('div');
+    filesHeader.style.cssText = `
+      padding: 8px 16px !important;
+      font-weight: 500 !important;
+      color: var(--secondary-text-color, #666) !important;
+      font-size: 14px !important;
+      user-select: none !important;
+    `;
+    filesHeader.textContent = 'Individual Files';
+    container.appendChild(filesHeader);
+  }
+
+  _createFolderOption(icon, title, description, clickHandler) {
+    const option = document.createElement('div');
+    option.style.cssText = `
+      padding: 12px 16px !important;
+      border: 2px solid var(--primary-color, #007bff) !important;
+      border-radius: 8px !important;
+      cursor: pointer !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 12px !important;
+      transition: all 0.2s ease !important;
+      background: var(--card-background-color, #fff) !important;
+      margin-bottom: 8px !important;
+      user-select: none !important;
+      pointer-events: auto !important;
+      z-index: 999999999 !important;
+    `;
+
+    option.onmouseenter = () => {
+      option.style.background = 'var(--primary-color, #007bff)';
+      option.style.color = 'white';
+      option.style.transform = 'translateY(-2px)';
+      option.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.3)';
+    };
+
+    option.onmouseleave = () => {
+      option.style.background = 'var(--card-background-color, #fff)';
+      option.style.color = 'var(--primary-text-color, #333)';
+      option.style.transform = 'translateY(0)';
+      option.style.boxShadow = 'none';
+    };
+
+    option.onclick = (e) => {
+      console.log('Folder option clicked:', title);
+      clickHandler();
+      return false;
+    };
+
+    const iconSpan = document.createElement('span');
+    iconSpan.style.cssText = `
+      font-size: 24px !important;
+      flex-shrink: 0 !important;
+      pointer-events: none !important;
+    `;
+    iconSpan.textContent = icon;
+
+    const textContainer = document.createElement('div');
+    textContainer.style.cssText = `
+      flex: 1 !important;
+      pointer-events: none !important;
+    `;
+
+    const titleSpan = document.createElement('div');
+    titleSpan.style.cssText = `
+      font-weight: 600 !important;
+      font-size: 16px !important;
+      color: var(--primary-text-color, #333) !important;
+      margin-bottom: 4px !important;
+      pointer-events: none !important;
+    `;
+    titleSpan.textContent = title;
+
+    const descSpan = document.createElement('div');
+    descSpan.style.cssText = `
+      font-size: 13px !important;
+      color: var(--secondary-text-color, #666) !important;
+      line-height: 1.3 !important;
+      pointer-events: none !important;
+    `;
+    descSpan.textContent = description;
+
+    textContainer.appendChild(titleSpan);
+    textContainer.appendChild(descSpan);
+    option.appendChild(iconSpan);
+    option.appendChild(textContainer);
+
+    return option;
+  }
+
+  _handleFolderModeSelected(folderPath, mode, dialog) {
+    console.log('Folder mode selected:', mode, 'for path:', folderPath);
+    
+    // Store the folder configuration
+    this._config = { 
+      ...this._config, 
+      media_path: folderPath,
+      folder_mode: mode,
+      // Auto-detect that this is now a folder-based configuration
+      is_folder: true
+    };
+    
+    this._fireConfigChanged();
+    
+    // Close the dialog
+    if (dialog && dialog.parentNode) {
+      console.log('Closing dialog after folder mode selection');
+      document.body.removeChild(dialog);
+    }
+  }
+
   _handleMediaPicked(mediaContentId) {
     console.log('Media picked:', mediaContentId);
     // Store the full media-source path for configuration
     this._config = { ...this._config, media_path: mediaContentId };
+    
+    // Clear folder-specific options when selecting a single file
+    // (since this is no longer a folder-based configuration)
+    this._config = { 
+      ...this._config, 
+      is_folder: false,
+      folder_mode: undefined
+    };
     
     // Auto-detect media type from extension
     const extension = mediaContentId.split('.').pop()?.toLowerCase();
@@ -1558,7 +2947,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     }
     
     this._fireConfigChanged();
-    console.log('Config updated:', this._config);
+    console.log('Config updated (file selected, folder options cleared):', this._config);
   }
 
   _titleChanged(ev) {
@@ -1568,6 +2957,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _mediaTypeChanged(ev) {
     this._config = { ...this._config, media_type: ev.target.value };
+    this._fireConfigChanged();
+  }
+
+  _aspectModeChanged(ev) {
+    this._config = { ...this._config, aspect_mode: ev.target.value };
     this._fireConfigChanged();
   }
 
@@ -1604,6 +2998,32 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _hideVideoControlsDisplayChanged(ev) {
     this._config = { ...this._config, hide_video_controls_display: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  // Navigation configuration handlers
+  _navigationZonesChanged(ev) {
+    this._config = { ...this._config, enable_navigation_zones: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _positionIndicatorChanged(ev) {
+    this._config = { ...this._config, show_position_indicator: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _dotsIndicatorChanged(ev) {
+    this._config = { ...this._config, show_dots_indicator: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _keyboardNavigationChanged(ev) {
+    this._config = { ...this._config, enable_keyboard_navigation: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _autoAdvanceModeChanged(ev) {
+    this._config = { ...this._config, auto_advance_mode: ev.target.value };
     this._fireConfigChanged();
   }
 
@@ -1766,6 +3186,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     });
     this.dispatchEvent(event);
   }
+
+  _isMediaFile(filePath) {
+    // Extract filename from the full path and get extension
+    const fileName = filePath.split('/').pop() || filePath;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+    if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
+      console.log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
+    }
+    return isMedia;
+  }
+
+  _detectFileType(filePath) {
+    const fileName = filePath.split('/').pop() || filePath;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    
+    if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
+      return 'video';
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+      return 'image';
+    }
+    
+    return null;
+  }
 }
 
 // Register the custom elements
@@ -1783,7 +3227,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.0.23  ',
+  '%c  MEDIA-CARD  %c  1.1.6  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
