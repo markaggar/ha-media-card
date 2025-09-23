@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.6
+ * Version: 1.1.7
  */
 
 // Import Lit from CDN for standalone usage
@@ -351,6 +351,10 @@ class MediaCard extends LitElement {
     if (isFolder && this.hass) {
       console.log('🔧 Config set with folder mode - triggering initialization');
       setTimeout(() => this._handleFolderMode(), 50);
+    } else if (!isFolder && config.media_path && this.hass) {
+      // For single file mode, ensure media loads even if auto-refresh is disabled
+      console.log('🔧 Config set with single file mode - loading media');
+      setTimeout(() => this._loadSingleFile(), 50);
     }
   }
 
@@ -419,6 +423,22 @@ class MediaCard extends LitElement {
       }
     } catch (error) {
       console.error('Error handling folder mode:', error);
+    }
+  }
+
+  async _loadSingleFile() {
+    console.log('Loading single file:', this.config.media_path);
+    
+    try {
+      const resolvedUrl = await this._resolveMediaPath(this.config.media_path);
+      if (resolvedUrl !== this._mediaUrl) {
+        this._mediaUrl = resolvedUrl;
+        this._detectMediaType(this.config.media_path);
+        console.log('📄 Loaded single file:', resolvedUrl);
+        this.requestUpdate();
+      }
+    } catch (error) {
+      console.error('Error loading single file:', error);
     }
   }
 
@@ -1100,6 +1120,23 @@ class MediaCard extends LitElement {
         </div>
       `;
     }
+
+    // Handle single file mode that hasn't been initialized yet
+    if (!this._mediaUrl && this.config?.media_path && !this.config?.is_folder && this.hass) {
+      console.log('🔧 No media URL but have single file config - triggering initialization');
+      // Trigger single file loading asynchronously
+      setTimeout(() => this._loadSingleFile(), 10);
+      
+      return html`
+        <div class="placeholder">
+          <div style="font-size: 64px; margin-bottom: 24px; opacity: 0.3;">📄</div>
+          <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">Loading Media...</div>
+          <div style="font-size: 0.9em; opacity: 0.8; line-height: 1.4;">
+            Loading media file
+          </div>
+        </div>
+      `;
+    }
     
     if (!this._mediaUrl) {
       return html`
@@ -1412,6 +1449,21 @@ class MediaCard extends LitElement {
 
   updated(changedProperties) {
     super.updated(changedProperties);
+    
+    // Handle initial loading when hass becomes available
+    if (changedProperties.has('hass') && this.config && this.hass) {
+      const isFolder = this.config.is_folder && this.config.folder_mode;
+      
+      if (isFolder) {
+        // Folder mode - trigger folder handling
+        console.log('🔄 Hass available - initializing folder mode');
+        setTimeout(() => this._handleFolderMode(), 50);
+      } else if (this.config.media_path) {
+        // Single file mode - ensure media loads even if auto-refresh is disabled
+        console.log('🔄 Hass available - loading single file');
+        setTimeout(() => this._loadSingleFile(), 50);
+      }
+    }
     
     // Set up auto-refresh when hass becomes available or config changes
     if ((changedProperties.has('hass') || changedProperties.has('config')) && 
@@ -3227,7 +3279,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.1.6  ',
+  '%c  MEDIA-CARD  %c  1.1.7  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
