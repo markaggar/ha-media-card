@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.7
+ * Version: 1.1.8
  */
 
 // Import Lit from CDN for standalone usage
@@ -559,14 +559,25 @@ class MediaCard extends LitElement {
             }
             
             let actualMtime = null;
+            let estimatedMtime = null;
+            
+            // Only extract timestamp from filename if we're in 'latest' mode
+            // This saves processing cycles in 'random' mode where timestamps aren't needed
+            if (this.config.folder_mode === 'latest') {
+              estimatedMtime = this._extractTimestampFromFilename(item.title || item.media_content_id);
+            } else {
+              // Skip timestamp extraction for random mode - saves processing cycles
+              if (index === 0) { // Log once to avoid spam
+                console.log('⚡ Skipping timestamp extraction in "' + this.config.folder_mode + '" mode for performance');
+              }
+            }
             
             // For now, focus on better filename timestamp extraction
             // In the future, could explore file system APIs if they become available
             
             return {
               ...item,
-              // Try to extract timestamp from filename
-              estimated_mtime: this._extractTimestampFromFilename(item.title || item.media_content_id),
+              estimated_mtime: estimatedMtime,
               sort_name: (item.title || item.media_content_id).toLowerCase(),
               original_index: index, // Preserve original API order
               actual_mtime: actualMtime // Will be null for now
@@ -574,44 +585,44 @@ class MediaCard extends LitElement {
           })
         );
 
-        // Sort based on available timing information
-        this._folderContents.sort((a, b) => {
-          // Prioritize items with actual modification times
-          if (a.actual_mtime && b.actual_mtime) {
-            return b.actual_mtime - a.actual_mtime; // Newest first
-          }
-          if (a.actual_mtime && !b.actual_mtime) return -1;
-          if (!a.actual_mtime && b.actual_mtime) return 1;
-          
-          // Fall back to filename timestamp parsing
-          if (a.estimated_mtime && b.estimated_mtime) {
-            return b.estimated_mtime - a.estimated_mtime;
-          }
-          if (a.estimated_mtime && !b.estimated_mtime) return -1;
-          if (!a.estimated_mtime && b.estimated_mtime) return 1;
-          
-          // Final fallback: for "latest" mode, try reverse alphabetical (often newer files have higher names)
-          // For other modes, use regular alphabetical
-          if (this.config.folder_mode === 'latest') {
+        // Only sort if we're in 'latest' mode - random mode doesn't need sorting
+        if (this.config.folder_mode === 'latest') {
+          // Sort based on available timing information
+          this._folderContents.sort((a, b) => {
+            // Prioritize items with actual modification times
+            if (a.actual_mtime && b.actual_mtime) {
+              return b.actual_mtime - a.actual_mtime; // Newest first
+            }
+            if (a.actual_mtime && !b.actual_mtime) return -1;
+            if (!a.actual_mtime && b.actual_mtime) return 1;
+            
+            // Fall back to filename timestamp parsing
+            if (a.estimated_mtime && b.estimated_mtime) {
+              return b.estimated_mtime - a.estimated_mtime;
+            }
+            if (a.estimated_mtime && !b.estimated_mtime) return -1;
+            if (!a.estimated_mtime && b.estimated_mtime) return 1;
+            
+            // Final fallback: reverse alphabetical (often newer files have higher names)
             return b.sort_name.localeCompare(a.sort_name); // Z to A
-          } else {
-            return a.sort_name.localeCompare(b.sort_name); // A to Z
-          }
-        });
-
-        console.log('Found', this._folderContents.length, 'media files in folder (filtered by type:', this.config.media_type, ')');
-        
-        // Debug logging for sorting
-        if (this._folderContents.length > 0) {
-          console.log('📁 First few files after sorting (mode:', this.config.folder_mode, '):');
-          this._folderContents.slice(0, 3).forEach((file, idx) => {
-            const timestamp = file.actual_mtime 
-              ? `📅 REAL: ${new Date(file.actual_mtime).toISOString()}` 
-              : file.estimated_mtime 
-                ? `📄 FILENAME: ${new Date(file.estimated_mtime).toISOString()}`
-                : 'no timestamp';
-            console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
           });
+
+          console.log('📁 Sorted', this._folderContents.length, 'files for "latest" mode');
+          
+          // Debug logging for sorting
+          if (this._folderContents.length > 0) {
+            console.log('📁 First few files after sorting:');
+            this._folderContents.slice(0, 3).forEach((file, idx) => {
+              const timestamp = file.actual_mtime 
+                ? `📅 REAL: ${new Date(file.actual_mtime).toISOString()}` 
+                : file.estimated_mtime 
+                  ? `📄 FILENAME: ${new Date(file.estimated_mtime).toISOString()}`
+                  : 'no timestamp';
+              console.log(`  ${idx + 1}. ${file.title} (${timestamp})`);
+            });
+          }
+        } else {
+          console.log('📁 Found', this._folderContents.length, 'files for "' + this.config.folder_mode + '" mode (skipping sort)');
         }
       } else {
         this._folderContents = [];
@@ -3279,7 +3290,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.1.7  ',
+  '%c  MEDIA-CARD  %c  1.1.8  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
