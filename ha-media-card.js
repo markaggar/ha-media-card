@@ -348,6 +348,10 @@ class MediaCard extends LitElement {
     
     this.config = config;
     
+    // Apply debug mode from config
+    this._debugMode = config.debug_mode === true;
+    this._log('🔧 Debug mode:', this._debugMode ? 'ENABLED' : 'disabled');
+    
     // Set aspect ratio mode data attribute for CSS styling
     const aspectMode = config.aspect_mode || 'default';
     if (aspectMode !== 'default') {
@@ -388,6 +392,7 @@ class MediaCard extends LitElement {
   _setupAutoRefresh() {
     // Clear any existing interval
     if (this._refreshInterval) {
+      this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
@@ -403,9 +408,14 @@ class MediaCard extends LitElement {
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       this._log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
       this._refreshInterval = setInterval(() => {
-        this._log('🔄 Auto-refresh timer triggered');
-        this._checkForMediaUpdates();
+        this._log('🔄 Auto-refresh timer triggered - isPaused:', this._isPaused);
+        if (!this._isPaused) {
+          this._checkForMediaUpdates();
+        } else {
+          this._log('🔄 Auto-refresh skipped - currently paused');
+        }
       }, refreshSeconds * 1000);
+      this._log('🔄 Auto-refresh interval created with ID:', this._refreshInterval);
     } else {
       this._log('🔄 Auto-refresh disabled or not configured:', {
         refreshSeconds,
@@ -1575,6 +1585,8 @@ class MediaCard extends LitElement {
   updated(changedProperties) {
     super.updated(changedProperties);
     
+    this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
+    
     // Handle initial loading when hass becomes available
     if (changedProperties.has('hass') && this.config && this.hass) {
       const isFolder = this.config.is_folder && this.config.folder_mode;
@@ -1596,11 +1608,20 @@ class MediaCard extends LitElement {
       
       // Only set up if we don't already have an interval running
       if (!this._refreshInterval) {
-        this._log('🔄 Setting up auto-refresh after property update');
+        this._log('🔄 Setting up auto-refresh after property update - current interval:', this._refreshInterval);
         this._setupAutoRefresh();
+      } else {
+        this._log('🔄 Auto-refresh already running - skipping setup, current interval:', this._refreshInterval);
       }
     } else if (this._isPaused) {
       this._log('🔄 Auto-refresh setup skipped - currently paused');
+    } else {
+      this._log('🔄 Auto-refresh setup skipped - conditions not met:', {
+        hasHass: !!this.hass,
+        hasConfig: !!this.config,
+        autoRefresh: this.config?.auto_refresh_seconds,
+        isPaused: this._isPaused
+      });
     }
   }
 
@@ -1688,24 +1709,32 @@ class MediaCard extends LitElement {
   _handleCenterClick(e) {
     e.stopPropagation();
     
+    this._log('🖱️ Center click detected - current mode:', this.config.folder_mode, 'isPaused:', this._isPaused);
+    
     // Only allow pause/resume in random mode
     if (this._isRandomMode()) {
       this._isPaused = !this._isPaused;
-      this._log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode`);
+      this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} auto-refresh in random mode`);
       
       // Actually pause/resume the auto-refresh timer
       if (this._isPaused) {
         // Pause: Clear the interval
         if (this._refreshInterval) {
+          this._log('🔄 Clearing interval on pause, ID:', this._refreshInterval);
           clearInterval(this._refreshInterval);
           this._refreshInterval = null;
+        } else {
+          this._log('🔄 No interval to clear on pause');
         }
       } else {
         // Resume: Restart the auto-refresh
+        this._log('🔄 Resuming - calling _setupAutoRefresh');
         this._setupAutoRefresh();
       }
       
       this.requestUpdate();
+    } else {
+      this._log('🖱️ Center click ignored - not in random mode');
     }
   }
 
