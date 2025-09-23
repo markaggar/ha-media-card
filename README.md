@@ -1,7 +1,7 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card v1.1.5
+# HA Media Card v1.1.6
 
 A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, dashcam clips, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
@@ -26,7 +26,8 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 ### 🎮 **Manual Navigation System**
 
 - **Click Navigation Zones**: Left/right areas of media for previous/next file browsing
-- **Keyboard Controls**: Arrow keys, space bar, and Enter for navigation
+- **Center Pause/Resume**: Click center area to pause auto-refresh in random mode
+- **Keyboard Controls**: Arrow keys, space bar, Enter for navigation, P for pause/resume
 - **Visual Indicators**: Subtle navigation hints and current file position display
 - **Configurable Controls**: Enable/disable navigation features independently
 - **Smart Folder Awareness**: Navigation works seamlessly with folder modes
@@ -463,7 +464,7 @@ Note: For video - the media_content_type is video/mp4
 ### **Mouse/Touch Navigation**
 - **Left Click Zone**: Click the left 25% of the media to go to previous file
 - **Right Click Zone**: Click the right 25% of the media to go to next file
-- **Center Click**: No navigation action (preserves other click actions)
+- **Center Click**: Pause/Resume auto-refresh (random mode only)
 
 ### **Keyboard Controls**
 
@@ -475,6 +476,7 @@ Note: For video - the media_content_type is video/mp4
 - **↓ Down Arrow**: Last file in folder
 - **Space**: Next file
 - **Enter**: Refresh current file
+- **P**: Pause/Resume auto-refresh (random mode only)
 
 > **💡 Tip**: You'll see a subtle outline around the card when it's focused and ready for keyboard input.
 

@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.5
+ * Version: 1.1.6
  */
 
 // Import Lit from CDN for standalone usage
@@ -17,7 +17,8 @@ class MediaCard extends LitElement {
     _refreshInterval: { state: true },
     _folderContents: { state: true },
     _currentMediaIndex: { state: true },
-    _lastRefreshTime: { state: true }
+    _lastRefreshTime: { state: true },
+    _isPaused: { state: true }
   };
 
   constructor() {
@@ -31,6 +32,7 @@ class MediaCard extends LitElement {
     this._currentMediaIndex = 0;
     this._lastRefreshTime = 0;
     this._pausedForNavigation = false;
+    this._isPaused = false;
   }
 
   static styles = css`
@@ -164,6 +166,32 @@ class MediaCard extends LitElement {
 
     .refresh-button:hover {
       background: rgba(0, 0, 0, 0.9);
+    }
+
+    /* Pause indicator */
+    .pause-indicator {
+      position: absolute;
+      top: 8px;
+      right: 50px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 12;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     /* Navigation Zones */
@@ -398,6 +426,12 @@ class MediaCard extends LitElement {
     const now = Date.now();
     const configuredInterval = (this.config.auto_refresh_seconds || 30) * 1000;
     const timeSinceLastRefresh = now - this._lastRefreshTime;
+    
+    // Check if paused (only applies to random mode)
+    if (this._isPaused && this.config.folder_mode === 'random') {
+      console.log('🎮 Folder mode refresh paused in random mode');
+      return;
+    }
     
     console.log('Refreshing folder mode:', this.config.folder_mode);
     console.log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
@@ -770,6 +804,12 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // Check if paused (only applies to random mode)
+    if (this._isPaused && this.config.folder_mode === 'random') {
+      console.log('🎮 Auto-refresh paused in random mode');
+      return;
+    }
+    
     console.log('Checking for media updates...', this.config.media_path);
     
     // Handle folder mode updates
@@ -968,6 +1008,7 @@ class MediaCard extends LitElement {
           ${this._renderNavigationZones()}
           ${this._renderNavigationIndicators()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
+          ${this._renderPauseIndicator()}
         </div>
       </div>
     `;
@@ -982,6 +1023,17 @@ class MediaCard extends LitElement {
       >
         🔄
       </button>
+    `;
+  }
+
+  _renderPauseIndicator() {
+    // Only show pause indicator when paused in random mode
+    if (!this._isPaused || this.config.folder_mode !== 'random') {
+      return html``;
+    }
+
+    return html`
+      <div class="pause-indicator">⏸</div>
     `;
   }
 
@@ -1115,7 +1167,12 @@ class MediaCard extends LitElement {
              tabindex="0"
              title="Previous image">
         </div>
-        <div class="nav-zone nav-zone-center"></div>
+        <div class="nav-zone nav-zone-center"
+             @click=${this._handleCenterClick}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
+             title="Pause/Resume auto-refresh">
+        </div>
         <div class="nav-zone nav-zone-right"  
              @click=${this._handleNextClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
@@ -1449,6 +1506,17 @@ class MediaCard extends LitElement {
     this._navigateNext().catch(err => console.error('Navigation error:', err));
   }
 
+  _handleCenterClick(e) {
+    e.stopPropagation();
+    
+    // Only allow pause/resume in random mode
+    if (this.config.folder_mode === 'random') {
+      this._isPaused = !this._isPaused;
+      console.log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode`);
+      this.requestUpdate();
+    }
+  }
+
   _handleGlobalKeyDown(e) {
     // Only handle keyboard navigation if enabled and we have navigable content
     if (this.config.enable_keyboard_navigation === false || 
@@ -1483,6 +1551,16 @@ class MediaCard extends LitElement {
         e.preventDefault();
         // Refresh current file
         this._manualRefresh().catch(err => console.error('Refresh error:', err));
+        break;
+      case 'p':
+      case 'P':
+        // Pause/Resume auto-refresh in random mode
+        if (this.config.folder_mode === 'random') {
+          e.preventDefault();
+          this._isPaused = !this._isPaused;
+          console.log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode (keyboard)`);
+          this.requestUpdate();
+        }
         break;
     }
   }
@@ -3149,7 +3227,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MEDIA-CARD  %c  1.1.5  ',
+  '%c  MEDIA-CARD  %c  1.1.6  ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
