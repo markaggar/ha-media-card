@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.1.9
+ * Version: 1.2.0
  */
 
 // Import Lit from CDN for standalone usage
