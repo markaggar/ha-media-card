@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.2.1
+ * Version: 1.2.2
  */
 
 // Import Lit from CDN for standalone usage
@@ -35,6 +35,8 @@ class MediaCard extends LitElement {
     this._isPaused = false;
     this._urlCreatedTime = 0; // Track when current URL was created
     this._debugMode = false; // Enable debug logging in development
+    this._initializationInProgress = false; // Prevent multiple initializations
+    this._scanInProgress = false; // Prevent multiple scans
   }
 
   // Debug logging utility
@@ -390,7 +392,7 @@ class MediaCard extends LitElement {
   }
 
   _setupAutoRefresh() {
-    // Clear any existing interval
+    // Clear any existing interval FIRST to prevent multiple timers
     if (this._refreshInterval) {
       this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
@@ -408,7 +410,7 @@ class MediaCard extends LitElement {
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       this._log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
       this._refreshInterval = setInterval(() => {
-        this._log('🔄 Auto-refresh timer triggered - isPaused:', this._isPaused);
+        this._log('🔄 Auto-refresh timer triggered - isPaused:', this._isPaused, 'interval ID:', this._refreshInterval);
         if (!this._isPaused) {
           this._checkForMediaUpdates();
         } else {
@@ -426,9 +428,17 @@ class MediaCard extends LitElement {
   }
 
   async _handleFolderMode() {
-    this._log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
+    // Prevent multiple simultaneous initializations
+    if (this._initializationInProgress) {
+      this._log('📂 Folder initialization already in progress - skipping');
+      return;
+    }
+    
+    this._initializationInProgress = true;
     
     try {
+      this._log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
+      
       // Scan folder contents
       await this._scanFolderContents();
       
@@ -466,6 +476,8 @@ class MediaCard extends LitElement {
       }
     } catch (error) {
       console.error('Error handling folder mode:', error);
+    } finally {
+      this._initializationInProgress = false;
     }
   }
 
@@ -494,10 +506,18 @@ class MediaCard extends LitElement {
 
     const now = Date.now();
     const configuredInterval = (this.config.auto_refresh_seconds || 30) * 1000;
+    
+    // Fix timestamp calculation - ensure _lastRefreshTime is reasonable
+    if (this._lastRefreshTime > now || this._lastRefreshTime < (now - 86400000)) {
+      this._log('⚠️ Invalid _lastRefreshTime detected, resetting:', this._lastRefreshTime);
+      this._lastRefreshTime = now - configuredInterval; // Set to allow immediate refresh
+    }
+    
     const timeSinceLastRefresh = now - this._lastRefreshTime;
     
     this._log('Refreshing folder mode:', this.config.folder_mode);
     this._log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
+    this._log('Timestamps - now:', now, 'last:', this._lastRefreshTime);
     
     // Check if enough time has passed since last refresh (prevent rapid-fire refreshing)
     if (this._lastRefreshTime > 0 && timeSinceLastRefresh < configuredInterval * 0.8) { // Use 80% to be more conservative
@@ -563,16 +583,27 @@ class MediaCard extends LitElement {
 
   async _scanFolderContents() {
     if (!this.hass) return;
-
-    this._log('Scanning folder contents for:', this.config.media_path);
+    
+    // Prevent multiple simultaneous scans
+    if (this._scanInProgress) {
+      this._log('📁 Folder scan already in progress - skipping');
+      return;
+    }
+    
+    this._scanInProgress = true;
     
     try {
+      this._log('Scanning folder contents for:', this.config.media_path);
+      
       const mediaContent = await this.hass.callWS({
         type: "media_source/browse_media",
         media_content_id: this.config.media_path
       });
 
-      this._log('📊 Raw media browser API response:', JSON.stringify(mediaContent, null, 2));
+      // Only log the response in debug mode to reduce console spam
+      if (this._debugMode) {
+        this._log('📊 Raw media browser API response:', JSON.stringify(mediaContent, null, 2));
+      }
 
       if (mediaContent && mediaContent.children) {
         // Filter for media files only, respecting the configured media type
@@ -673,6 +704,8 @@ class MediaCard extends LitElement {
     } catch (error) {
       console.error('Error scanning folder contents:', error);
       this._folderContents = [];
+    } finally {
+      this._scanInProgress = false;
     }
   }
 
@@ -1592,7 +1625,7 @@ class MediaCard extends LitElement {
       const isFolder = this.config.is_folder && this.config.folder_mode;
       
       if (isFolder) {
-        // Folder mode - trigger folder handling
+        // Folder mode - trigger folder handling (with debounce)
         this._log('🔄 Hass available - initializing folder mode');
         setTimeout(() => this._handleFolderMode(), 50);
       } else if (this.config.media_path) {
@@ -1602,17 +1635,20 @@ class MediaCard extends LitElement {
       }
     }
     
-    // Set up auto-refresh when hass becomes available or config changes
-    if ((changedProperties.has('hass') || changedProperties.has('config')) && 
-        this.config && this.hass && this.config.auto_refresh_seconds > 0 && !this._isPaused) {
-      
-      // Only set up if we don't already have an interval running
-      if (!this._refreshInterval) {
-        this._log('🔄 Setting up auto-refresh after property update - current interval:', this._refreshInterval);
-        this._setupAutoRefresh();
-      } else {
-        this._log('🔄 Auto-refresh already running - skipping setup, current interval:', this._refreshInterval);
-      }
+    // ONLY set up auto-refresh on specific property changes to prevent multiple timers
+    const shouldSetupAutoRefresh = (
+      changedProperties.has('hass') || 
+      changedProperties.has('config')
+    ) && 
+    this.config && 
+    this.hass && 
+    this.config.auto_refresh_seconds > 0 && 
+    !this._isPaused;
+    
+    if (shouldSetupAutoRefresh) {
+      // Always clear and recreate to prevent multiple timers
+      this._log('🔄 Property change detected - recreating auto-refresh timer');
+      this._setupAutoRefresh();
     } else if (this._isPaused) {
       this._log('🔄 Auto-refresh setup skipped - currently paused');
     } else {
@@ -1620,7 +1656,8 @@ class MediaCard extends LitElement {
         hasHass: !!this.hass,
         hasConfig: !!this.config,
         autoRefresh: this.config?.auto_refresh_seconds,
-        isPaused: this._isPaused
+        isPaused: this._isPaused,
+        changedProps: Array.from(changedProperties.keys())
       });
     }
   }
@@ -3465,7 +3502,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.2.1  ',
+    '%c  MEDIA-CARD  %c  1.2.2  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
