@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.3.1
+ * Version: 1.3.2
  */
 
 // Import Lit from CDN for standalone usage
@@ -25,7 +25,6 @@ class MediaCard extends LitElement {
     super();
     this._mediaUrl = '';
     this._mediaType = 'image';
-    this.setAttribute('data-media-type', 'image');
     this._lastModified = null;
     this._refreshInterval = null;
     this._mediaLoadedLogged = false;
@@ -41,6 +40,12 @@ class MediaCard extends LitElement {
     this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
     this._componentStartTime = Date.now(); // Track when component was created for startup protection
     this._lastScanTime = 0; // Track when we last scanned folder contents to prevent rapid re-scanning
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    // Set initial data attributes when element is connected to DOM
+    this.setAttribute('data-media-type', this._mediaType || 'image');
   }
 
   // Debug logging utility
@@ -3588,7 +3593,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.3.1  ',
+    '%c  MEDIA-CARD  %c  1.3.2  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
