@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.2.5
+ * Version: 1.2.6
  */
 
 // Import Lit from CDN for standalone usage
@@ -39,6 +39,7 @@ class MediaCard extends LitElement {
     this._scanInProgress = false; // Prevent multiple scans
     this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
     this._componentStartTime = Date.now(); // Track when component was created for startup protection
+    this._lastScanTime = 0; // Track when we last scanned folder contents to prevent rapid re-scanning
   }
 
   // Debug logging utility
@@ -593,7 +594,15 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // Prevent rapid re-scanning if we already have recent results and a selected media
+    const timeSinceLastScan = Date.now() - (this._lastScanTime || 0);
+    if (this._folderContents && this._folderContents.length > 0 && this._mediaUrl && timeSinceLastScan < 5000) {
+      this._log('📁 Folder scan skipped - recent results exist (', timeSinceLastScan, 'ms ago)');
+      return;
+    }
+    
     this._scanInProgress = true;
+    this._lastScanTime = Date.now();
     
     try {
       this._log('Scanning folder contents for:', this.config.media_path);
@@ -3524,7 +3533,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.2.5  ',
+    '%c  MEDIA-CARD  %c  1.2.6  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
