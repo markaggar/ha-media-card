@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.2.2
+ * Version: 1.2.3
  */
 
 // Import Lit from CDN for standalone usage
@@ -627,8 +627,8 @@ class MediaCard extends LitElement {
         // Try to get actual file modification times for better sorting
         this._folderContents = await Promise.all(
           filteredItems.map(async (item, index) => {
-            // Log the full structure of the first few items to understand available data
-            if (index < 3) {
+            // Log the full structure of the first few items to understand available data (only in debug mode)
+            if (index < 3 && this._debugMode) {
               this._log(`📄 Media item ${index + 1} structure:`, JSON.stringify(item, null, 2));
             }
             
@@ -906,14 +906,14 @@ class MediaCard extends LitElement {
   }
 
   async _checkForMediaUpdates() {
-    if (!this.config?.media_path) {
-      this._log('No media path configured for auto-refresh');
-      return;
-    }
-
-    // Exit immediately if paused
+    // CRITICAL: Exit immediately if paused - this should stop rapid cycling
     if (this._isPaused) {
       this._log('🔄 Auto-refresh skipped - currently paused');
+      return;
+    }
+    
+    if (!this.config?.media_path) {
+      this._log('No media path configured for auto-refresh');
       return;
     }
 
@@ -1620,8 +1620,8 @@ class MediaCard extends LitElement {
     
     this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
     
-    // Handle initial loading when hass becomes available
-    if (changedProperties.has('hass') && this.config && this.hass) {
+    // Only handle hass changes - ignore _folderContents changes to prevent loops
+    if (changedProperties.has('hass') && !changedProperties.has('_folderContents') && this.config && this.hass) {
       const isFolder = this.config.is_folder && this.config.folder_mode;
       
       if (isFolder) {
@@ -1635,11 +1635,12 @@ class MediaCard extends LitElement {
       }
     }
     
-    // ONLY set up auto-refresh on specific property changes to prevent multiple timers
+    // ONLY set up auto-refresh on initial hass/config changes - NOT on _folderContents changes
     const shouldSetupAutoRefresh = (
       changedProperties.has('hass') || 
       changedProperties.has('config')
     ) && 
+    !changedProperties.has('_folderContents') && // Prevent timer recreation on folder content changes
     this.config && 
     this.hass && 
     this.config.auto_refresh_seconds > 0 && 
@@ -1657,7 +1658,8 @@ class MediaCard extends LitElement {
         hasConfig: !!this.config,
         autoRefresh: this.config?.auto_refresh_seconds,
         isPaused: this._isPaused,
-        changedProps: Array.from(changedProperties.keys())
+        changedProps: Array.from(changedProperties.keys()),
+        hasFolderContents: changedProperties.has('_folderContents')
       });
     }
   }
@@ -3502,7 +3504,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.2.2  ',
+    '%c  MEDIA-CARD  %c  1.2.3  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
