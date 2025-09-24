@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.2.4
+ * Version: 1.2.5
  */
 
 // Import Lit from CDN for standalone usage
@@ -38,6 +38,7 @@ class MediaCard extends LitElement {
     this._initializationInProgress = false; // Prevent multiple initializations
     this._scanInProgress = false; // Prevent multiple scans
     this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
+    this._componentStartTime = Date.now(); // Track when component was created for startup protection
   }
 
   // Debug logging utility
@@ -914,6 +915,13 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // Prevent rapid firing during startup - ensure at least 3 seconds since component created
+    const timeSinceStartup = Date.now() - (this._componentStartTime || 0);
+    if (timeSinceStartup < 3000) {
+      this._log('🔄 Auto-refresh skipped - startup protection (need', 3000 - timeSinceStartup, 'ms more)');
+      return;
+    }
+    
     if (!this.config?.media_path) {
       this._log('No media path configured for auto-refresh');
       return;
@@ -1620,7 +1628,11 @@ class MediaCard extends LitElement {
   updated(changedProperties) {
     super.updated(changedProperties);
     
-    this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
+    // Only log component updates if they're significant (not just hass changes)
+    const significantChange = !changedProperties.has('hass') || changedProperties.size > 1;
+    if (significantChange && this._debugMode) {
+      this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
+    }
     
     // Only handle hass changes for INITIAL setup - ignore subsequent hass updates to prevent loops
     const isInitialHassSetup = changedProperties.has('hass') && !this._hasInitializedHass && this.hass;
@@ -1657,7 +1669,8 @@ class MediaCard extends LitElement {
       this._setupAutoRefresh();
     } else if (this._isPaused) {
       this._log('🔄 Auto-refresh setup skipped - currently paused');
-    } else {
+    } else if (isConfigChange) {
+      // Only log when config changes, not for frequent hass updates
       this._log('🔄 Auto-refresh setup skipped - conditions not met:', {
         hasHass: !!this.hass,
         hasConfig: !!this.config,
@@ -3511,7 +3524,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.2.4  ',
+    '%c  MEDIA-CARD  %c  1.2.5  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
