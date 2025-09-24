@@ -1,7 +1,7 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card v1.1.7
+# HA Media Card
 
 A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
@@ -532,6 +532,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Enjoy your new Media Card!** 🎉 
+**Enjoy your new Media Card!** 🎉
 
 If you find this card useful, please consider giving it a ⭐ on GitHub!

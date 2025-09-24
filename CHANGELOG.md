@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2025-09-23
+
+### Fixed
+
+- **CRITICAL**: Fixed createElement attribute error that prevented card loading in Home Assistant
+- Moved setAttribute calls from constructor to connectedCallback() following Web Components best practices
+- Resolved "NotSupportedError: Failed to execute 'createElement'" issue
+
+## [1.3.1] - 2025-09-23
+
+### Fixed
+
+- **Video Controls Accessibility**: Navigation zones now exclude bottom 50px to allow access to video controls
+- Video pause/seek/volume controls are now fully accessible when navigation zones are enabled
+- Added data-media-type attribute for proper CSS targeting of images vs videos
+
+### Changed
+
+- Navigation zones height reduced to calc(100% - 50px) for videos
+- Images maintain full-height navigation zones (no controls to interfere with)
+
+## [1.3.0] - 2025-09-23
+
+### Added
+
+- **Enhanced Navigation Zones**: Improved from 3-zone to 4-zone layout (20%/25%/30%/25%)
+- **Neutral Zone**: 30% width center area dedicated for tap/hold actions
+- **Conflict Resolution**: Tap/hold actions no longer interfere with navigation zones
+
+### Changed
+
+- Navigation zone restructuring prevents conflicts between navigation and tap/hold interactions
+- Better separation of interaction areas for improved user experience
+
+### Removed
+
+- Unnecessary back button implementation (existing behavior was correct by design)
+- Cleaned up redundant media browser navigation code
+
+## [1.2.8] - 2025-09-23
+
+### Fixed
+
+- **Pause/Resume Functionality**: Fixed pause showing icon but images continuing to advance
+- **Timer Management**: Pause now properly stops setInterval timer, resume restarts auto-refresh
+- **Editor Utility Methods**: Added missing getItemDisplayName and isMediaFile methods to MediaCardEditor
+- **Media Browser**: Resolved JavaScript errors when opening media browser from editor
+- **Rapid Cycling**: Fixed performance issues with scanning 975+ files causing browser lag
+- **Debug Mode**: Debug mode configuration now works properly
+- **Component Update Loops**: Added hasInitializedHass flag to prevent infinite update cycles
+
+### Added
+
+- Debug mode configuration option with proper logging controls
+- Startup protection mechanisms to prevent initialization issues
+- Scan overlap protection to prevent multiple simultaneous folder scans
+
 ## [1.0.22] - 2025-08-31
 
 ### Fixed
