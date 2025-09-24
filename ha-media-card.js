@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.2.3
+ * Version: 1.2.4
  */
 
 // Import Lit from CDN for standalone usage
@@ -37,6 +37,7 @@ class MediaCard extends LitElement {
     this._debugMode = false; // Enable debug logging in development
     this._initializationInProgress = false; // Prevent multiple initializations
     this._scanInProgress = false; // Prevent multiple scans
+    this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
   }
 
   // Debug logging utility
@@ -367,6 +368,7 @@ class MediaCard extends LitElement {
       this._log('🔧 Resetting media URL due to mode change');
       this._mediaUrl = '';
       this._folderContents = null; // Reset folder contents when mode changes
+      this._hasInitializedHass = false; // Allow reinitialization with new config
     }
     
     this._mediaType = config.media_type || 'all';
@@ -1620,27 +1622,30 @@ class MediaCard extends LitElement {
     
     this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
     
-    // Only handle hass changes - ignore _folderContents changes to prevent loops
-    if (changedProperties.has('hass') && !changedProperties.has('_folderContents') && this.config && this.hass) {
+    // Only handle hass changes for INITIAL setup - ignore subsequent hass updates to prevent loops
+    const isInitialHassSetup = changedProperties.has('hass') && !this._hasInitializedHass && this.hass;
+    const isConfigChange = changedProperties.has('config');
+    
+    if ((isInitialHassSetup || isConfigChange) && this.config && this.hass) {
       const isFolder = this.config.is_folder && this.config.folder_mode;
       
       if (isFolder) {
         // Folder mode - trigger folder handling (with debounce)
         this._log('🔄 Hass available - initializing folder mode');
+        this._hasInitializedHass = true; // Mark as initialized to prevent further hass updates
         setTimeout(() => this._handleFolderMode(), 50);
       } else if (this.config.media_path) {
         // Single file mode - ensure media loads even if auto-refresh is disabled
         this._log('🔄 Hass available - loading single file');
+        this._hasInitializedHass = true; // Mark as initialized to prevent further hass updates
         setTimeout(() => this._loadSingleFile(), 50);
       }
     }
     
-    // ONLY set up auto-refresh on initial hass/config changes - NOT on _folderContents changes
+    // ONLY set up auto-refresh on INITIAL hass/config changes - NOT on subsequent hass or _folderContents changes
     const shouldSetupAutoRefresh = (
-      changedProperties.has('hass') || 
-      changedProperties.has('config')
+      (isInitialHassSetup || isConfigChange)
     ) && 
-    !changedProperties.has('_folderContents') && // Prevent timer recreation on folder content changes
     this.config && 
     this.hass && 
     this.config.auto_refresh_seconds > 0 && 
@@ -1659,7 +1664,9 @@ class MediaCard extends LitElement {
         autoRefresh: this.config?.auto_refresh_seconds,
         isPaused: this._isPaused,
         changedProps: Array.from(changedProperties.keys()),
-        hasFolderContents: changedProperties.has('_folderContents')
+        isInitialHassSetup,
+        isConfigChange,
+        hasInitializedHass: this._hasInitializedHass
       });
     }
   }
