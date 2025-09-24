@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.3.0
+ * Version: 1.3.1
  */
 
 // Import Lit from CDN for standalone usage
@@ -25,6 +25,7 @@ class MediaCard extends LitElement {
     super();
     this._mediaUrl = '';
     this._mediaType = 'image';
+    this.setAttribute('data-media-type', 'image');
     this._lastModified = null;
     this._refreshInterval = null;
     this._mediaLoadedLogged = false;
@@ -232,10 +233,15 @@ class MediaCard extends LitElement {
       top: 0;
       left: 0;
       width: 100%;
-      height: 100%;
+      height: calc(100% - 50px); /* Leave space for video controls */
       display: flex;
       pointer-events: none;
       z-index: 10;
+    }
+
+    /* For images, use full height since they don't have controls */
+    :host([data-media-type="image"]) .navigation-zones {
+      height: 100%;
     }
 
     .nav-zone {
@@ -380,6 +386,7 @@ class MediaCard extends LitElement {
     }
     
     this._mediaType = config.media_type || 'all';
+    this.setAttribute('data-media-type', this._mediaType);
     this._mediaLoadedLogged = false; // Reset logging flag for new config
     
     // Set up auto-refresh if config changed or if folder mode is enabled
@@ -896,6 +903,7 @@ class MediaCard extends LitElement {
     const fileType = this._detectFileType(filePath);
     if (fileType) {
       this._mediaType = fileType;
+      this.setAttribute('data-media-type', fileType);
     }
   }
 
@@ -2032,6 +2040,7 @@ class MediaCard extends LitElement {
       // Update current media
       this._mediaUrl = mediaUrl;
       this._mediaType = this._detectFileType(item.title) || 'image'; // Default to image if unknown
+      this.setAttribute('data-media-type', this._mediaType);
       this._currentMediaIndex = index;
       
       // Force re-render
@@ -3579,7 +3588,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.3.0  ',
+    '%c  MEDIA-CARD  %c  1.3.1  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
