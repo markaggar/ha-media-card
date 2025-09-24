@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.2.8
+ * Version: 1.3.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -249,13 +249,19 @@ class MediaCard extends LitElement {
     }
 
     .nav-zone-left {
-      width: 25%;
+      width: 20%;
       cursor: w-resize;
     }
 
     .nav-zone-center {
-      width: 50%;
+      width: 25%;
       cursor: inherit;
+    }
+
+    .nav-zone-neutral {
+      width: 30%;
+      cursor: pointer;
+      /* This neutral zone allows tap/hold actions */
     }
 
     .nav-zone-right {
@@ -1342,6 +1348,15 @@ class MediaCard extends LitElement {
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Pause/Resume auto-refresh">
+        </div>
+        <div class="nav-zone nav-zone-neutral"
+             @click=${this._handleTap}
+             @dblclick=${this._handleDoubleTap}
+             @pointerdown=${this._handlePointerDown}
+             @pointerup=${this._handlePointerUp}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
+             title="Tap/Hold actions area">
         </div>
         <div class="nav-zone nav-zone-right"  
              @click=${this._handleNextClick}
@@ -2809,12 +2824,24 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     const buttonContainer = document.createElement('div');
     buttonContainer.style.cssText = `
       display: flex !important;
-      justify-content: flex-end !important;
+      justify-content: space-between !important;
       gap: 8px !important;
       margin-top: 16px !important;
       border-top: 1px solid var(--divider-color, #ddd) !important;
       padding-top: 16px !important;
       pointer-events: auto !important;
+    `;
+
+    const leftButtons = document.createElement('div');
+    leftButtons.style.cssText = `
+      display: flex !important;
+      gap: 8px !important;
+    `;
+
+    const rightButtons = document.createElement('div');
+    rightButtons.style.cssText = `
+      display: flex !important;
+      gap: 8px !important;
     `;
 
     const closeButton = document.createElement('button');
@@ -2865,7 +2892,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     };
     document.addEventListener('keydown', handleKeydown);
 
-    buttonContainer.appendChild(closeButton);
+    rightButtons.appendChild(closeButton);
+    buttonContainer.appendChild(leftButtons);
+    buttonContainer.appendChild(rightButtons);
     dialogContent.appendChild(title);
     dialogContent.appendChild(fileList);
     dialogContent.appendChild(buttonContainer);
@@ -3550,7 +3579,7 @@ window.customCards.push({
 // Only show version info in development
 if (window.location.hostname === 'localhost' || window.location.hostname.includes('homeassistant')) {
   console.info(
-    '%c  MEDIA-CARD  %c  1.2.8  ',
+    '%c  MEDIA-CARD  %c  1.3.0  ',
     'color: orange; font-weight: bold; background: black',
     'color: white; font-weight: bold; background: dimgray'
   );
