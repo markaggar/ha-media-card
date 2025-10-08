@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.4.0-beta2
+ * Version: 1.4.0-beta4
  */
 
 // Import Lit from CDN for standalone usage
@@ -31,6 +31,7 @@ class MediaCard extends LitElement {
     this._folderContents = null;
     this._currentMediaIndex = 0;
     this._lastRefreshTime = 0;
+    this._recentlyShown = null; // Smart cycling tracking for small collections
     this._pausedForNavigation = false;
     this._isPaused = false;
     this._urlCreatedTime = 0; // Track when current URL was created
@@ -40,6 +41,8 @@ class MediaCard extends LitElement {
     this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
     this._componentStartTime = Date.now(); // Track when component was created for startup protection
     this._lastScanTime = 0; // Track when we last scanned folder contents to prevent rapid re-scanning
+    this._errorState = null; // Track media loading errors with retry options
+    this._retryAttempts = new Map(); // Track retry attempts per URL to prevent endless loops
   }
 
   connectedCallback() {
@@ -261,10 +264,15 @@ class MediaCard extends LitElement {
       top: 0;
       left: 0;
       width: 100%;
-      height: calc(100% - 50px); /* Leave space for video controls */
+      height: 100%;
       display: flex;
       pointer-events: none;
-      z-index: 10;
+      z-index: 20; /* Higher z-index to ensure it's above video */
+    }
+
+    /* For videos, avoid covering the bottom controls area */
+    :host([data-media-type="video"]) .navigation-zones {
+      height: calc(100% - 40px); /* Leave space for video controls */
     }
 
     /* For images, use full height since they don't have controls */
@@ -410,6 +418,10 @@ class MediaCard extends LitElement {
       this._log('🔧 Resetting media URL due to mode change');
       this._mediaUrl = '';
       this._folderContents = null; // Reset folder contents when mode changes
+      // Reset smart cycling tracking when folder contents are reset
+      if (this._recentlyShown) {
+        this._recentlyShown.clear();
+      }
       this._hasInitializedHass = false; // Allow reinitialization with new config
     }
     
@@ -542,7 +554,7 @@ class MediaCard extends LitElement {
     }
   }
 
-  async _handleFolderModeRefresh() {
+  async _handleFolderModeRefresh(forceImmediate = false) {
     // Exit immediately if paused
     if (this._isPaused) {
       this._log('🔄 Folder mode refresh skipped - currently paused');
@@ -560,14 +572,19 @@ class MediaCard extends LitElement {
     
     const timeSinceLastRefresh = now - this._lastRefreshTime;
     
-    this._log('Refreshing folder mode:', this.config.folder_mode);
+    this._log('Refreshing folder mode:', this.config.folder_mode, 'forceImmediate:', forceImmediate);
     this._log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
     this._log('Timestamps - now:', now, 'last:', this._lastRefreshTime);
     
     // Check if enough time has passed since last refresh (prevent rapid-fire refreshing)
-    if (this._lastRefreshTime > 0 && timeSinceLastRefresh < configuredInterval * 0.8) { // Use 80% to be more conservative
+    // BUT allow immediate refresh when forced (e.g., video ended)
+    if (!forceImmediate && this._lastRefreshTime > 0 && timeSinceLastRefresh < configuredInterval * 0.8) { // Use 80% to be more conservative
       this._log('SKIPPING refresh - not enough time passed. Need to wait:', (configuredInterval * 0.8 - timeSinceLastRefresh), 'ms more');
       return;
+    }
+    
+    if (forceImmediate) {
+      this._log('🎬 FORCING immediate refresh (video ended)');
     }
     
     try {
@@ -751,8 +768,18 @@ class MediaCard extends LitElement {
         } else {
           this._log('📁 Found', this._folderContents.length, 'files for "' + this.config.folder_mode + '" mode (skipping sort)');
         }
+        
+        // Reset smart cycling tracking when folder contents change
+        if (this._recentlyShown) {
+          this._log('🔄 Resetting smart cycling tracking - folder contents updated');
+          this._recentlyShown.clear();
+        }
       } else {
         this._folderContents = [];
+        // Reset smart cycling tracking for empty folders too
+        if (this._recentlyShown) {
+          this._recentlyShown.clear();
+        }
       }
     } catch (error) {
       console.error('Error scanning folder contents:', error);
@@ -911,6 +938,18 @@ class MediaCard extends LitElement {
       return { file: this._folderContents[0], index: 0 };
     }
     
+    const totalFiles = this._folderContents.length;
+    const SMART_CYCLING_THRESHOLD = 1000; // Use smart cycling for 1000 or fewer items
+    
+    // Use smart cycling for small-to-medium collections to avoid repetition
+    if (totalFiles <= SMART_CYCLING_THRESHOLD) {
+      this._log(`🎲 Using smart cycling for ${totalFiles} files (≤${SMART_CYCLING_THRESHOLD})`);
+      return this._getSmartRandomFile(avoidCurrent);
+    }
+    
+    this._log(`🎲 Using simple random for ${totalFiles} files (>${SMART_CYCLING_THRESHOLD})`);
+    
+    // For large collections, use simple random with current avoidance
     let randomIndex;
     let attempts = 0;
     const maxAttempts = 10; // Prevent infinite loop
@@ -925,6 +964,53 @@ class MediaCard extends LitElement {
     );
     
     return { file: this._folderContents[randomIndex], index: randomIndex };
+  }
+
+  _getSmartRandomFile(avoidCurrent = false) {
+    // Initialize recently shown tracking if not exists
+    if (!this._recentlyShown) {
+      this._recentlyShown = new Set();
+    }
+    
+    const totalFiles = this._folderContents.length;
+    
+    // Get available files (not recently shown)
+    let availableIndices = [];
+    for (let i = 0; i < totalFiles; i++) {
+      if (!this._recentlyShown.has(i) && (!avoidCurrent || i !== this._currentMediaIndex)) {
+        availableIndices.push(i);
+      }
+    }
+    
+    // If no available files (all shown recently), reset the tracking
+    if (availableIndices.length === 0) {
+      this._log(`🔄 Smart cycling: All ${totalFiles} files shown, resetting cycle`);
+      this._recentlyShown.clear();
+      
+      // Rebuild available indices, still avoiding current if requested
+      availableIndices = [];
+      for (let i = 0; i < totalFiles; i++) {
+        if (!avoidCurrent || i !== this._currentMediaIndex) {
+          availableIndices.push(i);
+        }
+      }
+    }
+    
+    // If still no available files (edge case: only 1 file and avoid current), return current
+    if (availableIndices.length === 0) {
+      return { file: this._folderContents[this._currentMediaIndex || 0], index: this._currentMediaIndex || 0 };
+    }
+    
+    // Pick random from available files
+    const randomChoice = Math.floor(Math.random() * availableIndices.length);
+    const selectedIndex = availableIndices[randomChoice];
+    
+    // Mark as recently shown
+    this._recentlyShown.add(selectedIndex);
+    
+    this._log(`🎲 Smart cycling: Selected ${selectedIndex + 1}/${totalFiles}, recently shown: ${this._recentlyShown.size}/${totalFiles}`);
+    
+    return { file: this._folderContents[selectedIndex], index: selectedIndex };
   }
 
   _detectMediaType(filePath) {
@@ -1215,6 +1301,10 @@ class MediaCard extends LitElement {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
+      // Clear retry attempts for the new URL since it's fresh
+      if (this._retryAttempts.has(newUrl)) {
+        this._retryAttempts.delete(newUrl);
+      }
       this._log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
     }
   }
@@ -1339,6 +1429,39 @@ class MediaCard extends LitElement {
   }
 
   _renderMedia() {
+    // Handle error state
+    if (this._errorState) {
+      const isSynologyUrl = this._errorState.isSynologyUrl;
+      return html`
+        <div class="placeholder" style="border-color: var(--error-color, #f44336); background: rgba(244, 67, 54, 0.1);">
+          <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
+          <div style="color: var(--error-color, #f44336); font-weight: 500;">${this._errorState.message}</div>
+          <div style="font-size: 0.85em; margin-top: 8px; opacity: 0.7; word-break: break-all;">
+            ${this._mediaUrl ? this._mediaUrl.substring(0, 100) + (this._mediaUrl.length > 100 ? '...' : '') : 'No URL'}
+          </div>
+          <div style="font-size: 0.8em; margin-top: 12px; opacity: 0.6;">
+            ${isSynologyUrl ? 'Synology DSM authentication may have expired' : 'Attempted URL refresh - check Home Assistant logs for more details'}
+          </div>
+          <div style="margin-top: 16px;">
+            <button 
+              style="margin-right: 8px; padding: 8px 16px; background: var(--primary-color); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
+              @click=${() => this._handleRetryClick(false)}
+            >
+              🔄 ${isSynologyUrl ? 'Retry Authentication' : 'Retry Load'}
+            </button>
+            ${isSynologyUrl ? html`
+              <button 
+                style="padding: 8px 16px; background: var(--accent-color, var(--primary-color)); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
+                @click=${() => this._handleRetryClick(true)}
+              >
+                🔄 Force Refresh
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
     // Handle folder mode that hasn't been initialized yet
     if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass) {
       this._log('🔧 No media URL but have folder config - triggering initialization');
@@ -1614,6 +1737,17 @@ class MediaCard extends LitElement {
     this._log('Video ended:', this._mediaUrl);
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
+    
+    // Trigger immediate navigation to next video in folder mode
+    if (this.config.is_folder && this.config.folder_mode && this._folderContents && this._folderContents.length > 1) {
+      this._log('🎬 Video ended - triggering immediate next video');
+      // Small delay to ensure video ended event is fully processed
+      setTimeout(() => {
+        this._handleFolderModeRefresh(true).catch(err => {
+          console.error('Error advancing to next video after end:', err);
+        });
+      }, 100);
+    }
   }
 
   _onVideoLoadedMetadata() {
@@ -1637,6 +1771,7 @@ class MediaCard extends LitElement {
       this._mediaLoadedLogged = true;
     }
     // Clear any previous error states
+    this._errorState = null;
     this.requestUpdate();
   }
 
@@ -1674,21 +1809,43 @@ class MediaCard extends LitElement {
       console.warn('Synology DSM URL authentication may have expired:', this._mediaUrl);
     }
     
-    // Attempt URL refresh for expired URLs (common issue after ~1 hour)
-    this._attemptUrlRefresh()
-      .then(refreshed => {
-        if (!refreshed) {
-          // If refresh failed, show error state
+    // Check if we've already tried to retry this URL
+    const currentUrl = this._mediaUrl || 'unknown';
+    const retryCount = this._retryAttempts.get(currentUrl) || 0;
+    const maxAutoRetries = 1; // Only auto-retry once per URL
+    
+    if (retryCount < maxAutoRetries) {
+      // Clean up old retry attempts to prevent memory leaks (keep last 50)
+      if (this._retryAttempts.size > 50) {
+        const oldestKey = this._retryAttempts.keys().next().value;
+        this._retryAttempts.delete(oldestKey);
+      }
+      
+      // Mark this URL as attempted
+      this._retryAttempts.set(currentUrl, retryCount + 1);
+      
+      this._log(`🔄 Auto-retrying failed URL (attempt ${retryCount + 1}/${maxAutoRetries}):`, currentUrl.substring(0, 50) + '...');
+      
+      // Attempt URL refresh for expired URLs (common issue after ~1 hour)
+      this._attemptUrlRefresh()
+        .then(refreshed => {
+          if (!refreshed) {
+            // If refresh failed, show error state
+            this._showMediaError(errorMessage);
+          }
+        })
+        .catch(err => {
+          console.error('URL refresh attempt failed:', err);
           this._showMediaError(errorMessage);
-        }
-      })
-      .catch(err => {
-        console.error('URL refresh attempt failed:', err);
-        this._showMediaError(errorMessage);
-      });
+        });
+    } else {
+      // Already tried to retry this URL, show error immediately
+      this._log(`❌ Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
+      this._showMediaError(errorMessage);
+    }
   }
 
-  async _attemptUrlRefresh() {
+  async _attemptUrlRefresh(forceRefresh = false) {
     this._log('🔄 Attempting URL refresh due to media load failure');
     
     // Log additional context for Synology DSM URLs
@@ -1700,30 +1857,64 @@ class MediaCard extends LitElement {
     try {
       let refreshedUrl = null;
       
-      if (this.config.is_folder && this.config.folder_mode) {
-        // For folder mode, refresh the current file
-        if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
-          const currentFile = this._folderContents[this._currentMediaIndex];
-          this._log('🔄 Refreshing folder file:', currentFile.media_content_id);
-          refreshedUrl = await this._resolveMediaPath(currentFile.media_content_id);
-          this._log('🔄 Refreshed folder media URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
+      // Add retry logic with exponential backoff for Synology DSM URLs
+      const isSynologyUrl = this._mediaUrl && this._mediaUrl.includes('/synology_dsm/');
+      const maxRetries = isSynologyUrl ? 3 : 1;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          if (this.config.is_folder && this.config.folder_mode) {
+            // For folder mode, refresh the current file
+            if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
+              const currentFile = this._folderContents[this._currentMediaIndex];
+              this._log(`🔄 Refreshing folder file (attempt ${attempt}/${maxRetries}):`, currentFile.media_content_id);
+              refreshedUrl = await this._resolveMediaPath(currentFile.media_content_id);
+              this._log('🔄 Refreshed folder media URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
+            }
+          } else if (this.config.media_path) {
+            // For single file mode, refresh the configured path
+            this._log(`🔄 Refreshing single file (attempt ${attempt}/${maxRetries}):`, this.config.media_path);
+            refreshedUrl = await this._resolveMediaPath(this.config.media_path);
+            this._log('🔄 Refreshed single file URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
+          }
+          
+          // If we got a different URL or this is a forced refresh, consider it successful
+          if (refreshedUrl && (refreshedUrl !== this._mediaUrl || forceRefresh)) {
+            this._setMediaUrl(refreshedUrl);
+            this._log('✅ URL refresh successful, updating media');
+            this.requestUpdate();
+            return true;
+          } else if (refreshedUrl === this._mediaUrl && !forceRefresh) {
+            this._log(`⚠️ URL refresh returned same URL (attempt ${attempt}/${maxRetries})`);
+            if (attempt < maxRetries) {
+              // Wait before retrying (exponential backoff)
+              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+              this._log(`⏱️ Waiting ${delay}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+          } else {
+            this._log(`❌ No URL returned (attempt ${attempt}/${maxRetries})`);
+            if (attempt < maxRetries) {
+              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+          }
+        } catch (attemptError) {
+          this._log(`❌ Attempt ${attempt}/${maxRetries} failed:`, attemptError.message);
+          if (attempt < maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          throw attemptError;
         }
-      } else if (this.config.media_path) {
-        // For single file mode, refresh the configured path
-        this._log('🔄 Refreshing single file:', this.config.media_path);
-        refreshedUrl = await this._resolveMediaPath(this.config.media_path);
-        this._log('🔄 Refreshed single file URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
       }
       
-      if (refreshedUrl && refreshedUrl !== this._mediaUrl) {
-        this._setMediaUrl(refreshedUrl);
-        this._log('✅ URL refresh successful, updating media');
-        this.requestUpdate();
-        return true;
-      } else {
-        console.warn('⚠️ URL refresh returned same/empty URL');
-        return false;
-      }
+      console.warn('⚠️ All URL refresh attempts failed or returned same URL');
+      return false;
+      
     } catch (error) {
       console.error('❌ URL refresh failed:', error);
       return false;
@@ -1731,44 +1922,47 @@ class MediaCard extends LitElement {
   }
 
   _showMediaError(errorMessage) {
+    // Store error state
+    this._errorState = {
+      message: errorMessage,
+      timestamp: Date.now(),
+      isSynologyUrl: this._mediaUrl && this._mediaUrl.includes('/synology_dsm/')
+    };
+    
     // Force re-render to show error state
-    setTimeout(() => {
-      if (this.shadowRoot) {
-        const container = this.shadowRoot.querySelector('.media-container');
-        if (container && (container.innerHTML.includes('video') || container.innerHTML.includes('img'))) {
-          const isSynologyUrl = this._mediaUrl && this._mediaUrl.includes('/synology_dsm/');
-          const retryButton = isSynologyUrl ? `
-            <button 
-              style="margin-top: 16px; padding: 8px 16px; background: var(--primary-color); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
-              onclick="this.closest('media-card').requestUpdate(); this.closest('media-card')._attemptUrlRefresh().then(success => { if (success) this.closest('media-card').requestUpdate(); });"
-            >
-              🔄 Retry Authentication
-            </button>
-          ` : `
-            <button 
-              style="margin-top: 16px; padding: 8px 16px; background: var(--primary-color); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
-              onclick="this.closest('media-card').requestUpdate(); this.closest('media-card')._attemptUrlRefresh().then(success => { if (success) this.closest('media-card').requestUpdate(); });"
-            >
-              🔄 Retry Load
-            </button>
-          `;
-          
-          container.innerHTML = `
-            <div class="placeholder" style="border-color: var(--error-color, #f44336); background: rgba(244, 67, 54, 0.1);">
-              <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
-              <div style="color: var(--error-color, #f44336); font-weight: 500;">${errorMessage}</div>
-              <div style="font-size: 0.85em; margin-top: 8px; opacity: 0.7; word-break: break-all;">
-                ${this._mediaUrl ? this._mediaUrl.substring(0, 100) + (this._mediaUrl.length > 100 ? '...' : '') : 'No URL'}
-              </div>
-              <div style="font-size: 0.8em; margin-top: 12px; opacity: 0.6;">
-                ${isSynologyUrl ? 'Synology DSM authentication may have expired' : 'Attempted URL refresh - check Home Assistant logs for more details'}
-              </div>
-              ${retryButton}
-            </div>
-          `;
-        }
+    this.requestUpdate();
+  }
+
+  async _handleRetryClick(forceRefresh = false) {
+    this._log('🔄 Manual retry requested, force refresh:', forceRefresh);
+    
+    // Clear error state
+    this._errorState = null;
+    
+    // Reset retry attempts for this URL since user manually requested retry
+    const currentUrl = this._mediaUrl || 'unknown';
+    if (this._retryAttempts.has(currentUrl)) {
+      this._retryAttempts.delete(currentUrl);
+      this._log('🔄 Reset retry attempts for manual retry');
+    }
+    
+    // Show loading state briefly
+    this.requestUpdate();
+    
+    try {
+      const success = await this._attemptUrlRefresh(forceRefresh);
+      if (success) {
+        this._log('✅ Manual retry successful');
+        this.requestUpdate();
+      } else {
+        this._log('❌ Manual retry failed');
+        // Show error again but with updated message
+        this._showMediaError('Retry failed - try refreshing the Home Assistant page');
       }
-    }, 100);
+    } catch (error) {
+      console.error('❌ Manual retry error:', error);
+      this._showMediaError('Retry error: ' + error.message);
+    }
   }
 
   connectedCallback() {
@@ -2372,10 +2566,6 @@ class MediaCardEditor extends LitElement {
   }
 
   // Utility methods needed by the editor
-  _getItemDisplayName(item) {
-    return item.title || item.media_content_id;
-  }
-
   _isMediaFile(filePath) {
     // Extract filename from the full path and get extension  
     const fileName = filePath.split('/').pop() || filePath;
@@ -3135,8 +3325,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     this._log('Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
     
-    for (const item of itemsToShow) {
-      const fileItem = document.createElement('div');
+    if (itemsToShow.length === 0) {
+      const noFilesMessage = document.createElement('div');
+      noFilesMessage.style.cssText = `
+        padding: 20px !important;
+        text-align: center !important;
+        color: var(--secondary-text-color, #666) !important;
+        font-style: italic !important;
+      `;
+      noFilesMessage.textContent = 'No media files found in this folder';
+      container.appendChild(noFilesMessage);
+      return;
+    }
+    
+    for (let i = 0; i < itemsToShow.length; i++) {
+      const item = itemsToShow[i];
+      this._log(`Creating item ${i + 1}/${itemsToShow.length}:`, this._getItemDisplayName(item));
+      
+      try {
+        const fileItem = document.createElement('div');
       fileItem.style.cssText = `
         padding: 12px 16px !important;
         border: 1px solid var(--divider-color, #ddd) !important;
@@ -3170,12 +3377,20 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         fileItem.style.boxShadow = 'none';
       };
 
-      const icon = document.createElement('span');
-      icon.style.cssText = `
-        font-size: 24px !important;
+      // Create thumbnail/icon container
+      const thumbnailContainer = document.createElement('div');
+      thumbnailContainer.style.cssText = `
+        width: 60px !important;
+        height: 60px !important;
         flex-shrink: 0 !important;
         user-select: none !important;
         pointer-events: none !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 4px !important;
+        overflow: hidden !important;
+        background: var(--secondary-background-color, #f5f5f5) !important;
       `;
       
       const name = document.createElement('span');
@@ -3188,11 +3403,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         user-select: none !important;
         pointer-events: none !important;
         color: var(--primary-text-color, #333) !important;
+        margin-left: 8px !important;
       `;
 
       if (item.can_expand) {
-        // This is a folder
-        icon.textContent = '📁';
+        // This is a folder - show folder icon
+        const folderIcon = document.createElement('span');
+        folderIcon.textContent = '📁';
+        folderIcon.style.cssText = `
+          font-size: 24px !important;
+        `;
+        thumbnailContainer.appendChild(folderIcon);
         // Use onclick instead of addEventListener
         fileItem.onclick = async (e) => {
           this._log('FOLDER CLICKED VIA ONCLICK:', item.media_content_id);
@@ -3249,14 +3470,76 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           return false;
         };
       } else {
-        // This is a media file
-        const ext = item.media_content_id.split('.').pop()?.toLowerCase();
-        if (['mp4', 'webm', 'ogg', 'avi', 'mov'].includes(ext)) {
-          icon.textContent = '🎬';
-        } else if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-          icon.textContent = '🖼️';
+        // This is a media file - create thumbnail or icon
+        const fileName = this._getItemDisplayName(item);
+        const ext = fileName.split('.').pop()?.toLowerCase() || '';
+        const isVideo = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'mkv', 'wmv', 'flv'].includes(ext);
+        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff', 'heic', 'avif'].includes(ext);
+        
+        // Create appropriate icon immediately (no async loading issues)
+        let mediaIcon;
+        let iconText;
+        let backgroundColor;
+        
+        if (isImage) {
+          iconText = '🖼️';
+          backgroundColor = 'rgba(76, 175, 80, 0.1)'; // Green tint for images
+        } else if (isVideo) {
+          iconText = '🎬';
+          backgroundColor = 'rgba(33, 150, 243, 0.1)'; // Blue tint for videos
         } else {
-          icon.textContent = '📄';
+          iconText = '📄';
+          backgroundColor = 'rgba(158, 158, 158, 0.1)'; // Gray tint for other files
+        }
+        
+        mediaIcon = document.createElement('span');
+        mediaIcon.textContent = iconText;
+        mediaIcon.style.cssText = `
+          font-size: 32px !important;
+          display: block !important;
+          text-align: center !important;
+          line-height: 1 !important;
+        `;
+        
+        // Set background color for the thumbnail container based on media type
+        thumbnailContainer.style.background = backgroundColor;
+        thumbnailContainer.appendChild(mediaIcon);
+        
+        // For images, try to load thumbnail asynchronously (but keep icon as fallback)
+        if (isImage) {
+          this._resolveMediaPath(item.media_content_id).then(resolvedUrl => {
+            if (resolvedUrl) {
+              // Create thumbnail image
+              const thumbnail = document.createElement('img');
+              thumbnail.style.cssText = `
+                width: 100% !important;
+                height: 100% !important;
+                object-fit: cover !important;
+                border-radius: 4px !important;
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+              `;
+              
+              // Only replace icon with thumbnail if image loads successfully
+              thumbnail.onload = () => {
+                // Make container relative for absolute positioning
+                thumbnailContainer.style.position = 'relative';
+                thumbnailContainer.appendChild(thumbnail);
+                this._log('Thumbnail loaded successfully for:', fileName);
+              };
+              
+              thumbnail.onerror = () => {
+                this._log('Thumbnail failed to load for:', fileName, '- keeping icon');
+                // Keep the original icon - no change needed
+              };
+              
+              thumbnail.src = resolvedUrl;
+            }
+          }).catch(error => {
+            this._log('Thumbnail resolution failed for:', fileName, error);
+            // Keep the original icon - no change needed
+          });
         }
 
         // Use onclick for file selection
@@ -3273,9 +3556,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         };
       }
 
-      fileItem.appendChild(icon);
-      fileItem.appendChild(name);
-      container.appendChild(fileItem);
+        fileItem.appendChild(thumbnailContainer);
+        fileItem.appendChild(name);
+        container.appendChild(fileItem);
+      } catch (error) {
+        console.error(`Error creating media browser item ${i + 1}:`, error);
+        this._log('Error creating item:', this._getItemDisplayName(item), error);
+        // Continue with next item
+      }
     }
     
     this._log('Added all items to browser container');
