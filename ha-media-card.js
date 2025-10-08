@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.3.2
+ * Version: 1.4.0-beta2
  */
 
 // Import Lit from CDN for standalone usage
@@ -145,6 +145,29 @@ class MediaCard extends LitElement {
     
     video {
       max-height: 400px;
+      object-fit: contain;
+    }
+
+    /* Smart aspect ratio handling for videos - matching image behavior */
+    :host([data-aspect-mode="viewport-fit"]) video {
+      max-height: 100vh;
+      max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) video {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) video {
+      max-height: 90vh;
+      max-width: 100%;
+      width: auto;
+      height: auto;
       object-fit: contain;
     }
     
@@ -936,6 +959,60 @@ class MediaCard extends LitElement {
     return null;
   }
 
+  async _shouldWaitForVideoCompletion() {
+    const videoElement = this.shadowRoot?.querySelector('video');
+    if (!videoElement) {
+      return false;
+    }
+
+    // If video has ended, don't wait
+    if (videoElement.ended) {
+      return false;
+    }
+
+    // If video is paused, don't wait (user intentionally paused)
+    if (videoElement.paused) {
+      return false;
+    }
+
+    // Get configuration values
+    const videoMaxDuration = this.config.video_max_duration || 0;
+    const autoRefreshSeconds = this.config.auto_refresh_seconds || 30;
+
+    this._log('🎬 Video completion check - videoMaxDuration:', videoMaxDuration, 'autoRefreshSeconds:', autoRefreshSeconds);
+
+    // If video_max_duration is 0, wait indefinitely for video completion
+    if (videoMaxDuration === 0) {
+      this._log('🎬 Video playing - waiting for completion (no time limit set)');
+      return true;
+    }
+
+    // Check if we've been waiting too long based on video_max_duration
+    const now = Date.now();
+    if (!this._videoWaitStartTime) {
+      this._videoWaitStartTime = now;
+      this._log('🎬 Starting video wait timer at:', new Date(now).toLocaleTimeString());
+    }
+
+    const waitTimeMs = now - this._videoWaitStartTime;
+    const waitTimeSeconds = Math.floor(waitTimeMs / 1000);
+    const maxWaitMs = videoMaxDuration * 1000;
+
+    // Use the larger of video_max_duration and auto_refresh_seconds as the actual limit
+    // This prevents auto_refresh_seconds from cutting off long videos
+    const effectiveMaxWaitMs = Math.max(maxWaitMs, autoRefreshSeconds * 1000);
+    const effectiveMaxWaitSeconds = Math.floor(effectiveMaxWaitMs / 1000);
+
+    if (waitTimeMs >= effectiveMaxWaitMs) {
+      this._log(`🎬 Video max duration reached (${waitTimeSeconds}s/${effectiveMaxWaitSeconds}s), proceeding with refresh`);
+      this._videoWaitStartTime = null; // Reset for next video
+      return false;
+    }
+
+    this._log(`🎬 Video playing - waiting for completion (${waitTimeSeconds}s/${effectiveMaxWaitSeconds}s)`);
+    return true;
+  }
+
   async _checkForMediaUpdates() {
     // CRITICAL: Exit immediately if paused - this should stop rapid cycling
     if (this._isPaused) {
@@ -947,6 +1024,12 @@ class MediaCard extends LitElement {
     const timeSinceStartup = Date.now() - (this._componentStartTime || 0);
     if (timeSinceStartup < 3000) {
       this._log('🔄 Auto-refresh skipped - startup protection (need', 3000 - timeSinceStartup, 'ms more)');
+      return;
+    }
+
+    // Check if current media is a video and if it's still playing
+    if (this._mediaType === 'video' && await this._shouldWaitForVideoCompletion()) {
+      this._log('🔄 Auto-refresh skipped - waiting for video to complete');
       return;
     }
     
@@ -1317,6 +1400,8 @@ class MediaCard extends LitElement {
           @error=${this._onMediaError}
           @canplay=${this._onVideoCanPlay}
           @loadedmetadata=${this._onVideoLoadedMetadata}
+          @play=${this._onVideoPlay}
+          @ended=${this._onVideoEnded}
           style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
         >
           <source src="${this._mediaUrl}" type="video/mp4">
@@ -1511,10 +1596,24 @@ class MediaCard extends LitElement {
 
   _onVideoLoadStart() {
     this._log('Video started loading:', this._mediaUrl);
+    // Reset video wait timer for new video
+    this._videoWaitStartTime = null;
   }
 
   _onVideoCanPlay() {
     this._log('Video can start playing:', this._mediaUrl);
+  }
+
+  _onVideoPlay() {
+    this._log('Video started playing:', this._mediaUrl);
+    // Reset video wait timer when video starts playing
+    this._videoWaitStartTime = null;
+  }
+
+  _onVideoEnded() {
+    this._log('Video ended:', this._mediaUrl);
+    // Reset video wait timer when video ends
+    this._videoWaitStartTime = null;
   }
 
   _onVideoLoadedMetadata() {
@@ -1544,10 +1643,15 @@ class MediaCard extends LitElement {
   _onMediaError(e) {
     console.error('Media failed to load:', this._mediaUrl, e);
     const target = e.target;
-    const error = target.error;
+    const error = target?.error;
     
     let errorMessage = 'Media file not found';
-    if (error) {
+    
+    // Handle case where target is null (element destroyed/replaced)
+    if (!target) {
+      errorMessage = 'Media element unavailable';
+      console.warn('Media error event has null target - element may have been destroyed');
+    } else if (error) {
       switch (error.code) {
         case error.MEDIA_ERR_ABORTED:
           errorMessage = 'Media loading was aborted';
@@ -1562,6 +1666,12 @@ class MediaCard extends LitElement {
           errorMessage = 'Media source not supported';
           break;
       }
+    }
+    
+    // Add specific handling for Synology DSM authentication errors
+    if (this._mediaUrl && this._mediaUrl.includes('/synology_dsm/') && this._mediaUrl.includes('authSig=')) {
+      errorMessage = 'Synology DSM authentication expired - try refreshing';
+      console.warn('Synology DSM URL authentication may have expired:', this._mediaUrl);
     }
     
     // Attempt URL refresh for expired URLs (common issue after ~1 hour)
@@ -1581,6 +1691,12 @@ class MediaCard extends LitElement {
   async _attemptUrlRefresh() {
     this._log('🔄 Attempting URL refresh due to media load failure');
     
+    // Log additional context for Synology DSM URLs
+    if (this._mediaUrl && this._mediaUrl.includes('/synology_dsm/')) {
+      this._log('🔄 Synology DSM URL detected - checking authentication signature');
+      console.warn('Synology DSM URL refresh needed:', this._mediaUrl.substring(0, 100) + '...');
+    }
+    
     try {
       let refreshedUrl = null;
       
@@ -1588,13 +1704,15 @@ class MediaCard extends LitElement {
         // For folder mode, refresh the current file
         if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
           const currentFile = this._folderContents[this._currentMediaIndex];
+          this._log('🔄 Refreshing folder file:', currentFile.media_content_id);
           refreshedUrl = await this._resolveMediaPath(currentFile.media_content_id);
-          this._log('🔄 Refreshed folder media URL:', refreshedUrl);
+          this._log('🔄 Refreshed folder media URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
         }
       } else if (this.config.media_path) {
         // For single file mode, refresh the configured path
+        this._log('🔄 Refreshing single file:', this.config.media_path);
         refreshedUrl = await this._resolveMediaPath(this.config.media_path);
-        this._log('🔄 Refreshed single file URL:', refreshedUrl);
+        this._log('🔄 Refreshed single file URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
       }
       
       if (refreshedUrl && refreshedUrl !== this._mediaUrl) {
@@ -1618,16 +1736,34 @@ class MediaCard extends LitElement {
       if (this.shadowRoot) {
         const container = this.shadowRoot.querySelector('.media-container');
         if (container && (container.innerHTML.includes('video') || container.innerHTML.includes('img'))) {
+          const isSynologyUrl = this._mediaUrl && this._mediaUrl.includes('/synology_dsm/');
+          const retryButton = isSynologyUrl ? `
+            <button 
+              style="margin-top: 16px; padding: 8px 16px; background: var(--primary-color); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
+              onclick="this.closest('media-card').requestUpdate(); this.closest('media-card')._attemptUrlRefresh().then(success => { if (success) this.closest('media-card').requestUpdate(); });"
+            >
+              🔄 Retry Authentication
+            </button>
+          ` : `
+            <button 
+              style="margin-top: 16px; padding: 8px 16px; background: var(--primary-color); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
+              onclick="this.closest('media-card').requestUpdate(); this.closest('media-card')._attemptUrlRefresh().then(success => { if (success) this.closest('media-card').requestUpdate(); });"
+            >
+              🔄 Retry Load
+            </button>
+          `;
+          
           container.innerHTML = `
             <div class="placeholder" style="border-color: var(--error-color, #f44336); background: rgba(244, 67, 54, 0.1);">
               <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
               <div style="color: var(--error-color, #f44336); font-weight: 500;">${errorMessage}</div>
               <div style="font-size: 0.85em; margin-top: 8px; opacity: 0.7; word-break: break-all;">
-                ${this._mediaUrl}
+                ${this._mediaUrl ? this._mediaUrl.substring(0, 100) + (this._mediaUrl.length > 100 ? '...' : '') : 'No URL'}
               </div>
               <div style="font-size: 0.8em; margin-top: 12px; opacity: 0.6;">
-                Attempted URL refresh - check Home Assistant logs for more details
+                ${isSynologyUrl ? 'Synology DSM authentication may have expired' : 'Attempted URL refresh - check Home Assistant logs for more details'}
               </div>
+              ${retryButton}
             </div>
           `;
         }
@@ -2467,7 +2603,7 @@ class MediaCardEditor extends LitElement {
           </div>
         </div>
         
-        ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
+        ${this._config.media_type === 'video' || this._config.media_type === 'all' || this._config.is_folder ? html`
           <div class="section">
             <div class="section-title">🎬 Video Options</div>
             
@@ -2516,6 +2652,20 @@ class MediaCardEditor extends LitElement {
                   @change=${this._hideVideoControlsDisplayChanged}
                 />
                 <div class="help-text">Hide the "Video options: ..." text below the video</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Max Video Duration</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  .value=${this._config.video_max_duration || 0}
+                  @change=${this._videoMaxDurationChanged}
+                  placeholder="0"
+                />
+                <div class="help-text">Maximum time to play videos in seconds (0 = play to completion)</div>
               </div>
             </div>
           </div>
@@ -3346,6 +3496,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _mutedChanged(ev) {
     this._config = { ...this._config, video_muted: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _videoMaxDurationChanged(ev) {
+    const duration = parseInt(ev.target.value) || 0;
+    this._config = { ...this._config, video_max_duration: duration };
     this._fireConfigChanged();
   }
 
