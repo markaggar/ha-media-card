@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.4.0-beta38
+ * Version: 2.0.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -325,7 +325,6 @@ class MediaCard extends LitElement {
       left: 0;
       width: 100%;
       height: 100%;
-      display: flex;
       pointer-events: none;
       z-index: 20; /* Higher z-index to ensure it's above video */
     }
@@ -341,7 +340,7 @@ class MediaCard extends LitElement {
     }
 
     .nav-zone {
-      height: 100%;
+      position: absolute;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -350,45 +349,89 @@ class MediaCard extends LitElement {
       user-select: none;
     }
 
+    /* Previous button - small rectangle on left side */
     .nav-zone-left {
-      width: 20%;
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 80px;
+      height: 120px;
       cursor: w-resize;
+      border-radius: 8px;
     }
 
+    /* Pause button - top right corner */
     .nav-zone-center {
-      width: 25%;
-      cursor: inherit;
-    }
-
-    .nav-zone-neutral {
-      width: 30%;
+      top: 8px;
+      right: 8px;
+      width: 60px;
+      height: 60px;
       cursor: pointer;
-      /* This neutral zone allows tap/hold actions */
+      border-radius: 8px;
     }
 
+    /* Main action area - center region, excluding button areas */
+    .nav-zone-neutral {
+      left: 100px;
+      right: 100px;
+      top: 80px;
+      bottom: 20px;
+      cursor: pointer;
+      /* Large center area for tap/hold actions, avoiding button zones */
+    }
+
+    /* For videos, ensure main action area stays well above video controls */
+    :host([data-media-type="video"]) .nav-zone-neutral {
+      bottom: 60px; /* Extra space above video controls */
+    }
+
+    /* For images, can use more space since no controls */
+    :host([data-media-type="image"]) .nav-zone-neutral {
+      bottom: 20px;
+    }
+
+    /* Next button - small rectangle on right side */
     .nav-zone-right {
-      width: 25%;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 80px;
+      height: 120px;
       cursor: e-resize;
+      border-radius: 8px;
     }
 
     .nav-zone:hover {
-      background: rgba(0, 0, 0, 0.1);
+      background: rgba(0, 0, 0, 0.2);
     }
 
     .nav-zone-left:hover::after {
       content: '◀';
       color: white;
-      font-size: 2em;
+      font-size: 1.5em;
       text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
-      opacity: 0.8;
+      opacity: 0.9;
+    }
+
+    .nav-zone-center:hover::after {
+      content: '⏸️';
+      color: white;
+      font-size: 1.2em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.9;
     }
 
     .nav-zone-right:hover::after {
       content: '▶';
       color: white;
-      font-size: 2em;
+      font-size: 1.5em;
       text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
-      opacity: 0.8;
+      opacity: 0.9;
+    }
+
+    /* No hover effect for neutral zone to keep it clean for actions */
+    .nav-zone-neutral:hover {
+      background: transparent;
     }
 
     /* Hide navigation zones when not in folder mode */
@@ -1850,13 +1893,13 @@ class MediaCard extends LitElement {
              @click=${this._handlePrevClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Previous image">
+             title="Previous (left side button)">
         </div>
         <div class="nav-zone nav-zone-center"
              @click=${this._handleCenterClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Pause/Resume auto-refresh">
+             title="Pause/Resume (top-right corner)">
         </div>
         <div class="nav-zone nav-zone-neutral"
              @click=${this._handleTap}
@@ -1865,13 +1908,13 @@ class MediaCard extends LitElement {
              @pointerup=${this._handlePointerUp}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Tap/Hold actions area">
+             title="Main action area (tap/hold)">
         </div>
         <div class="nav-zone nav-zone-right"  
              @click=${this._handleNextClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Next image">
+             title="Next (right side button)">
         </div>
       </div>
     `;
