@@ -57,6 +57,10 @@ class MediaCard extends LitElement {
     super.connectedCallback();
     // Set initial data attributes when element is connected to DOM
     this.setAttribute('data-media-type', this._mediaType || 'image');
+    // Initialize pause state attribute
+    if (this._isPaused) {
+      this.setAttribute('data-is-paused', '');
+    }
   }
 
   // Home Assistant calls this setter when hass becomes available
@@ -296,12 +300,13 @@ class MediaCard extends LitElement {
     .pause-indicator {
       position: absolute;
       top: 8px;
-      right: 50px;
+      right: 8px;
+      width: 60px;
+      height: 60px;
       background: rgba(0, 0, 0, 0.8);
       color: white;
-      padding: 6px 10px;
-      border-radius: 12px;
-      font-size: 14px;
+      border-radius: 8px;
+      font-size: 1.2em;
       font-weight: 500;
       pointer-events: none;
       z-index: 12;
@@ -309,8 +314,9 @@ class MediaCard extends LitElement {
       -webkit-backdrop-filter: blur(4px);
       display: flex;
       align-items: center;
-      gap: 4px;
+      justify-content: center;
       animation: fadeIn 0.3s ease;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
     }
 
     @keyframes fadeIn {
@@ -413,7 +419,8 @@ class MediaCard extends LitElement {
       opacity: 0.9;
     }
 
-    .nav-zone-center:hover::after {
+    /* Only show hover icon when not paused (to avoid duplicate icons) */
+    :host(:not([data-is-paused])) .nav-zone-center:hover::after {
       content: '⏸️';
       color: white;
       font-size: 1.2em;
@@ -1163,18 +1170,39 @@ class MediaCard extends LitElement {
       }
     } else if (this._isRandomMode()) {
       // For random mode, detect files that weren't in the folder before
-      // This is more complex and might need folder comparison
-      // For now, we'll use a simpler approach - detect significant folder size changes
       if (!this._lastKnownFolderSize) {
         this._lastKnownFolderSize = this._folderContents.length;
         return [];
       }
       
       if (this._folderContents.length > this._lastKnownFolderSize) {
-        // Folder grew - show newest files as new content
+        // Folder grew - need to find the actual newest files
         const newCount = this._folderContents.length - this._lastKnownFolderSize;
-        newFiles.push(...this._folderContents.slice(0, newCount));
+        
+        // For new content detection, we need to sort by timestamp to find truly new files
+        // Create a temporary sorted copy just for new content detection
+        const tempSorted = [...this._folderContents];
+        tempSorted.forEach(item => {
+          if (!item.estimated_mtime) {
+            item.estimated_mtime = this._extractTimestampFromFilename(this._getItemDisplayName(item));
+          }
+        });
+        
+        // Sort to get newest first
+        tempSorted.sort((a, b) => {
+          if (a.estimated_mtime && b.estimated_mtime) {
+            return b.estimated_mtime - a.estimated_mtime;
+          }
+          if (a.estimated_mtime) return -1;
+          if (b.estimated_mtime) return 1;
+          return b.sort_name?.localeCompare(a.sort_name) || 0;
+        });
+        
+        // Take the newest files as new content
+        newFiles.push(...tempSorted.slice(0, newCount));
         this._lastKnownFolderSize = this._folderContents.length;
+        
+        this._log(`🔄 Random mode: detected ${newCount} new files, prioritizing newest`);
       }
     }
     
@@ -1704,7 +1732,7 @@ class MediaCard extends LitElement {
     }
 
     return html`
-      <div class="pause-indicator">⏸</div>
+      <div class="pause-indicator">⏸️</div>
     `;
   }
 
@@ -1893,13 +1921,13 @@ class MediaCard extends LitElement {
              @click=${this._handlePrevClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Previous (left side button)">
+             title="Previous">
         </div>
         <div class="nav-zone nav-zone-center"
              @click=${this._handleCenterClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Pause/Resume (top-right corner)">
+             title="Pause/Resume">
         </div>
         <div class="nav-zone nav-zone-neutral"
              @click=${this._handleTap}
@@ -1914,7 +1942,7 @@ class MediaCard extends LitElement {
              @click=${this._handleNextClick}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
-             title="Next (right side button)">
+             title="Next">
         </div>
       </div>
     `;
@@ -2539,6 +2567,18 @@ class MediaCard extends LitElement {
     this._navigateNext().catch(err => console.error('Navigation error:', err));
   }
 
+  _setPauseState(isPaused) {
+    this._isPaused = isPaused;
+    // Update DOM attribute for CSS styling
+    if (isPaused) {
+      this.setAttribute('data-is-paused', '');
+    } else {
+      this.removeAttribute('data-is-paused');
+    }
+    // Force re-render to update pause indicator
+    this.requestUpdate();
+  }
+
   _handleCenterClick(e) {
     e.stopPropagation();
     
@@ -2546,7 +2586,7 @@ class MediaCard extends LitElement {
     
     // Only allow pause/resume in random mode
     if (this._isRandomMode()) {
-      this._isPaused = !this._isPaused;
+      this._setPauseState(!this._isPaused);
       this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} auto-refresh in random mode`);
       
       // Actually pause/resume the auto-refresh timer
@@ -2611,7 +2651,7 @@ class MediaCard extends LitElement {
         // Pause/Resume auto-refresh in random mode
         if (this._isRandomMode()) {
           e.preventDefault();
-          this._isPaused = !this._isPaused;
+          this._setPauseState(!this._isPaused);
           this._log(`🎮 ${this._isPaused ? 'Paused' : 'Resumed'} auto-refresh in random mode (keyboard)`);
           
           // Actually pause/resume the auto-refresh timer
