@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.4.0-beta36
+ * Version: 1.4.0-beta38
  */
 
 // Import Lit from CDN for standalone usage
@@ -43,6 +43,14 @@ class MediaCard extends LitElement {
     this._lastScanTime = 0; // Track when we last scanned folder contents to prevent rapid re-scanning
     this._errorState = null; // Track media loading errors with retry options
     this._retryAttempts = new Map(); // Track retry attempts per URL to prevent endless loops
+    
+    // Slideshow behavior state tracking 
+    this._slideshowPosition = 0; // Current position in slideshow sequence
+    this._newContentQueue = []; // Queue of new files to show with priority
+    this._showingNewContent = false; // Are we currently showing priority new content?
+    this._lastKnownNewest = null; // Track newest file to detect new arrivals
+    this._lastKnownFolderSize = null; // Track folder size to detect new content in random mode
+    this._slideshowFiles = []; // Cached list of files for slideshow (latest: newest N, random: performance subset)
   }
 
   connectedCallback() {
@@ -657,30 +665,22 @@ class MediaCard extends LitElement {
       let selectedFile;
       let shouldUpdate = false;
       
-      if (this._isLatestMode()) {
-        // Check if there's a newer file
-        selectedFile = this._getLatestFile();
-        const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
-        // Only update if we have a different file
-        shouldUpdate = resolvedUrl && resolvedUrl !== this._mediaUrl;
-        
-        if (shouldUpdate) {
-          this._log('Found newer file:', this._getItemDisplayName(selectedFile));
-        } else {
-          this._log('No newer files found');
-        }
-      } else if (this._isRandomMode()) {
-        // Get a different random file (avoid showing the same file repeatedly)
-        const randomResult = this._getRandomFileWithIndex(true); // Pass true to avoid current file
-        selectedFile = randomResult.file;
-        shouldUpdate = selectedFile != null;
-        
-        if (shouldUpdate) {
-          this._currentMediaIndex = randomResult.index;
-          this._log('Selected new random file:', this._getItemDisplayName(selectedFile));
-        } else {
-          this._log('No different random file available');
-        }
+      // Handle slideshow behavior
+      const slideshowBehavior = this.config.slideshow_behavior || 'static';
+      
+      if (slideshowBehavior === 'smart_slideshow') {
+        const result = await this._handleSmartSlideshow();
+        selectedFile = result.file;
+        shouldUpdate = result.shouldUpdate;
+      } else if (slideshowBehavior === 'cycle') {
+        const result = await this._handleCycleSlideshow();
+        selectedFile = result.file;
+        shouldUpdate = result.shouldUpdate;
+      } else {
+        // Static behavior (default)
+        const result = await this._handleStaticBehavior();
+        selectedFile = result.file;
+        shouldUpdate = result.shouldUpdate;
       }
 
       if (shouldUpdate && selectedFile) {
@@ -953,6 +953,191 @@ class MediaCard extends LitElement {
     return null;
   }
 
+  async _handleStaticBehavior() {
+    // Static behavior - original logic
+    let selectedFile;
+    let shouldUpdate = false;
+    
+    if (this._isLatestMode()) {
+      // Check if there's a newer file
+      selectedFile = this._getLatestFile();
+      const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+      // Only update if we have a different file
+      shouldUpdate = resolvedUrl && resolvedUrl !== this._mediaUrl;
+      
+      if (shouldUpdate) {
+        this._log('Found newer file:', this._getItemDisplayName(selectedFile));
+      } else {
+        this._log('No newer files found');
+      }
+    } else if (this._isRandomMode()) {
+      // Get a different random file (avoid showing the same file repeatedly)
+      const randomResult = this._getRandomFileWithIndex(true); // Pass true to avoid current file
+      selectedFile = randomResult.file;
+      shouldUpdate = selectedFile != null;
+      
+      if (shouldUpdate) {
+        this._currentMediaIndex = randomResult.index;
+        this._log('Selected new random file:', this._getItemDisplayName(selectedFile));
+      } else {
+        this._log('No different random file available');
+      }
+    }
+    
+    return { file: selectedFile, shouldUpdate };
+  }
+
+  async _handleCycleSlideshow() {
+    // Cycle behavior - round-robin through recent files
+    const windowSize = this.config.slideshow_window || 1000;
+    let selectedFile;
+    let shouldUpdate = false;
+    
+    if (this._isLatestMode()) {
+      // Cycle through newest N files
+      const cycleFiles = this._folderContents.slice(0, windowSize);
+      this._slideshowPosition = (this._slideshowPosition + 1) % cycleFiles.length;
+      selectedFile = cycleFiles[this._slideshowPosition];
+      shouldUpdate = true;
+      
+      // CRITICAL: Update _currentMediaIndex to match slideshow position
+      this._currentMediaIndex = this._slideshowPosition;
+      
+      this._log(`🔄 Cycling through latest files: ${this._slideshowPosition + 1}/${cycleFiles.length}, file: ${this._getItemDisplayName(selectedFile)}`);
+    } else if (this._isRandomMode()) {
+      // Get a different random file from the window
+      const randomResult = this._getRandomFileWithIndex(true);
+      selectedFile = randomResult.file;
+      shouldUpdate = selectedFile != null;
+      
+      if (shouldUpdate) {
+        this._currentMediaIndex = randomResult.index;
+        this._log('🔄 Cycling random file:', this._getItemDisplayName(selectedFile));
+      }
+    }
+    
+    return { file: selectedFile, shouldUpdate };
+  }
+
+  async _handleSmartSlideshow() {
+    // Smart slideshow - context-aware with new content priority
+    let selectedFile;
+    let shouldUpdate = false;
+    
+    // First, check for new content
+    const newFiles = await this._detectNewContent();
+    
+    if (newFiles.length > 0) {
+      // New content found - show it with priority
+      if (this._newContentQueue.length === 0) {
+        // First time seeing new content - add to queue
+        this._newContentQueue = [...newFiles];
+        this._showingNewContent = true;
+        this._log(`🚨 New content detected: ${newFiles.length} files, adding to priority queue`);
+      }
+    }
+    
+    if (this._showingNewContent && this._newContentQueue.length > 0) {
+      // Show next item from new content queue
+      selectedFile = this._newContentQueue.shift();
+      shouldUpdate = true;
+      
+      // CRITICAL: Update _currentMediaIndex to match the selected file
+      const fileIndex = this._folderContents.findIndex(f => f.media_content_id === selectedFile.media_content_id);
+      if (fileIndex >= 0) {
+        this._currentMediaIndex = fileIndex;
+      }
+      
+      // Add to "already shown" list for random mode
+      if (this._isRandomMode() && selectedFile && fileIndex >= 0 && this._recentlyShown) {
+        this._recentlyShown.add(fileIndex);
+      }
+      
+      this._log(`🆕 Showing new content: ${this._getItemDisplayName(selectedFile)} (${this._newContentQueue.length} remaining in queue)`);
+      
+      // If queue is empty, resume normal slideshow
+      if (this._newContentQueue.length === 0) {
+        this._showingNewContent = false;
+        this._log('✅ Finished showing new content, will resume slideshow on next refresh');
+      }
+    } else {
+      // No new content - continue normal slideshow
+      if (this._isLatestMode()) {
+        // Slideshow through recent files
+        const windowSize = this.config.slideshow_window || 1000;
+        const slideshowFiles = this._folderContents.slice(0, windowSize);
+        this._slideshowPosition = (this._slideshowPosition + 1) % slideshowFiles.length;
+        selectedFile = slideshowFiles[this._slideshowPosition];
+        shouldUpdate = true;
+        
+        // CRITICAL: Update _currentMediaIndex to match slideshow position
+        this._currentMediaIndex = this._slideshowPosition;
+        
+        this._log(`📽️ Latest slideshow: ${this._slideshowPosition + 1}/${slideshowFiles.length} (window: ${windowSize}), file: ${this._getItemDisplayName(selectedFile)}`);
+      } else if (this._isRandomMode()) {
+        // Random slideshow with memory
+        const randomResult = this._getRandomFileWithIndex(true);
+        selectedFile = randomResult.file;
+        shouldUpdate = selectedFile != null;
+        
+        if (shouldUpdate) {
+          this._currentMediaIndex = randomResult.index;
+          this._log(`📽️ Random slideshow: ${this._getItemDisplayName(selectedFile)}`);
+        }
+      }
+    }
+    
+    return { file: selectedFile, shouldUpdate };
+  }
+
+  async _detectNewContent() {
+    // Detect new files that weren't in the last known state
+    if (!this._folderContents || this._folderContents.length === 0) {
+      return [];
+    }
+    
+    const newFiles = [];
+    
+    if (this._isLatestMode()) {
+      // For latest mode, detect files newer than the last known newest
+      const currentNewest = this._folderContents[0];
+      
+      if (!this._lastKnownNewest) {
+        // First time - current newest becomes the baseline
+        this._lastKnownNewest = currentNewest;
+        return [];
+      }
+      
+      // Check if there are newer files
+      const lastKnownIndex = this._folderContents.findIndex(f => 
+        f.media_content_id === this._lastKnownNewest.media_content_id
+      );
+      
+      if (lastKnownIndex > 0) {
+        // There are files newer than our last known newest
+        newFiles.push(...this._folderContents.slice(0, lastKnownIndex));
+        this._lastKnownNewest = currentNewest; // Update baseline
+      }
+    } else if (this._isRandomMode()) {
+      // For random mode, detect files that weren't in the folder before
+      // This is more complex and might need folder comparison
+      // For now, we'll use a simpler approach - detect significant folder size changes
+      if (!this._lastKnownFolderSize) {
+        this._lastKnownFolderSize = this._folderContents.length;
+        return [];
+      }
+      
+      if (this._folderContents.length > this._lastKnownFolderSize) {
+        // Folder grew - show newest files as new content
+        const newCount = this._folderContents.length - this._lastKnownFolderSize;
+        newFiles.push(...this._folderContents.slice(0, newCount));
+        this._lastKnownFolderSize = this._folderContents.length;
+      }
+    }
+    
+    return newFiles;
+  }
+
   _getLatestFile() {
     if (!this._folderContents || this._folderContents.length === 0) return null;
     
@@ -997,23 +1182,27 @@ class MediaCard extends LitElement {
     }
     
     const totalFiles = this._folderContents.length;
-    const SMART_CYCLING_THRESHOLD = 1000; // Use smart cycling for 1000 or fewer items
+    const slideshowWindow = this.config?.slideshow_window || 1000;
+    const effectiveWindow = Math.min(totalFiles, slideshowWindow);
     
-    // Use smart cycling for small-to-medium collections to avoid repetition
-    if (totalFiles <= SMART_CYCLING_THRESHOLD) {
-      this._log(`🎲 Using smart cycling for ${totalFiles} files (≤${SMART_CYCLING_THRESHOLD})`);
-      return this._getSmartRandomFile(avoidCurrent);
+    // Use smart cycling for collections within slideshow window
+    if (effectiveWindow <= 1000) {
+      this._log(`🎲 Using smart cycling for ${effectiveWindow} files (window: ${slideshowWindow})`);
+      return this._getSmartRandomFile(avoidCurrent, effectiveWindow);
     }
     
-    this._log(`🎲 Using simple random for ${totalFiles} files (>${SMART_CYCLING_THRESHOLD})`);
+    this._log(`🎲 Using simple random within ${effectiveWindow} files (total: ${totalFiles}, window: ${slideshowWindow})`);
     
-    // For large collections, use simple random with current avoidance
+    // For large collections, use simple random within slideshow window
+    // For random mode, we use the newest N files as the window for better performance
+    const windowFiles = this._folderContents.slice(0, effectiveWindow);
+    
     let randomIndex;
     let attempts = 0;
     const maxAttempts = 10; // Prevent infinite loop
     
     do {
-      randomIndex = Math.floor(Math.random() * this._folderContents.length);
+      randomIndex = Math.floor(Math.random() * windowFiles.length);
       attempts++;
     } while (
       avoidCurrent && 
@@ -1021,20 +1210,22 @@ class MediaCard extends LitElement {
       attempts < maxAttempts
     );
     
-    return { file: this._folderContents[randomIndex], index: randomIndex };
+    return { file: windowFiles[randomIndex], index: randomIndex };
   }
 
-  _getSmartRandomFile(avoidCurrent = false) {
+  _getSmartRandomFile(avoidCurrent = false, windowSize = null) {
     // Initialize recently shown tracking if not exists
     if (!this._recentlyShown) {
       this._recentlyShown = new Set();
     }
     
     const totalFiles = this._folderContents.length;
+    const effectiveWindow = windowSize || totalFiles;
+    const windowFiles = this._folderContents.slice(0, effectiveWindow);
     
-    // Get available files (not recently shown)
+    // Get available files (not recently shown) within the window
     let availableIndices = [];
-    for (let i = 0; i < totalFiles; i++) {
+    for (let i = 0; i < effectiveWindow; i++) {
       if (!this._recentlyShown.has(i) && (!avoidCurrent || i !== this._currentMediaIndex)) {
         availableIndices.push(i);
       }
@@ -1042,12 +1233,12 @@ class MediaCard extends LitElement {
     
     // If no available files (all shown recently), reset the tracking
     if (availableIndices.length === 0) {
-      this._log(`🔄 Smart cycling: All ${totalFiles} files shown, resetting cycle`);
+      this._log(`🔄 Smart cycling: All ${effectiveWindow} files shown, resetting cycle (total: ${totalFiles})`);
       this._recentlyShown.clear();
       
       // Rebuild available indices, still avoiding current if requested
       availableIndices = [];
-      for (let i = 0; i < totalFiles; i++) {
+      for (let i = 0; i < effectiveWindow; i++) {
         if (!avoidCurrent || i !== this._currentMediaIndex) {
           availableIndices.push(i);
         }
@@ -1056,7 +1247,7 @@ class MediaCard extends LitElement {
     
     // If still no available files (edge case: only 1 file and avoid current), return current
     if (availableIndices.length === 0) {
-      return { file: this._folderContents[this._currentMediaIndex || 0], index: this._currentMediaIndex || 0 };
+      return { file: windowFiles[this._currentMediaIndex || 0], index: this._currentMediaIndex || 0 };
     }
     
     // Pick random from available files
@@ -1066,9 +1257,9 @@ class MediaCard extends LitElement {
     // Mark as recently shown
     this._recentlyShown.add(selectedIndex);
     
-    this._log(`🎲 Smart cycling: Selected ${selectedIndex + 1}/${totalFiles}, recently shown: ${this._recentlyShown.size}/${totalFiles}`);
+    this._log(`🎲 Smart cycling: Selected ${selectedIndex + 1}/${effectiveWindow}, recently shown: ${this._recentlyShown.size}/${effectiveWindow} (total files: ${totalFiles})`);
     
-    return { file: this._folderContents[selectedIndex], index: selectedIndex };
+    return { file: windowFiles[selectedIndex], index: selectedIndex };
   }
 
   _detectMediaType(filePath) {
@@ -3101,6 +3292,34 @@ class MediaCardEditor extends LitElement {
                 <div class="help-text">How auto-refresh behaves when navigating manually</div>
               </div>
             </div>
+            
+            <div class="config-row">
+              <label>Slideshow Behavior</label>
+              <div>
+                <select @change=${this._slideshowBehaviorChanged} .value=${this._config.slideshow_behavior || 'static'}>
+                  <option value="static">Static - Show single file, refresh in place</option>
+                  <option value="cycle">Cycle - Round-robin through recent files</option>
+                  <option value="smart_slideshow">Smart Slideshow - Context-aware with new content priority</option>
+                </select>
+                <div class="help-text">How auto-refresh cycles through files in latest/random mode</div>
+              </div>
+            </div>
+            
+            ${this._config.slideshow_behavior !== 'static' ? html`
+              <div class="config-row">
+                <label>Slideshow Window Size</label>
+                <div>
+                  <input
+                    type="number"
+                    min="5"
+                    max="5000"
+                    .value=${this._config.slideshow_window || 1000}
+                    @input=${this._slideshowWindowChanged}
+                  />
+                  <div class="help-text">Number of files to include in slideshow (latest mode: newest N files, random mode: performance limit)</div>
+                </div>
+              </div>
+            ` : ''}
           </div>
         ` : ''}
 
@@ -4106,6 +4325,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _autoAdvanceModeChanged(ev) {
     this._config = { ...this._config, auto_advance_mode: ev.target.value };
+    this._fireConfigChanged();
+  }
+
+  _slideshowBehaviorChanged(ev) {
+    this._config = { ...this._config, slideshow_behavior: ev.target.value };
+    // Reset slideshow state when behavior changes
+    this._slideshowPosition = 0;
+    this._newContentQueue = [];
+    this._showingNewContent = false;
+    this._fireConfigChanged();
+  }
+
+  _slideshowWindowChanged(ev) {
+    const value = parseInt(ev.target.value) || 100;
+    this._config = { ...this._config, slideshow_window: Math.max(5, Math.min(5000, value)) };
     this._fireConfigChanged();
   }
 
