@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 1.4.0-beta4
+ * Version: 1.4.0-beta36
  */
 
 // Import Lit from CDN for standalone usage
@@ -35,7 +35,7 @@ class MediaCard extends LitElement {
     this._pausedForNavigation = false;
     this._isPaused = false;
     this._urlCreatedTime = 0; // Track when current URL was created
-    this._debugMode = false; // Enable debug logging in development
+    this._debugMode = true; // Enable debug logging for thumbnail development
     this._initializationInProgress = false; // Prevent multiple initializations
     this._scanInProgress = false; // Prevent multiple scans
     this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
@@ -51,9 +51,61 @@ class MediaCard extends LitElement {
     this.setAttribute('data-media-type', this._mediaType || 'image');
   }
 
-  // Debug logging utility
+  // Home Assistant calls this setter when hass becomes available
+  set hass(hass) {
+    const oldHass = this._hass;
+    this._hass = hass;
+    
+    this._log('💎 hass setter called - hasHass:', !!hass, 'hadOldHass:', !!oldHass, 'hasConfig:', !!this.config);
+    
+    // Trigger folder initialization when both hass and config are available
+    if (hass && this.config && !oldHass) {
+      this._log('💎 First time hass available - checking for folder initialization');
+      
+      if (this.config.is_folder && this.config.folder_mode) {
+        this._log('💎 Triggering folder mode initialization from hass setter');
+        setTimeout(() => this._handleFolderMode(), 100);
+      } else if (this.config.media_path) {
+        this._log('💎 Triggering single file load from hass setter');
+        setTimeout(() => this._loadSingleFile(), 100);
+      }
+    }
+    
+    this.requestUpdate();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  // Debug logging utility with throttling for frequent messages
   _log(...args) {
     if (this._debugMode || window.location.hostname === 'localhost') {
+      const message = args.join(' ');
+      
+      // Throttle frequent messages to avoid spam
+      const throttlePatterns = [
+        'hass setter called',
+        'Component updated',
+        'Media type from folder contents',
+        'Rendering media with type'
+      ];
+      
+      const shouldThrottle = throttlePatterns.some(pattern => message.includes(pattern));
+      
+      if (shouldThrottle) {
+        const now = Date.now();
+        const lastLog = this._lastLogTime?.[message] || 0;
+        
+        // Only log throttled messages every 10 seconds
+        if (now - lastLog < 10000) {
+          return;
+        }
+        
+        if (!this._lastLogTime) this._lastLogTime = {};
+        this._lastLogTime[message] = now;
+      }
+      
       console.log(...args);
     }
   }
@@ -394,8 +446,8 @@ class MediaCard extends LitElement {
     }
     
     const oldConfig = this.config;
-    const wasFolder = oldConfig?.is_folder && oldConfig?.folder_mode;
-    const isFolder = config.is_folder && config.folder_mode;
+    const wasFolder = !!(oldConfig?.is_folder && oldConfig?.folder_mode);
+    const isFolder = !!(config.is_folder && config.folder_mode);
     
     this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
     
@@ -456,9 +508,14 @@ class MediaCard extends LitElement {
       this._refreshInterval = null;
     }
 
-    // Don't set up auto-refresh if paused
+    // Don't set up auto-refresh if paused or not visible
     if (this._isPaused) {
       this._log('🔄 Auto-refresh setup skipped - currently paused');
+      return;
+    }
+    
+    if (this._backgroundPaused) {
+      this._log('🔄 Auto-refresh setup skipped - background activity paused (not visible)');
       return;
     }
 
@@ -467,11 +524,12 @@ class MediaCard extends LitElement {
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       this._log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
       this._refreshInterval = setInterval(() => {
-        this._log('🔄 Auto-refresh timer triggered - isPaused:', this._isPaused, 'interval ID:', this._refreshInterval);
-        if (!this._isPaused) {
+        // Check both pause states before running
+        if (!this._isPaused && !this._backgroundPaused) {
+          this._log('🔄 Auto-refresh timer triggered - active');
           this._checkForMediaUpdates();
         } else {
-          this._log('🔄 Auto-refresh skipped - currently paused');
+          this._log('🔄 Auto-refresh skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
         }
       }, refreshSeconds * 1000);
       this._log('🔄 Auto-refresh interval created with ID:', this._refreshInterval);
@@ -1021,6 +1079,23 @@ class MediaCard extends LitElement {
     }
   }
 
+  _getCurrentMediaType() {
+    // Get the current file from folder contents if available
+    if (this._folderContents && this._currentMediaIndex >= 0 && this._currentMediaIndex < this._folderContents.length) {
+      const currentFile = this._folderContents[this._currentMediaIndex];
+      if (currentFile && currentFile.media_content_id) {
+        const detectedType = this._detectFileType(currentFile.media_content_id) || 'image';
+        this._log('🎯 Media type from folder contents:', detectedType, 'file:', currentFile.media_content_id, 'index:', this._currentMediaIndex);
+        return detectedType;
+      }
+    }
+    
+    // Fallback to detecting from URL (for single file mode or edge cases)
+    const fallbackType = this._detectFileType(this._mediaUrl) || 'image';
+    this._log('🎯 Media type from URL fallback:', fallbackType, 'url:', this._mediaUrl, 'hasFolder:', !!this._folderContents, 'index:', this._currentMediaIndex);
+    return fallbackType;
+  }
+
   _isMediaFile(filePath) {
     // Extract filename from the full path and get extension  
     const fileName = filePath.split('/').pop() || filePath;
@@ -1033,8 +1108,24 @@ class MediaCard extends LitElement {
   }
 
   _detectFileType(filePath) {
-    const fileName = filePath.split('/').pop() || filePath;
-    const extension = fileName.split('.').pop()?.toLowerCase();
+    if (!filePath) return null;
+    
+    // Handle URLs with query parameters by extracting the path portion
+    let cleanPath = filePath;
+    if (filePath.includes('?')) {
+      // For URLs like "/path/file.mp4?token=123", extract just "/path/file.mp4"
+      cleanPath = filePath.split('?')[0];
+    }
+    
+    const fileName = cleanPath.split('/').pop() || cleanPath;
+    
+    // Handle Synology _shared suffix (e.g., "file.mp4_shared" -> "file.mp4")
+    let cleanFileName = fileName;
+    if (fileName.endsWith('_shared')) {
+      cleanFileName = fileName.replace('_shared', '');
+    }
+    
+    const extension = cleanFileName.split('.').pop()?.toLowerCase();
     
     if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
       return 'video';
@@ -1216,7 +1307,8 @@ class MediaCard extends LitElement {
     this._log('Using URL for reload:', useUrl);
     
     // For images, update src directly
-    if (this._mediaType === 'image') {
+    const currentMediaType = this._getCurrentMediaType();
+    if (currentMediaType === 'image') {
       const img = this.shadowRoot?.querySelector('img');
       if (img) {
         this._log('Refreshing image element');
@@ -1226,7 +1318,7 @@ class MediaCard extends LitElement {
           this._mediaUrl = useUrl;
         }
       }
-    } else if (this._mediaType === 'video') {
+    } else if (currentMediaType === 'video') {
       const video = this.shadowRoot?.querySelector('video');
       if (video) {
         this._log('Refreshing video element');
@@ -1508,11 +1600,16 @@ class MediaCard extends LitElement {
       `;
     }
 
-    if (this._mediaType === 'video') {
+    // CRITICAL FIX: Use the corrected media type detection method
+    // This uses the original filename from folder contents instead of the resolved URL
+    const currentMediaType = this._getCurrentMediaType();
+    this._log('🎬 Rendering media with type:', currentMediaType, 'URL:', this._mediaUrl);
+    
+    if (currentMediaType === 'video') {
       return html`
         <video 
           controls
-          preload="metadata"
+          preload="auto"
           playsinline
           crossorigin="anonymous"
           ?loop=${this.config.video_loop || false}
@@ -1967,6 +2064,10 @@ class MediaCard extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    
+    // Set up visibility observers to pause background activity when not visible
+    this._setupVisibilityObservers();
+    
     // Ensure auto-refresh is set up when component is connected/reconnected
     if (this.config && this.hass && !this._isPaused) {
       this._log('🔌 Component connected - setting up auto-refresh');
@@ -1980,6 +2081,10 @@ class MediaCard extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    
+    // Clean up visibility observers
+    this._cleanupVisibilityObservers();
+    
     // Clean up the refresh interval when component is removed
     if (this._refreshInterval) {
       clearInterval(this._refreshInterval);
@@ -1989,6 +2094,74 @@ class MediaCard extends LitElement {
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
+    }
+  }
+
+  _setupVisibilityObservers() {
+    // Set up Intersection Observer to detect when card is visible
+    if ('IntersectionObserver' in window) {
+      this._intersectionObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          const wasVisible = this._isVisible;
+          this._isVisible = entry.isIntersecting;
+          
+          if (wasVisible !== this._isVisible) {
+            this._log('👁️ Card visibility changed:', this._isVisible ? 'visible' : 'hidden');
+            this._handleVisibilityChange();
+          }
+        });
+      }, {
+        threshold: 0.1, // Trigger when 10% visible
+        rootMargin: '50px' // Start observing 50px before entering viewport
+      });
+      
+      this._intersectionObserver.observe(this);
+    }
+    
+    // Set up Page Visibility API to detect when page/tab is hidden
+    this._handlePageVisibility = () => {
+      const wasPageVisible = this._isPageVisible;
+      this._isPageVisible = !document.hidden;
+      
+      if (wasPageVisible !== this._isPageVisible) {
+        this._log('📄 Page visibility changed:', this._isPageVisible ? 'visible' : 'hidden');
+        this._handleVisibilityChange();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', this._handlePageVisibility);
+    
+    // Initialize visibility states
+    this._isVisible = true; // Assume visible initially
+    this._isPageVisible = !document.hidden;
+  }
+
+  _cleanupVisibilityObservers() {
+    if (this._intersectionObserver) {
+      this._intersectionObserver.disconnect();
+      this._intersectionObserver = null;
+    }
+    
+    if (this._handlePageVisibility) {
+      document.removeEventListener('visibilitychange', this._handlePageVisibility);
+      this._handlePageVisibility = null;
+    }
+  }
+
+  _handleVisibilityChange() {
+    const shouldBeActive = this._isVisible && this._isPageVisible;
+    
+    if (shouldBeActive && this._backgroundPaused) {
+      this._log('🔄 Resuming background activity - card is now visible');
+      this._backgroundPaused = false;
+      this._setupAutoRefresh();
+    } else if (!shouldBeActive && !this._backgroundPaused) {
+      this._log('⏸️ Pausing background activity - card is not visible');
+      this._backgroundPaused = true;
+      if (this._refreshInterval) {
+        clearInterval(this._refreshInterval);
+        this._refreshInterval = null;
+      }
     }
   }
 
@@ -2566,6 +2739,10 @@ class MediaCardEditor extends LitElement {
   }
 
   // Utility methods needed by the editor
+  _getItemDisplayName(item) {
+    return item.title || item.media_content_id;
+  }
+
   _isMediaFile(filePath) {
     // Extract filename from the full path and get extension  
     const fileName = filePath.split('/').pop() || filePath;
@@ -3325,25 +3502,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     this._log('Showing', itemsToShow.length, 'items (filtered by media type:', this._config.media_type, ')');
     
-    if (itemsToShow.length === 0) {
-      const noFilesMessage = document.createElement('div');
-      noFilesMessage.style.cssText = `
-        padding: 20px !important;
-        text-align: center !important;
-        color: var(--secondary-text-color, #666) !important;
-        font-style: italic !important;
-      `;
-      noFilesMessage.textContent = 'No media files found in this folder';
-      container.appendChild(noFilesMessage);
-      return;
-    }
-    
-    for (let i = 0; i < itemsToShow.length; i++) {
-      const item = itemsToShow[i];
-      this._log(`Creating item ${i + 1}/${itemsToShow.length}:`, this._getItemDisplayName(item));
-      
-      try {
-        const fileItem = document.createElement('div');
+    for (const item of itemsToShow) {
+      const fileItem = document.createElement('div');
       fileItem.style.cssText = `
         padding: 12px 16px !important;
         border: 1px solid var(--divider-color, #ddd) !important;
@@ -3470,76 +3630,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           return false;
         };
       } else {
-        // This is a media file - create thumbnail or icon
-        const fileName = this._getItemDisplayName(item);
-        const ext = fileName.split('.').pop()?.toLowerCase() || '';
-        const isVideo = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'mkv', 'wmv', 'flv'].includes(ext);
-        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff', 'heic', 'avif'].includes(ext);
-        
-        // Create appropriate icon immediately (no async loading issues)
-        let mediaIcon;
-        let iconText;
-        let backgroundColor;
+        // This is a media file - create thumbnail
+        const ext = item.media_content_id.split('.').pop()?.toLowerCase();
+        const isVideo = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(ext);
+        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
         
         if (isImage) {
-          iconText = '🖼️';
-          backgroundColor = 'rgba(76, 175, 80, 0.1)'; // Green tint for images
+          // Create image thumbnail with better error handling
+          this._createImageThumbnail(thumbnailContainer, item);
         } else if (isVideo) {
-          iconText = '🎬';
-          backgroundColor = 'rgba(33, 150, 243, 0.1)'; // Blue tint for videos
+          // Create video thumbnail (enhanced)
+          this._createVideoThumbnail(thumbnailContainer, item);
         } else {
-          iconText = '📄';
-          backgroundColor = 'rgba(158, 158, 158, 0.1)'; // Gray tint for other files
-        }
-        
-        mediaIcon = document.createElement('span');
-        mediaIcon.textContent = iconText;
-        mediaIcon.style.cssText = `
-          font-size: 32px !important;
-          display: block !important;
-          text-align: center !important;
-          line-height: 1 !important;
-        `;
-        
-        // Set background color for the thumbnail container based on media type
-        thumbnailContainer.style.background = backgroundColor;
-        thumbnailContainer.appendChild(mediaIcon);
-        
-        // For images, try to load thumbnail asynchronously (but keep icon as fallback)
-        if (isImage) {
-          this._resolveMediaPath(item.media_content_id).then(resolvedUrl => {
-            if (resolvedUrl) {
-              // Create thumbnail image
-              const thumbnail = document.createElement('img');
-              thumbnail.style.cssText = `
-                width: 100% !important;
-                height: 100% !important;
-                object-fit: cover !important;
-                border-radius: 4px !important;
-                position: absolute !important;
-                top: 0 !important;
-                left: 0 !important;
-              `;
-              
-              // Only replace icon with thumbnail if image loads successfully
-              thumbnail.onload = () => {
-                // Make container relative for absolute positioning
-                thumbnailContainer.style.position = 'relative';
-                thumbnailContainer.appendChild(thumbnail);
-                this._log('Thumbnail loaded successfully for:', fileName);
-              };
-              
-              thumbnail.onerror = () => {
-                this._log('Thumbnail failed to load for:', fileName, '- keeping icon');
-                // Keep the original icon - no change needed
-              };
-              
-              thumbnail.src = resolvedUrl;
-            }
-          }).catch(error => {
-            this._log('Thumbnail resolution failed for:', fileName, error);
-            // Keep the original icon - no change needed
-          });
+          // Unknown file type
+          const fileIcon = document.createElement('span');
+          fileIcon.textContent = '📄';
+          fileIcon.style.cssText = `
+            font-size: 24px !important;
+          `;
+          thumbnailContainer.appendChild(fileIcon);
         }
 
         // Use onclick for file selection
@@ -3556,14 +3665,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         };
       }
 
-        fileItem.appendChild(thumbnailContainer);
-        fileItem.appendChild(name);
-        container.appendChild(fileItem);
-      } catch (error) {
-        console.error(`Error creating media browser item ${i + 1}:`, error);
-        this._log('Error creating item:', this._getItemDisplayName(item), error);
-        // Continue with next item
-      }
+      fileItem.appendChild(thumbnailContainer);
+      fileItem.appendChild(name);
+      container.appendChild(fileItem);
     }
     
     this._log('Added all items to browser container');
@@ -3750,6 +3854,176 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     this._fireConfigChanged();
     this._log('Config updated (file selected, folder options cleared):', this._config);
+  }
+
+  async _createImageThumbnail(container, item) {
+    // Show loading indicator first
+    const loadingIcon = document.createElement('div');
+    loadingIcon.style.cssText = `
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: rgba(0, 0, 0, 0.05) !important;
+      border-radius: 4px !important;
+    `;
+    loadingIcon.innerHTML = `
+      <span style="font-size: 16px; opacity: 0.5;">⏳</span>
+    `;
+    container.appendChild(loadingIcon);
+
+    // Debug: Log the item structure to understand what's available
+    this._log('🔍 Creating thumbnail for item:', item);
+    this._log('🔍 Item properties:', Object.keys(item));
+    if (item.thumbnail_url) {
+      this._log('🖼️ Found thumbnail_url:', item.thumbnail_url);
+    }
+    if (item.children_media_class) {
+      this._log('📁 Item media class:', item.children_media_class);
+    }
+
+    try {
+      // Try multiple approaches for getting the thumbnail
+      let thumbnailUrl = null;
+      
+      // Approach 1: Check if item already has thumbnail URL (Synology Photos does this)
+      if (item.thumbnail_url) {
+        thumbnailUrl = item.thumbnail_url;
+        this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
+      }
+      
+      // Approach 2: Try Home Assistant thumbnail API
+      if (!thumbnailUrl) {
+        try {
+          const thumbnailResponse = await this.hass.callWS({
+            type: "media_source/resolve_media",
+            media_content_id: item.media_content_id,
+            expires: 3600
+          });
+          
+          if (thumbnailResponse && thumbnailResponse.url) {
+            thumbnailUrl = thumbnailResponse.url;
+            this._log('✅ Got thumbnail from resolve_media API:', thumbnailUrl);
+          }
+        } catch (error) {
+          this._log('❌ Thumbnail resolve_media API failed:', error);
+        }
+      }
+      
+      // Approach 3: Try direct resolution
+      if (!thumbnailUrl) {
+        thumbnailUrl = await this._resolveMediaPath(item.media_content_id);
+        if (thumbnailUrl) {
+          this._log('✅ Got thumbnail from direct resolution:', thumbnailUrl);
+        }
+      }
+      
+      if (thumbnailUrl) {
+        const thumbnail = document.createElement('img');
+        thumbnail.style.cssText = `
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: cover !important;
+          border-radius: 4px !important;
+          opacity: 0 !important;
+          transition: opacity 0.3s ease !important;
+        `;
+        
+        thumbnail.onload = () => {
+          // Success! Replace loading indicator with thumbnail
+          container.innerHTML = '';
+          thumbnail.style.opacity = '1';
+          container.appendChild(thumbnail);
+          this._log('✅ Thumbnail loaded successfully:', item.media_content_id);
+        };
+        
+        thumbnail.onerror = () => {
+          // Failed to load - show fallback icon
+          this._showThumbnailFallback(container, '🖼️', 'Image thumbnail failed to load');
+          this._log('❌ Thumbnail failed to load:', item.media_content_id);
+        };
+        
+        // Set source to start loading
+        thumbnail.src = thumbnailUrl;
+        
+        // Timeout fallback (in case image takes too long)
+        setTimeout(() => {
+          if (thumbnail.style.opacity === '0') {
+            this._showThumbnailFallback(container, '🖼️', 'Image thumbnail timeout');
+            this._log('⏰ Thumbnail timeout:', item.media_content_id);
+          }
+        }, 5000);
+        
+      } else {
+        // No URL available - show fallback
+        this._showThumbnailFallback(container, '🖼️', 'No thumbnail URL available');
+      }
+      
+    } catch (error) {
+      console.error('Error creating image thumbnail:', error);
+      this._showThumbnailFallback(container, '🖼️', 'Thumbnail error: ' + error.message);
+    }
+  }
+
+  async _createVideoThumbnail(container, item) {
+    // For now, show a video icon, but we could enhance this to generate actual video thumbnails
+    const videoIcon = document.createElement('div');
+    videoIcon.style.cssText = `
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: rgba(33, 150, 243, 0.1) !important;
+      border-radius: 4px !important;
+      position: relative !important;
+    `;
+    
+    videoIcon.innerHTML = `
+      <span style="font-size: 24px;">🎬</span>
+      <div style="
+        position: absolute !important;
+        bottom: 2px !important;
+        right: 2px !important;
+        background: rgba(0, 0, 0, 0.7) !important;
+        color: white !important;
+        font-size: 8px !important;
+        padding: 1px 3px !important;
+        border-radius: 2px !important;
+        text-transform: uppercase !important;
+      ">VIDEO</div>
+    `;
+    
+    container.appendChild(videoIcon);
+    
+    // TODO: Future enhancement - generate actual video thumbnails
+    // This would involve creating a video element, loading the video,
+    // seeking to a specific time, and drawing to canvas
+  }
+
+  _showThumbnailFallback(container, icon, reason) {
+    container.innerHTML = '';
+    const fallbackIcon = document.createElement('div');
+    fallbackIcon.style.cssText = `
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: rgba(0, 0, 0, 0.05) !important;
+      border-radius: 4px !important;
+      position: relative !important;
+    `;
+    
+    fallbackIcon.innerHTML = `
+      <span style="font-size: 24px; opacity: 0.7;">${icon}</span>
+    `;
+    
+    // Add title attribute for debugging
+    fallbackIcon.title = reason;
+    
+    container.appendChild(fallbackIcon);
   }
 
   _titleChanged(ev) {
