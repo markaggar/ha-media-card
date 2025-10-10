@@ -3915,6 +3915,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._log('Current path:', currentPath);
     this._log('Media content ID:', mediaContent.media_content_id);
     
+    // Counter for limiting debug output
+    let processedCount = 0;
+    
     // Check if this folder contains media files (not just subfolders)
     // For performance with large folders, just check the first 50 items
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
@@ -4088,9 +4091,28 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         };
       } else {
         // This is a media file - create thumbnail
-        const ext = item.media_content_id.split('.').pop()?.toLowerCase();
+        processedCount++;
+        
+        // Only log details for first 5 files to avoid console spam
+        if (processedCount <= 5) {
+          this._log('🎯 Processing media file:', item.title, 'content_id:', item.media_content_id);
+        }
+        
+        // Try to get extension from both title and content_id
+        const titleExt = item.title?.split('.').pop()?.toLowerCase();
+        const contentExt = item.media_content_id?.split('.').pop()?.toLowerCase();
+        const ext = titleExt || contentExt;
+        
+        if (processedCount <= 5) {
+          this._log('🎯 Extensions - title:', titleExt, 'content:', contentExt, 'using:', ext);
+        }
+        
         const isVideo = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(ext);
         const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
+        
+        if (processedCount <= 5) {
+          this._log('🎯 File type detection - isImage:', isImage, 'isVideo:', isVideo);
+        }
         
         if (isImage) {
           // Create image thumbnail with better error handling
@@ -4100,6 +4122,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           this._createVideoThumbnail(thumbnailContainer, item);
         } else {
           // Unknown file type
+          if (processedCount <= 5) {
+            this._log('🎯 Unknown file type, showing generic icon');
+          }
           const fileIcon = document.createElement('span');
           fileIcon.textContent = '📄';
           fileIcon.style.cssText = `
@@ -4330,24 +4355,40 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
     container.appendChild(loadingIcon);
 
-    // Debug: Log the item structure to understand what's available
-    this._log('🔍 Creating thumbnail for item:', item);
-    this._log('🔍 Item properties:', Object.keys(item));
-    if (item.thumbnail_url) {
-      this._log('🖼️ Found thumbnail_url:', item.thumbnail_url);
-    }
-    if (item.children_media_class) {
-      this._log('📁 Item media class:', item.children_media_class);
+    // Debug: Log the item structure to understand what's available (limit to first few)
+    const shouldLog = this._thumbnailDebugCount === undefined ? (this._thumbnailDebugCount = 0) < 5 : this._thumbnailDebugCount < 5;
+    if (shouldLog) {
+      this._thumbnailDebugCount++;
+      this._log('🔍 Creating thumbnail for item:', item);
+      this._log('🔍 Item properties:', Object.keys(item));
+      if (item.thumbnail) {
+        this._log('🖼️ Found thumbnail:', item.thumbnail);
+      }
+      if (item.thumbnail_url) {
+        this._log('🖼️ Found thumbnail_url:', item.thumbnail_url);
+      }
+      if (item.children_media_class) {
+        this._log('📁 Item media class:', item.children_media_class);
+      }
     }
 
     try {
       // Try multiple approaches for getting the thumbnail
       let thumbnailUrl = null;
       
-      // Approach 1: Check if item already has thumbnail URL (Synology Photos does this)
-      if (item.thumbnail_url) {
+      // Approach 1: Check if item already has thumbnail URL (Synology Photos uses 'thumbnail' property)
+      if (item.thumbnail) {
+        thumbnailUrl = item.thumbnail;
+        if (shouldLog) {
+          this._log('✅ Using provided thumbnail:', thumbnailUrl);
+        }
+      }
+      // Approach 1b: Check alternative thumbnail_url property
+      else if (item.thumbnail_url) {
         thumbnailUrl = item.thumbnail_url;
-        this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
+        if (shouldLog) {
+          this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
+        }
       }
       
       // Approach 2: Try Home Assistant thumbnail API
@@ -4361,10 +4402,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           
           if (thumbnailResponse && thumbnailResponse.url) {
             thumbnailUrl = thumbnailResponse.url;
-            this._log('✅ Got thumbnail from resolve_media API:', thumbnailUrl);
+            if (shouldLog) {
+              this._log('✅ Got thumbnail from resolve_media API:', thumbnailUrl);
+            }
           }
         } catch (error) {
-          this._log('❌ Thumbnail resolve_media API failed:', error);
+          if (shouldLog) {
+            this._log('❌ Thumbnail resolve_media API failed:', error);
+          }
         }
       }
       
@@ -4392,13 +4437,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           container.innerHTML = '';
           thumbnail.style.opacity = '1';
           container.appendChild(thumbnail);
-          this._log('✅ Thumbnail loaded successfully:', item.media_content_id);
+          if (shouldLog) {
+            this._log('✅ Thumbnail loaded successfully:', item.media_content_id);
+          }
         };
         
         thumbnail.onerror = () => {
           // Failed to load - show fallback icon
           this._showThumbnailFallback(container, '🖼️', 'Image thumbnail failed to load');
-          this._log('❌ Thumbnail failed to load:', item.media_content_id);
+          if (shouldLog) {
+            this._log('❌ Thumbnail failed to load:', item.media_content_id);
+          }
         };
         
         // Set source to start loading
@@ -4408,7 +4457,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         setTimeout(() => {
           if (thumbnail.style.opacity === '0') {
             this._showThumbnailFallback(container, '🖼️', 'Image thumbnail timeout');
-            this._log('⏰ Thumbnail timeout:', item.media_content_id);
+            if (shouldLog) {
+              this._log('⏰ Thumbnail timeout:', item.media_content_id);
+            }
           }
         }, 5000);
         

@@ -56,13 +56,33 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - **Visual Indicators**: Subtle navigation hints and current file position display
 - **Configurable Controls**: Enable/disable navigation features independently
 - **Smart Folder Awareness**: Navigation works seamlessly with folder modes
+- **Neutral Zone Pass-through**: When no actions are configured, clicks pass through the center to the image (for zoom)
 
 ### 📁 **Built-in Media Browser**
-
 - **GUI file selection** - No more typing file paths!
 - **Folder Mode Selection** - Choose between single file, latest, or random display
+- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling
+- **Enhanced Video Icons** - Styled video thumbnails with "VIDEO" labels
+- **Multi-source Support** - Works with Synology DSM, local files, and other media sources
 - Browse through your Home Assistant media folders
 - Navigate subfolders with intuitive back/forward navigation
+
+### 🔍 **Image Zoom (v2.0)**
+- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
+- **Second Click/Tap**: Resets zoom back to normal
+- **Image-only**: Videos are unaffected
+- **Simple & Safe**: No pan/drag, minimal CSS transforms
+
+Enable in card options (GUI editor), or via YAML:
+
+```yaml
+type: custom:media-card
+title: "Photo Viewer"
+media_type: image
+media_path: media-source://media_source/local/photos/
+enable_image_zoom: true
+zoom_level: 2.0  # optional (default 2.0, supports 1.5–5.0)
+```
 
 ### 🔄 **Auto-Refresh System**
 - **Automatic updates** - Monitor files for changes every N seconds
