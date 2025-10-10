@@ -51,6 +51,12 @@ class MediaCard extends LitElement {
     this._lastKnownNewest = null; // Track newest file to detect new arrivals
     this._lastKnownFolderSize = null; // Track folder size to detect new content in random mode
     this._slideshowFiles = []; // Cached list of files for slideshow (latest: newest N, random: performance subset)
+
+    // Image zoom state
+    this._isImageZoomed = false; // Track whether the image is currently zoomed
+    this._zoomOriginX = 50; // Percent
+    this._zoomOriginY = 50; // Percent
+    this._zoomLevel = 2.0;  // Default zoom level
   }
 
   connectedCallback() {
@@ -81,6 +87,12 @@ class MediaCard extends LitElement {
         this._log('💎 Triggering single file load from hass setter');
         setTimeout(() => this._loadSingleFile(), 100);
       }
+    }
+    // Update actions attribute whenever hass is set
+    if (this._hasAnyAction()) {
+      this.setAttribute('data-has-actions', '');
+    } else {
+      this.removeAttribute('data-has-actions');
     }
     
     this.requestUpdate();
@@ -441,6 +453,11 @@ class MediaCard extends LitElement {
       background: transparent;
     }
 
+    /* When no actions are configured, let clicks pass through neutral zone */
+    :host(:not([data-has-actions])) .nav-zone-neutral {
+      pointer-events: none;
+    }
+
     /* Hide navigation zones when not in folder mode */
     :host(:not([data-has-folder-navigation])) .navigation-zones {
       display: none;
@@ -461,6 +478,20 @@ class MediaCard extends LitElement {
       z-index: 15;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
+    }
+
+    /* Image Zoom Styles */
+    :host([data-media-type="image"]) .zoomable-container {
+      position: relative;
+      overflow: hidden;
+      cursor: zoom-in;
+    }
+    :host([data-media-type="image"][data-image-zoomed]) .zoomable-container {
+      cursor: zoom-out;
+    }
+    :host([data-media-type="image"]) .zoomable-container img {
+      transition: transform 0.25s ease, transform-origin 0.1s ease;
+      will-change: transform;
     }
 
     /* Dots indicator */
@@ -521,6 +552,12 @@ class MediaCard extends LitElement {
       this.setAttribute('data-aspect-mode', aspectMode);
     } else {
       this.removeAttribute('data-aspect-mode');
+    }
+    // Update actions attribute based on config
+    if (this._hasAnyAction()) {
+      this.setAttribute('data-has-actions', '');
+    } else {
+      this.removeAttribute('data-has-actions');
     }
     
     // Only reset URL if switching between folder/file modes or if it's a new config
@@ -1896,13 +1933,18 @@ class MediaCard extends LitElement {
     }
     
     return html`
-      <img 
-        src="${this._mediaUrl}" 
-        alt="${this.config.title || 'Media'}"
-        @error=${this._onMediaError}
-        @load=${this._onMediaLoaded}
-        style="width: 100%; height: auto; display: block;"
-      />
+      <div class="zoomable-container"
+           @click=${(e) => this._handleImageZoomClick(e)}
+           @touchend=${(e) => this._handleImageZoomTouchEnd(e)}
+      >
+        <img 
+          src="${this._mediaUrl}" 
+          alt="${this.config.title || 'Media'}"
+          @error=${this._onMediaError}
+          @load=${this._onMediaLoaded}
+          style="width: 100%; height: auto; display: block;"
+        />
+      </div>
     `;
   }
 
@@ -1987,6 +2029,72 @@ class MediaCard extends LitElement {
       ${positionIndicator}
       ${dotsIndicator}
     `;
+  }
+
+  // ===== Image Zoom Helpers =====
+  _handleImageZoomClick(e) {
+    // Only for images and when enabled
+    if (this._mediaType !== 'image') return;
+    if (this.config.enable_image_zoom !== true) return;
+
+    // If user configured tap_action, don't intercept
+    if (this.config.tap_action) return;
+
+    // Determine click point as percent within image container
+    const container = e.currentTarget;
+    const img = container.querySelector('img');
+    if (!img) return;
+
+    // Toggle zoom state
+    if (this._isImageZoomed) {
+      this._resetZoom(img);
+      return;
+    }
+
+    const rect = img.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+    // Use configured zoom level with bounds
+    const level = Math.max(1.5, Math.min(5.0, this.config.zoom_level || this._zoomLevel));
+    this._zoomToPoint(img, x, y, level);
+  }
+
+  _handleImageZoomTouchEnd(e) {
+    // Treat touch end as click for simplicity
+    if (e.changedTouches && e.changedTouches.length) {
+      const touch = e.changedTouches[0];
+      // Synthesize a click-like event object
+      const synthetic = {
+        currentTarget: e.currentTarget,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+      };
+      this._handleImageZoomClick(synthetic);
+    }
+  }
+
+  _zoomToPoint(img, xPercent, yPercent, level) {
+    this._isImageZoomed = true;
+    this._zoomOriginX = xPercent;
+    this._zoomOriginY = yPercent;
+    this._zoomLevel = level;
+
+    // Set host attribute for styling/cursor
+    this.setAttribute('data-image-zoomed', '');
+
+    // Apply transform
+    img.style.transformOrigin = `${xPercent}% ${yPercent}%`;
+    img.style.transform = `scale(${level})`;
+  }
+
+  _resetZoom(img) {
+    this._isImageZoomed = false;
+    this.removeAttribute('data-image-zoomed');
+    if (img) {
+      img.style.transformOrigin = '50% 50%';
+      img.style.transform = 'none';
+    }
   }
 
   _renderVideoInfo() {
@@ -2128,6 +2236,12 @@ class MediaCard extends LitElement {
     if (!this._mediaLoadedLogged) {
       this._log('Media loaded successfully:', this._mediaUrl);
       this._mediaLoadedLogged = true;
+    }
+    // Reset image zoom when a new image loads
+    if (this._mediaType === 'image') {
+      const container = this.renderRoot?.querySelector('.zoomable-container');
+      const img = container?.querySelector('img');
+      if (img) this._resetZoom(img);
     }
     // Clear any previous error states
     this._errorState = null;
@@ -2559,11 +2673,21 @@ class MediaCard extends LitElement {
   // Navigation zone event handlers
   _handlePrevClick(e) {
     e.stopPropagation();
+    // Reset zoom before navigating
+    try {
+      const img = this.renderRoot?.querySelector('.zoomable-container img');
+      if (img) this._resetZoom(img);
+    } catch {}
     this._navigatePrevious().catch(err => console.error('Navigation error:', err));
   }
 
   _handleNextClick(e) {
     e.stopPropagation(); 
+    // Reset zoom before navigating
+    try {
+      const img = this.renderRoot?.querySelector('.zoomable-container img');
+      if (img) this._resetZoom(img);
+    } catch {}
     this._navigateNext().catch(err => console.error('Navigation error:', err));
   }
 
@@ -3311,6 +3435,37 @@ class MediaCardEditor extends LitElement {
             </div>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">🖼️ Image Options</div>
+          
+          <div class="config-row">
+            <label>Enable Image Zoom</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.enable_image_zoom || false}
+                @change=${this._imageZoomChanged}
+              />
+              <div class="help-text">Click/tap on images to zoom in at that point</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Zoom Level</label>
+            <div>
+              <input
+                type="number"
+                min="1.5"
+                max="5.0"
+                step="0.5"
+                .value=${this._config.zoom_level || 2.0}
+                @change=${this._zoomLevelChanged}
+              />
+              <div class="help-text">How much to zoom when clicked (1.5x to 5.0x)</div>
+            </div>
+          </div>
+        </div>
 
         ${this._config.is_folder ? html`
           <div class="section">
@@ -4366,6 +4521,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   _videoMaxDurationChanged(ev) {
     const duration = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, video_max_duration: duration };
+    this._fireConfigChanged();
+  }
+
+  _imageZoomChanged(ev) {
+    this._config = { ...this._config, enable_image_zoom: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _zoomLevelChanged(ev) {
+    const level = parseFloat(ev.target.value) || 2.0;
+    this._config = { ...this._config, zoom_level: level };
     this._fireConfigChanged();
   }
 
