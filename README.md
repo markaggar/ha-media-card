@@ -1,13 +1,52 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card
+# HA Media Card 🎬
 
-A powerful custom Home Assistant Dashboard card that displays images and videos with advanced features including **folder-based media display**, **manual navigation controls**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **advanced folder management**, and **intelligent content prioritization**. Features include **folder-based media display**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
-## ✨ Features
+## 🚀 What's New in v2.0
+
+### 🎯 **Smart Slideshow System**
+- **Three slideshow behaviors**: `static`, `cycle`, and `smart_slideshow` modes
+- **New Content Prioritization**: Automatically interrupts slideshow to show new arrivals
+- **Intelligent Timing**: Context-aware advancement that respects content type
+- **Performance Protection**: Configurable slideshow window (default: 1000 files)
+
+### 🎬 **Video Completion Intelligence** 
+- **Auto-advance after completion**: Videos advance immediately when finished
+- **Smart wait detection**: Automatic handling of video duration vs refresh intervals
+- **Background playback optimization**: Pauses processing when tab is inactive
+
+### 🔍 **Image Zoom**
+- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
+- **Second Click/Tap**: Resets zoom back to normal
+- **Image-only**: Videos are unaffected
+- **Simple & Safe**: No pan/drag, minimal CSS transforms
+
+### 🎮 **Precision Navigation Controls**
+- **Focused click areas**: Small rectangular zones around actual buttons
+- **Top-right pause control**: Dedicated corner area for pause/resume
+- **Video-aware zones**: Navigation areas avoid video controls automatically
+- **Center action preservation**: Main area reserved for tap/hold actions
+
+### ⚡ **Performance Optimizations**
+- **Background activity management**: Pauses updates when not visible
+- **Large folder optimization**: Handles 1000+ file folders efficiently
+- **Smart caching**: Reduced API calls with intelligent content detection
+- **Enhanced Synology support**: Improved video detection and authentication
+
+## 🐛 **Bug Fixes**
+
+- Fixed media browser dialog not removing keydown event listeners
+- Fixed thumbnail timeout accumulation causing memory bloat
+- Fixed file extension detection for Synology shared space items
+- Fixed debug logging spam with large media collections
+- Enhanced error handling for thumbnail loading failures
+
+## ✨ Pre 2.0 Features
 
 ### 🎬 **Media Display**
 - **Images**: JPG, PNG, GIF, WebP, SVG, BMP
@@ -31,11 +70,13 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - **Visual Indicators**: Subtle navigation hints and current file position display
 - **Configurable Controls**: Enable/disable navigation features independently
 - **Smart Folder Awareness**: Navigation works seamlessly with folder modes
+- **Neutral Zone Pass-through**: When no actions are configured, clicks pass through the center to the image (for zoom)
 
 ### 📁 **Built-in Media Browser**
-
 - **GUI file selection** - No more typing file paths!
 - **Folder Mode Selection** - Choose between single file, latest, or random display
+- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling (v2.0)
+- **Multi-source Support** - Works with Synology DSM, local files, and other media sources
 - Browse through your Home Assistant media folders
 - Navigate subfolders with intuitive back/forward navigation
 
@@ -89,12 +130,6 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 YAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
 
-```yaml
-type: custom:media-card
-title: "Security Camera"
-media_type: image
-media_path: media-source://media_source/local/cameras/front_door.jpg
-```
 ## ⚙️ Configuration Options
 
 ### Basic Configuration
@@ -114,6 +149,8 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 |--------|------|---------|-------------|
 | `folder_mode` | string | `none` | `latest`, `random`, or `none` for single file |
 | `random_count` | number | `1` | Number of random files to cycle through |
+| `slideshow_behavior` | string | `static` | `static`, `cycle`, or `smart_slideshow` - Controls slideshow advancement behavior |
+| `slideshow_window` | number | `1000` | Number of files to include in slideshow (performance protection) |
 
 ### Navigation Controls
 | Option | Type | Default | Description |
@@ -150,27 +187,6 @@ The `aspect_mode` configuration helps optimize image display for different layou
 | `smart-scale` | Limits image height to 90% viewport, prevents scrolling | Panel layouts with mixed orientations |
 | `viewport-fit` | Scales image to fit entirely within viewport | Fullscreen panel layouts |
 | `viewport-fill` | Scales image to fill entire viewport (may crop) | Background/wallpaper displays |
-
-### **Panel Layout Examples**
-
-#### Smart Scale (Recommended for Panels)
-```yaml
-type: custom:media-card
-title: "Security Camera Feed"
-media_path: media-source://media_source/local/cameras/
-folder_mode: latest
-aspect_mode: smart-scale  # Prevents scrolling on tall images
-auto_refresh_seconds: 30
-```
-
-#### Viewport Fit (Full Panel Coverage)
-```yaml
-type: custom:media-card
-media_path: media-source://media_source/local/wallpapers/
-folder_mode: random
-aspect_mode: viewport-fit  # Fits entire image in viewport
-hide_title: true
-auto_refresh_seconds: 300
 ```
 
 ## �📝 Configuration Examples
@@ -191,22 +207,6 @@ enable_navigation_zones: true
 show_file_position: true
 ```
 
-#### Random Dashcam Clips
-
-```yaml
-type: custom:media-card
-title: "Random Dashcam Footage"
-media_type: video
-media_path: media-source://media_source/local/dashcam/
-folder_mode: random
-random_count: 5
-auto_refresh_seconds: 60
-video_autoplay: true
-video_muted: true
-enable_keyboard_navigation: true
-show_navigation_indicators: true
-```
-
 #### Family Photo Gallery with Navigation
 
 ```yaml
@@ -223,6 +223,54 @@ show_navigation_indicators: true
 show_file_position: true
 ```
 
+### 🚀 **New v2.0 Features Examples**
+
+#### Smart Slideshow with New Content Priority
+
+```yaml
+type: custom:media-card
+title: "Security Camera Smart Slideshow"
+media_type: image
+media_path: media-source://media_source/local/security/
+folder_mode: latest
+slideshow_behavior: smart_slideshow  # 🆕 Interrupts for new content
+slideshow_window: 500  # Process last 500 files for performance
+auto_refresh_seconds: 10
+enable_navigation_zones: true
+show_file_position: true
+```
+
+#### Video Gallery with Completion Auto-Advance
+
+```yaml
+type: custom:media-card
+title: "Dashcam Highlights"
+media_type: video
+media_path: media-source://media_source/local/dashcam/
+folder_mode: latest
+slideshow_behavior: cycle  # 🆕 Round-robin through content
+slideshow_window: 1000
+auto_refresh_seconds: 30  # Videos advance immediately when done
+video_autoplay: true
+video_muted: true
+enable_navigation_zones: true
+```
+
+#### Large Folder Performance Optimized
+
+```yaml
+type: custom:media-card
+title: "Photo Archive (1000+ files)"
+media_type: image
+media_path: media-source://media_source/local/photos/archive/
+folder_mode: random
+slideshow_behavior: static  # 🆕 Stay on current until manual change
+slideshow_window: 2000  # Handle large folders efficiently
+auto_refresh_seconds: 120
+enable_navigation_zones: true
+enable_keyboard_navigation: true
+```
+
 ### 📸 **Single File Examples**
 
 #### Security Camera Snapshot
@@ -234,19 +282,6 @@ media_type: image
 media_path: media-source://media_source/local/cameras/front_door.jpg
 auto_refresh_seconds: 30
 show_refresh_button: true
-```
-
-#### Dashcam Video
-
-```yaml
-type: custom:media-card
-title: "Latest Dashcam Footage"
-media_type: video
-media_path: media-source://media_source/local/dashcam/latest.mp4
-video_autoplay: true
-video_muted: true
-video_loop: true
-hide_video_controls_display: true
 ```
 
 ### 👆 **Interactive Media Card**
@@ -448,10 +483,11 @@ Note: For video - the media_content_type is video/mp4
 
 ## 🎮 **Navigation & Keyboard Shortcuts**
 
-### **Mouse/Touch Navigation**
-- **Left Click Zone**: Click the left 25% of the media to go to previous file
-- **Right Click Zone**: Click the right 25% of the media to go to next file
-- **Center Click**: Pause/Resume auto-refresh (random mode only)
+### **Mouse/Touch Navigation** 🆕 v2.0 Precision Controls
+- **Previous Button**: Small rectangular zone on the left side (80px × 120px)
+- **Next Button**: Small rectangular zone on the right side (80px × 120px)  
+- **Pause/Resume**: Top-right corner button (60px × 60px)
+- **Main Action Area**: Large center region for tap/hold actions (avoids video controls)
 
 ### **Keyboard Controls**
 
@@ -512,6 +548,26 @@ Note: For video - the media_content_type is video/mp4
 3. **Console errors** - Look for JavaScript errors in browser console
 4. **HACS installation** - Ensure proper installation through HACS or manual setup
 
+### 🆕 v2.0 Features Not Working?
+
+#### Smart Slideshow Issues
+1. **Check slideshow_behavior** - Must be set to `smart_slideshow` for new content prioritization
+2. **Slideshow window size** - Large folders may need `slideshow_window` adjustment (default: 1000)
+3. **New content detection** - Requires folder refresh interval (`auto_refresh_seconds > 0`)
+4. **Console debugging** - Check browser console for slideshow behavior logs
+
+#### Video Completion Auto-Advance
+1. **Video format support** - MP4, WebM, OGG formats supported for completion detection
+2. **Auto-refresh enabled** - Requires `auto_refresh_seconds > 0` for advancement
+3. **Browser compatibility** - Modern browsers required for video event handling
+4. **Background tab behavior** - Auto-advance pauses when tab is inactive (performance feature)
+
+#### Precision Navigation Controls
+1. **Navigation zones enabled** - Set `enable_navigation_zones: true`
+2. **Hover indicators** - Look for button symbols when hovering over navigation areas
+3. **Video controls conflict** - Navigation automatically avoids video control areas
+4. **Touch device testing** - Test with mouse/touch to verify button responsiveness
+
 ## 🤝 Contributing
 
 Found a bug or want to contribute? Great! 
@@ -529,9 +585,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Home Assistant community for inspiration and support
 - Lit Element for the excellent web component framework
 - All users who provide feedback and suggestions
-
----
-
-**Enjoy your new Media Card!** 🎉
 
 If you find this card useful, please consider giving it a ⭐ on GitHub!
