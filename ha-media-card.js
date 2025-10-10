@@ -3846,9 +3846,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       z-index: 999999999 !important;
     `;
 
-    // Dialog close function with debugging
+    // Dialog close function with debugging and proper cleanup
     const closeDialog = () => {
       this._log('Closing media browser dialog');
+      // CRITICAL: Remove keydown event listener to prevent memory leak
+      document.removeEventListener('keydown', handleKeydown);
       if (dialog && dialog.parentNode) {
         document.body.removeChild(dialog);
         this._log('Dialog closed successfully');
@@ -3870,12 +3872,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     };
 
-    // Escape key to close
+    // Escape key to close - defined after closeDialog to avoid hoisting issues
     const handleKeydown = (e) => {
       if (e.key === 'Escape') {
         this._log('Escape key pressed');
-        closeDialog();
-        document.removeEventListener('keydown', handleKeydown);
+        closeDialog(); // closeDialog now handles the cleanup
       }
     };
     document.addEventListener('keydown', handleKeydown);
@@ -4432,11 +4433,19 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           transition: opacity 0.3s ease !important;
         `;
         
+        // CRITICAL: Store timeout reference to prevent memory leak
+        let timeoutId;
+        
         thumbnail.onload = () => {
           // Success! Replace loading indicator with thumbnail
           container.innerHTML = '';
           thumbnail.style.opacity = '1';
           container.appendChild(thumbnail);
+          // CRITICAL: Clear timeout to prevent memory leak
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
           if (shouldLog) {
             this._log('✅ Thumbnail loaded successfully:', item.media_content_id);
           }
@@ -4445,6 +4454,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         thumbnail.onerror = () => {
           // Failed to load - show fallback icon
           this._showThumbnailFallback(container, '🖼️', 'Image thumbnail failed to load');
+          // CRITICAL: Clear timeout to prevent memory leak
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
           if (shouldLog) {
             this._log('❌ Thumbnail failed to load:', item.media_content_id);
           }
@@ -4453,14 +4467,15 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         // Set source to start loading
         thumbnail.src = thumbnailUrl;
         
-        // Timeout fallback (in case image takes too long)
-        setTimeout(() => {
+        // Timeout fallback (in case image takes too long) - store reference for cleanup
+        timeoutId = setTimeout(() => {
           if (thumbnail.style.opacity === '0') {
             this._showThumbnailFallback(container, '🖼️', 'Image thumbnail timeout');
             if (shouldLog) {
               this._log('⏰ Thumbnail timeout:', item.media_content_id);
             }
           }
+          timeoutId = null; // Clear reference after execution
         }, 5000);
         
       } else {
