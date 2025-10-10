@@ -38,6 +38,14 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - **Smart caching**: Reduced API calls with intelligent content detection
 - **Enhanced Synology support**: Improved video detection and authentication
 
+## 🐛 **Bug Fixes**
+
+- Fixed media browser dialog not removing keydown event listeners
+- Fixed thumbnail timeout accumulation causing memory bloat
+- Fixed file extension detection for Synology shared space items
+- Fixed debug logging spam with large media collections
+- Enhanced error handling for thumbnail loading failures
+
 ## ✨ Pre 2.0 Features
 
 ### 🎬 **Media Display**
