@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.0.0
+ * Version: 2.2b4 - Fixed Auth Signature Cleanup
  */
 
 // Import Lit from CDN for standalone usage
@@ -18,7 +18,8 @@ class MediaCard extends LitElement {
     _folderContents: { state: true },
     _currentMediaIndex: { state: true },
     _lastRefreshTime: { state: true },
-    _isPaused: { state: true }
+    _isPaused: { state: true },
+    _currentMetadata: { state: true }
   };
 
   constructor() {
@@ -34,6 +35,7 @@ class MediaCard extends LitElement {
     this._recentlyShown = null; // Smart cycling tracking for small collections
     this._pausedForNavigation = false;
     this._isPaused = false;
+    this._currentMetadata = null; // Current media metadata (folder, filename, date)
     this._urlCreatedTime = 0; // Track when current URL was created
     this._debugMode = true; // Enable debug logging for thumbnail development
     this._initializationInProgress = false; // Prevent multiple initializations
@@ -146,6 +148,160 @@ class MediaCard extends LitElement {
 
   _isLatestMode() {
     return this._isFolderMode('latest');
+  }
+
+  // Path cleaning utility
+  _cleanPath(path) {
+    if (!path) return path;
+    
+    let cleanPath = path;
+    
+    // Remove auth signatures (case-insensitive)
+    if (cleanPath.includes('?authsig=')) {
+      cleanPath = cleanPath.split('?authsig=')[0];
+    } else if (cleanPath.includes('?authSig=')) {
+      cleanPath = cleanPath.split('?authSig=')[0];
+    }
+    
+    return cleanPath;
+  }
+
+  // Metadata extraction utilities
+  _extractMetadataFromPath(mediaPath, folderContents) {
+    if (!mediaPath) return {};
+    
+    // Clean the path first
+    const cleanedPath = this._cleanPath(mediaPath);
+    const metadata = {};
+    
+    // Extract filename and clean it up
+    const pathParts = cleanedPath.split('/');
+    let filename = pathParts[pathParts.length - 1];
+    
+    // Decode URL encoding (%20 -> space, etc.)
+    try {
+      filename = decodeURIComponent(filename);
+    } catch (e) {
+      // If decoding fails, use the original filename
+      this._log('⚠️ Failed to decode filename:', filename, e);
+    }
+    
+    metadata.filename = filename;
+    
+    // Extract folder name (parent directory)
+    if (pathParts.length > 1) {
+      let folder = pathParts[pathParts.length - 2];
+      
+      // Decode URL encoding for folder name too
+      try {
+        folder = decodeURIComponent(folder);
+      } catch (e) {
+        // If decoding fails, use the original folder name
+        this._log('⚠️ Failed to decode folder name:', folder, e);
+      }
+      
+      metadata.folder = folder;
+    }
+    
+    // Try to extract date from cleaned filename (multiple formats)
+    const dateFromFilename = this._extractDateFromFilename(filename);
+    if (dateFromFilename) {
+      metadata.date = dateFromFilename;
+    }
+    
+    // Try to get file modification date from folder contents
+    if (folderContents && folderContents.children) {
+      const fileItem = folderContents.children.find(child => 
+        child.media_content_id === mediaPath || child.title === filename
+      );
+      if (fileItem && fileItem.thumbnail) {
+        // Some HA integrations include timestamp in thumbnail URL
+        const timestampFromThumbnail = this._extractTimestampFromUrl(fileItem.thumbnail);
+        if (timestampFromThumbnail && !metadata.date) {
+          metadata.date = new Date(timestampFromThumbnail);
+        }
+      }
+    }
+    
+    this._log('📊 Extracted metadata from', mediaPath, ':', metadata);
+    return metadata;
+  }
+
+  _extractDateFromFilename(filename) {
+    if (!filename) return null;
+    
+    // Common date patterns in filenames
+    const patterns = [
+      // YYYY-MM-DD format
+      /(\d{4})-(\d{2})-(\d{2})/,
+      // YYYYMMDD format  
+      /(\d{4})(\d{2})(\d{2})/,
+      // MM-DD-YYYY format
+      /(\d{2})-(\d{2})-(\d{4})/,
+      // DD-MM-YYYY format (less common but possible)
+      /(\d{2})-(\d{2})-(\d{4})/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = filename.match(pattern);
+      if (match) {
+        let year, month, day;
+        
+        if (pattern.source.includes('(\\d{4})-(\\d{2})-(\\d{2})') || 
+            pattern.source.includes('(\\d{4})(\\d{2})(\\d{2})')) {
+          // YYYY-MM-DD or YYYYMMDD
+          year = parseInt(match[1]);
+          month = parseInt(match[2]) - 1; // JS Date months are 0-indexed
+          day = parseInt(match[3]);
+        } else {
+          // MM-DD-YYYY format
+          month = parseInt(match[1]) - 1;
+          day = parseInt(match[2]);
+          year = parseInt(match[3]);
+        }
+        
+        const date = new Date(year, month, day);
+        if (!isNaN(date.getTime()) && year > 1900 && year < 2100) {
+          return date;
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  _extractTimestampFromUrl(url) {
+    if (!url) return null;
+    
+    // Look for timestamp parameters in URLs
+    const timestampPattern = /[?&]t=(\d+)/;
+    const match = url.match(timestampPattern);
+    if (match) {
+      return parseInt(match[1]) * 1000; // Convert to milliseconds
+    }
+    
+    return null;
+  }
+
+  _formatMetadataDisplay(metadata) {
+    if (!metadata || !this.config.metadata) return '';
+    
+    const parts = [];
+    
+    if (this.config.metadata.show_folder && metadata.folder) {
+      parts.push(`📁 ${metadata.folder}`);
+    }
+    
+    if (this.config.metadata.show_filename && metadata.filename) {
+      parts.push(`📄 ${metadata.filename}`);
+    }
+    
+    if (this.config.metadata.show_date && metadata.date) {
+      const dateStr = metadata.date.toLocaleDateString();
+      parts.push(`📅 ${dateStr}`);
+    }
+    
+    return parts.join(' • ');
   }
 
   _isRandomMode() {
@@ -334,6 +490,46 @@ class MediaCard extends LitElement {
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(-4px); }
       to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Metadata overlay */
+    .metadata-overlay {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      line-height: 1.2;
+      pointer-events: none;
+      z-index: 11;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      animation: fadeIn 0.3s ease;
+      max-width: calc(100% - 16px);
+      word-break: break-word;
+    }
+
+    /* Metadata positioning */
+    .metadata-overlay.metadata-bottom-left {
+      bottom: 8px;
+      left: 8px;
+    }
+
+    .metadata-overlay.metadata-bottom-right {
+      bottom: 8px;
+      right: 8px;
+    }
+
+    .metadata-overlay.metadata-top-left {
+      top: 8px;
+      left: 8px;
+    }
+
+    .metadata-overlay.metadata-top-right {
+      top: 8px;
+      right: 8px;
     }
 
     /* Navigation Zones */
@@ -540,11 +736,22 @@ class MediaCard extends LitElement {
     
     this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
     
-    this.config = config;
+    // Create new config object with metadata defaults
+    this.config = {
+      ...config,
+      metadata: {
+        show_folder: config.metadata?.show_folder !== false, // Default: true
+        show_filename: config.metadata?.show_filename !== false, // Default: true  
+        show_date: config.metadata?.show_date !== false, // Default: true
+        position: config.metadata?.position || 'bottom-left', // Default: bottom-left
+        ...config.metadata
+      }
+    };
     
     // Apply debug mode from config
-    this._debugMode = config.debug_mode === true;
+    this._debugMode = this.config.debug_mode === true;
     this._log('🔧 Debug mode:', this._debugMode ? 'ENABLED' : 'disabled');
+    this._log('🔧 Metadata config:', this.config.metadata);
     
     // Set aspect ratio mode data attribute for CSS styling
     const aspectMode = config.aspect_mode || 'default';
@@ -676,7 +883,7 @@ class MediaCard extends LitElement {
       if (selectedFile && selectedIndex >= 0) {
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
         if (resolvedUrl !== this._mediaUrl) {
-          this._setMediaUrl(resolvedUrl);
+          this._setMediaUrl(resolvedUrl, selectedFile.media_content_id);
           this._currentMediaIndex = selectedIndex;
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = Date.now(); // Set initial refresh time
@@ -1688,7 +1895,7 @@ class MediaCard extends LitElement {
     return mediaPath;
   }
 
-  _setMediaUrl(newUrl) {
+  _setMediaUrl(newUrl, mediaPath = null) {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
@@ -1696,6 +1903,15 @@ class MediaCard extends LitElement {
       if (this._retryAttempts.has(newUrl)) {
         this._retryAttempts.delete(newUrl);
       }
+      
+      // Extract metadata from the media path, clean it first
+      if (mediaPath || newUrl) {
+        const pathToAnalyze = this._cleanPath(mediaPath || newUrl);
+        this._currentMetadata = this._extractMetadataFromPath(pathToAnalyze, this._folderContents);
+      } else {
+        this._currentMetadata = null;
+      }
+      
       this._log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
     }
   }
@@ -1745,6 +1961,7 @@ class MediaCard extends LitElement {
           ${this._renderNavigationIndicators()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
           ${this._renderPauseIndicator()}
+          ${this._renderMetadataOverlay()}
         </div>
       </div>
     `;
@@ -1770,6 +1987,27 @@ class MediaCard extends LitElement {
 
     return html`
       <div class="pause-indicator">⏸️</div>
+    `;
+  }
+
+  _renderMetadataOverlay() {
+    // Only show if metadata is configured and available
+    if (!this.config.metadata || !this._currentMetadata) {
+      return html``;
+    }
+
+    const metadataText = this._formatMetadataDisplay(this._currentMetadata);
+    if (!metadataText) {
+      return html``;
+    }
+
+    const position = this.config.metadata.position || 'bottom-left';
+    const positionClass = `metadata-${position}`;
+
+    return html`
+      <div class="metadata-overlay ${positionClass}">
+        ${metadataText}
+      </div>
     `;
   }
 
@@ -3562,7 +3800,60 @@ class MediaCardEditor extends LitElement {
         ` : ''}
 
         <div class="section">
-          <div class="section-title">👆 Interactions</div>
+          <div class="section-title">� Metadata Display</div>
+          
+          <div class="config-row">
+            <label>Show Folder Name</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_folder !== false}
+                @change=${this._metadataShowFolderChanged}
+              />
+              <div class="help-text">Display the parent folder name</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Show File Name</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_filename !== false}
+                @change=${this._metadataShowFilenameChanged}
+              />
+              <div class="help-text">Display the media file name</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Show Date</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_date !== false}
+                @change=${this._metadataShowDateChanged}
+              />
+              <div class="help-text">Display the file date (if available in filename)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Metadata Position</label>
+            <div>
+              <select @change=${this._metadataPositionChanged} .value=${this._config.metadata?.position || 'bottom-left'}>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="top-left">Top Left</option>
+                <option value="top-right">Top Right</option>
+              </select>
+              <div class="help-text">Where to display the metadata overlay</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">�👆 Interactions</div>
           
           <div class="config-row">
             <label>Tap Action</label>
@@ -4806,6 +5097,51 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     } else {
       this._config = { ...this._config, double_tap_action: { action } };
     }
+    this._fireConfigChanged();
+  }
+
+  // Metadata configuration event handlers
+  _metadataShowFolderChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_folder: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _metadataShowFilenameChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_filename: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _metadataShowDateChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_date: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _metadataPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        position: ev.target.value
+      }
+    };
     this._fireConfigChanged();
   }
 
