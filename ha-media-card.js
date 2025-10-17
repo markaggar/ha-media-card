@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b20 - Fixed folderInfo Variable Scoping Bug
+ * Version: 2.3b22 - Fixed Scanning Completion & Timeout Handling
  */
 
 // Import Lit from CDN for standalone usage
@@ -3593,54 +3593,46 @@ class SubfolderQueue {
       const basePath = this.card.config.media_path;
       if (!basePath) {
         this._log('❌ No base media path configured');
+        this.isScanning = false;
         return false;
       }
 
       this._log('🔍 Discovering subfolders from base path:', basePath, 'max depth:', this.config.scan_depth);
       
-      // Progressive scanning: start with depth 1, then expand
+      // Use a progressive approach - scan what we can and complete even if some folders timeout
       let subfolders = [];
       
       try {
-        // First, try a quick depth-1 scan with longer timeout for large folder structures
-        this._log('🚀 Quick depth-1 scan...');
-        const quickScanTimeout = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Quick scan timeout')), 30000) // Increased timeout
-        );
+        // Try a scan with reasonable timeout
+        this._log('🚀 Starting folder discovery scan...');
         
-        subfolders = await Promise.race([
-          this.discoverSubfolders(basePath, 0), // This will scan to configured depth
-          quickScanTimeout
-        ]);
+        // Set up a timeout that will force completion after a reasonable time
+        const forceCompleteTimeout = setTimeout(() => {
+          this._log('⚠️ Forcing scan completion due to timeout');
+          this.isScanning = false;
+        }, 60000); // 60 seconds absolute maximum
         
-        this._log('✅ Scan completed successfully with', subfolders.length, 'folders');
+        subfolders = await this.discoverSubfolders(basePath, 0);
+        
+        clearTimeout(forceCompleteTimeout);
+        this._log('✅ Folder discovery completed with', subfolders.length, 'folders');
         
       } catch (error) {
-        this._log('⚠️ Full recursive scan failed:', error.message);
-        
-        // Fallback: just get immediate subfolders (depth 1 only)
-        this._log('🔄 Falling back to depth-1 only scan...');
-        try {
-          subfolders = await this.discoverSubfolders(basePath, 0, 1); // Force max depth 1
-        } catch (fallbackError) {
-          this._log('❌ Even fallback scan failed:', fallbackError.message);
-          subfolders = [];
-        }
+        this._log('⚠️ Folder discovery failed:', error.message);
+        subfolders = [];
       }
       
+      // Always complete the scan regardless of results
+      this.isScanning = false;
+      
       if (subfolders.length === 0) {
-        this._log('⚠️ No subfolders found, falling back to normal mode');
+        this._log('⚠️ No subfolders found, subfolder queue disabled');
         return false;
       }
 
       // Store discovered folders for later refills
       this.discoveredFolders = subfolders;
-      this._log('📁 Found', subfolders.length, 'subfolders, processing first', this.config.initial_scan_limit);
-      
-      if (subfolders.length === 0) {
-        this._log('❌ No usable folders found');
-        return false;
-      }
+      this._log('📁 Found', subfolders.length, 'subfolders total, processing first', this.config.initial_scan_limit);
       
       // Process first N folders - prioritize large folders that were successfully scanned
       const sortedFolders = [...subfolders].sort((a, b) => b.fileCount - a.fileCount);
@@ -3662,9 +3654,8 @@ class SubfolderQueue {
       
     } catch (error) {
       this._log('❌ Quick scan failed:', error);
-      return false;
-    } finally {
       this.isScanning = false;
+      return false;
     }
   }
 
@@ -3738,30 +3729,32 @@ class SubfolderQueue {
           if (currentDepth + 1 < maxDepth) {
             this._log('� Recursing into:', dir.title, 'next depth:', currentDepth + 2);
             
-            // Recursive call with adaptive timeout based on folder size
-            if (folderInfo.fileCount > 10000) {
-              // Skip recursion for ultra-massive folders to prevent timeouts
-              this._log('⚡ Skipping recursion for ultra-massive folder to prevent timeout:', dir.title);
+            // Skip recursion for large folders to prevent timeouts and hangs
+            if (folderInfo.fileCount > 3000) {
+              this._log('⚡ Skipping recursion for large folder (performance):', dir.title, 'files:', folderInfo.fileCount);
             } else {
-              let recursiveTimeoutMs = 10000; // Default 10 seconds
-              if (folderInfo.fileCount > 5000) {
-                recursiveTimeoutMs = 60000; // 60 seconds for massive folders
-              } else if (folderInfo.fileCount > 1000) {
-                recursiveTimeoutMs = 30000; // 30 seconds for large folders
+              this._log('🔄 Recursing into:', dir.title, 'next depth:', currentDepth + 2, 'files:', folderInfo.fileCount);
+              
+              try {
+                // Simple recursive call with timeout
+                const recursiveTimeout = new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error(`Recursive timeout: ${dir.title}`)), 15000) // 15 seconds max
+                );
+                
+                const nestedFolders = await Promise.race([
+                  this.discoverSubfolders(dir.media_content_id, currentDepth + 1, maxDepth),
+                  recursiveTimeout
+                ]);
+                
+                if (nestedFolders && nestedFolders.length > 0) {
+                  this._log('📂 Found', nestedFolders.length, 'nested folders in:', dir.title);
+                  allSubfolders.push(...nestedFolders);
+                }
+                
+              } catch (recursiveError) {
+                this._log('⚠️ Recursive scan failed for:', dir.title, recursiveError.message);
+                // Continue processing other folders - don't let one failure stop everything
               }
-              
-              const recursiveTimeout = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error(`Recursive timeout: ${dir.title}`)), recursiveTimeoutMs)
-              );
-              
-              this._log('🔄 Recursing with', recursiveTimeoutMs/1000, 'second timeout for', folderInfo.fileCount, 'files');
-              
-              const nestedFolders = await Promise.race([
-                this.discoverSubfolders(dir.media_content_id, currentDepth + 1),
-                recursiveTimeout
-              ]);
-              
-              allSubfolders.push(...nestedFolders);
             }
           }
           
@@ -4137,14 +4130,15 @@ class SubfolderQueue {
       }
     }
 
-    // Find first unshown item
-    let unshownCount = 0;
+    // Find first unshown item and remove it from queue
     for (let i = 0; i < this.queue.length; i++) {
       const item = this.queue[i];
       if (!this.shownItems.has(item.media_content_id)) {
-        unshownCount++;
+        // Add to blacklist and remove from queue
         this.shownItems.add(item.media_content_id);
-        this._log('✅ Served item from queue:', item.title, 'remaining unshown:', this.getRemainingCount());
+        this.queue.splice(i, 1); // Remove item from queue permanently
+        
+        this._log('✅ Served and removed from queue:', item.title, 'queue size now:', this.queue.length);
         
         // Check if we need to refill queue
         if (this.needsRefill()) {
@@ -4156,7 +4150,7 @@ class SubfolderQueue {
       }
     }
 
-    this._log('⚠️ All queue items have been shown (' + this.shownItems.size + ' total), clearing exclusions and refilling');
+    this._log('⚠️ Queue is empty or all items shown (' + this.shownItems.size + ' total), clearing blacklist and refilling');
     this.clearShownItems();
     this.refillQueue();
     
@@ -4164,7 +4158,8 @@ class SubfolderQueue {
     if (this.queue.length > 0) {
       const item = this.queue[0];
       this.shownItems.add(item.media_content_id);
-      this._log('✅ Served item after refill:', item.title);
+      this.queue.splice(0, 1); // Remove from queue
+      this._log('✅ Served item after refill:', item.title, 'queue size now:', this.queue.length);
       return item;
     }
     
@@ -4172,14 +4167,14 @@ class SubfolderQueue {
     return null;
   }
 
-  // Get count of remaining unshown items
+  // Get count of remaining items in queue (all items are unshown now)
   getRemainingCount() {
-    return this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
+    return this.queue.length; // Since we remove items when shown, all remaining items are unshown
   }
 
   // Check if queue needs refilling
   needsRefill() {
-    return this.getRemainingCount() < 5; // Refill when < 5 items left
+    return this.queue.length < 5; // Refill when < 5 items left
   }
 
   // Clear shown items tracking (reset exclusions)
