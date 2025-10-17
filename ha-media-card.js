@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.2b4 - Fixed Auth Signature Cleanup
+ * Version: 2.3b20 - Fixed folderInfo Variable Scoping Bug
  */
 
 // Import Lit from CDN for standalone usage
@@ -50,6 +50,9 @@ class MediaCard extends LitElement {
     this._slideshowPosition = 0; // Current position in slideshow sequence
     this._newContentQueue = []; // Queue of new files to show with priority
     this._showingNewContent = false; // Are we currently showing priority new content?
+    
+    // Subfolder queue system
+    this._subfolderQueue = null; // Will be initialized when needed
     this._lastKnownNewest = null; // Track newest file to detect new arrivals
     this._lastKnownFolderSize = null; // Track folder size to detect new content in random mode
     this._slideshowFiles = []; // Cached list of files for slideshow (latest: newest N, random: performance subset)
@@ -302,6 +305,15 @@ class MediaCard extends LitElement {
     }
     
     return parts.join(' • ');
+  }
+
+  // Initialize subfolder queue if needed
+  _initializeSubfolderQueue() {
+    if (!this._subfolderQueue && this.config.subfolder_queue?.enabled) {
+      this._log('🚀 Initializing subfolder queue system');
+      this._subfolderQueue = new SubfolderQueue(this);
+    }
+    return this._subfolderQueue;
   }
 
   _isRandomMode() {
@@ -745,6 +757,14 @@ class MediaCard extends LitElement {
         show_date: config.metadata?.show_date !== false, // Default: true
         position: config.metadata?.position || 'bottom-left', // Default: bottom-left
         ...config.metadata
+      },
+      subfolder_queue: {
+        enabled: config.subfolder_queue?.enabled || false, // Default: disabled for now
+        scan_depth: config.subfolder_queue?.scan_depth || 2, // Default: 2 levels deep
+        queue_size: config.subfolder_queue?.queue_size || 30,
+        initial_scan_limit: config.subfolder_queue?.initial_scan_limit || 10,
+        priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
+        ...config.subfolder_queue
       }
     };
     
@@ -825,16 +845,26 @@ class MediaCard extends LitElement {
     const refreshSeconds = this.config?.auto_refresh_seconds;
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       this._log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
-      this._refreshInterval = setInterval(() => {
-        // Check both pause states before running
-        if (!this._isPaused && !this._backgroundPaused) {
-          this._log('🔄 Auto-refresh timer triggered - active');
-          this._checkForMediaUpdates();
-        } else {
-          this._log('🔄 Auto-refresh skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
-        }
-      }, refreshSeconds * 1000);
-      this._log('🔄 Auto-refresh interval created with ID:', this._refreshInterval);
+      
+      // For folder mode, short delay to allow initial queue setup
+      const startDelay = this.config?.is_folder ? 8000 : 0; // 8 second delay for folder mode
+      
+      setTimeout(() => {
+        this._refreshInterval = setInterval(() => {
+          // Check both pause states before running
+          if (!this._isPaused && !this._backgroundPaused) {
+            this._log('🔄 Auto-refresh timer triggered - active');
+            this._checkForMediaUpdates();
+          } else {
+            this._log('🔄 Auto-refresh skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
+          }
+        }, refreshSeconds * 1000);
+        this._log('🔄 Auto-refresh interval created with ID:', this._refreshInterval);
+      }, startDelay);
+      
+      if (startDelay > 0) {
+        this._log('🔄 Auto-refresh will start in', startDelay / 1000, 'seconds to allow initialization');
+      }
     } else {
       this._log('🔄 Auto-refresh disabled or not configured:', {
         refreshSeconds,
@@ -856,7 +886,32 @@ class MediaCard extends LitElement {
     try {
       this._log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
       
-      // Scan folder contents
+      // Initialize subfolder queue if enabled and in random mode
+      if (this.config.subfolder_queue?.enabled && this._isRandomMode()) {
+        this._log('🚀 Initializing subfolder queue for random mode');
+        this._initializeSubfolderQueue();
+        if (this._subfolderQueue) {
+          const queueInitialized = await this._subfolderQueue.initialize();
+          if (queueInitialized) {
+            this._log('✅ Subfolder queue successfully initialized');
+            // Use queue for initial media selection
+            const randomResult = this._getRandomFileWithIndex();
+            if (randomResult && randomResult.file) {
+              this._log('📂 Using subfolder queue for initial media selection');
+              await this._loadMediaFromItem(randomResult.file);
+              this._lastRefreshTime = Date.now();
+              return; // Exit early - queue handled the selection
+            } else {
+              this._log('⚠️ Subfolder queue failed to provide initial item, falling back to normal mode');
+            }
+          } else {
+            this._log('⚠️ Subfolder queue initialization failed, using normal mode');
+          }
+        }
+      }
+      
+      // Fallback: scan folder contents for normal mode or queue failures
+      this._log('📁 Scanning root folder contents (fallback mode)');
       await this._scanFolderContents();
       
       if (!this._folderContents || this._folderContents.length === 0) {
@@ -866,7 +921,7 @@ class MediaCard extends LitElement {
         return;
       }
 
-      // Select media based on mode
+      // Select media based on mode (fallback for non-queue modes or queue failures)
       let selectedFile;
       let selectedIndex = 0;
       
@@ -948,7 +1003,20 @@ class MediaCard extends LitElement {
     }
     
     try {
-      // Rescan folder contents
+      // If subfolder queue is active, use it instead of scanning folder contents
+      if (this._subfolderQueue && this._subfolderQueue.config.enabled && this._isRandomMode()) {
+        this._log('🔄 Using subfolder queue for refresh');
+        const randomResult = this._getRandomFileWithIndex(true);
+        if (randomResult && randomResult.file) {
+          await this._loadMediaFromItem(randomResult.file);
+          this._lastRefreshTime = Date.now();
+          return;
+        } else {
+          this._log('⚠️ Subfolder queue failed during refresh, falling back to folder scan');
+        }
+      }
+      
+      // Fallback: rescan folder contents
       await this._scanFolderContents();
       
       if (!this._folderContents || this._folderContents.length === 0) {
@@ -1487,6 +1555,18 @@ class MediaCard extends LitElement {
   }
 
   _getRandomFileWithIndex(avoidCurrent = false) {
+    // Try to use subfolder queue if available and enabled
+    if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
+      const queueItem = this._subfolderQueue.getNextItem();
+      if (queueItem) {
+        this._log('🚀 Using item from subfolder queue:', queueItem.title, 'from path:', queueItem.media_content_id);
+        // When using queue, don't map to folder contents index - queue items may be from different folders
+        return { file: queueItem, index: -1 }; // Use -1 to indicate this is a queue item
+      } else {
+        this._log('⚠️ Queue empty, falling back to normal random selection');
+      }
+    }
+
     if (!this._folderContents || this._folderContents.length === 0) {
       return { file: null, index: 0 };
     }
@@ -3054,12 +3134,29 @@ class MediaCard extends LitElement {
   }
 
   async _navigatePrevious() {
+    // If subfolder queue is enabled, use queue for previous item (same as next in random mode)
+    if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
+      this._log('🔄 Navigate Previous: Using subfolder queue');
+      
+      // Handle auto-advance mode
+      this._handleAutoAdvanceMode();
+      
+      const randomResult = this._getRandomFileWithIndex(true);
+      if (randomResult && randomResult.file) {
+        await this._loadMediaFromItem(randomResult.file);
+        return;
+      } else {
+        this._log('⚠️ Queue navigation failed, falling back to folder navigation');
+      }
+    }
+    
+    // Fallback to standard folder navigation
     if (!this._folderContents || this._folderContents.length <= 1) return;
     
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
     
-    this._log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
+    this._log(`🔄 Navigate Previous (folder): ${currentIndex} -> ${newIndex}`);
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
@@ -3068,12 +3165,29 @@ class MediaCard extends LitElement {
   }
 
   async _navigateNext() {
+    // If subfolder queue is enabled, use queue for next item
+    if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
+      this._log('🔄 Navigate Next: Using subfolder queue');
+      
+      // Handle auto-advance mode
+      this._handleAutoAdvanceMode();
+      
+      const randomResult = this._getRandomFileWithIndex(true);
+      if (randomResult && randomResult.file) {
+        await this._loadMediaFromItem(randomResult.file);
+        return;
+      } else {
+        this._log('⚠️ Queue navigation failed, falling back to folder navigation');
+      }
+    }
+    
+    // Fallback to standard folder navigation
     if (!this._folderContents || this._folderContents.length <= 1) return;
     
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
     
-    this._log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
+    this._log(`🔄 Navigate Next (folder): ${currentIndex} -> ${newIndex}`);
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
@@ -3175,22 +3289,31 @@ class MediaCard extends LitElement {
     if (!this._folderContents || index < 0 || index >= this._folderContents.length) return;
     
     const item = this._folderContents[index];
+    await this._loadMediaFromItem(item, index);
+  }
+
+  async _loadMediaFromItem(item, index = -1) {
+    if (!item) return;
     
-    this._log(`📂 Loading media at index ${index}:`, item.title);
+    this._log(`📂 Loading media item:`, item.title);
     
     try {
       const mediaUrl = await this._resolveMediaPath(item.media_content_id);
+      
+      // Extract metadata from the item and its path
+      const metadata = this._extractMetadataFromPath(mediaUrl, null);
       
       // Update current media
       this._mediaUrl = mediaUrl;
       this._mediaType = this._detectFileType(item.title) || 'image'; // Default to image if unknown
       this.setAttribute('data-media-type', this._mediaType);
-      this._currentMediaIndex = index;
+      this._currentMediaIndex = index >= 0 ? index : (this._folderContents ? this._folderContents.findIndex(f => f.media_content_id === item.media_content_id) : -1);
+      this._currentMetadata = metadata;
       
       // Force re-render
       this.requestUpdate();
     } catch (error) {
-      console.error('Error loading media at index:', index, error);
+      console.error('Error loading media item:', item.title, error);
     }
   }
 
@@ -3352,6 +3475,747 @@ class MediaCard extends LitElement {
       enable_keyboard_navigation: true,
       auto_advance_mode: 'pause'
     };
+  }
+}
+
+// Subfolder Queue System for Random Mode
+class SubfolderQueue {
+  constructor(card) {
+    this.card = card;
+    this.config = card.config.subfolder_queue;
+    this.queue = [];
+    this.shownItems = new Set();
+    this.discoveredFolders = [];
+    this.folderWeights = new Map();
+    this.isScanning = false;
+    this.scanProgress = { current: 0, total: 0 };
+    
+    this._log('🚀 SubfolderQueue initialized with config:', this.config);
+    this._log('📋 Priority patterns configured:', this.config.priority_folder_patterns);
+  }
+
+  _log(...args) {
+    if (this.card._debugMode) {
+      console.log('📂 SubfolderQueue:', ...args);
+    }
+  }
+
+  // Calculate weight multiplier based on folder path patterns
+  getPathWeightMultiplier(folderPath) {
+    let multiplier = 1.0;
+    
+    if (this.config.priority_folder_patterns.length === 0) {
+      this._log('⚠️ No priority patterns configured');
+      return multiplier;
+    }
+    
+    this._log('🔍 Checking path:', folderPath, 'against', this.config.priority_folder_patterns.length, 'patterns');
+    
+    for (const pattern of this.config.priority_folder_patterns) {
+      const patternPath = pattern.path || pattern; // Handle both old and new format
+      this._log('  • Testing pattern:', patternPath, 'against path:', folderPath);
+      
+      if (folderPath.includes(patternPath)) {
+        multiplier = Math.max(multiplier, pattern.weight_multiplier || 3.0);
+        this._log('✨ Path weight match:', folderPath, 'pattern:', patternPath, 'multiplier:', pattern.weight_multiplier || 3.0);
+      }
+    }
+    
+    if (multiplier === 1.0) {
+      this._log('📍 No pattern matches for:', folderPath);
+    }
+    
+    return multiplier;
+  }
+
+  // Calculate folder weight based on file count and path patterns
+  calculateFolderWeight(folder) {
+    // Heavily penalize small folders to prevent repetition
+    let baseWeight;
+    if (folder.fileCount < 10) {
+      baseWeight = folder.fileCount * 0.1; // Very low weight for tiny folders
+    } else if (folder.fileCount < 50) {
+      baseWeight = folder.fileCount * 0.5; // Reduced weight for small folders
+    } else if (folder.fileCount > 5000) {
+      // MASSIVE folders get huge bonus due to variety
+      baseWeight = Math.log(folder.fileCount + 1) * folder.fileCount * 0.2;
+    } else {
+      baseWeight = Math.log(folder.fileCount + 1) * folder.fileCount * 0.1; // Normal scaling for larger folders
+    }
+    
+    const pathMultiplier = this.getPathWeightMultiplier(folder.path);
+    
+    // Enhanced large folder bonus system
+    let largeBonus = 1.0;
+    if (folder.fileCount > 10000) {
+      largeBonus = 5.0; // Massive bonus for 10K+ files (like Samsung Gallery)
+    } else if (folder.fileCount > 5000) {
+      largeBonus = 3.0; // Large bonus for 5K+ files
+    } else if (folder.fileCount > 1000) {
+      largeBonus = 2.0; // Medium bonus for 1K+ files
+    } else if (folder.fileCount > 500) {
+      largeBonus = 1.5; // Small bonus for 500+ files
+    }
+    
+    const finalWeight = baseWeight * pathMultiplier * largeBonus;
+    this._log('📊 Weight calculation:', folder.title, 'files:', folder.fileCount, 'base:', baseWeight.toFixed(2), 'path:', pathMultiplier, 'large:', largeBonus, 'final:', finalWeight.toFixed(2));
+    
+    return finalWeight;
+  }
+
+  // Start the queue system
+  async initialize() {
+    if (!this.config.enabled || this.card.config.folder_mode !== 'random') {
+      this._log('❌ Queue disabled or not in random mode');
+      return false;
+    }
+
+    this._log('🚀 Starting subfolder queue initialization');
+    this.isScanning = true;
+    
+    try {
+      // Start with quick initial scan
+      await this.quickScan();
+      return true;
+    } catch (error) {
+      this._log('❌ Queue initialization failed:', error);
+      this.isScanning = false;
+      return false;
+    }
+  }
+
+  // Quick initial scan of first few folders
+  async quickScan() {
+    this._log('⚡ Starting quick scan for first', this.config.initial_scan_limit, 'folders');
+    
+    try {
+      // Get the base media path from the card's configuration
+      const basePath = this.card.config.media_path;
+      if (!basePath) {
+        this._log('❌ No base media path configured');
+        return false;
+      }
+
+      this._log('🔍 Discovering subfolders from base path:', basePath, 'max depth:', this.config.scan_depth);
+      
+      // Progressive scanning: start with depth 1, then expand
+      let subfolders = [];
+      
+      try {
+        // First, try a quick depth-1 scan with longer timeout for large folder structures
+        this._log('🚀 Quick depth-1 scan...');
+        const quickScanTimeout = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Quick scan timeout')), 30000) // Increased timeout
+        );
+        
+        subfolders = await Promise.race([
+          this.discoverSubfolders(basePath, 0), // This will scan to configured depth
+          quickScanTimeout
+        ]);
+        
+        this._log('✅ Scan completed successfully with', subfolders.length, 'folders');
+        
+      } catch (error) {
+        this._log('⚠️ Full recursive scan failed:', error.message);
+        
+        // Fallback: just get immediate subfolders (depth 1 only)
+        this._log('🔄 Falling back to depth-1 only scan...');
+        try {
+          subfolders = await this.discoverSubfolders(basePath, 0, 1); // Force max depth 1
+        } catch (fallbackError) {
+          this._log('❌ Even fallback scan failed:', fallbackError.message);
+          subfolders = [];
+        }
+      }
+      
+      if (subfolders.length === 0) {
+        this._log('⚠️ No subfolders found, falling back to normal mode');
+        return false;
+      }
+
+      // Store discovered folders for later refills
+      this.discoveredFolders = subfolders;
+      this._log('📁 Found', subfolders.length, 'subfolders, processing first', this.config.initial_scan_limit);
+      
+      if (subfolders.length === 0) {
+        this._log('❌ No usable folders found');
+        return false;
+      }
+      
+      // Process first N folders - prioritize large folders that were successfully scanned
+      const sortedFolders = [...subfolders].sort((a, b) => b.fileCount - a.fileCount);
+      const initialFolders = sortedFolders.slice(0, this.config.initial_scan_limit);
+      
+      this._log('🎯 Starting with largest folders:', initialFolders.map(f => `${f.title}(${f.fileCount})`).join(', '));
+      await this.populateQueueFromFolders(initialFolders);
+      
+      this._log('✅ Quick scan complete, queue has', this.queue.length, 'items');
+      
+      // Start background expansion for deeper scanning if we have a shallow scan
+      if (subfolders.length > 0 && this.config.scan_depth > 1) {
+        this.startProgressiveDeepening(basePath, subfolders);
+      } else if (subfolders.length > this.config.initial_scan_limit) {
+        this.startProgressiveScanning(subfolders.slice(this.config.initial_scan_limit));
+      }
+      
+      return true;
+      
+    } catch (error) {
+      this._log('❌ Quick scan failed:', error);
+      return false;
+    } finally {
+      this.isScanning = false;
+    }
+  }
+
+  // Discover all subfolders under the base path (recursive with reliability)
+  async discoverSubfolders(basePath, currentDepth = 0, forceMaxDepth = null) {
+    const maxDepth = forceMaxDepth || this.config.scan_depth || 2;
+    this._log('🔍 Starting recursive subfolder discovery from:', basePath, 'depth:', currentDepth, 'max:', maxDepth);
+    
+    if (currentDepth >= maxDepth) {
+      this._log('📁 Max depth reached:', currentDepth);
+      return [];
+    }
+    
+    try {
+      // Get folder contents with timeout
+      const apiTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 8000)
+      );
+      
+      const folderContents = await Promise.race([
+        this.card.hass.callWS({
+          type: "media_source/browse_media",
+          media_content_id: basePath
+        }),
+        apiTimeout
+      ]);
+
+      const allSubfolders = [];
+      
+      if (!folderContents || !folderContents.children) {
+        this._log('📁 No children found at depth:', currentDepth);
+        return [];
+      }
+      
+      this._log('📁 Found', folderContents.children.length, 'items at depth:', currentDepth);
+      
+      // Process directories only
+      const directories = folderContents.children.filter(item => item.media_class === 'directory');
+      
+      for (const dir of directories) {
+        let folderInfo = null; // Declare outside try block so it's available in catch
+        try {
+          this._log('� Processing folder:', dir.title, 'at depth:', currentDepth + 1);
+          
+          // Scan this folder for files (with timeout)
+          const folderScanTimeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Folder scan timeout: ${dir.title}`)), 15000) // Increased timeout
+          );
+          
+          folderInfo = await Promise.race([
+            this.scanFolderFiles(dir.media_content_id),
+            folderScanTimeout
+          ]);
+          
+          // Add this folder if it has files
+          if (folderInfo.fileCount > 0) {
+            const sampleInfo = folderInfo.isSampled ? ` (random sampled 1:${folderInfo.sampleRatio})` : '';
+            this._log('✅ Folder has files:', dir.title, 'count:', folderInfo.fileCount + sampleInfo);
+            allSubfolders.push({
+              path: dir.media_content_id,
+              title: dir.title,
+              fileCount: folderInfo.fileCount,
+              files: folderInfo.files,
+              depth: currentDepth + 1,
+              isSampled: folderInfo.isSampled,
+              sampleRatio: folderInfo.sampleRatio
+            });
+          }
+          
+          // Recursively scan deeper if within depth limit
+          if (currentDepth + 1 < maxDepth) {
+            this._log('� Recursing into:', dir.title, 'next depth:', currentDepth + 2);
+            
+            // Recursive call with adaptive timeout based on folder size
+            if (folderInfo.fileCount > 10000) {
+              // Skip recursion for ultra-massive folders to prevent timeouts
+              this._log('⚡ Skipping recursion for ultra-massive folder to prevent timeout:', dir.title);
+            } else {
+              let recursiveTimeoutMs = 10000; // Default 10 seconds
+              if (folderInfo.fileCount > 5000) {
+                recursiveTimeoutMs = 60000; // 60 seconds for massive folders
+              } else if (folderInfo.fileCount > 1000) {
+                recursiveTimeoutMs = 30000; // 30 seconds for large folders
+              }
+              
+              const recursiveTimeout = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`Recursive timeout: ${dir.title}`)), recursiveTimeoutMs)
+              );
+              
+              this._log('🔄 Recursing with', recursiveTimeoutMs/1000, 'second timeout for', folderInfo.fileCount, 'files');
+              
+              const nestedFolders = await Promise.race([
+                this.discoverSubfolders(dir.media_content_id, currentDepth + 1),
+                recursiveTimeout
+              ]);
+              
+              allSubfolders.push(...nestedFolders);
+            }
+          }
+          
+        } catch (error) {
+          this._log('⚠️ Folder processing error:', dir.title, 'error:', error.message);
+          
+          // If we at least got the file count, add this folder anyway (important for large folders)
+          if (folderInfo && folderInfo.fileCount > 0) {
+            this._log('🚨 Adding folder despite error (has', folderInfo.fileCount, 'files):', dir.title);
+            allSubfolders.push({
+              path: dir.media_content_id,
+              title: dir.title,
+              fileCount: folderInfo.fileCount,
+              files: folderInfo.files,
+              depth: currentDepth + 1,
+              isSampled: folderInfo.isSampled,
+              sampleRatio: folderInfo.sampleRatio,
+              hasError: true
+            });
+          }
+          // Continue with other folders even if one fails
+        }
+      }
+
+      // Sort by file count (largest first) at the top level only
+      if (currentDepth === 0) {
+        allSubfolders.sort((a, b) => b.fileCount - a.fileCount);
+        this._log('✅ Recursive discovery complete:', allSubfolders.length, 'total subfolders found');
+        
+        // Log depth distribution
+        const depthCounts = {};
+        allSubfolders.forEach(folder => {
+          depthCounts[folder.depth] = (depthCounts[folder.depth] || 0) + 1;
+        });
+        this._log('📊 Depth distribution:', depthCounts);
+        
+        // Log all discovered paths for debugging
+        this._log('📁 All discovered folder paths:');
+        allSubfolders.forEach(folder => {
+          this._log(`  • ${folder.title} (${folder.fileCount} files) - Path: ${folder.path}`);
+        });
+      }
+      
+      return allSubfolders;
+      
+    } catch (error) {
+      this._log('❌ Failed at depth', currentDepth, ':', error.message);
+      return [];
+    }
+  }
+
+  // Scan files in a specific folder with large folder optimization
+  async scanFolderFiles(folderPath) {
+    try {
+      const folderContents = await this.card.hass.callWS({
+        type: "media_source/browse_media", 
+        media_content_id: folderPath
+      });
+
+      const files = [];
+      let totalChildren = 0;
+      
+      if (folderContents && folderContents.children) {
+        totalChildren = folderContents.children.length;
+        this._log('📁 Folder has', totalChildren, 'total items:', folderPath.split('/').pop());
+        
+        // Smart handling for different folder sizes
+        if (totalChildren > 5000) {
+          // MASSIVE folders (5K+): Random sampling for performance
+          const sampleRatio = 10;
+          const targetSamples = Math.floor(totalChildren / sampleRatio);
+          this._log('🚀 MASSIVE folder detected (', totalChildren, 'items) - random sampling', targetSamples, 'items');
+          
+          // Create array of random indices
+          const randomIndices = [];
+          for (let i = 0; i < targetSamples; i++) {
+            randomIndices.push(Math.floor(Math.random() * totalChildren));
+          }
+          // Remove duplicates and sort
+          const uniqueIndices = [...new Set(randomIndices)].sort((a, b) => a - b);
+          
+          for (const index of uniqueIndices) {
+            const item = folderContents.children[index];
+            if (item && item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
+              files.push(item);
+            }
+          }
+          
+          // Estimate total files based on sample
+          const estimatedFileCount = Math.floor(files.length * sampleRatio);
+          this._log('📊 Random sampled', files.length, 'files, estimated total:', estimatedFileCount);
+          
+          return {
+            fileCount: estimatedFileCount,
+            files: files,
+            isSampled: true,
+            sampleRatio: sampleRatio
+          };
+          
+        } else if (totalChildren > 1000) {
+          // LARGE folders (1K-5K): Random sampling 
+          const sampleRatio = 3;
+          const targetSamples = Math.floor(totalChildren / sampleRatio);
+          this._log('📂 LARGE folder detected (', totalChildren, 'items) - random sampling', targetSamples, 'items');
+          
+          // Create array of random indices
+          const randomIndices = [];
+          for (let i = 0; i < targetSamples; i++) {
+            randomIndices.push(Math.floor(Math.random() * totalChildren));
+          }
+          // Remove duplicates and sort
+          const uniqueIndices = [...new Set(randomIndices)].sort((a, b) => a - b);
+          
+          for (const index of uniqueIndices) {
+            const item = folderContents.children[index];
+            if (item && item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
+              files.push(item);
+            }
+          }
+          
+          // Estimate total files based on sample
+          const estimatedFileCount = Math.floor(files.length * sampleRatio);
+          this._log('📊 Random sampled', files.length, 'files, estimated total:', estimatedFileCount);
+          
+          return {
+            fileCount: estimatedFileCount,
+            files: files,
+            isSampled: true,
+            sampleRatio: sampleRatio
+          };
+          
+        } else {
+          // NORMAL folders (<1K): Scan all files
+          for (const item of folderContents.children) {
+            if (item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
+              files.push(item);
+            }
+          }
+          
+          return {
+            fileCount: files.length,
+            files: files,
+            isSampled: false
+          };
+        }
+      }
+
+      return {
+        fileCount: 0,
+        files: [],
+        isSampled: false
+      };
+      
+    } catch (error) {
+      this._log('❌ Failed to scan folder files:', folderPath, error);
+      return { fileCount: 0, files: [], isSampled: false };
+    }
+  }
+
+  // Check if file is a media file
+  isMediaFile(filePath) {
+    const fileName = filePath.split('/').pop() || filePath;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    return ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+  }
+
+  // Populate queue from discovered folders using weighted selection
+  async populateQueueFromFolders(folders) {
+    try {
+      this._log('🎲 Populating queue from', folders.length, 'folders');
+      
+      if (folders.length === 0) {
+        this._log('❌ No folders provided for queue population');
+        return;
+      }
+      
+      // Calculate weights for each folder
+      for (const folder of folders) {
+        try {
+          const weight = this.calculateFolderWeight(folder);
+          this.folderWeights.set(folder.path, weight);
+          this._log('📊 Folder weight:', folder.title, 'files:', folder.fileCount, 'weight:', weight.toFixed(2));
+        } catch (error) {
+          this._log('❌ Error calculating weight for folder:', folder.title, error);
+        }
+      }
+
+      // Calculate total weight
+      const totalWeight = Array.from(this.folderWeights.values()).reduce((sum, weight) => sum + weight, 0);
+      
+      if (totalWeight === 0) {
+        this._log('❌ Total weight is zero, cannot allocate queue slots');
+        return;
+      }
+      
+      // Allocate queue slots based on weights
+      // Use a reasonable queue size that allows for good randomization
+      const queueSize = Math.max(this.config.queue_size || 15, this.discoveredFolders.length * 2);
+      this.queue = [];
+      
+      this._log('🎯 Allocating', queueSize, 'total slots among', folders.length, 'folders for better randomization');
+      
+      // First pass: calculate proportional slots
+      let totalAllocated = 0;
+      const allocations = [];
+      
+      for (const folder of folders) {
+        try {
+          const folderWeight = this.folderWeights.get(folder.path);
+          const proportionalSlots = Math.floor((folderWeight / totalWeight) * queueSize);
+          
+          allocations.push({
+            folder: folder,
+            weight: folderWeight,
+            proportionalSlots: proportionalSlots
+          });
+          totalAllocated += proportionalSlots;
+        } catch (error) {
+          this._log('❌ Error allocating slots for folder:', folder.title, error);
+        }
+      }
+      
+      // If we have remaining slots, distribute them to highest weight folders
+      let remainingSlots = queueSize - totalAllocated;
+      this._log('📊 Initial allocation:', totalAllocated, 'remaining:', remainingSlots);
+      
+      // Sort by weight (highest first) for remaining slot distribution
+      allocations.sort((a, b) => b.weight - a.weight);
+      
+      // Ensure every folder with files gets at least 1 slot for variety
+      for (let i = 0; i < allocations.length && remainingSlots > 0; i++) {
+        if (allocations[i].proportionalSlots === 0 && allocations[i].folder.files && allocations[i].folder.files.length > 0) {
+          allocations[i].proportionalSlots = 1;
+          remainingSlots--;
+        }
+      }
+      
+      // Distribute any still remaining slots to highest weight folders
+      for (let i = 0; i < allocations.length && remainingSlots > 0; i++) {
+        allocations[i].proportionalSlots++;
+        remainingSlots--;
+      }
+      
+      // Now populate queue with allocated slots
+      for (const allocation of allocations) {
+        try {
+          const allocatedSlots = allocation.proportionalSlots;
+          
+          this._log('🎯 Allocating', allocatedSlots, 'slots to', allocation.folder.title);
+          
+          // Randomly select files from this folder
+          const selectedFiles = this.selectRandomFiles(allocation.folder.files || [], allocatedSlots);
+          this.queue.push(...selectedFiles);
+        } catch (error) {
+          this._log('❌ Error processing folder:', allocation.folder.title, error);
+        }
+      }
+
+      // Shuffle the final queue for temporal randomness
+      this.shuffleQueue();
+      
+      this._log('✅ Queue populated with', this.queue.length, 'items from', folders.length, 'folders');
+    } catch (error) {
+      this._log('❌ Critical error in populateQueueFromFolders:', error);
+    }
+  }
+
+  // Select N random files from an array, excluding already shown items
+  selectRandomFiles(files, count) {
+    if (!files || files.length === 0) return [];
+    
+    // Filter out already shown items - this is the key fix!
+    const availableFiles = files.filter(file => !this.shownItems.has(file.media_content_id));
+    
+    this._log('📁 Folder selection: available', availableFiles.length, 'of', files.length, 'total files');
+    
+    if (availableFiles.length === 0) {
+      this._log('⚠️ All files in this folder have been shown - skipping folder entirely');
+      return []; // Don't add any items from this folder - critical fix!
+    }
+    
+    if (availableFiles.length <= count) {
+      return [...availableFiles]; // Return all available files if we need more than available
+    }
+    
+    const selected = [];
+    const available = [...availableFiles];
+    
+    for (let i = 0; i < count && available.length > 0; i++) {
+      const randomIndex = Math.floor(Math.random() * available.length);
+      selected.push(available.splice(randomIndex, 1)[0]);
+    }
+    
+    return selected;
+  }
+
+  // Shuffle the queue array
+  shuffleQueue() {
+    for (let i = this.queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
+    }
+  }
+
+  // Start progressive scanning of remaining folders
+  startProgressiveScanning(remainingFolders) {
+    this._log('🔄 Starting progressive scan for', remainingFolders.length, 'remaining folders');
+    
+    // For now, just log that we would do this
+    // In a full implementation, we'd scan these folders in batches and update the queue
+    setTimeout(() => {
+      this._log('📈 Progressive scanning complete (simulated)');
+    }, 5000);
+  }
+
+  // Start progressive deepening to find more subfolders
+  async startProgressiveDeepening(basePath, initialFolders) {
+    this._log('🔄 Starting progressive deepening from', initialFolders.length, 'initial folders');
+    
+    // Background task to find deeper folders
+    setTimeout(async () => {
+      try {
+        this._log('🔍 Background: Searching for deeper folders...');
+        
+        // Look for folders that might have subfolders we haven't scanned yet
+        const deeperFolders = [];
+        
+        for (const folder of initialFolders.slice(0, 3)) { // Only check top 3 folders
+          if (folder.depth === 1) { // Only go deeper if we're at shallow depth
+            try {
+              this._log('🔍 Background: Checking', folder.title, 'for subfolders...');
+              
+              const nestedFolders = await this.discoverSubfolders(folder.path, folder.depth);
+              if (nestedFolders.length > 0) {
+                this._log('✅ Background: Found', nestedFolders.length, 'nested folders in', folder.title);
+                deeperFolders.push(...nestedFolders);
+              }
+            } catch (error) {
+              this._log('⚠️ Background: Failed to scan', folder.title, ':', error.message);
+            }
+          }
+        }
+        
+        if (deeperFolders.length > 0) {
+          this._log('🎉 Background: Found', deeperFolders.length, 'additional deep folders');
+          
+          // Add to discovered folders and expand queue
+          this.discoveredFolders.push(...deeperFolders);
+          
+          // Refresh queue with new folders
+          const additionalFiles = deeperFolders.reduce((sum, f) => sum + f.fileCount, 0);
+          this._log('📈 Background: Adding', additionalFiles, 'additional files to pool');
+        } else {
+          this._log('📭 Background: No additional deep folders found');
+        }
+        
+      } catch (error) {
+        this._log('❌ Background deepening failed:', error.message);
+      }
+    }, 3000); // Start background scan after 3 seconds
+  }
+
+  // Get next item from queue
+  getNextItem() {
+    this._log('🎯 getNextItem called - queue size:', this.queue.length, 'folders:', this.discoveredFolders.length);
+    
+    if (this.queue.length === 0) {
+      this._log('⚠️ Queue empty, attempting to refill');
+      this.refillQueue();
+      if (this.queue.length === 0) {
+        this._log('❌ Queue refill failed, no items available');
+        return null;
+      }
+    }
+
+    // Find first unshown item
+    let unshownCount = 0;
+    for (let i = 0; i < this.queue.length; i++) {
+      const item = this.queue[i];
+      if (!this.shownItems.has(item.media_content_id)) {
+        unshownCount++;
+        this.shownItems.add(item.media_content_id);
+        this._log('✅ Served item from queue:', item.title, 'remaining unshown:', this.getRemainingCount());
+        
+        // Check if we need to refill queue
+        if (this.needsRefill()) {
+          this._log('🔄 Queue running low, scheduling refill');
+          setTimeout(() => this.refillQueue(), 1000);
+        }
+        
+        return item;
+      }
+    }
+
+    this._log('⚠️ All queue items have been shown (' + this.shownItems.size + ' total), clearing exclusions and refilling');
+    this.clearShownItems();
+    this.refillQueue();
+    
+    // Try again after refill
+    if (this.queue.length > 0) {
+      const item = this.queue[0];
+      this.shownItems.add(item.media_content_id);
+      this._log('✅ Served item after refill:', item.title);
+      return item;
+    }
+    
+    this._log('❌ No items available even after refill');
+    return null;
+  }
+
+  // Get count of remaining unshown items
+  getRemainingCount() {
+    return this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
+  }
+
+  // Check if queue needs refilling
+  needsRefill() {
+    return this.getRemainingCount() < 5; // Refill when < 5 items left
+  }
+
+  // Clear shown items tracking (reset exclusions)
+  clearShownItems() {
+    this._log('🔄 Clearing shown items tracking, resetting exclusions');
+    this.shownItems.clear();
+  }
+
+  // Refill queue with new random selections
+  refillQueue() {
+    if (this.isScanning) {
+      this._log('⏳ Scan in progress, skipping refill');
+      return;
+    }
+
+    this._log('🔄 Refilling queue from discovered folders, available:', this.discoveredFolders.length);
+    
+    if (this.discoveredFolders.length === 0) {
+      this._log('❌ No folders available for refill - rescanning');
+      // Try to rescan folders
+      this.quickScan();
+      return;
+    }
+
+    // Count total files available across all folders
+    const totalFiles = this.discoveredFolders.reduce((sum, folder) => sum + (folder.files ? folder.files.length : 0), 0);
+    this._log('📊 Total files available across all folders:', totalFiles);
+    
+    if (totalFiles === 0) {
+      this._log('❌ No files found in any folder - rescanning');
+      this.quickScan();
+      return;
+    }
+
+    // Re-populate queue from discovered folders
+    this.populateQueueFromFolders(this.discoveredFolders.slice(0, this.config.initial_scan_limit));
   }
 }
 
@@ -3851,6 +4715,67 @@ class MediaCardEditor extends LitElement {
             </div>
           </div>
         </div>
+
+        ${this._config.is_folder && this._config.folder_mode === 'random' ? html`
+          <div class="section">
+            <div class="section-title">🚀 Subfolder Queue (Random Mode)</div>
+            
+            <div class="config-row">
+              <label>Enable Subfolder Queue</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.subfolder_queue?.enabled || false}
+                  @change=${this._subfolderQueueEnabledChanged}
+                />
+                <div class="help-text">Use background queue for faster multi-folder random selection</div>
+              </div>
+            </div>
+            
+            ${this._config.subfolder_queue?.enabled ? html`
+              <div class="config-row">
+                <label>Scan Depth</label>
+                <div>
+                  <input
+                    type="number"
+                    min="1"
+                    max="5"
+                    .value=${this._config.subfolder_queue?.scan_depth || 2}
+                    @input=${this._subfolderScanDepthChanged}
+                  />
+                  <div class="help-text">How many folder levels to scan (1-5). Higher = more subfolders, slower scan.</div>
+                </div>
+              </div>
+              
+              <div class="config-row">
+                <label>Randomization Pool Size</label>
+                <div>
+                  <input
+                    type="number"
+                    min="10"
+                    max="100"
+                    .value=${this._config.subfolder_queue?.queue_size || 30}
+                    @input=${this._subfolderQueueSizeChanged}
+                  />
+                  <div class="help-text">Larger pool = better randomization, prevents repetition</div>
+                </div>
+              </div>
+              
+              <div class="config-row">
+                <label>Priority Folder Patterns</label>
+                <div>
+                  <textarea
+                    rows="4"
+                    .value=${this._formatPriorityPatterns()}
+                    @input=${this._priorityPatternsChanged}
+                    placeholder="DCIM/Camera&#10;Photos/Camera Roll&#10;Photos/2024"
+                  ></textarea>
+                  <div class="help-text">Folder paths to prioritize (one per line). Paths containing these patterns get 3x weight.</div>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        ` : ''}
 
         <div class="section">
           <div class="section-title">�👆 Interactions</div>
@@ -5143,6 +6068,66 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     };
     this._fireConfigChanged();
+  }
+
+  // Subfolder queue configuration event handlers
+  _subfolderQueueEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _subfolderScanDepthChanged(ev) {
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        scan_depth: Math.max(1, Math.min(5, parseInt(ev.target.value) || 2))
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _subfolderQueueSizeChanged(ev) {
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        queue_size: parseInt(ev.target.value) || 30
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _priorityPatternsChanged(ev) {
+    // Debounce the input to avoid constant config changes while typing
+    clearTimeout(this._patternInputTimeout);
+    this._patternInputTimeout = setTimeout(() => {
+      const patterns = ev.target.value
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(path => ({ path, weight_multiplier: 3.0 }));
+
+      this._config = {
+        ...this._config,
+        subfolder_queue: {
+          ...this._config.subfolder_queue,
+          priority_folder_patterns: patterns
+        }
+      };
+      this._fireConfigChanged();
+    }, 1000); // Wait 1 second after user stops typing
+  }
+
+  _formatPriorityPatterns() {
+    const patterns = this._config.subfolder_queue?.priority_folder_patterns || [];
+    return patterns.map(p => p.path).join('\n');
   }
 
   _fireConfigChanged() {
