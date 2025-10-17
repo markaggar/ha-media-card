@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b22 - Fixed Scanning Completion & Timeout Handling
+ * Version: 2.3b23 - Balanced Weighting & Fixed Initialization
  */
 
 // Import Lit from CDN for standalone usage
@@ -894,16 +894,30 @@ class MediaCard extends LitElement {
           const queueInitialized = await this._subfolderQueue.initialize();
           if (queueInitialized) {
             this._log('✅ Subfolder queue successfully initialized');
-            // Use queue for initial media selection
-            const randomResult = this._getRandomFileWithIndex();
-            if (randomResult && randomResult.file) {
-              this._log('📂 Using subfolder queue for initial media selection');
-              await this._loadMediaFromItem(randomResult.file);
-              this._lastRefreshTime = Date.now();
-              return; // Exit early - queue handled the selection
-            } else {
-              this._log('⚠️ Subfolder queue failed to provide initial item, falling back to normal mode');
+            
+            // Wait a moment for queue to populate, then try using it
+            let attempts = 0;
+            const maxAttempts = 5;
+            let randomResult = null;
+            
+            while (attempts < maxAttempts) {
+              randomResult = this._getRandomFileWithIndex();
+              if (randomResult && randomResult.file) {
+                this._log('📂 Using subfolder queue for initial media selection (attempt', attempts + 1, ')');
+                await this._loadMediaFromItem(randomResult.file);
+                this._lastRefreshTime = Date.now();
+                return; // Exit early - queue handled the selection
+              }
+              
+              // If no item available, wait briefly for queue to populate
+              if (attempts < maxAttempts - 1) {
+                this._log('⏳ Queue empty, waiting 500ms for population (attempt', attempts + 1, ')');
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
+              attempts++;
             }
+            
+            this._log('⚠️ Subfolder queue failed to provide item after', maxAttempts, 'attempts, falling back');
           } else {
             this._log('⚠️ Subfolder queue initialization failed, using normal mode');
           }
@@ -3530,35 +3544,37 @@ class SubfolderQueue {
 
   // Calculate folder weight based on file count and path patterns
   calculateFolderWeight(folder) {
-    // Heavily penalize small folders to prevent repetition
+    // Balanced weighting system that prevents massive folder dominance
+    // Use logarithmic scaling to compress the range between small and large folders
+    
     let baseWeight;
-    if (folder.fileCount < 10) {
-      baseWeight = folder.fileCount * 0.1; // Very low weight for tiny folders
-    } else if (folder.fileCount < 50) {
-      baseWeight = folder.fileCount * 0.5; // Reduced weight for small folders
-    } else if (folder.fileCount > 5000) {
-      // MASSIVE folders get huge bonus due to variety
-      baseWeight = Math.log(folder.fileCount + 1) * folder.fileCount * 0.2;
+    if (folder.fileCount === 0) {
+      return 0; // Empty folders get no weight
+    } else if (folder.fileCount < 5) {
+      baseWeight = folder.fileCount * 0.5; // Very small folders get minimal weight
     } else {
-      baseWeight = Math.log(folder.fileCount + 1) * folder.fileCount * 0.1; // Normal scaling for larger folders
+      // Logarithmic scaling prevents massive folders from completely dominating
+      // This compresses the range significantly: 100 files ≈ 2.0, 10,000 files ≈ 4.0
+      baseWeight = Math.log10(folder.fileCount) * 10;
     }
     
     const pathMultiplier = this.getPathWeightMultiplier(folder.path);
     
-    // Enhanced large folder bonus system
-    let largeBonus = 1.0;
+    // Much more balanced bonus system - prevents 10K+ folders from getting 5x advantage
+    let sizeMultiplier = 1.0;
     if (folder.fileCount > 10000) {
-      largeBonus = 5.0; // Massive bonus for 10K+ files (like Samsung Gallery)
-    } else if (folder.fileCount > 5000) {
-      largeBonus = 3.0; // Large bonus for 5K+ files
+      sizeMultiplier = 1.8; // Modest bonus for ultra-large folders
     } else if (folder.fileCount > 1000) {
-      largeBonus = 2.0; // Medium bonus for 1K+ files
-    } else if (folder.fileCount > 500) {
-      largeBonus = 1.5; // Small bonus for 500+ files
+      sizeMultiplier = 1.5; // Small bonus for large folders  
+    } else if (folder.fileCount > 100) {
+      sizeMultiplier = 1.2; // Tiny bonus for medium folders
     }
     
-    const finalWeight = baseWeight * pathMultiplier * largeBonus;
-    this._log('📊 Weight calculation:', folder.title, 'files:', folder.fileCount, 'base:', baseWeight.toFixed(2), 'path:', pathMultiplier, 'large:', largeBonus, 'final:', finalWeight.toFixed(2));
+    const finalWeight = baseWeight * pathMultiplier * sizeMultiplier;
+    
+    // Log with percentage representation to make bias clear
+    this._log('📊 Weight calculation:', folder.title, 'files:', folder.fileCount, 'weight:', finalWeight.toFixed(1), 
+              'log10:', Math.log10(folder.fileCount).toFixed(1), 'multiplier:', sizeMultiplier);
     
     return finalWeight;
   }
