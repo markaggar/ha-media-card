@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b37 - Fixed Navigation Crash + Enhanced Queue Debugging
+ * Version: 2.3b38 - Added Navigation History + Keep Queue Items
  */
 
 // Import Lit from CDN for standalone usage
@@ -3174,19 +3174,21 @@ class MediaCard extends LitElement {
   }
 
   async _navigatePrevious() {
-    // If subfolder queue is enabled, use queue for previous item (same as next in random mode)
+    // If subfolder queue is enabled, use history for backward navigation
     if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
-      this._log('🔄 Navigate Previous: Using subfolder queue');
+      this._log('◀️ Navigate Previous: Using subfolder queue history');
       
       // Handle auto-advance mode
       this._handleAutoAdvanceMode();
       
-      const randomResult = this._getRandomFileWithIndex(true);
-      if (randomResult && randomResult.file) {
-        await this._loadMediaFromItem(randomResult.file);
+      const previousItem = this._subfolderQueue.getPreviousItem();
+      if (previousItem) {
+        this._log('✅ Got previous item from history:', previousItem.title);
+        await this._loadMediaFromItem(previousItem);
         return;
       } else {
-        this._log('⚠️ Queue navigation failed, falling back to folder navigation');
+        this._log('⚠️ No previous item in history, staying at current');
+        return;
       }
     }
     
@@ -3205,16 +3207,17 @@ class MediaCard extends LitElement {
   }
 
   async _navigateNext() {
-    // If subfolder queue is enabled, use queue for next item
+    // If subfolder queue is enabled, use queue for forward navigation
     if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
-      this._log('🔄 Navigate Next: Using subfolder queue');
+      this._log('▶️ Navigate Next: Using subfolder queue');
       
       // Handle auto-advance mode
       this._handleAutoAdvanceMode();
       
-      const randomResult = this._getRandomFileWithIndex(true);
-      if (randomResult && randomResult.file) {
-        await this._loadMediaFromItem(randomResult.file);
+      const nextItem = this._subfolderQueue.getNextItem();
+      if (nextItem) {
+        this._log('✅ Got next item from queue/history:', nextItem.title);
+        await this._loadMediaFromItem(nextItem);
         return;
       } else {
         this._log('⚠️ Queue navigation failed, falling back to folder navigation');
@@ -3535,6 +3538,10 @@ class SubfolderQueue {
     this.folderWeights = new Map();
     this.isScanning = false;
     this.scanProgress = { current: 0, total: 0 };
+    
+    // Navigation history for back/forward functionality
+    this.history = []; // Array of shown items in chronological order
+    this.historyIndex = -1; // Current position in history (-1 = latest)
     
     this._log('🚀 SubfolderQueue initialized with config:', this.config);
     this._log('📋 Priority patterns configured:', this.config.priority_folder_patterns);
@@ -4294,10 +4301,19 @@ class SubfolderQueue {
     }, 3000); // Start background scan after 3 seconds
   }
 
-  // Get next item from queue
+  // Get next item from queue (forward navigation)
   getNextItem() {
-    this._log('🎯 getNextItem called - queue size:', this.queue.length, 'folders:', this.discoveredFolders.length);
+    this._log('🎯 getNextItem called - queue size:', this.queue.length, 'folders:', this.discoveredFolders.length, 'historyIndex:', this.historyIndex);
     
+    // If we're navigating within history (not at the latest position)
+    if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
+      this.historyIndex++;
+      const item = this.history[this.historyIndex];
+      this._log('▶️ Moving forward in history to index:', this.historyIndex, 'item:', item.title);
+      return item;
+    }
+
+    // We're at the latest position, get a new item from queue
     if (this.queue.length === 0) {
       this._log('⚠️ Queue empty, attempting to refill');
       this.refillQueue();
@@ -4307,19 +4323,28 @@ class SubfolderQueue {
       }
     }
 
-    // Find first unshown item and remove it from queue
+    // Find first unshown item (don't remove from queue, just mark as shown)
     for (let i = 0; i < this.queue.length; i++) {
       const item = this.queue[i];
       if (!this.shownItems.has(item.media_content_id)) {
-        // Add to blacklist and remove from queue
+        // Add to blacklist but keep in queue for potential navigation
         this.shownItems.add(item.media_content_id);
-        this.queue.splice(i, 1); // Remove item from queue permanently
+        
+        // Add to history for navigation
+        this.history.push(item);
+        this.historyIndex = this.history.length - 1; // Move to latest position
+        
+        // Limit history size to prevent memory issues
+        if (this.history.length > 100) {
+          this.history.shift(); // Remove oldest item
+          this.historyIndex = this.history.length - 1;
+        }
         
         // Extract folder name for logging
         const pathParts = item.media_content_id.split('/');
         const folderName = pathParts[pathParts.length - 2] || 'root';
         
-        this._log('✅ Served and removed from queue:', item.title, `from folder: ${folderName}`, 'queue size now:', this.queue.length);
+        this._log('✅ Served and added to history:', item.title, `from folder: ${folderName}`, 'history size:', this.history.length);
         
         // Check if we need to refill queue
         if (this.needsRefill()) {
@@ -4339,12 +4364,45 @@ class SubfolderQueue {
     if (this.queue.length > 0) {
       const item = this.queue[0];
       this.shownItems.add(item.media_content_id);
-      this.queue.splice(0, 1); // Remove from queue
-      this._log('✅ Served item after refill:', item.title, 'queue size now:', this.queue.length);
+      
+      // Add to history
+      this.history.push(item);
+      this.historyIndex = this.history.length - 1;
+      
+      this._log('✅ Served item after refill:', item.title, 'history size:', this.history.length);
       return item;
     }
     
     this._log('❌ No items available even after refill');
+    return null;
+  }
+
+  // Get previous item from navigation history (backward navigation)
+  getPreviousItem() {
+    this._log('🎯 getPreviousItem called - history size:', this.history.length, 'historyIndex:', this.historyIndex);
+    
+    if (this.history.length === 0) {
+      this._log('⚠️ No history available for backward navigation');
+      return null;
+    }
+
+    // If we're at the latest position (historyIndex = -1 or at the end)
+    if (this.historyIndex === -1) {
+      this.historyIndex = this.history.length - 2; // Go to second-to-last item
+    } else if (this.historyIndex > 0) {
+      this.historyIndex--; // Go back one more step
+    } else {
+      this._log('⚠️ Already at the beginning of history');
+      return this.history[0]; // Stay at first item
+    }
+
+    if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
+      const item = this.history[this.historyIndex];
+      this._log('◀️ Moving backward in history to index:', this.historyIndex, 'item:', item.title);
+      return item;
+    }
+
+    this._log('⚠️ Invalid history index:', this.historyIndex);
     return null;
   }
 
