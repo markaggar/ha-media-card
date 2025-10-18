@@ -852,7 +852,16 @@ class MediaCard extends LitElement {
       this._refreshInterval = setInterval(() => {
         // Check both pause states before running
         if (!this._isPaused && !this._backgroundPaused) {
-          this._log('🔄 Auto-refresh timer triggered - active');
+          // Skip auto-refresh if folder discovery is actively in progress
+          if (this._subfolderQueue && this._subfolderQueue.isDiscoveryInProgress && this._subfolderQueue.isDiscoveryInProgress()) {
+            this._log('🔄 Auto-refresh skipped - folder discovery in progress');
+            return;
+          }
+          
+          // Reduce logging noise - only log if debug mode or occasional
+          if (this.config?.debug_mode || Math.random() < 0.1) {
+            this._log('🔄 Auto-refresh timer triggered - active');
+          }
           this._checkForMediaUpdates();
         } else {
           this._log('🔄 Auto-refresh skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
@@ -3555,6 +3564,8 @@ class SubfolderQueue {
     this.folderWeights = new Map();
     this.isScanning = false;
     this.scanProgress = { current: 0, total: 0 };
+    this.discoveryStartTime = null;
+    this.discoveryInProgress = false;
     
     // Navigation history for back/forward functionality
     this.history = []; // Array of shown items in chronological order
@@ -3568,6 +3579,21 @@ class SubfolderQueue {
     if (this.card._debugMode) {
       console.log('📂 SubfolderQueue:', ...args);
     }
+  }
+
+  // Check if folder discovery is actively in progress
+  isDiscoveryInProgress() {
+    if (!this.discoveryInProgress) return false;
+    
+    // Consider discovery finished after 30 seconds to prevent permanent blocking
+    const discoveryDuration = Date.now() - (this.discoveryStartTime || 0);
+    if (discoveryDuration > 30000) {
+      this._log('⏰ Discovery timeout reached - allowing auto-refresh');
+      this.discoveryInProgress = false;
+      return false;
+    }
+    
+    return true;
   }
 
   // Calculate weight multiplier based on folder path patterns
@@ -3644,6 +3670,8 @@ class SubfolderQueue {
 
     this._log('🚀 Starting subfolder queue initialization');
     this.isScanning = true;
+    this.discoveryInProgress = true;
+    this.discoveryStartTime = Date.now();
     this.earlyPopulationTriggered = false; // Reset the early population flag at start of initialization
     
     // Create a promise that resolves when early population completes
@@ -3675,7 +3703,11 @@ class SubfolderQueue {
     } catch (error) {
       this._log('❌ Queue initialization failed:', error);
       this.isScanning = false;
+      this.discoveryInProgress = false;
       return false;
+    } finally {
+      // Always clear discovery flag when initialization completes or fails
+      this.discoveryInProgress = false;
     }
   }
 
@@ -3891,7 +3923,7 @@ class SubfolderQueue {
           if (isTimeoutError && isCameraFolder) {
             this._log(`🚨 Emergency quick scan timeout for ${dir.title} - attempting recovery (error: ${error.message})`);
             try {
-              const emergencyResult = await this.emergencyQuickScan(dir.title, dir.media_content_id);
+              const emergencyResult = await this.emergencyQuickScan(dir.media_content_id, dir.title);
               if (emergencyResult) {
                 this._log(`✅ Emergency scan successful for ${dir.title} - adding to discovered folders`);
                 // Add the emergency result to discovered folders
@@ -4061,11 +4093,18 @@ class SubfolderQueue {
       return; // No folders with files yet
     }
     
-    // Start with just the first good folder to get images quickly
-    const initialFolder = goodFolders[0];
-    this._log('🎯 Early population with single folder:', `${initialFolder.title}(${initialFolder.fileCount})`);
+    // Use up to 3 good folders for more balanced early population
+    const foldersToUse = goodFolders.slice(0, Math.min(3, goodFolders.length));
+    this._log('🎯 Early population with', foldersToUse.length, 'folders:', foldersToUse.map(f => `${f.title}(${f.fileCount})`).join(', '));
     
-    await this.populateQueueFromFolders([initialFolder]);
+    // Temporarily reduce queue size for early population to get variety
+    const originalQueueSize = this.config.queue_size;
+    this.config.queue_size = Math.min(50, originalQueueSize); // Limit early queue to 50 items
+    
+    await this.populateQueueFromFolders(foldersToUse);
+    
+    // Restore original queue size
+    this.config.queue_size = originalQueueSize;
     this._log('✅ Early queue populated! Queue has', this.queue.length, 'items');
     
     // Check if we have enough items in queue to start showing (minimum 3 items)
