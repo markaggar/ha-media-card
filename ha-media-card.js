@@ -764,6 +764,8 @@ class MediaCard extends LitElement {
         queue_size: config.subfolder_queue?.queue_size || 30,
         initial_scan_limit: config.subfolder_queue?.initial_scan_limit || 10,
         priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
+        equal_probability_mode: config.subfolder_queue?.equal_probability_mode || false, // True equal probability per media item
+        estimated_total_photos: config.subfolder_queue?.estimated_total_photos || null, // User estimate for better probability calculation
         ...config.subfolder_queue
       }
     };
@@ -4235,9 +4237,16 @@ class SubfolderQueue {
     try {
       this._log('🚨 Emergency quick scan starting for:', folderTitle);
       
-      // Very quick scan with minimal timeout
+      // Increase timeout for critical folders that are known to be large
+      const isCriticalFolder = folderTitle.toLowerCase().includes('camera') || 
+                               folderTitle.toLowerCase().includes('dcim') ||
+                               folderTitle.toLowerCase().includes('roll');
+      const timeoutMs = isCriticalFolder ? 8000 : 3000; // 8 seconds for Camera/DCIM folders
+      
+      this._log('⏰ Emergency timeout set to', timeoutMs + 'ms for', folderTitle, '(critical:', isCriticalFolder + ')');
+      
       const emergencyTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`Emergency scan timeout: ${folderTitle}`)), 3000)
+        setTimeout(() => reject(new Error(`Emergency scan timeout: ${folderTitle}`)), timeoutMs)
       );
       
       const folderContents = await Promise.race([
@@ -4358,42 +4367,13 @@ class SubfolderQueue {
         }
       }
 
-      // Use BALANCED allocation instead of weight-based to ensure fair folder representation
+      // Choose allocation method based on configuration
       const queueSize = Math.max(this.config.queue_size || 15, folders.length * 10);
       this.queue = [];
       
-      this._log('🎯 Using BALANCED allocation of', queueSize, 'slots among', folders.length, 'folders for fair representation');
-      
-      // Give each folder a more equal share (minimum 5 items per folder, rest distributed evenly)
-      const minItemsPerFolder = Math.min(5, Math.floor(queueSize / folders.length));
-      const baseSlotsNeeded = folders.length * minItemsPerFolder;
-      const extraSlotsPool = Math.max(0, queueSize - baseSlotsNeeded);
-      const bonusSlotsPerFolder = Math.floor(extraSlotsPool / folders.length);
-      const extraSlots = extraSlotsPool % folders.length;
-      
-      // Create balanced allocations - each folder gets fair representation
-      const allocations = [];
-      let totalAllocated = 0;
-      
-      for (let i = 0; i < folders.length; i++) {
-        const folder = folders[i];
-        
-        // Each folder gets: minimum + bonus + (1 extra if needed)
-        const baseSlots = minItemsPerFolder + bonusSlotsPerFolder;
-        const extraSlot = i < extraSlots ? 1 : 0;
-        const finalSlots = baseSlots + extraSlot;
-        
-        allocations.push({
-          folder: folder,
-          proportionalSlots: finalSlots,
-          weight: finalSlots  // Use slot count as weight for balanced allocation
-        });
-        
-        totalAllocated += finalSlots;
-        this._log('🎯 BALANCED allocation:', folder.title, 'gets', finalSlots, 'slots (min:', minItemsPerFolder, '+ bonus:', bonusSlotsPerFolder, '+ extra:', extraSlot, ')');
-      }
-      
-      this._log('📊 Balanced allocation complete:', totalAllocated, 'total slots allocated');
+      const allocations = this.config.equal_probability_mode 
+        ? this.calculateEqualProbabilityAllocations(folders, queueSize)
+        : this.calculateBalancedFolderAllocations(folders, queueSize);
       
       // Now populate queue with allocated slots
       for (const allocation of allocations) {
@@ -4448,6 +4428,107 @@ class SubfolderQueue {
     } catch (error) {
       this._log('❌ Critical error in populateQueueFromFolders:', error);
     }
+  }
+
+  // Calculate equal probability allocation - each media item has equal chance
+  calculateEqualProbabilityAllocations(folders, queueSize) {
+    this._log('🎯 Using EQUAL PROBABILITY allocation - each media item has equal selection chance');
+    this._log('📊 Working with', folders.length, 'discovered folders (more may be found later)');
+    
+    // Calculate total number of media items
+    const discoveredMediaItems = folders.reduce((sum, folder) => sum + folder.fileCount, 0);
+    
+    // Use user estimate if provided, otherwise use discovered count
+    const totalMediaItems = this.config.estimated_total_photos || discoveredMediaItems;
+    
+    if (this.config.estimated_total_photos) {
+      this._log('📊 Using user estimate of', totalMediaItems, 'total photos (discovered:', discoveredMediaItems + ')');
+    } else {
+      this._log('📊 Using discovered count of', totalMediaItems, 'photos (adaptive - will adjust as more folders found)');
+    }
+    
+    if (totalMediaItems === 0) {
+      this._log('❌ No media items found in folders');
+      return [];
+    }
+    
+    // Each item in the queue should represent (totalMediaItems / queueSize) items
+    // So each folder gets slots proportional to its file count
+    const allocations = [];
+    let totalAllocated = 0;
+    
+    folders.forEach(folder => {
+      // Exact proportional allocation based on file count
+      const exactSlots = (folder.fileCount / totalMediaItems) * queueSize;
+      
+      // Round to nearest integer, but ensure minimum of 1 if folder has files
+      let allocatedSlots = Math.round(exactSlots);
+      if (allocatedSlots === 0 && folder.fileCount > 0) {
+        allocatedSlots = 1;
+      }
+      
+      allocations.push({
+        folder: folder,
+        proportionalSlots: allocatedSlots,
+        weight: allocatedSlots,
+        exactProbability: folder.fileCount / totalMediaItems,
+        itemProbability: allocatedSlots / folder.fileCount // Probability per item in this folder
+      });
+      
+      totalAllocated += allocatedSlots;
+      
+      this._log('🎯 EQUAL PROBABILITY allocation:', folder.title, 
+                'files:', folder.fileCount, 
+                'slots:', allocatedSlots, 
+                'exact:', exactSlots.toFixed(2),
+                'per-item prob:', (allocatedSlots / folder.fileCount * 100).toFixed(2) + '%');
+    });
+    
+    this._log('📊 Equal probability allocation complete:', totalAllocated, 'total slots,', totalMediaItems, 'total items');
+    this._log('📊 Target per-item probability:', (queueSize / totalMediaItems * 100).toFixed(3) + '%');
+    
+    return allocations;
+  }
+
+  // Calculate balanced folder allocation - each folder gets fair representation  
+  calculateBalancedFolderAllocations(folders, queueSize) {
+    this._log('🎯 Using BALANCED FOLDER allocation - each folder gets fair representation');
+    
+    // Give each folder a more equal share (minimum 5 items per folder, rest distributed evenly)
+    const minItemsPerFolder = Math.min(5, Math.floor(queueSize / folders.length));
+    const baseSlotsNeeded = folders.length * minItemsPerFolder;
+    const extraSlotsPool = Math.max(0, queueSize - baseSlotsNeeded);
+    const bonusSlotsPerFolder = Math.floor(extraSlotsPool / folders.length);
+    const extraSlots = extraSlotsPool % folders.length;
+    
+    const allocations = [];
+    let totalAllocated = 0;
+    
+    for (let i = 0; i < folders.length; i++) {
+      const folder = folders[i];
+      
+      // Each folder gets: minimum + bonus + (1 extra if needed)
+      const baseSlots = minItemsPerFolder + bonusSlotsPerFolder;
+      const extraSlot = i < extraSlots ? 1 : 0;
+      const finalSlots = baseSlots + extraSlot;
+      
+      allocations.push({
+        folder: folder,
+        proportionalSlots: finalSlots,
+        weight: finalSlots,  // Use slot count as weight for balanced allocation
+        itemProbability: finalSlots / folder.fileCount // Probability per item in this folder
+      });
+      
+      totalAllocated += finalSlots;
+      this._log('🎯 BALANCED FOLDER allocation:', folder.title, 
+                'gets', finalSlots, 'slots',
+                'per-item prob:', (finalSlots / folder.fileCount * 100).toFixed(2) + '%',
+                '(min:', minItemsPerFolder, '+ bonus:', bonusSlotsPerFolder, '+ extra:', extraSlot, ')');
+    }
+    
+    this._log('📊 Balanced folder allocation complete:', totalAllocated, 'total slots allocated');
+    
+    return allocations;
   }
 
   // Shuffle the queue to mix items from different folders
@@ -4560,6 +4641,10 @@ class SubfolderQueue {
     // Background task to find deeper folders
     setTimeout(async () => {
       try {
+        // Set discovery flag to prevent auto-refresh interruption
+        this.discoveryInProgress = true;
+        this.discoveryStartTime = Date.now();
+        
         this._log('🔍 Background: Searching for deeper folders...');
         
         // Look for folders that might have subfolders we haven't scanned yet
@@ -4596,6 +4681,10 @@ class SubfolderQueue {
         
       } catch (error) {
         this._log('❌ Background deepening failed:', error.message);
+      } finally {
+        // Clear discovery flag when background deepening completes
+        this.discoveryInProgress = false;
+        this._log('🏁 Background discovery complete - auto-refresh resumed');
       }
     }, 3000); // Start background scan after 3 seconds
   }
@@ -5336,6 +5425,42 @@ class MediaCardEditor extends LitElement {
                   <div class="help-text">Folder paths to prioritize (one per line). Paths containing these patterns get 3x weight.</div>
                 </div>
               </div>
+              
+              <div class="config-row">
+                <label class="switch-container">
+                  <input
+                    type="checkbox"
+                    .checked=${this._config.subfolder_queue?.equal_probability_mode === true}
+                    @change=${this._equalProbabilityModeChanged}
+                  />
+                  <span class="switch-slider"></span>
+                  Equal Probability Mode
+                </label>
+                <div class="help-text">
+                  <strong>Checked:</strong> Every media item has equal chance of selection (true statistical fairness)<br>
+                  <strong>Unchecked:</strong> Each folder gets equal representation (folders with few items are overrepresented)
+                </div>
+              </div>
+              
+              ${this._config.subfolder_queue?.equal_probability_mode ? html`
+                <div class="config-row">
+                  <label>Estimated Total Photos (Optional)</label>
+                  <div>
+                    <input
+                      type="number"
+                      min="100"
+                      max="100000"
+                      .value=${this._config.subfolder_queue?.estimated_total_photos || ''}
+                      @input=${this._estimatedTotalChanged}
+                      placeholder="e.g., 5000"
+                    />
+                    <div class="help-text">
+                      If you know roughly how many photos you have total, this improves probability calculations.<br>
+                      <strong>Leave empty</strong> for adaptive mode (adjusts as folders are discovered).
+                    </div>
+                  </div>
+                </div>
+              ` : ''}
             ` : ''}
           </div>
         ` : ''}
@@ -6691,6 +6816,29 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   _formatPriorityPatterns() {
     const patterns = this._config.subfolder_queue?.priority_folder_patterns || [];
     return patterns.map(p => p.path).join('\n');
+  }
+
+  _equalProbabilityModeChanged(ev) {
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        equal_probability_mode: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _estimatedTotalChanged(ev) {
+    const value = ev.target.value ? parseInt(ev.target.value) : null;
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        estimated_total_photos: value
+      }
+    };
+    this._fireConfigChanged();
   }
 
   _fireConfigChanged() {
