@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b47 - Progressive queue enhancement: add each folder as discovered
+ * Version: 2.3b53 - Fixed repetitive media type logging - now logs once per image only
  */
 
 // Import Lit from CDN for standalone usage
@@ -1685,16 +1685,12 @@ class MediaCard extends LitElement {
     if (this._folderContents && this._currentMediaIndex >= 0 && this._currentMediaIndex < this._folderContents.length) {
       const currentFile = this._folderContents[this._currentMediaIndex];
       if (currentFile && currentFile.media_content_id) {
-        const detectedType = this._detectFileType(currentFile.media_content_id) || 'image';
-        this._log('🎯 Media type from folder contents:', detectedType, 'file:', currentFile.media_content_id, 'index:', this._currentMediaIndex);
-        return detectedType;
+        return this._detectFileType(currentFile.media_content_id) || 'image';
       }
     }
     
     // Fallback to detecting from URL (for single file mode or edge cases)
-    const fallbackType = this._detectFileType(this._mediaUrl) || 'image';
-    this._log('🎯 Media type from URL fallback:', fallbackType, 'url:', this._mediaUrl, 'hasFolder:', !!this._folderContents, 'index:', this._currentMediaIndex);
-    return fallbackType;
+    return this._detectFileType(this._mediaUrl) || 'image';
   }
 
   _isMediaFile(filePath) {
@@ -2002,12 +1998,20 @@ class MediaCard extends LitElement {
       // Extract metadata from the media path, clean it first
       if (mediaPath || newUrl) {
         const pathToAnalyze = this._cleanPath(mediaPath || newUrl);
-        this._currentMetadata = this._extractMetadataFromPath(pathToAnalyze, this._folderContents);
+        const newMetadata = this._extractMetadataFromPath(pathToAnalyze, this._folderContents);
+        
+        // Only update metadata if it actually changed
+        if (JSON.stringify(newMetadata) !== JSON.stringify(this._currentMetadata)) {
+          this._currentMetadata = newMetadata;
+        }
       } else {
         this._currentMetadata = null;
       }
       
-      this._log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
+      this._log('✅ Media URL set, triggering re-render:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
+    } else {
+      // URL didn't change - don't trigger any updates
+      this._log('🔄 URL unchanged, skipping render trigger');
     }
   }
 
@@ -2250,7 +2254,12 @@ class MediaCard extends LitElement {
     // CRITICAL FIX: Use the corrected media type detection method
     // This uses the original filename from folder contents instead of the resolved URL
     const currentMediaType = this._getCurrentMediaType();
-    this._log('🎬 Rendering media with type:', currentMediaType, 'URL:', this._mediaUrl);
+    
+    // Only log rendering info once per media URL to avoid spam
+    if (!this._lastRenderedUrl || this._lastRenderedUrl !== this._mediaUrl) {
+      this._log('🎬 Rendering media with type:', currentMediaType, 'URL:', this._mediaUrl);
+      this._lastRenderedUrl = this._mediaUrl;
+    }
     
     if (currentMediaType === 'video') {
       return html`
@@ -3752,9 +3761,9 @@ class SubfolderQueue {
     }
     
     try {
-      // Get folder contents with timeout
+      // Get folder contents with timeout (increased for large Camera folders)
       const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 8000)
+        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 12000)
       );
       
       const folderContents = await Promise.race([
@@ -3774,10 +3783,18 @@ class SubfolderQueue {
       
       this._log('📁 Found', folderContents.children.length, 'items at depth:', currentDepth);
       
-      // Process directories only
+      // Process directories only - RANDOMIZE ORDER for variety
       const directories = folderContents.children.filter(item => item.media_class === 'directory');
       
-      for (const dir of directories) {
+      // Shuffle directories to ensure different folders get early population each time
+      const shuffledDirectories = [...directories];
+      for (let i = shuffledDirectories.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffledDirectories[i], shuffledDirectories[j]] = [shuffledDirectories[j], shuffledDirectories[i]];
+      }
+      this._log('🎲 Randomized folder processing order - starting with:', shuffledDirectories.slice(0, 3).map(d => d.title).join(', '));
+      
+      for (const dir of shuffledDirectories) {
         let folderInfo = null; // Declare outside try block so it's available in catch
         try {
           this._log('� Processing folder:', dir.title, 'at depth:', currentDepth + 1);
@@ -3867,10 +3884,41 @@ class SubfolderQueue {
         } catch (error) {
           this._log('⚠️ Folder processing error:', dir.title, 'error:', error.message);
           
+          // Emergency timeout recovery for large folders like Camera Roll
+          const isTimeoutError = error.message.toLowerCase().includes('timeout');
+          const isCameraFolder = dir.title.toLowerCase().includes('camera') || dir.title.toLowerCase().includes('dcim');
+          
+          if (isTimeoutError && isCameraFolder) {
+            this._log(`🚨 Emergency quick scan timeout for ${dir.title} - attempting recovery (error: ${error.message})`);
+            try {
+              const emergencyResult = await this.emergencyQuickScan(dir.title, dir.media_content_id);
+              if (emergencyResult) {
+                this._log(`✅ Emergency scan successful for ${dir.title} - adding to discovered folders`);
+                // Add the emergency result to discovered folders
+                discoveredFolders.push(emergencyResult);
+                
+                // Also try to add to queue immediately if we have one
+                if (this.queue && this.queue.length > 0) {
+                  try {
+                    await this.addFolderToQueue(emergencyResult);
+                    this._log(`✅ Emergency folder ${dir.title} added to queue immediately`);
+                  } catch (queueError) {
+                    this._log(`⚠️ Could not add emergency folder to queue: ${queueError.message}`);
+                  }
+                }
+                continue; // Skip to next folder since we handled this one
+              }
+            } catch (emergencyError) {
+              this._log(`❌ Emergency scan also failed for ${dir.title}: ${emergencyError.message}`);
+            }
+          } else if (isTimeoutError) {
+            this._log(`⏰ Timeout detected for non-camera folder: ${dir.title}`);
+          }
+          
           // If we at least got the file count, add this folder anyway (important for large folders)
           if (folderInfo && folderInfo.fileCount > 0) {
             this._log('🚨 Adding folder despite error (has', folderInfo.fileCount, 'files):', dir.title);
-            allSubfolders.push({
+            const folderData = {
               path: dir.media_content_id,
               title: dir.title,
               fileCount: folderInfo.fileCount,
@@ -3879,7 +3927,46 @@ class SubfolderQueue {
               isSampled: folderInfo.isSampled,
               sampleRatio: folderInfo.sampleRatio,
               hasError: true
-            });
+            };
+            allSubfolders.push(folderData);
+            
+            // Also track for early population and progressive enhancement
+            if (this.tempDiscoveredFolders) {
+              this.tempDiscoveredFolders.push(folderData);
+              this._log('📦 Added error-recovered folder to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
+              
+              if (this.earlyPopulationTriggered) {
+                // Queue already exists, add this folder's files progressively
+                this._log('🔄 Progressive enhancement: Adding error-recovered', folderData.title, 'to existing queue');
+                this.addFolderToQueue(folderData).catch(error => {
+                  this._log('⚠️ Progressive folder addition failed for error-recovered folder:', error.message);
+                });
+              }
+            }
+          } else if (error.message && error.message.includes('timeout')) {
+            // Special handling for timeouts - try a quick emergency scan
+            this._log('🚨 Timeout detected, attempting emergency quick scan for:', dir.title);
+            try {
+              const emergencyInfo = await this.emergencyQuickScan(dir.media_content_id, dir.title);
+              if (emergencyInfo && emergencyInfo.fileCount > 0) {
+                this._log('✅ Emergency scan successful for', dir.title, '- found', emergencyInfo.fileCount, 'files');
+                allSubfolders.push(emergencyInfo);
+                
+                if (this.tempDiscoveredFolders) {
+                  this.tempDiscoveredFolders.push(emergencyInfo);
+                  this._log('📦 Added emergency-scanned folder to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
+                  
+                  if (this.earlyPopulationTriggered) {
+                    this._log('🔄 Progressive enhancement: Adding emergency-scanned', emergencyInfo.title, 'to existing queue');
+                    this.addFolderToQueue(emergencyInfo).catch(error => {
+                      this._log('⚠️ Progressive folder addition failed for emergency-scanned folder:', error.message);
+                    });
+                  }
+                }
+              }
+            } catch (emergencyError) {
+              this._log('⚠️ Emergency scan also failed for:', dir.title, emergencyError.message);
+            }
           }
           // Continue with other folders even if one fails
         }
@@ -4104,6 +4191,63 @@ class SubfolderQueue {
     }
   }
 
+  // Emergency quick scan for folders that timeout - minimal sampling for basic info
+  async emergencyQuickScan(folderPath, folderTitle) {
+    try {
+      this._log('🚨 Emergency quick scan starting for:', folderTitle);
+      
+      // Very quick scan with minimal timeout
+      const emergencyTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`Emergency scan timeout: ${folderTitle}`)), 3000)
+      );
+      
+      const folderContents = await Promise.race([
+        this.card.hass.callWS({
+          type: "media_source/browse_media", 
+          media_content_id: folderPath
+        }),
+        emergencyTimeout
+      ]);
+
+      if (folderContents && folderContents.children && folderContents.children.length > 0) {
+        const totalChildren = folderContents.children.length;
+        this._log('🚨 Emergency scan found', totalChildren, 'total items in:', folderTitle);
+        
+        // Take only first 50 items for emergency sampling
+        const emergencySampleSize = Math.min(50, totalChildren);
+        const files = [];
+        
+        for (let i = 0; i < emergencySampleSize; i++) {
+          const item = folderContents.children[i];
+          if (item && item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
+            files.push(item);
+          }
+        }
+        
+        // Estimate total based on sample
+        const estimatedFileCount = Math.floor((files.length / emergencySampleSize) * totalChildren);
+        this._log('🚨 Emergency scan: sampled', files.length, 'files from first', emergencySampleSize, 'items, estimated total:', estimatedFileCount);
+        
+        return {
+          path: folderPath,
+          title: folderTitle,
+          fileCount: Math.max(estimatedFileCount, files.length),
+          files: files,
+          depth: 1, // Assume depth 1 for simplicity
+          isSampled: true,
+          sampleRatio: Math.ceil(totalChildren / emergencySampleSize),
+          hasError: true,
+          isEmergencyScan: true
+        };
+      }
+      
+      return null;
+    } catch (error) {
+      this._log('❌ Emergency scan failed for:', folderTitle, error.message);
+      return null;
+    }
+  }
+
   // Check if file is a media file
   isMediaFile(filePath) {
     const fileName = filePath.split('/').pop() || filePath;
@@ -4116,9 +4260,21 @@ class SubfolderQueue {
     try {
       this._log('➕ Adding folder to existing queue:', folder.title, 'files:', folder.fileCount);
       
-      // Calculate how many files to add from this folder (balanced approach)
+      // Calculate how many files to add from this folder (more balanced approach)
       const currentQueueSize = this.queue.length;
-      const targetSlots = Math.min(10, Math.max(5, Math.floor(folder.fileCount / 10))); // 5-10 files per folder
+      
+      // Progressive balancing: add more files if queue is small or if this folder is large
+      let targetSlots;
+      if (currentQueueSize < 50) {
+        // Early stage: add significant portions to quickly build diversity
+        targetSlots = Math.min(25, Math.max(15, Math.floor(folder.fileCount / 5)));
+      } else if (currentQueueSize < 100) {
+        // Medium stage: moderate additions
+        targetSlots = Math.min(15, Math.max(10, Math.floor(folder.fileCount / 8)));
+      } else {
+        // Late stage: smaller additions
+        targetSlots = Math.min(10, Math.max(5, Math.floor(folder.fileCount / 10)));
+      }
       
       this._log('🎯 Adding', targetSlots, 'files from', folder.title, 'to queue of', currentQueueSize);
       
@@ -4296,13 +4452,6 @@ class SubfolderQueue {
     
     this._log('📁 Folder selection: available', availableFiles.length, 'of', files.length, 'total files (excluding shown:', this.shownItems.size, 'and queued:', existingQueueIds.size, ')');
     
-    // DEBUG: Show some sample file IDs to understand the filtering
-    if (files.length > 0 && availableFiles.length === 0) {
-      this._log('🔍 DEBUG: Sample file IDs in folder:', files.slice(0, 3).map(f => f.media_content_id));
-      this._log('🔍 DEBUG: Sample shown items:', [...this.shownItems].slice(0, 3));
-      this._log('🔍 DEBUG: Sample queue items:', [...existingQueueIds].slice(0, 3));
-    }
-    
     if (availableFiles.length === 0) {
       this._log('⚠️ All files in this folder have been shown or queued - skipping folder entirely');
       return []; // Don't add any items from this folder - critical fix!
@@ -4312,12 +4461,41 @@ class SubfolderQueue {
       return [...availableFiles]; // Return all available files if we need more than available
     }
     
-    const selected = [];
-    const available = [...availableFiles];
+    // Enhanced randomization with time-based seed and better distribution
+    const timeSeed = Date.now() % 1000; // Use time as additional randomness
+    const shuffledFiles = [...availableFiles];
     
-    for (let i = 0; i < count && available.length > 0; i++) {
-      const randomIndex = Math.floor(Math.random() * available.length);
-      selected.push(available.splice(randomIndex, 1)[0]);
+    // Multi-pass shuffle for better randomization
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = shuffledFiles.length - 1; i > 0; i--) {
+        const j = Math.floor((Math.random() + timeSeed / 1000) * (i + 1)) % (i + 1);
+        [shuffledFiles[i], shuffledFiles[j]] = [shuffledFiles[j], shuffledFiles[i]];
+      }
+    }
+    
+    // Select from different parts of the shuffled array for more variety
+    const selected = [];
+    const segmentSize = Math.floor(shuffledFiles.length / count);
+    
+    for (let i = 0; i < count; i++) {
+      const segmentStart = i * segmentSize;
+      const segmentEnd = Math.min(segmentStart + segmentSize, shuffledFiles.length);
+      
+      if (segmentStart < shuffledFiles.length) {
+        const localIndex = Math.floor(Math.random() * (segmentEnd - segmentStart));
+        const fileIndex = segmentStart + localIndex;
+        
+        if (shuffledFiles[fileIndex]) {
+          selected.push(shuffledFiles[fileIndex]);
+          shuffledFiles.splice(fileIndex, 1); // Remove to avoid duplicates
+        }
+      }
+    }
+    
+    // If we didn't get enough from segments, fill from remaining
+    while (selected.length < count && shuffledFiles.length > 0) {
+      const randomIndex = Math.floor(Math.random() * shuffledFiles.length);
+      selected.push(shuffledFiles.splice(randomIndex, 1)[0]);
     }
     
     return selected;
