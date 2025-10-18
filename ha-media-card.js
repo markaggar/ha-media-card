@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b38 - Added Navigation History + Keep Queue Items
+ * Version: 2.3b47 - Progressive queue enhancement: add each folder as discovered
  */
 
 // Import Lit from CDN for standalone usage
@@ -1011,13 +1011,21 @@ class MediaCard extends LitElement {
       // If subfolder queue is active, use it instead of scanning folder contents
       if (this._subfolderQueue && this._subfolderQueue.config.enabled && this._isRandomMode()) {
         this._log('🔄 Using subfolder queue for refresh');
+        
+        // If queue is still scanning, wait rather than falling back to root folder
+        if (this._subfolderQueue.isScanning && this._subfolderQueue.queue.length === 0) {
+          this._log('⏳ Queue still initializing - skipping refresh to avoid showing root folder images');
+          this._lastRefreshTime = Date.now(); // Update timestamp to prevent rapid retries
+          return;
+        }
+        
         const randomResult = this._getRandomFileWithIndex(true);
         if (randomResult && randomResult.file) {
           await this._loadMediaFromItem(randomResult.file);
           this._lastRefreshTime = Date.now();
           return;
         } else {
-          this._log('⚠️ Subfolder queue failed during refresh, falling back to folder scan');
+          this._log('⚠️ Subfolder queue failed during refresh - queue empty but not scanning');
         }
       }
       
@@ -3804,7 +3812,7 @@ class SubfolderQueue {
               this.tempDiscoveredFolders.push(folderData);
               this._log('📦 Added to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
               
-              // Trigger immediate population when we have enough good folders - start much earlier!
+              // Progressive queue enhancement: Add this folder to queue immediately
               if (!this.earlyPopulationTriggered && this.tempDiscoveredFolders.length >= 2) {
                 this._log('⚡ IMMEDIATE early population triggered with', this.tempDiscoveredFolders.length, 'folders');
                 this.earlyPopulationTriggered = true;
@@ -3812,6 +3820,12 @@ class SubfolderQueue {
                 // Trigger population immediately in the background
                 this.triggerEarlyPopulation().catch(error => {
                   this._log('⚠️ Early population failed:', error.message);
+                });
+              } else if (this.earlyPopulationTriggered) {
+                // Queue already exists, add this new folder's files progressively
+                this._log('🔄 Progressive enhancement: Adding', folderData.title, 'to existing queue');
+                this.addFolderToQueue(folderData).catch(error => {
+                  this._log('⚠️ Progressive folder addition failed:', error.message);
                 });
               }
             }
@@ -3906,16 +3920,31 @@ class SubfolderQueue {
     // Don't reset earlyPopulationTriggered here - let it trigger when conditions are met
     
     try {
+      // First, check for files in the root folder and add as a "folder" to ensure equal treatment
+      const rootFiles = await this.scanFolderFiles(basePath);
+      if (rootFiles.length > 0) {
+        const rootFolder = {
+          title: 'Root Folder',
+          path: basePath,
+          files: rootFiles,
+          fileCount: rootFiles.length,
+          depth: 0
+        };
+        this.tempDiscoveredFolders.push(rootFolder);
+        this._log('📁 Added root folder with', rootFiles.length, 'files to queue consideration');
+        
+        // Trigger early population if root folder has enough files
+        if (!this.earlyPopulationTriggered) {
+          await this.triggerEarlyPopulation();
+        }
+      }
+      
       // Start regular discovery - early population will happen automatically when we have enough folders
       const allSubfolders = await this.discoverSubfolders(basePath, currentDepth);
       
       // If early population didn't happen, do final population now
-      if (!this.earlyPopulationTriggered && allSubfolders.length > 0) {
-        this._log('📦 Final population with all', allSubfolders.length, 'discovered folders');
-        const sortedFolders = [...allSubfolders].sort((a, b) => b.fileCount - a.fileCount);
-        const initialFolders = sortedFolders.slice(0, this.config.initial_scan_limit);
-        await this.populateQueueFromFolders(initialFolders);
-      }
+      // No final repopulation needed - progressive enhancement handles this
+      this._log('✅ Discovery complete:', allSubfolders.length, 'folders found, queue progressively enhanced during discovery');
       
       return allSubfolders;
       
@@ -4082,6 +4111,37 @@ class SubfolderQueue {
     return ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
   }
 
+  // Add a single folder to existing queue progressively
+  async addFolderToQueue(folder) {
+    try {
+      this._log('➕ Adding folder to existing queue:', folder.title, 'files:', folder.fileCount);
+      
+      // Calculate how many files to add from this folder (balanced approach)
+      const currentQueueSize = this.queue.length;
+      const targetSlots = Math.min(10, Math.max(5, Math.floor(folder.fileCount / 10))); // 5-10 files per folder
+      
+      this._log('🎯 Adding', targetSlots, 'files from', folder.title, 'to queue of', currentQueueSize);
+      
+      // Select random files from this folder
+      const selectedFiles = this.selectRandomFiles(folder.files || [], targetSlots);
+      
+      if (selectedFiles.length > 0) {
+        // Add to queue
+        this.queue.push(...selectedFiles);
+        
+        // Shuffle immediately for proper mixing
+        this.shuffleQueue();
+        
+        this._log('✅ Added', selectedFiles.length, 'files from', folder.title, '- queue now has', this.queue.length, 'items');
+      } else {
+        this._log('⚠️ No new files available from', folder.title);
+      }
+      
+    } catch (error) {
+      this._log('❌ Error adding folder to queue:', folder.title, error);
+    }
+  }
+
   // Populate queue from discovered folders using weighted selection
   async populateQueueFromFolders(folders) {
     try {
@@ -4103,61 +4163,42 @@ class SubfolderQueue {
         }
       }
 
-      // Calculate total weight
-      const totalWeight = Array.from(this.folderWeights.values()).reduce((sum, weight) => sum + weight, 0);
-      
-      if (totalWeight === 0) {
-        this._log('❌ Total weight is zero, cannot allocate queue slots');
-        return;
-      }
-      
-      // Allocate queue slots based on weights
-      // Use a reasonable queue size that allows for good randomization
-      const queueSize = Math.max(this.config.queue_size || 15, this.discoveredFolders.length * 2);
+      // Use BALANCED allocation instead of weight-based to ensure fair folder representation
+      const queueSize = Math.max(this.config.queue_size || 15, folders.length * 10);
       this.queue = [];
       
-      this._log('🎯 Allocating', queueSize, 'total slots among', folders.length, 'folders for better randomization');
+      this._log('🎯 Using BALANCED allocation of', queueSize, 'slots among', folders.length, 'folders for fair representation');
       
-      // First pass: calculate proportional slots
-      let totalAllocated = 0;
+      // Give each folder a more equal share (minimum 5 items per folder, rest distributed evenly)
+      const minItemsPerFolder = Math.min(5, Math.floor(queueSize / folders.length));
+      const baseSlotsNeeded = folders.length * minItemsPerFolder;
+      const extraSlotsPool = Math.max(0, queueSize - baseSlotsNeeded);
+      const bonusSlotsPerFolder = Math.floor(extraSlotsPool / folders.length);
+      const extraSlots = extraSlotsPool % folders.length;
+      
+      // Create balanced allocations - each folder gets fair representation
       const allocations = [];
+      let totalAllocated = 0;
       
-      for (const folder of folders) {
-        try {
-          const folderWeight = this.folderWeights.get(folder.path);
-          const proportionalSlots = Math.floor((folderWeight / totalWeight) * queueSize);
-          
-          allocations.push({
-            folder: folder,
-            weight: folderWeight,
-            proportionalSlots: proportionalSlots
-          });
-          totalAllocated += proportionalSlots;
-        } catch (error) {
-          this._log('❌ Error allocating slots for folder:', folder.title, error);
-        }
+      for (let i = 0; i < folders.length; i++) {
+        const folder = folders[i];
+        
+        // Each folder gets: minimum + bonus + (1 extra if needed)
+        const baseSlots = minItemsPerFolder + bonusSlotsPerFolder;
+        const extraSlot = i < extraSlots ? 1 : 0;
+        const finalSlots = baseSlots + extraSlot;
+        
+        allocations.push({
+          folder: folder,
+          proportionalSlots: finalSlots,
+          weight: finalSlots  // Use slot count as weight for balanced allocation
+        });
+        
+        totalAllocated += finalSlots;
+        this._log('🎯 BALANCED allocation:', folder.title, 'gets', finalSlots, 'slots (min:', minItemsPerFolder, '+ bonus:', bonusSlotsPerFolder, '+ extra:', extraSlot, ')');
       }
       
-      // If we have remaining slots, distribute them to highest weight folders
-      let remainingSlots = queueSize - totalAllocated;
-      this._log('📊 Initial allocation:', totalAllocated, 'remaining:', remainingSlots);
-      
-      // Sort by weight (highest first) for remaining slot distribution
-      allocations.sort((a, b) => b.weight - a.weight);
-      
-      // Ensure every folder with files gets at least 1 slot for variety
-      for (let i = 0; i < allocations.length && remainingSlots > 0; i++) {
-        if (allocations[i].proportionalSlots === 0 && allocations[i].folder.files && allocations[i].folder.files.length > 0) {
-          allocations[i].proportionalSlots = 1;
-          remainingSlots--;
-        }
-      }
-      
-      // Distribute any still remaining slots to highest weight folders
-      for (let i = 0; i < allocations.length && remainingSlots > 0; i++) {
-        allocations[i].proportionalSlots++;
-        remainingSlots--;
-      }
+      this._log('📊 Balanced allocation complete:', totalAllocated, 'total slots allocated');
       
       // Now populate queue with allocated slots
       for (const allocation of allocations) {
@@ -4169,16 +4210,24 @@ class SubfolderQueue {
           // Randomly select files from this folder
           const selectedFiles = this.selectRandomFiles(allocation.folder.files || [], allocatedSlots);
           this._log('📄 Selected', selectedFiles.length, 'files from', allocation.folder.title);
+          
+          // Add files and shuffle immediately to ensure proper interleaving
           this.queue.push(...selectedFiles);
+          
+          // Shuffle after each folder addition for proper mixing
+          if (selectedFiles.length > 0) {
+            this.shuffleQueue();
+            this._log('🔀 Shuffled queue after adding', allocation.folder.title, '- queue size:', this.queue.length);
+          }
         } catch (error) {
           this._log('❌ Error processing folder:', allocation.folder.title, error);
         }
       }
 
-      // Shuffle the final queue for temporal randomness
-      this.shuffleQueue();
-      
       this._log('✅ Queue populated with', this.queue.length, 'items from', folders.length, 'folders');
+      
+      // Final shuffle to ensure complete randomization
+      this.shuffleQueue();
       
       // Log detailed queue composition
       if (this.queue.length > 0) {
@@ -4206,17 +4255,56 @@ class SubfolderQueue {
     }
   }
 
+  // Shuffle the queue to mix items from different folders
+  shuffleQueue() {
+    this._log('🎲 Shuffling queue to mix items from different folders - queue size:', this.queue.length);
+    
+    // Show first few items BEFORE shuffle
+    this._log('📋 BEFORE shuffle - first 5 items:', this.queue.slice(0, 5).map(item => {
+      const pathParts = item.media_content_id.split('/');
+      const folderName = pathParts[pathParts.length - 2] || 'root';
+      return `${item.title} (${folderName})`;
+    }).join(', '));
+    
+    // Fisher-Yates shuffle algorithm
+    for (let i = this.queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
+    }
+    
+    // Show first few items AFTER shuffle
+    this._log('📋 AFTER shuffle - first 5 items:', this.queue.slice(0, 5).map(item => {
+      const pathParts = item.media_content_id.split('/');
+      const folderName = pathParts[pathParts.length - 2] || 'root';
+      return `${item.title} (${folderName})`;
+    }).join(', '));
+  }
+
   // Select N random files from an array, excluding already shown items
   selectRandomFiles(files, count) {
-    if (!files || files.length === 0) return [];
+    if (!files || files.length === 0) {
+      this._log('⚠️ selectRandomFiles: No files provided or empty array');
+      return [];
+    }
     
-    // Filter out already shown items - this is the key fix!
-    const availableFiles = files.filter(file => !this.shownItems.has(file.media_content_id));
+    // Filter out already shown items AND items already in queue
+    const existingQueueIds = new Set(this.queue.map(item => item.media_content_id));
+    const availableFiles = files.filter(file => 
+      !this.shownItems.has(file.media_content_id) && 
+      !existingQueueIds.has(file.media_content_id)
+    );
     
-    this._log('📁 Folder selection: available', availableFiles.length, 'of', files.length, 'total files');
+    this._log('📁 Folder selection: available', availableFiles.length, 'of', files.length, 'total files (excluding shown:', this.shownItems.size, 'and queued:', existingQueueIds.size, ')');
+    
+    // DEBUG: Show some sample file IDs to understand the filtering
+    if (files.length > 0 && availableFiles.length === 0) {
+      this._log('🔍 DEBUG: Sample file IDs in folder:', files.slice(0, 3).map(f => f.media_content_id));
+      this._log('🔍 DEBUG: Sample shown items:', [...this.shownItems].slice(0, 3));
+      this._log('🔍 DEBUG: Sample queue items:', [...existingQueueIds].slice(0, 3));
+    }
     
     if (availableFiles.length === 0) {
-      this._log('⚠️ All files in this folder have been shown - skipping folder entirely');
+      this._log('⚠️ All files in this folder have been shown or queued - skipping folder entirely');
       return []; // Don't add any items from this folder - critical fix!
     }
     
@@ -4235,13 +4323,7 @@ class SubfolderQueue {
     return selected;
   }
 
-  // Shuffle the queue array
-  shuffleQueue() {
-    for (let i = this.queue.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
-    }
-  }
+
 
   // Start progressive scanning of remaining folders
   startProgressiveScanning(remainingFolders) {
@@ -4356,8 +4438,8 @@ class SubfolderQueue {
       }
     }
 
-    this._log('⚠️ Queue is empty or all items shown (' + this.shownItems.size + ' total), clearing blacklist and refilling');
-    this.clearShownItems();
+    this._log('⚠️ Queue is empty or all items shown (' + this.shownItems.size + ' total), aging out blacklist and refilling');
+    this.ageOutShownItems();
     this.refillQueue();
     
     // Try again after refill
@@ -4411,15 +4493,43 @@ class SubfolderQueue {
     return this.queue.length; // Since we remove items when shown, all remaining items are unshown
   }
 
-  // Check if queue needs refilling
+  // Check if queue needs refilling (since items stay in queue, check available unshown items)
   needsRefill() {
-    return this.queue.length < 5; // Refill when < 5 items left
+    const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
+    return unshownCount < 10; // Refill when < 10 unshown items left
   }
 
   // Clear shown items tracking (reset exclusions)
   clearShownItems() {
     this._log('🔄 Clearing shown items tracking, resetting exclusions');
     this.shownItems.clear();
+  }
+
+  // Age out older shown items (partial clearing for better variety)
+  ageOutShownItems() {
+    const totalShown = this.shownItems.size;
+    if (totalShown === 0) return;
+    
+    // Keep the most recent 30% of shown items, age out the rest
+    const keepPercentage = 0.3;
+    const itemsToKeep = Math.ceil(totalShown * keepPercentage);
+    const itemsToAge = totalShown - itemsToKeep;
+    
+    if (itemsToAge <= 0) {
+      this._log('🔄 Not enough shown items to age out, clearing all');
+      this.clearShownItems();
+      return;
+    }
+    
+    // Convert Set to Array, keep the last N items (most recently shown)
+    const shownArray = Array.from(this.shownItems);
+    const itemsToKeep_array = shownArray.slice(-itemsToKeep);
+    
+    this._log('📅 Aging out', itemsToAge, 'older items, keeping', itemsToKeep, 'recent items');
+    
+    // Replace set with aged-out version
+    this.shownItems.clear();
+    itemsToKeep_array.forEach(item => this.shownItems.add(item));
   }
 
   // Refill queue with new random selections
@@ -4448,8 +4558,10 @@ class SubfolderQueue {
       return;
     }
 
-    // Re-populate queue from discovered folders
+    // Re-populate queue from discovered folders (this will add to existing queue)
+    const currentQueueSize = this.queue.length;
     this.populateQueueFromFolders(this.discoveredFolders.slice(0, this.config.initial_scan_limit));
+    this._log('🔄 Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
   }
 }
 
