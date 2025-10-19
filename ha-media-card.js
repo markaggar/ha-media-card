@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b53 - Fixed repetitive media type logging - now logs once per image only
+ * Version: 2.3b61 - Added detailed timing logs to investigate actual timeout behavior
  */
 
 // Import Lit from CDN for standalone usage
@@ -3834,12 +3834,27 @@ class SubfolderQueue {
           this._log('� Processing folder:', dir.title, 'at depth:', currentDepth + 1);
           
           // Scan this folder for files (with timeout)
+          const folderScanStartTime = Date.now();
+          this._log('🕐 Main folder scan starting at', folderScanStartTime, 'for', dir.title);
+          
           const folderScanTimeout = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(`Folder scan timeout: ${dir.title}`)), 15000) // Increased timeout
+            setTimeout(() => {
+              const elapsed = Date.now() - folderScanStartTime;
+              this._log('⏰ Main folder timeout triggered after', elapsed + 'ms for', dir.title);
+              reject(new Error(`Folder scan timeout: ${dir.title}`));
+            }, 60000) // 60 second timeout - we have queue system
           );
           
           folderInfo = await Promise.race([
-            this.scanFolderFiles(dir.media_content_id),
+            this.scanFolderFiles(dir.media_content_id).then(result => {
+              const elapsed = Date.now() - folderScanStartTime;
+              this._log('✅ Main folder scan completed after', elapsed + 'ms for', dir.title);
+              return result;
+            }).catch(error => {
+              const elapsed = Date.now() - folderScanStartTime;
+              this._log('❌ Main folder scan failed after', elapsed + 'ms for', dir.title, ':', error.message);
+              throw error;
+            }),
             folderScanTimeout
           ]);
           
@@ -3941,9 +3956,16 @@ class SubfolderQueue {
                   }
                 }
                 continue; // Skip to next folder since we handled this one
+              } else {
+                this._log(`❌ Emergency scan returned null for ${dir.title} - no synthetic folder created`);
               }
             } catch (emergencyError) {
               this._log(`❌ Emergency scan also failed for ${dir.title}: ${emergencyError.message}`);
+              // Emergency scan failed completely - create a synthetic folder as last resort
+              const syntheticFolder = this.createSyntheticFolderEntry(dir.media_content_id, dir.title);
+              discoveredFolders.push(syntheticFolder);
+              this._log(`🔄 Created last-resort synthetic folder for ${dir.title} with estimated ${syntheticFolder.fileCount} files`);
+              continue;
             }
           } else if (isTimeoutError) {
             this._log(`⏰ Timeout detected for non-camera folder: ${dir.title}`);
@@ -4233,26 +4255,52 @@ class SubfolderQueue {
   }
 
   // Emergency quick scan for folders that timeout - minimal sampling for basic info
-  async emergencyQuickScan(folderPath, folderTitle) {
+  async emergencyQuickScan(folderPath, folderTitle, customTimeoutMs = null) {
     try {
       this._log('🚨 Emergency quick scan starting for:', folderTitle);
       
-      // Increase timeout for critical folders that are known to be large
+      // For known massive folders, use estimated approach instead of enumeration
+      const isMassiveFolder = folderTitle.toLowerCase().includes('camera roll') || 
+                              folderTitle.toLowerCase().includes('dcim') ||
+                              folderTitle.toLowerCase().includes('photos');
+      
+      if (isMassiveFolder) {
+        return this.handleMassiveFolderEstimation(folderPath, folderTitle);
+      }
+      
+      // For other folders, try normal emergency scan with extended timeout
       const isCriticalFolder = folderTitle.toLowerCase().includes('camera') || 
                                folderTitle.toLowerCase().includes('dcim') ||
                                folderTitle.toLowerCase().includes('roll');
-      const timeoutMs = isCriticalFolder ? 8000 : 3000; // 8 seconds for Camera/DCIM folders
       
-      this._log('⏰ Emergency timeout set to', timeoutMs + 'ms for', folderTitle, '(critical:', isCriticalFolder + ')');
+      // Use custom timeout if provided, otherwise use defaults
+      const timeoutMs = customTimeoutMs || (isCriticalFolder ? 60000 : 30000); // 60s for critical, 30s for others
+      
+      this._log('⏰ Emergency timeout set to', timeoutMs + 'ms for', folderTitle, '(critical:', isCriticalFolder, 'custom:', !!customTimeoutMs + ')');
+      
+      const startTime = Date.now();
+      this._log('🕐 Emergency scan starting at', startTime, 'for', folderTitle);
       
       const emergencyTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`Emergency scan timeout: ${folderTitle}`)), timeoutMs)
+        setTimeout(() => {
+          const elapsed = Date.now() - startTime;
+          this._log('⏰ Emergency timeout triggered after', elapsed + 'ms for', folderTitle);
+          reject(new Error(`Emergency scan timeout: ${folderTitle}`));
+        }, timeoutMs)
       );
       
       const folderContents = await Promise.race([
         this.card.hass.callWS({
           type: "media_source/browse_media", 
           media_content_id: folderPath
+        }).then(result => {
+          const elapsed = Date.now() - startTime;
+          this._log('✅ WebSocket call completed after', elapsed + 'ms for', folderTitle);
+          return result;
+        }).catch(error => {
+          const elapsed = Date.now() - startTime;
+          this._log('❌ WebSocket call failed after', elapsed + 'ms for', folderTitle, ':', error.message);
+          throw error;
         }),
         emergencyTimeout
       ]);
@@ -4292,8 +4340,58 @@ class SubfolderQueue {
       return null;
     } catch (error) {
       this._log('❌ Emergency scan failed for:', folderTitle, error.message);
-      return null;
+      
+      // Create a synthetic folder entry for timed-out folders
+      // This allows the system to acknowledge the folder exists even if we can't scan it
+      return this.createSyntheticFolderEntry(folderPath, folderTitle);
     }
+  }
+
+  // Create a synthetic folder entry for folders that timeout during scanning
+  createSyntheticFolderEntry(folderPath, folderTitle) {
+    // Estimate folder size based on folder name patterns and context
+    const estimatedFileCount = this.estimateFolderSize(folderTitle);
+    
+    this._log('🔄 Creating synthetic folder entry for:', folderTitle, 'estimated files:', estimatedFileCount);
+    
+    return {
+      title: folderTitle,
+      path: folderPath,
+      media_content_id: folderPath,
+      fileCount: estimatedFileCount,
+      files: [], // Empty files array - will be populated via lazy loading if needed
+      isSynthetic: true,
+      isLargeFolder: true,
+      depth: 1, // Assume shallow depth for synthetic entries
+      hasError: true,
+      errorType: 'timeout',
+      canLazyLoad: true // Flag to indicate this folder can attempt lazy loading later
+    };
+  }
+
+  // Estimate folder size based on name patterns and context
+  estimateFolderSize(folderTitle) {
+    const titleLower = folderTitle.toLowerCase();
+    
+    // Large photo repositories
+    if (titleLower.includes('camera roll') || titleLower.includes('camera_roll')) {
+      return 3000; // Typical camera roll size
+    }
+    if (titleLower.includes('dcim') || titleLower.includes('camera')) {
+      return 2000; // DCIM folders are usually large
+    }
+    if (titleLower.includes('photos') || titleLower.includes('pictures')) {
+      return 1500; // General photo folders
+    }
+    if (titleLower.includes('screenshot')) {
+      return 200; // Screenshots folder
+    }
+    if (titleLower.includes('download')) {
+      return 100; // Download folders
+    }
+    
+    // Default estimate for unknown folders that timeout
+    return 500; // Conservative estimate - if it times out, it's probably substantial
   }
 
   // Check if file is a media file
@@ -4306,7 +4404,29 @@ class SubfolderQueue {
   // Add a single folder to existing queue progressively
   async addFolderToQueue(folder) {
     try {
-      this._log('➕ Adding folder to existing queue:', folder.title, 'files:', folder.fileCount);
+      this._log('➕ Adding folder to existing queue:', folder.title, 'files:', folder.fileCount, folder.isSynthetic ? '(synthetic)' : '');
+      
+      // Handle synthetic folders that need lazy loading
+      if (folder.isSynthetic && (!folder.files || folder.files.length === 0)) {
+        this._log('🔄 Attempting lazy load for synthetic folder:', folder.title);
+        try {
+          // Attempt a quick emergency scan with a very short timeout for lazy loading
+          const lazyLoadResult = await this.emergencyQuickScan(folder.path, folder.title, 10000); // 10 second timeout for lazy loading
+          if (lazyLoadResult && lazyLoadResult.files && lazyLoadResult.files.length > 0) {
+            // Update the folder with real data
+            folder.files = lazyLoadResult.files;
+            folder.fileCount = lazyLoadResult.fileCount;
+            folder.isSynthetic = false; // No longer synthetic
+            this._log('✅ Lazy load successful for', folder.title, '- now has', folder.fileCount, 'real files');
+          } else {
+            this._log('❌ Lazy load failed for', folder.title, '- skipping queue addition for now');
+            return; // Skip adding this folder to queue for now
+          }
+        } catch (error) {
+          this._log('❌ Lazy load error for', folder.title, ':', error.message);
+          return; // Skip adding this folder to queue
+        }
+      }
       
       // Calculate how many files to add from this folder (more balanced approach)
       const currentQueueSize = this.queue.length;
@@ -4435,6 +4555,17 @@ class SubfolderQueue {
     this._log('🎯 Using EQUAL PROBABILITY allocation - each media item has equal selection chance');
     this._log('📊 Working with', folders.length, 'discovered folders (more may be found later)');
     
+    // Count synthetic vs real folders
+    const syntheticFolders = folders.filter(f => f.isSynthetic);
+    const realFolders = folders.filter(f => !f.isSynthetic);
+    
+    if (syntheticFolders.length > 0) {
+      this._log('🔄 Including', syntheticFolders.length, 'synthetic folders in calculations (large folders that timed out)');
+      syntheticFolders.forEach(folder => {
+        this._log('   📁 Synthetic:', folder.title, 'estimated files:', folder.fileCount);
+      });
+    }
+    
     // Calculate total number of media items
     const discoveredMediaItems = folders.reduce((sum, folder) => sum + folder.fileCount, 0);
     
@@ -4461,27 +4592,51 @@ class SubfolderQueue {
       // Exact proportional allocation based on file count
       const exactSlots = (folder.fileCount / totalMediaItems) * queueSize;
       
-      // Round to nearest integer, but ensure minimum of 1 if folder has files
-      let allocatedSlots = Math.round(exactSlots);
-      if (allocatedSlots === 0 && folder.fileCount > 0) {
-        allocatedSlots = 1;
+      // Use probabilistic rounding instead of guaranteed minimum
+      // Small folders should sometimes get 0 slots for true statistical fairness
+      let allocatedSlots;
+      
+      if (exactSlots < 1.0) {
+        // For small allocations, use probabilistic rounding
+        // e.g., if exactSlots = 0.3, there's a 30% chance of getting 1 slot, 70% chance of 0
+        const random = Math.random();
+        allocatedSlots = (random < exactSlots) ? 1 : 0;
+        
+        if (allocatedSlots === 0) {
+          this._log('🎲 Small folder', folder.title, 'gets 0 slots this round (exact:', exactSlots.toFixed(3), ', random:', random.toFixed(3), ')');
+        } else {
+          this._log('🎲 Small folder', folder.title, 'gets 1 slot (exact:', exactSlots.toFixed(3), ', random:', random.toFixed(3), ')');
+        }
+      } else {
+        // For larger allocations, use normal rounding
+        allocatedSlots = Math.round(exactSlots);
       }
       
+      // ALWAYS add folder to allocations list (even with 0 slots) so it can be selected during refills
       allocations.push({
         folder: folder,
         proportionalSlots: allocatedSlots,
-        weight: allocatedSlots,
+        weight: Math.max(allocatedSlots, 0.1), // Minimum weight ensures folders can be selected during refills
         exactProbability: folder.fileCount / totalMediaItems,
-        itemProbability: allocatedSlots / folder.fileCount // Probability per item in this folder
+        itemProbability: allocatedSlots > 0 ? (allocatedSlots / folder.fileCount) : (exactSlots / folder.fileCount) // Use exact probability even when slots = 0
       });
       
       totalAllocated += allocatedSlots;
       
-      this._log('🎯 EQUAL PROBABILITY allocation:', folder.title, 
-                'files:', folder.fileCount, 
-                'slots:', allocatedSlots, 
-                'exact:', exactSlots.toFixed(2),
-                'per-item prob:', (allocatedSlots / folder.fileCount * 100).toFixed(2) + '%');
+      if (allocatedSlots > 0) {
+        this._log('🎯 EQUAL PROBABILITY allocation:', folder.title, 
+                  'files:', folder.fileCount, 
+                  'slots:', allocatedSlots, 
+                  'exact:', exactSlots.toFixed(2),
+                  'per-item prob:', (allocatedSlots / folder.fileCount * 100).toFixed(2) + '%',
+                  folder.isSynthetic ? '(synthetic)' : '');
+      } else {
+        this._log('🎯 EQUAL PROBABILITY allocation:', folder.title, 
+                  'files:', folder.fileCount, 
+                  'slots: 0 (kept in allocations with weight 0.1 for refills)',
+                  'exact:', exactSlots.toFixed(2),
+                  folder.isSynthetic ? '(synthetic)' : '');
+      }
     });
     
     this._log('📊 Equal probability allocation complete:', totalAllocated, 'total slots,', totalMediaItems, 'total items');
