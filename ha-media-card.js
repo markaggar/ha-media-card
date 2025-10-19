@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b67 - Fixed queue expansion, increased timeouts, improved folder statistics display
+ * Version: 2.3b70 - Fixed streaming to use sampling instead of taking all files from folders
  */
 
 // Import Lit from CDN for standalone usage
@@ -3875,6 +3875,13 @@ class SubfolderQueue {
     // Queue history - tracks every file ever added to the queue for debug purposes
     this.queueHistory = [];
     
+    // Batch scheduler for interleaving batches from different folders
+    this.batchScheduler = {
+      scheduledBatches: [],
+      isProcessing: false,
+      intervalId: null
+    };
+    
     // Navigation history for back/forward functionality
     this.history = []; // Array of shown items in chronological order
     this.historyIndex = -1; // Current position in history (-1 = latest)
@@ -4038,36 +4045,27 @@ class SubfolderQueue {
       let subfolders = [];
       
       try {
-        // Try a scan with reasonable timeout
-        this._log('🚀 Starting folder discovery scan...');
+        // NEW: Use streaming initialization instead of early population
+        this._log('🚀 Starting streaming folder scan...');
         
-        // Set up a timeout that will force completion after a reasonable time
-        const forceCompleteTimeout = setTimeout(() => {
-          this._log('⚠️ Forcing scan completion due to timeout');
+        const streamingSuccess = await this.initializeWithStreamingScans(basePath);
+        
+        if (!streamingSuccess) {
+          this._log('⚠️ No subfolders found, subfolder queue disabled');
           this.isScanning = false;
-        }, 60000); // 60 seconds absolute maximum
+          return false;
+        }
         
-        // Start discovery but implement early population
-        subfolders = await this.discoverSubfoldersWithEarlyPopulation(basePath, 0);
-        
-        clearTimeout(forceCompleteTimeout);
-        this._log('✅ Folder discovery completed with', subfolders.length, 'folders');
+        this._log('✅ Streaming initialization started - queue will populate as scans complete');
         
       } catch (error) {
-        this._log('⚠️ Folder discovery failed:', error.message);
-        subfolders = [];
-      }
-      
-      // Always complete the scan regardless of results
-      this.isScanning = false;
-      
-      if (subfolders.length === 0) {
-        this._log('⚠️ No subfolders found, subfolder queue disabled');
+        this._log('⚠️ Streaming initialization failed:', error.message);
+        this.isScanning = false;
         return false;
       }
-
-      // Store discovered folders for later refills
-      this.discoveredFolders = subfolders;
+      
+      // Scanning continues in background, mark as complete
+      this.isScanning = false;
       this._log('📁 Found', subfolders.length, 'subfolders total');
       
       // Note: Queue population is handled by discoverSubfoldersWithEarlyPopulation
@@ -4462,8 +4460,375 @@ class SubfolderQueue {
     }
   }
 
-  // Scan files in a specific folder with large folder optimization
+  // Stream files from a folder in real-time batches (NEW STREAMING APPROACH)
+  async streamFolderFiles(folderPath, folderTitle) {
+    const BATCH_SIZE = 100; // Process files in batches of 100
+    const TIMEOUT_MS = 300000; // 5 minutes safety timeout
+    
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const batchBuffer = [];
+      let totalProcessed = 0;
+      let isComplete = false;
+      
+      // Safety timeout
+      const safetyTimeout = setTimeout(() => {
+        const elapsed = Date.now() - startTime;
+        this._log('⏰ SAFETY TIMEOUT after', Math.round(elapsed/1000) + 's for folder:', folderTitle);
+        isComplete = true;
+        reject(new Error(`Safety timeout: ${folderTitle}`));
+      }, TIMEOUT_MS);
+      
+      this._log('🚀 Starting streaming scan for:', folderTitle);
+      
+      // Start the WebSocket call
+      this.card.hass.callWS({
+        type: "media_source/browse_media", 
+        media_content_id: folderPath
+      }).then(folderContents => {
+        clearTimeout(safetyTimeout);
+        
+        if (isComplete) return; // Already timed out
+        
+        const totalChildren = folderContents?.children?.length || 0;
+        this._log('📁 Streaming folder has', totalChildren, 'total items:', folderTitle);
+        
+        if (!folderContents || !folderContents.children || folderContents.children.length === 0) {
+          this._log('📂 Empty folder:', folderTitle);
+          resolve({ files: [], fileCount: 0, title: folderTitle, path: folderPath });
+          return;
+        }
+        
+        // Process files in streaming batches using the batch scheduler
+        this.processFolderChildrenInBatches(folderContents.children, BATCH_SIZE, (batch, batchIndex, isLastBatch) => {
+          if (isComplete) return;
+          
+          totalProcessed += batch.length;
+          this._log('📦 Processing batch', batchIndex + 1, 'of', folderTitle + ':', batch.length, 'files (total processed:', totalProcessed + ')');
+          
+          // Schedule batch for interleaved processing instead of adding directly
+          if (batch.length > 0) {
+            const onComplete = isLastBatch ? () => {
+              isComplete = true;
+              this._log('✅ Completed streaming scan for:', folderTitle, '- total files:', totalProcessed);
+              resolve({ 
+                files: [], // Don't return files (already added to queue via scheduler)
+                fileCount: totalProcessed, 
+                title: folderTitle, 
+                path: folderPath,
+                streamingComplete: true
+              });
+            } : null;
+            
+            this.scheduleBatch(batch, folderTitle, batchIndex, onComplete);
+          } else if (isLastBatch) {
+            // Handle edge case of empty last batch
+            isComplete = true;
+            resolve({ 
+              files: [], 
+              fileCount: totalProcessed, 
+              title: folderTitle, 
+              path: folderPath,
+              streamingComplete: true
+            });
+          }
+        }, folderTitle);
+        
+      }).catch(error => {
+        clearTimeout(safetyTimeout);
+        if (!isComplete) {
+          isComplete = true;
+          this._log('❌ Streaming scan failed for:', folderTitle, error.message);
+          reject(error);
+        }
+      });
+    });
+  }
+
+  // Process folder children in batches with sampling and staggered timing for interleaving
+  processFolderChildrenInBatches(children, batchSize, onBatch, folderTitle) {
+    const allMediaFiles = [];
+    
+    // Filter media files first
+    for (const child of children) {
+      if (child.media_class === 'image' || child.media_class === 'video') {
+        if (child.media_content_type && 
+            (child.media_content_type.startsWith('image/') || 
+             child.media_content_type.startsWith('video/'))) {
+          allMediaFiles.push(child);
+        }
+      }
+    }
+    
+    this._log('📄 Found', allMediaFiles.length, 'media files out of', children.length, 'total children in', folderTitle);
+    
+    // SAMPLING LOGIC - Don't take all files, sample based on folder size
+    const maxFilesPerFolder = this.calculateMaxFilesForFolder(allMediaFiles.length, folderTitle);
+    const mediaFiles = this.selectRandomFiles(allMediaFiles, maxFilesPerFolder);
+    
+    this._log('🎲 SAMPLING:', folderTitle, '-', mediaFiles.length, 'sampled from', allMediaFiles.length, 'available (max allowed:', maxFilesPerFolder, ', queue size target:', this.config.queue_size + ')');
+    
+    // Process in batches with randomized delays to encourage interleaving
+    const totalBatches = Math.ceil(mediaFiles.length / batchSize);
+    for (let i = 0; i < mediaFiles.length; i += batchSize) {
+      const batch = mediaFiles.slice(i, i + batchSize);
+      const batchIndex = Math.floor(i / batchSize);
+      const isLastBatch = (i + batchSize) >= mediaFiles.length;
+      
+      // Use variable delays to encourage interleaving between folders
+      const baseDelay = batchIndex * 50; // Base delay increases per batch
+      const randomOffset = Math.random() * 100; // Random offset 0-100ms
+      const totalDelay = baseDelay + randomOffset;
+      
+      setTimeout(() => {
+        onBatch(batch, batchIndex, isLastBatch);
+      }, totalDelay);
+    }
+  }
+
+  // Legacy method kept for compatibility - now uses streaming internally
   async scanFolderFiles(folderPath) {
+    try {
+      const folderTitle = folderPath.split('/').pop() || 'Unknown';
+      const result = await this.streamFolderFiles(folderPath, folderTitle);
+      
+      // For legacy compatibility, return the folder info
+      return {
+        files: result.files,
+        fileCount: result.fileCount,
+        title: result.title,
+        path: result.path
+      };
+    } catch (error) {
+      this._log('❌ Legacy scan fallback failed:', error.message);
+      return { files: [], fileCount: 0, title: folderPath.split('/').pop() || 'Unknown', path: folderPath };
+    }
+  }
+
+  // Calculate maximum files to sample from a folder based on queue size and folder count
+  calculateMaxFilesForFolder(folderSize, folderTitle) {
+    const targetQueueSize = this.config.queue_size || 1000;
+    const estimatedFolderCount = Math.max(this.discoveredFolders.length, 10); // Estimate at least 10 folders
+    
+    // Base allocation per folder
+    const baseAllocation = Math.floor(targetQueueSize / estimatedFolderCount);
+    
+    let result;
+    let category;
+    
+    // Smart sampling based on folder size
+    if (folderSize <= 50) {
+      // Small folders: take most files (up to 80%)
+      result = Math.min(folderSize, Math.floor(folderSize * 0.8));
+      category = 'small';
+    } else if (folderSize <= 200) {
+      // Medium folders: take moderate sample
+      result = Math.min(baseAllocation * 2, Math.floor(folderSize * 0.5));
+      category = 'medium';
+    } else if (folderSize <= 1000) {
+      // Large folders: take smaller percentage but reasonable absolute amount
+      result = Math.min(baseAllocation * 3, Math.floor(folderSize * 0.3));
+      category = 'large';
+    } else {
+      // Massive folders: take small percentage but cap at reasonable limit
+      const maxForMassive = Math.min(200, baseAllocation * 4); // Cap at 200 files max
+      const percentageSample = Math.floor(folderSize * 0.1); // 10% of massive folders
+      result = Math.min(maxForMassive, percentageSample);
+      category = 'massive';
+    }
+    
+    this._log('📊 Sampling calculation for', folderTitle + ':', category, 'folder with', folderSize, 'files → sample', result, 'files (base allocation:', baseAllocation + ')');
+    
+    return result;
+  }
+
+  // BATCH SCHEDULER - ensures batches from different folders are interleaved
+  startBatchScheduler() {
+    if (this.batchScheduler.isProcessing) return;
+    
+    this.batchScheduler.isProcessing = true;
+    this._log('🎛️ Starting batch scheduler for interleaved processing');
+    
+    // Process batches every 200ms
+    this.batchScheduler.intervalId = setInterval(() => {
+      if (this.batchScheduler.scheduledBatches.length === 0) return;
+      
+      // Take the next batch (FIFO)
+      const batchInfo = this.batchScheduler.scheduledBatches.shift();
+      
+      this._log('🔄 Scheduler processing batch from', batchInfo.folderTitle, '- batch', batchInfo.batchIndex + 1, 'with', batchInfo.batch.length, 'files');
+      
+      // Add batch to queue
+      if (batchInfo.batch.length > 0) {
+        this.addFilesToQueue(batchInfo.batch, batchInfo.folderTitle, 'streaming_scan');
+        this._log('✨ Scheduler streamed', batchInfo.batch.length, 'files from', batchInfo.folderTitle, '- queue size now:', this.queue.length);
+        
+        // Debug mode event logging
+        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+          this.card._debugLogEvent('batch_streamed', `Batch scheduled and processed`, {
+            folder: batchInfo.folderTitle,
+            batchSize: batchInfo.batch.length,
+            queueSize: this.queue.length,
+            batchIndex: batchInfo.batchIndex + 1,
+            schedulerQueue: this.batchScheduler.scheduledBatches.length
+          });
+        }
+      }
+      
+      // Call completion callback if this was the last batch
+      if (batchInfo.onComplete) {
+        batchInfo.onComplete();
+      }
+      
+    }, 200); // Process batches every 200ms for smooth interleaving
+  }
+  
+  stopBatchScheduler() {
+    if (this.batchScheduler.intervalId) {
+      clearInterval(this.batchScheduler.intervalId);
+      this.batchScheduler.intervalId = null;
+    }
+    this.batchScheduler.isProcessing = false;
+    this._log('⏸️ Batch scheduler stopped');
+  }
+  
+  scheduleBatch(batch, folderTitle, batchIndex, onComplete = null) {
+    this.batchScheduler.scheduledBatches.push({
+      batch: batch,
+      folderTitle: folderTitle,
+      batchIndex: batchIndex,
+      onComplete: onComplete
+    });
+    
+    this._log('📅 Scheduled batch', batchIndex + 1, 'from', folderTitle, '- scheduler queue:', this.batchScheduler.scheduledBatches.length);
+  }
+
+  // NEW CONCURRENT STREAMING SCAN MANAGER
+  async startConcurrentStreamingScans(folders) {
+    const MAX_CONCURRENT = 3; // Maximum concurrent folder scans
+    const scanQueue = [...folders]; // Copy of folders to scan
+    const activescans = new Set(); // Track active scans
+    const completedScans = [];
+    
+    this._log('🎯 Starting concurrent streaming scans for', folders.length, 'folders (max concurrent:', MAX_CONCURRENT + ')');
+    
+    // Start the batch scheduler for interleaving
+    this.startBatchScheduler();
+    
+    return new Promise((resolve) => {
+      const tryStartNextScan = () => {
+        // Start new scans if we have capacity and folders waiting
+        while (activescans.size < MAX_CONCURRENT && scanQueue.length > 0) {
+          const folder = scanQueue.shift();
+          const scanPromise = this.streamFolderFiles(folder.path, folder.title);
+          
+          activescans.add(scanPromise);
+          this._log('▶️ Started streaming scan for:', folder.title, '(active scans:', activescans.size + ')');
+          
+          scanPromise.then(result => {
+            activescans.delete(scanPromise);
+            completedScans.push({ folder, result });
+            this._log('✅ Completed streaming scan for:', folder.title, '(remaining active:', activescans.size, 'queue:', scanQueue.length + ')');
+            
+            // Try to start next scan
+            tryStartNextScan();
+            
+            // Check if all scans complete
+            if (activescans.size === 0 && scanQueue.length === 0) {
+              // Wait a bit for scheduler to finish processing remaining batches
+              setTimeout(() => {
+                this.stopBatchScheduler();
+                this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+                resolve(completedScans);
+              }, 1000);
+            }
+          }).catch(error => {
+            activescans.delete(scanPromise);
+            this._log('❌ Streaming scan failed for:', folder.title, '-', error.message);
+            
+            // Continue with other scans
+            tryStartNextScan();
+            
+            // Check if all scans complete
+            if (activescans.size === 0 && scanQueue.length === 0) {
+              // Wait a bit for scheduler to finish processing remaining batches
+              setTimeout(() => {
+                this.stopBatchScheduler();
+                this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+                resolve(completedScans);
+              }, 1000);
+            }
+          });
+        }
+        
+        // If no folders to scan and no active scans, we're done
+        if (scanQueue.length === 0 && activescans.size === 0) {
+          setTimeout(() => {
+            this.stopBatchScheduler();
+            this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+            resolve(completedScans);
+          }, 1000);
+        }
+      };
+      
+      // Start initial scans
+      tryStartNextScan();
+    });
+  }
+
+  // NEW STREAMING INITIALIZATION - replaces early population approach
+  async initializeWithStreamingScans(basePath) {
+    this._log('🚀 Initializing with streaming approach...');
+    
+    try {
+      // First discover folders (but don't scan their files yet)
+      const allFolders = await this.discoverSubfolders(basePath, 0);
+      
+      if (allFolders.length === 0) {
+        this._log('⚠️ No subfolders found');
+        return false;
+      }
+      
+      this._log('📁 Discovered', allFolders.length, 'folders, starting concurrent streaming scans...');
+      
+      // Store folders for reference
+      this.discoveredFolders = allFolders;
+      
+      // Randomize folder order for scanning
+      const randomizedFolders = [...allFolders].sort(() => Math.random() - 0.5);
+      
+      // Start concurrent streaming scans (non-blocking)
+      this.startConcurrentStreamingScans(randomizedFolders).then(results => {
+        this._log('🎉 All streaming scans completed! Queue final size:', this.queue.length);
+        
+        // Update folder statistics with actual file counts
+        results.forEach(({ folder, result }) => {
+          const folderIndex = this.discoveredFolders.findIndex(f => f.path === folder.path);
+          if (folderIndex >= 0) {
+            this.discoveredFolders[folderIndex].fileCount = result.fileCount;
+          }
+        });
+        
+        // Update debug stats if in debug mode
+        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+          this.card._updateDebugStats();
+        }
+      }).catch(error => {
+        this._log('❌ Streaming scans failed:', error.message);
+      });
+      
+      // Return immediately - scans continue in background
+      this._log('✅ Streaming initialization started - queue will grow as scans complete');
+      return true;
+      
+    } catch (error) {
+      this._log('❌ Streaming initialization failed:', error.message);
+      return false;
+    }
+  }
+
+  // LEGACY CODE BELOW - keeping for reference but will be replaced
+  async scanFolderFiles_OLD(folderPath) {
     try {
       const folderContents = await this.card.hass.callWS({
         type: "media_source/browse_media", 
