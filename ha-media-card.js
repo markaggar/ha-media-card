@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b61 - Added detailed timing logs to investigate actual timeout behavior
+ * Version: 2.3b67 - Fixed queue expansion, increased timeouts, improved folder statistics display
  */
 
 // Import Lit from CDN for standalone usage
@@ -2036,6 +2036,11 @@ class MediaCard extends LitElement {
   render() {
     if (!this.config) return html``;
     
+    // Debug queue mode - show queue analysis instead of media
+    if (this.config.debug_queue_mode) {
+      return this._renderDebugQueueMode();
+    }
+    
     // Set navigation attribute based on folder mode, content, and configuration
     const hasNavigation = this.config.is_folder && 
                          this._folderContents && 
@@ -2074,6 +2079,182 @@ class MediaCard extends LitElement {
           ${this._renderMetadataOverlay()}
         </div>
       </div>
+    `;
+  }
+
+  _renderDebugQueueMode() {
+    if (!this.debugQueueData) {
+      this.debugQueueData = {
+        queueEvents: [],
+        sessionStart: Date.now(),
+        totalAdded: 0,
+        folderStats: new Map(),
+        lastRefresh: null
+      };
+    }
+
+    const hasTitle = this.config.title && this.config.title.trim();
+    
+    // Debug: Log what we have access to
+    console.log('🐛 Debug render - checking subfolderQueue availability:', !!this.subfolderQueue);
+    console.log('🐛 Debug render - this keys:', Object.keys(this));
+    
+    // Access the correct queue data - it's stored as _subfolderQueue
+    let queueSize = 0;
+    let foldersFound = 0;
+    let currentQueue = [];
+    
+    if (this._subfolderQueue) {
+      queueSize = this._subfolderQueue.queue?.length || 0;
+      const discoveredCount = this._subfolderQueue.discoveredFolders?.length || 0;
+      const tempCount = this._subfolderQueue.tempDiscoveredFolders?.length || 0;
+      foldersFound = discoveredCount + tempCount;
+      currentQueue = this._subfolderQueue.queue || [];
+      console.log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'temp folders:', tempCount, 'total:', foldersFound);
+      console.log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => f.title));
+      console.log('🐛 Debug render - temp folders:', this._subfolderQueue.tempDiscoveredFolders?.map(f => f.title));
+    } else {
+      console.log('🐛 Debug render - NO _subfolderQueue found');
+    }
+    
+    return html`
+      <div class="card debug-mode ${!hasTitle ? 'no-title' : ''}">
+        ${hasTitle ? html`<div class="title">🐛 DEBUG: ${this.config.title}</div>` : html`<div class="title">🐛 DEBUG QUEUE MODE</div>`}
+        
+        <div class="debug-container">
+          <div class="debug-stats">
+            <div><strong>Session:</strong> ${Math.floor((Date.now() - this.debugQueueData.sessionStart) / 1000)}s</div>
+            <div><strong>Total Added:</strong> ${this.debugQueueData.totalAdded}</div>
+            <div><strong>Queue Size:</strong> ${queueSize}</div>
+            <div><strong>Folders Found:</strong> ${foldersFound}</div>
+            <div><strong>Last Refresh:</strong> ${this.debugQueueData.lastRefresh ? new Date(this.debugQueueData.lastRefresh).toLocaleTimeString() : 'Never'}</div>
+            <div><strong>Events Logged:</strong> ${this.debugQueueData.queueEvents.length}</div>
+            <div><strong>Has _SubfolderQueue:</strong> ${!!this._subfolderQueue ? 'Yes' : 'No'}</div>
+          </div>
+          
+          <div class="debug-controls">
+            <button @click=${this._debugRefreshQueue} style="margin: 5px; padding: 5px 10px;">🔄 Refresh Queue</button>
+            <button @click=${this._debugClearEvents} style="margin: 5px; padding: 5px 10px;">🗑️ Clear Events</button>
+            <button @click=${this._debugCopyQueue} style="margin: 5px; padding: 5px 10px;">📋 Copy Queue</button>
+          </div>
+          
+          <div class="debug-current-queue">
+            <h4>📄 Current Queue (${queueSize} items):</h4>
+            <textarea id="debug-queue-list" readonly style="width: 100%; height: 150px; font-family: monospace; font-size: 11px; background: #ffffff; color: #000000; border: 1px solid #000; resize: vertical; padding: 8px;">
+${currentQueue.map((item, index) => {
+  const filename = item.title || item.media_content_id?.split('/').pop() || 'Unknown';
+  const folder = item.media_content_id?.split('/').slice(-2, -1)[0] || 'Unknown';
+  return `${(index + 1).toString().padStart(3, ' ')}: ${folder.padEnd(20, ' ')} → ${filename}`;
+}).join('\n')}
+            </textarea>
+          </div>
+          
+          <div class="debug-folder-stats">
+            <h4>📊 Folder Statistics:</h4>
+            <div style="background: #ffffff; border: 1px solid #000; padding: 8px; font-family: monospace;">
+              ${foldersFound > 0 || (this._subfolderQueue?.tempDiscoveredFolders?.length > 0) ? html`
+                ${([...(this._subfolderQueue?.discoveredFolders || []), ...(this._subfolderQueue?.tempDiscoveredFolders || [])]).map(folder => {
+                  const queueItems = currentQueue.filter(item => 
+                    item.media_content_id?.includes(folder.title) || 
+                    item.media_content_id?.split('/').slice(-2, -1)[0] === folder.title
+                  ).length;
+                  const percentage = queueSize > 0 ? (queueItems / queueSize * 100).toFixed(1) : '0.0';
+                  return html`
+                    <div style="margin: 4px 0; font-size: 12px; user-select: text; color: #000000;">
+                      <span style="color: #0066cc; font-weight: bold;">${folder.title}</span>: 
+                      <span style="color: #000000;">
+                        ${folder.fileCount || 0} total, 
+                        ${queueItems} in queue 
+                        (${percentage}%) 
+                        ${folder.isSynthetic ? '(synthetic)' : ''}
+                      </span>
+                    </div>
+                  `;
+                })}
+              ` : html`
+                <div style="color: #cc0000; font-style: italic;">
+                  No folders discovered yet... 
+                  (_subfolderQueue: ${!!this._subfolderQueue})
+                </div>
+              `}
+            </div>
+          </div>
+          
+          <div class="debug-history">
+            <h4>📚 Queue History (${(this._subfolderQueue?.queueHistory || []).length} files added):</h4>
+            <textarea id="debug-history-list" readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 11px; background: #ffffff; color: #000000; border: 1px solid #000; resize: vertical; padding: 8px;">
+${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
+  const timestamp = new Date(entry.timestamp).toLocaleTimeString();
+  const filename = entry.file.title || entry.file.media_content_id?.split('/').pop() || 'Unknown';
+  const folder = entry.folderName || 'Unknown';
+  const source = entry.source || 'unknown';
+  return `${(index + 1).toString().padStart(4, ' ')}: [${timestamp}] ${folder.padEnd(15, ' ')} → ${filename.padEnd(25, ' ')} (${source})`;
+}).join('\n')}
+            </textarea>
+            <button @click=${this._debugCopyHistory} style="margin: 5px 0; padding: 5px 10px;">📋 Copy History</button>
+          </div>
+          
+          <div class="debug-events" style="max-height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin: 10px 0;">
+            <h4>📝 Queue Events (Last 50):</h4>
+            <div style="font-family: monospace; font-size: 11px; user-select: text;">
+              ${this.debugQueueData.queueEvents.slice(-50).reverse().map((event, index) => html`
+                <div style="margin: 4px 0; padding: 6px; background: ${event.type === 'queue_refill' ? '#fff3cd' : event.type === 'folder_added' ? '#cce5ff' : '#d4edda'}; border-radius: 3px; border: 1px solid ${event.type === 'queue_refill' ? '#ffeaa7' : event.type === 'folder_added' ? '#a3dcff' : '#c3e6cb'};">
+                  <div style="font-weight: bold; color: #000000;">
+                    [${new Date(event.timestamp).toLocaleTimeString()}] ${event.type.toUpperCase()}
+                  </div>
+                  <div style="margin-left: 10px; color: #333333;">
+                    ${event.type === 'file_added' ? 
+                      `📁 ${event.folder} → 📄 ${event.filename}` : 
+                      event.type === 'folder_added' ? 
+                      `📁 ${event.folder} (${event.fileCount} files, ${event.slots} slots, weight: ${event.weight})` : 
+                      event.details
+                    }
+                  </div>
+                </div>
+              `)}
+              ${this.debugQueueData.queueEvents.length === 0 ? html`
+                <div style="color: #cc0000; font-style: italic; padding: 20px; text-align: center; background: #ffffff; border: 1px solid #000;">
+                  No events yet... waiting for queue activity
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <style>
+        .debug-mode .debug-container {
+          padding: 10px;
+          font-family: Arial, sans-serif;
+          font-size: 13px;
+          background: #f0f0f0;
+          border: 1px solid #000;
+        }
+        .debug-mode .debug-stats {
+          background: #ffffff;
+          color: #000000;
+          padding: 10px;
+          border: 1px solid #000;
+          border-radius: 5px;
+          margin-bottom: 10px;
+        }
+        .debug-mode .debug-stats div {
+          margin: 3px 0;
+          color: #000000;
+        }
+        .debug-mode .debug-folder-stats {
+          background: #ffffff;
+          padding: 0;
+          border-radius: 5px;
+          margin: 10px 0;
+          max-height: 200px;
+          overflow-y: auto;
+        }
+        .debug-mode h4 {
+          color: #000000;
+          margin: 10px 0 5px 0;
+        }
+      </style>
     `;
   }
 
@@ -3054,6 +3235,126 @@ class MediaCard extends LitElement {
     }
   }
 
+  // Debug mode control methods
+  _debugRefreshQueue() {
+    this._log('🐛 DEBUG: Manual queue refresh triggered');
+    this._debugLogEvent('queue_refill', 'Manual refresh triggered');
+    this.debugQueueData.lastRefresh = Date.now();
+    if (this._subfolderQueue) {
+      this._subfolderQueue.refillQueue();
+    }
+    // Force update debug stats
+    this._updateDebugStats();
+    this.requestUpdate();
+  }
+
+  _updateDebugStats() {
+    if (!this.debugQueueData || !this._subfolderQueue) return;
+    
+    // Update last refresh time when queue activities happen
+    if (this._subfolderQueue.queue && this._subfolderQueue.queue.length > 0) {
+      this.debugQueueData.lastRefresh = Date.now();
+    }
+    
+    // Force re-render to show updated stats
+    this.requestUpdate();
+  }
+
+  _debugClearEvents() {
+    this._log('🐛 DEBUG: Clearing event log');
+    this.debugQueueData.queueEvents = [];
+    this.debugQueueData.folderStats.clear();
+    this.debugQueueData.totalAdded = 0;
+    this.requestUpdate();
+  }
+
+  _debugCopyQueue() {
+    if (!this._subfolderQueue?.queue) {
+      alert('No queue available to copy');
+      return;
+    }
+    
+    const queueText = this._subfolderQueue.queue.map((item, index) => {
+      const filename = item.title || item.media_content_id?.split('/').pop() || 'Unknown';
+      const folder = item.media_content_id?.split('/').slice(-2, -1)[0] || 'Unknown';
+      return `${(index + 1).toString().padStart(3, ' ')}: ${folder.padEnd(20, ' ')} → ${filename}`;
+    }).join('\n');
+    
+    navigator.clipboard.writeText(queueText).then(() => {
+      this._log('🐛 DEBUG: Queue copied to clipboard');
+    }).catch(err => {
+      this._log('🐛 DEBUG: Failed to copy queue:', err);
+      // Fallback - select the textarea content
+      const textarea = this.shadowRoot.getElementById('debug-queue-list');
+      if (textarea) {
+        textarea.select();
+      }
+    });
+  }
+
+  _debugCopyHistory() {
+    if (!this._subfolderQueue?.queueHistory) {
+      alert('No queue history available to copy');
+      return;
+    }
+    
+    const historyText = this._subfolderQueue.queueHistory.map((entry, index) => {
+      const timestamp = new Date(entry.timestamp).toLocaleTimeString();
+      const filename = entry.file.title || entry.file.media_content_id?.split('/').pop() || 'Unknown';
+      const folder = entry.folderName || 'Unknown';
+      const source = entry.source || 'unknown';
+      return `${(index + 1).toString().padStart(4, ' ')}: [${timestamp}] ${folder.padEnd(15, ' ')} → ${filename.padEnd(25, ' ')} (${source})`;
+    }).join('\n');
+    
+    navigator.clipboard.writeText(historyText).then(() => {
+      this._log('🐛 DEBUG: Queue history copied to clipboard');
+    }).catch(err => {
+      this._log('🐛 DEBUG: Failed to copy history:', err);
+      // Fallback - select the textarea content
+      const textarea = this.shadowRoot.getElementById('debug-history-list');
+      if (textarea) {
+        textarea.select();
+      }
+    });
+  }
+
+  _debugLogEvent(type, details, extraData = {}) {
+    if (!this.debugQueueData) return;
+    
+    const event = {
+      timestamp: Date.now(),
+      type: type,
+      details: details,
+      ...extraData
+    };
+    
+    this.debugQueueData.queueEvents.push(event);
+    
+    // Update folder stats for file additions
+    if (type === 'file_added' && extraData.folder && extraData.filename) {
+      const folder = extraData.folder;
+      if (!this.debugQueueData.folderStats.has(folder)) {
+        this.debugQueueData.folderStats.set(folder, {
+          count: 0,
+          files: [],
+          percentage: 0
+        });
+      }
+      
+      const stats = this.debugQueueData.folderStats.get(folder);
+      stats.count++;
+      stats.files.push(extraData.filename);
+      this.debugQueueData.totalAdded++;
+      
+      // Update percentages
+      this.debugQueueData.folderStats.forEach(folderStats => {
+        folderStats.percentage = (folderStats.count / this.debugQueueData.totalAdded) * 100;
+      });
+      
+      this.requestUpdate();
+    }
+  }
+
   // Navigation zone event handlers
   _handlePrevClick(e) {
     e.stopPropagation();
@@ -3550,7 +3851,9 @@ class MediaCard extends LitElement {
       show_position_indicator: true, 
       show_dots_indicator: true,
       enable_keyboard_navigation: true,
-      auto_advance_mode: 'reset'
+      auto_advance_mode: 'reset',
+      // Debug options
+      debug_queue_mode: false
     };
   }
 }
@@ -3568,6 +3871,9 @@ class SubfolderQueue {
     this.scanProgress = { current: 0, total: 0 };
     this.discoveryStartTime = null;
     this.discoveryInProgress = false;
+    
+    // Queue history - tracks every file ever added to the queue for debug purposes
+    this.queueHistory = [];
     
     // Navigation history for back/forward functionality
     this.history = []; // Array of shown items in chronological order
@@ -3842,7 +4148,7 @@ class SubfolderQueue {
               const elapsed = Date.now() - folderScanStartTime;
               this._log('⏰ Main folder timeout triggered after', elapsed + 'ms for', dir.title);
               reject(new Error(`Folder scan timeout: ${dir.title}`));
-            }, 60000) // 60 second timeout - we have queue system
+            }, 20000) // 20 second timeout - balance between thoroughness and UX
           );
           
           folderInfo = await Promise.race([
@@ -3933,11 +4239,11 @@ class SubfolderQueue {
         } catch (error) {
           this._log('⚠️ Folder processing error:', dir.title, 'error:', error.message);
           
-          // Emergency timeout recovery for large folders like Camera Roll
+          // Emergency timeout recovery for large folders
           const isTimeoutError = error.message.toLowerCase().includes('timeout');
-          const isCameraFolder = dir.title.toLowerCase().includes('camera') || dir.title.toLowerCase().includes('dcim');
           
-          if (isTimeoutError && isCameraFolder) {
+          // Apply emergency recovery to any folder that times out
+          if (isTimeoutError) {
             this._log(`🚨 Emergency quick scan timeout for ${dir.title} - attempting recovery (error: ${error.message})`);
             try {
               const emergencyResult = await this.emergencyQuickScan(dir.media_content_id, dir.title);
@@ -4141,6 +4447,16 @@ class SubfolderQueue {
         this.resolveEarlyPopulation('early-population-complete');
         this._log('🎯 Early population completion signaled to main process - queue has', this.queue.length, 'items ready');
       }
+      
+      // Start background expansion to target size
+      setTimeout(async () => {
+        try {
+          await this.expandQueueToTargetSize();
+        } catch (error) {
+          this._log('⚠️ Background queue expansion failed:', error.message);
+        }
+      }, 2000);
+      
     } else {
       this._log('🔄 Queue only has', this.queue.length, 'items - continuing to scan for more...');
     }
@@ -4347,6 +4663,19 @@ class SubfolderQueue {
     }
   }
 
+  // Handle massive folders with estimation instead of full enumeration
+  handleMassiveFolderEstimation(folderPath, folderTitle) {
+    this._log('🚀 Using estimation approach for massive folder:', folderTitle);
+    
+    // Create synthetic folder entry for massive folders
+    const syntheticFolder = this.createSyntheticFolderEntry(folderPath, folderTitle);
+    syntheticFolder.isLargeFolder = true;
+    syntheticFolder.estimationReason = 'massive_folder_detection';
+    
+    this._log('📊 Created synthetic entry for massive folder:', folderTitle, 'estimated files:', syntheticFolder.fileCount);
+    return syntheticFolder;
+  }
+
   // Create a synthetic folder entry for folders that timeout during scanning
   createSyntheticFolderEntry(folderPath, folderTitle) {
     // Estimate folder size based on folder name patterns and context
@@ -4411,7 +4740,7 @@ class SubfolderQueue {
         this._log('🔄 Attempting lazy load for synthetic folder:', folder.title);
         try {
           // Attempt a quick emergency scan with a very short timeout for lazy loading
-          const lazyLoadResult = await this.emergencyQuickScan(folder.path, folder.title, 10000); // 10 second timeout for lazy loading
+          const lazyLoadResult = await this.emergencyQuickScan(folder.path, folder.title, 8000); // 8 second timeout for lazy loading
           if (lazyLoadResult && lazyLoadResult.files && lazyLoadResult.files.length > 0) {
             // Update the folder with real data
             folder.files = lazyLoadResult.files;
@@ -4450,13 +4779,13 @@ class SubfolderQueue {
       const selectedFiles = this.selectRandomFiles(folder.files || [], targetSlots);
       
       if (selectedFiles.length > 0) {
-        // Add to queue
-        this.queue.push(...selectedFiles);
+        // Add to queue with history tracking
+        this.addFilesToQueue(selectedFiles, folder.title, 'addFolderToQueue');
         
-        // Shuffle immediately for proper mixing
-        this.shuffleQueue();
-        
-        this._log('✅ Added', selectedFiles.length, 'files from', folder.title, '- queue now has', this.queue.length, 'items');
+        // Update debug stats
+        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+          this.card._updateDebugStats();
+        }
       } else {
         this._log('⚠️ No new files available from', folder.title);
       }
@@ -4467,9 +4796,10 @@ class SubfolderQueue {
   }
 
   // Populate queue from discovered folders using weighted selection
-  async populateQueueFromFolders(folders) {
+  async populateQueueFromFolders(folders, customQueueSize = null) {
     try {
-      this._log('🎲 Populating queue from', folders.length, 'folders');
+      const targetQueueSize = customQueueSize || this.config.queue_size;
+      this._log('🎲 Populating queue from', folders.length, 'folders, target size:', targetQueueSize);
       
       if (folders.length === 0) {
         this._log('❌ No folders provided for queue population');
@@ -4488,8 +4818,12 @@ class SubfolderQueue {
       }
 
       // Choose allocation method based on configuration
-      const queueSize = Math.max(this.config.queue_size || 15, folders.length * 10);
-      this.queue = [];
+      const queueSize = Math.max(targetQueueSize || 15, folders.length * 10);
+      
+      // For expansion, don't clear the queue, just add to it
+      if (!customQueueSize) {
+        this.queue = [];
+      }
       
       const allocations = this.config.equal_probability_mode 
         ? this.calculateEqualProbabilityAllocations(folders, queueSize)
@@ -4506,13 +4840,24 @@ class SubfolderQueue {
           const selectedFiles = this.selectRandomFiles(allocation.folder.files || [], allocatedSlots);
           this._log('📄 Selected', selectedFiles.length, 'files from', allocation.folder.title);
           
-          // Add files and shuffle immediately to ensure proper interleaving
-          this.queue.push(...selectedFiles);
-          
-          // Shuffle after each folder addition for proper mixing
+          // Add files with history tracking - this handles shuffling automatically
           if (selectedFiles.length > 0) {
-            this.shuffleQueue();
-            this._log('🔀 Shuffled queue after adding', allocation.folder.title, '- queue size:', this.queue.length);
+            this.addFilesToQueue(selectedFiles, allocation.folder.title, 'populateQueueFromFolders');
+            
+            // Log folder allocation for debug mode
+            if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+              this.card._debugLogEvent('folder_added', `Folder allocated slots`, {
+                folder: allocation.folder.title,
+                fileCount: allocation.folder.fileCount || 0,
+                slots: allocatedSlots,
+                weight: allocation.weight
+              });
+            }
+          }
+          
+          // Update debug stats after queue population
+          if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+            this.card._updateDebugStats();
           }
         } catch (error) {
           this._log('❌ Error processing folder:', allocation.folder.title, error);
@@ -4711,6 +5056,48 @@ class SubfolderQueue {
     }).join(', '));
   }
 
+  // Add files to queue with history tracking and shuffling
+  addFilesToQueue(files, folderName = null, source = 'unknown') {
+    if (!files || files.length === 0) return;
+    
+    // Add to main queue
+    this.queue.push(...files);
+    
+    // Add to history with metadata
+    files.forEach(file => {
+      const historyEntry = {
+        file: file,
+        timestamp: new Date().toISOString(),
+        folderName: folderName || this.extractFolderName(file),
+        source: source
+      };
+      this.queueHistory.push(historyEntry);
+      
+      // Debug logging for debug mode
+      if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+        this.card._debugLogEvent('file_added', `Added to queue`, {
+          folder: historyEntry.folderName,
+          filename: file.title || file.media_content_id.split('/').pop(),
+          source: source,
+          queueSize: this.queue.length,
+          historySize: this.queueHistory.length
+        });
+      }
+    });
+    
+    // Shuffle immediately for proper mixing
+    this.shuffleQueue();
+    
+    this._log('✅ Added', files.length, 'files from', folderName, '- queue now has', this.queue.length, 'items, history has', this.queueHistory.length, 'entries');
+  }
+  
+  // Helper to extract folder name from file path
+  extractFolderName(file) {
+    if (!file || !file.media_content_id) return 'unknown';
+    const pathParts = file.media_content_id.split('/');
+    return pathParts[pathParts.length - 2] || 'root';
+  }
+
   // Select N random files from an array, excluding already shown items
   selectRandomFiles(files, count) {
     if (!files || files.length === 0) {
@@ -4827,9 +5214,12 @@ class SubfolderQueue {
           // Add to discovered folders and expand queue
           this.discoveredFolders.push(...deeperFolders);
           
-          // Refresh queue with new folders
+          // Refresh queue with new folders to reach target size
           const additionalFiles = deeperFolders.reduce((sum, f) => sum + f.fileCount, 0);
-          this._log('📈 Background: Adding', additionalFiles, 'additional files to pool');
+          this._log('📈 Background: Adding', additionalFiles, 'additional files to pool - expanding queue to target size');
+          
+          // Expand queue to target size with all available folders
+          await this.expandQueueToTargetSize();
         } else {
           this._log('📭 Background: No additional deep folders found');
         }
@@ -4842,6 +5232,39 @@ class SubfolderQueue {
         this._log('🏁 Background discovery complete - auto-refresh resumed');
       }
     }, 3000); // Start background scan after 3 seconds
+  }
+
+  // Expand queue to target size using all available folders
+  async expandQueueToTargetSize() {
+    const targetSize = this.config.queue_size;
+    const currentSize = this.queue.length;
+    
+    this._log('🎯 Expanding queue from', currentSize, 'to target', targetSize);
+    
+    if (currentSize >= targetSize) {
+      this._log('✅ Queue already at target size');
+      return;
+    }
+    
+    const neededItems = targetSize - currentSize;
+    this._log('📊 Need', neededItems, 'more items for queue');
+    
+    // Use all discovered folders for expansion
+    const availableFolders = this.discoveredFolders.filter(folder => 
+      folder.files && folder.files.length > 0
+    );
+    
+    if (availableFolders.length === 0) {
+      this._log('⚠️ No folders available for queue expansion');
+      return;
+    }
+    
+    this._log('📁 Using', availableFolders.length, 'folders for expansion');
+    
+    // Use the same allocation logic but for the additional items needed
+    await this.populateQueueFromFolders(availableFolders, neededItems);
+    
+    this._log('✅ Queue expansion complete - queue now has', this.queue.length, 'items');
   }
 
   // Get next item from queue (forward navigation)
@@ -5668,6 +6091,22 @@ class MediaCardEditor extends LitElement {
               </select>
               <div class="help-text">Action when card is double-tapped</div>
               ${this._renderActionConfig('double_tap_action')}
+            </div>
+          </div>
+        </div>
+        
+        <div class="section">
+          <div class="section-title">🐛 Debug Options</div>
+          
+          <div class="config-row">
+            <label>Debug Queue Mode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.debug_queue_mode || false}
+                @change=${this._debugQueueModeChanged}
+              />
+              <div class="help-text">Show queue analysis instead of media for troubleshooting randomization</div>
             </div>
           </div>
         </div>
@@ -6865,6 +7304,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     } else {
       this._config = { ...this._config, double_tap_action: { action } };
     }
+    this._fireConfigChanged();
+  }
+
+  _debugQueueModeChanged(ev) {
+    this._config = { ...this._config, debug_queue_mode: ev.target.checked };
     this._fireConfigChanged();
   }
 
