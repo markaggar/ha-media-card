@@ -147,6 +147,10 @@ class MediaCard extends LitElement {
     return item.title || item.media_content_id;
   }
 
+  _getFileExtension(fileName) {
+    return fileName?.split('.').pop()?.toLowerCase();
+  }
+
   // Folder mode utility helpers
   _isFolderMode(mode) {
     return this.config.folder_mode === mode;
@@ -1785,7 +1789,7 @@ class MediaCard extends LitElement {
   _isMediaFile(filePath) {
     // Extract filename from the full path and get extension  
     const fileName = filePath.split('/').pop() || filePath;
-    const extension = fileName.split('.').pop()?.toLowerCase();
+    const extension = this._getFileExtension(fileName);
     const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
     if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
       this._log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
@@ -1811,7 +1815,7 @@ class MediaCard extends LitElement {
       cleanFileName = fileName.replace('_shared', '');
     }
     
-    const extension = cleanFileName.split('.').pop()?.toLowerCase();
+    const extension = this._getFileExtension(cleanFileName);
     
     if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
       return 'video';
