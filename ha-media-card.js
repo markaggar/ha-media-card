@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b70 - Fixed streaming to use sampling instead of taking all files from folders
+ * Version: 2.3b714 - Added immediate display: shows first image as soon as available instead of waiting for full scan
  */
 
 // Import Lit from CDN for standalone usage
@@ -314,6 +314,52 @@ class MediaCard extends LitElement {
       this._subfolderQueue = new SubfolderQueue(this);
     }
     return this._subfolderQueue;
+  }
+
+  // Monitor queue for immediate display as soon as items are available
+  _startQueueMonitor() {
+    if (this._queueMonitorInterval) {
+      clearInterval(this._queueMonitorInterval);
+    }
+    
+    this._log('👀 Starting queue monitor for immediate display');
+    let checkCount = 0;
+    const maxChecks = 100; // 10 seconds at 100ms intervals
+    
+    this._queueMonitorInterval = setInterval(async () => {
+      checkCount++;
+      
+      if (!this._subfolderQueue || checkCount > maxChecks) {
+        this._log('⏰ Queue monitor timeout or queue unavailable - stopping');
+        clearInterval(this._queueMonitorInterval);
+        this._queueMonitorInterval = null;
+        return;
+      }
+      
+      const queueSize = this._subfolderQueue.queue.length;
+      if (queueSize > 0) {
+        this._log('🎉 QUEUE MONITOR: Found', queueSize, 'items - triggering immediate display!');
+        clearInterval(this._queueMonitorInterval);
+        this._queueMonitorInterval = null;
+        
+        // Immediately display first available item
+        const randomResult = this._getRandomFileWithIndex();
+        if (randomResult && randomResult.file) {
+          this._log('🚀 Queue monitor triggering immediate display');
+          await this._loadMediaFromItem(randomResult.file);
+          this._lastRefreshTime = Date.now();
+          
+          // Set minimal _folderContents to enable navigation controls
+          this._folderContents = [randomResult.file, {}];
+          this._log('🎮 Queue monitor enabled navigation controls');
+          
+          // Force UI update
+          this.requestUpdate();
+        }
+      } else if (checkCount % 10 === 0) {
+        this._log('👀 Queue monitor: still waiting... (check', checkCount + '/' + maxChecks + ')');
+      }
+    }, 100); // Check every 100ms for responsive display
   }
 
   _isRandomMode() {
@@ -918,7 +964,9 @@ class MediaCard extends LitElement {
                 return; // Exit early - queue already available
               }
             } else {
-              this._log('⚠️ Queue empty after initialization - falling back to root');
+              this._log('⚠️ Queue empty after initialization - starting queue monitor for immediate display');
+              // Start monitoring for queue population (streaming scans are in progress)
+              this._startQueueMonitor();
             }
           } else {
             this._log('⚠️ Subfolder queue initialization failed, using normal mode');
@@ -3031,6 +3079,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
+    // Clean up queue monitor
+    if (this._queueMonitorInterval) {
+      clearInterval(this._queueMonitorInterval);
+      this._queueMonitorInterval = null;
+    }
     // Clean up hold timer
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
@@ -4132,19 +4185,24 @@ class SubfolderQueue {
       }
       this._log('🎲 Randomized folder processing order - starting with:', shuffledDirectories.slice(0, 3).map(d => d.title).join(', '));
       
-      for (const dir of shuffledDirectories) {
-        let folderInfo = null; // Declare outside try block so it's available in catch
+      // Start batch scheduler for processing concurrent results
+      this.startBatchScheduler();
+      this._log('🎛️ Batch scheduler started for concurrent folder processing');
+      
+      // Start all folder scans concurrently instead of sequentially
+      const folderScanPromises = shuffledDirectories.map(async (dir) => {
+        let folderInfo = null;
         try {
-          this._log('� Processing folder:', dir.title, 'at depth:', currentDepth + 1);
+          this._log('🚀 CONCURRENT: Processing folder:', dir.title, 'at depth:', currentDepth + 1);
           
           // Scan this folder for files (with timeout)
           const folderScanStartTime = Date.now();
-          this._log('🕐 Main folder scan starting at', folderScanStartTime, 'for', dir.title);
+          this._log('🕐 Concurrent scan starting at', folderScanStartTime, 'for', dir.title);
           
           const folderScanTimeout = new Promise((_, reject) => 
             setTimeout(() => {
               const elapsed = Date.now() - folderScanStartTime;
-              this._log('⏰ Main folder timeout triggered after', elapsed + 'ms for', dir.title);
+              this._log('⏰ Concurrent timeout triggered after', elapsed + 'ms for', dir.title);
               reject(new Error(`Folder scan timeout: ${dir.title}`));
             }, 20000) // 20 second timeout - balance between thoroughness and UX
           );
@@ -4259,7 +4317,7 @@ class SubfolderQueue {
                     this._log(`⚠️ Could not add emergency folder to queue: ${queueError.message}`);
                   }
                 }
-                continue; // Skip to next folder since we handled this one
+                return { dir, folderInfo: emergencyResult, success: true };
               } else {
                 this._log(`❌ Emergency scan returned null for ${dir.title} - no synthetic folder created`);
               }
@@ -4269,7 +4327,7 @@ class SubfolderQueue {
               const syntheticFolder = this.createSyntheticFolderEntry(dir.media_content_id, dir.title);
               discoveredFolders.push(syntheticFolder);
               this._log(`🔄 Created last-resort synthetic folder for ${dir.title} with estimated ${syntheticFolder.fileCount} files`);
-              continue;
+              return { dir, folderInfo: syntheticFolder, success: true };
             }
           } else if (isTimeoutError) {
             this._log(`⏰ Timeout detected for non-camera folder: ${dir.title}`);
@@ -4330,7 +4388,40 @@ class SubfolderQueue {
           }
           // Continue with other folders even if one fails
         }
-      }
+        
+        return { dir, folderInfo, success: true };
+      });
+      
+      // Wait for all concurrent scans to complete (or timeout)
+      this._log('⏳ Waiting for', folderScanPromises.length, 'concurrent folder scans to complete...');
+      const results = await Promise.allSettled(folderScanPromises);
+      
+      // Process results from concurrent scans
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value.folderInfo && result.value.folderInfo.fileCount > 0) {
+          const { dir, folderInfo } = result.value;
+          this._log('✅ CONCURRENT: Successfully processed', dir.title, 'with', folderInfo.fileCount, 'files');
+          
+          const folderData = {
+            path: dir.media_content_id,
+            title: dir.title,
+            fileCount: folderInfo.fileCount,
+            files: folderInfo.files,
+            depth: currentDepth + 1,
+            isSampled: folderInfo.isSampled,
+            sampleRatio: folderInfo.sampleRatio
+          };
+          allSubfolders.push(folderData);
+          
+          // Add to temp discovered folders for early population
+          if (this.tempDiscoveredFolders) {
+            this.tempDiscoveredFolders.push(folderData);
+          }
+          
+        } else if (result.status === 'rejected') {
+          this._log('❌ CONCURRENT: Folder scan failed:', shuffledDirectories[index]?.title, result.reason?.message);
+        }
+      });
 
       // Sort by file count (largest first) at the top level only
       if (currentDepth === 0) {
@@ -4662,6 +4753,18 @@ class SubfolderQueue {
       if (batchInfo.batch.length > 0) {
         this.addFilesToQueue(batchInfo.batch, batchInfo.folderTitle, 'streaming_scan');
         this._log('✨ Scheduler streamed', batchInfo.batch.length, 'files from', batchInfo.folderTitle, '- queue size now:', this.queue.length);
+        
+        // 🎯 IMMEDIATE DISPLAY: Trigger card update if this is the first batch
+        if (this.queue.length === batchInfo.batch.length && this.card && !this.card._mediaUrl) {
+          this._log('🚀 FIRST BATCH: Triggering immediate display - queue has', this.queue.length, 'items');
+          // Notify card that queue has content and should display immediately
+          setTimeout(() => {
+            if (this.card && typeof this.card.requestUpdate === 'function') {
+              this.card.requestUpdate();
+              this._log('🎬 Requested card update for immediate display');
+            }
+          }, 50); // Small delay to ensure queue is fully populated
+        }
         
         // Debug mode event logging
         if (this.card && this.card.config && this.card.config.debug_queue_mode) {
