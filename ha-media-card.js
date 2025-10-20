@@ -4057,12 +4057,7 @@ class SubfolderQueue {
     this.queueShuffleCounter = 0; // Tracks files added since last shuffle for batch optimization
     this.SHUFFLE_BATCH_SIZE = 10; // Shuffle queue every N file additions (batch optimization)
     
-    // Batch scheduler for interleaving batches from different folders
-    this.batchScheduler = {
-      scheduledBatches: [],
-      isProcessing: false,
-      intervalId: null
-    };
+    // Removed batch scheduler - unnecessary complexity, direct queue addition works better
     
     // Navigation history for back/forward functionality
     this.history = []; // Array of shown items in chronological order
@@ -4857,7 +4852,7 @@ class SubfolderQueue {
               });
             } : null;
             
-            this.scheduleBatch(batch, folderTitle, batchIndex, onComplete);
+            this.addBatchToQueue(batch, folderTitle, batchIndex, onComplete);
           } else if (isLastBatch) {
             // Handle edge case of empty last batch
             isComplete = true;
@@ -5088,77 +5083,38 @@ class SubfolderQueue {
     return adjustedProbability;
   }
 
-  // BATCH SCHEDULER - ensures batches from different folders are interleaved
-  startBatchScheduler() {
-    if (this.batchScheduler.isProcessing) return;
-    
-    this.batchScheduler.isProcessing = true;
-    this._log('🎛️ Starting batch scheduler for interleaved processing');
-    
-    // Process batches every 200ms
-    this.batchScheduler.intervalId = setInterval(() => {
-      if (this.batchScheduler.scheduledBatches.length === 0) return;
+  // Direct queue addition - simpler than batch scheduling
+  addBatchToQueue(batch, folderTitle, batchIndex, onComplete = null) {
+    if (batch.length > 0) {
+      this.addFilesToQueue(batch, folderTitle, 'streaming_scan');
+      this._log('✨ Added batch', batchIndex + 1, 'from', folderTitle, ':', batch.length, 'files - queue size now:', this.queue.length);
       
-      // Take the next batch (FIFO)
-      const batchInfo = this.batchScheduler.scheduledBatches.shift();
-      
-      this._log('🔄 Scheduler processing batch from', batchInfo.folderTitle, '- batch', batchInfo.batchIndex + 1, 'with', batchInfo.batch.length, 'files');
-      
-      // Add batch to queue
-      if (batchInfo.batch.length > 0) {
-        this.addFilesToQueue(batchInfo.batch, batchInfo.folderTitle, 'streaming_scan');
-        this._log('✨ Scheduler streamed', batchInfo.batch.length, 'files from', batchInfo.folderTitle, '- queue size now:', this.queue.length);
-        
-        // 🎯 IMMEDIATE DISPLAY: Trigger card update if this is the first batch
-        if (this.queue.length === batchInfo.batch.length && this.card && !this.card._mediaUrl) {
-          this._log('🚀 FIRST BATCH: Triggering immediate display - queue has', this.queue.length, 'items');
-          // Notify card that queue has content and should display immediately
-          setTimeout(() => {
-            if (this.card && typeof this.card.requestUpdate === 'function') {
-              this.card.requestUpdate();
-              this._log('🎬 Requested card update for immediate display');
-            }
-          }, 50); // Small delay to ensure queue is fully populated
-        }
-        
-        // Debug mode event logging
-        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-          this.card._debugLogEvent('batch_streamed', `Batch scheduled and processed`, {
-            folder: batchInfo.folderTitle,
-            batchSize: batchInfo.batch.length,
-            queueSize: this.queue.length,
-            batchIndex: batchInfo.batchIndex + 1,
-            schedulerQueue: this.batchScheduler.scheduledBatches.length
-          });
-        }
+      // 🎯 IMMEDIATE DISPLAY: Trigger card update if this is the first batch
+      if (this.queue.length === batch.length && this.card && !this.card._mediaUrl) {
+        this._log('🚀 FIRST BATCH: Triggering immediate display - queue has', this.queue.length, 'items');
+        setTimeout(() => {
+          if (this.card && typeof this.card.requestUpdate === 'function') {
+            this.card.requestUpdate();
+            this._log('🎬 Requested card update for immediate display');
+          }
+        }, 50);
       }
       
-      // Call completion callback if this was the last batch
-      if (batchInfo.onComplete) {
-        batchInfo.onComplete();
+      // Debug mode event logging
+      if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+        this.card._debugLogEvent('batch_added', `Batch directly added to queue`, {
+          folder: folderTitle,
+          batchSize: batch.length,
+          queueSize: this.queue.length,
+          batchIndex: batchIndex + 1
+        });
       }
-      
-    }, 200); // Process batches every 200ms for smooth interleaving
-  }
-  
-  stopBatchScheduler() {
-    if (this.batchScheduler.intervalId) {
-      clearInterval(this.batchScheduler.intervalId);
-      this.batchScheduler.intervalId = null;
     }
-    this.batchScheduler.isProcessing = false;
-    this._log('⏸️ Batch scheduler stopped');
-  }
-  
-  scheduleBatch(batch, folderTitle, batchIndex, onComplete = null) {
-    this.batchScheduler.scheduledBatches.push({
-      batch: batch,
-      folderTitle: folderTitle,
-      batchIndex: batchIndex,
-      onComplete: onComplete
-    });
     
-    this._log('📅 Scheduled batch', batchIndex + 1, 'from', folderTitle, '- scheduler queue:', this.batchScheduler.scheduledBatches.length);
+    // Call completion callback immediately
+    if (onComplete) {
+      onComplete();
+    }
   }
 
   // NEW CONCURRENT STREAMING SCAN MANAGER
@@ -5169,9 +5125,6 @@ class SubfolderQueue {
     const completedScans = [];
     
     this._log('🎯 Starting concurrent streaming scans for', folders.length, 'folders (max concurrent:', MAX_CONCURRENT + ')');
-    
-    // Start the batch scheduler for interleaving
-    this.startBatchScheduler();
     
     return new Promise((resolve) => {
       const tryStartNextScan = () => {
@@ -5193,12 +5146,8 @@ class SubfolderQueue {
             
             // Check if all scans complete
             if (activescans.size === 0 && scanQueue.length === 0) {
-              // Wait a bit for scheduler to finish processing remaining batches
-              setTimeout(() => {
-                this.stopBatchScheduler();
-                this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
-                resolve(completedScans);
-              }, 1000);
+              this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+              resolve(completedScans);
             }
           }).catch(error => {
             activescans.delete(scanPromise);
@@ -5209,23 +5158,16 @@ class SubfolderQueue {
             
             // Check if all scans complete
             if (activescans.size === 0 && scanQueue.length === 0) {
-              // Wait a bit for scheduler to finish processing remaining batches
-              setTimeout(() => {
-                this.stopBatchScheduler();
-                this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
-                resolve(completedScans);
-              }, 1000);
+              this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+              resolve(completedScans);
             }
           });
         }
         
         // If no folders to scan and no active scans, we're done
         if (scanQueue.length === 0 && activescans.size === 0) {
-          setTimeout(() => {
-            this.stopBatchScheduler();
-            this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
-            resolve(completedScans);
-          }, 1000);
+          this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+          resolve(completedScans);
         }
       };
       
