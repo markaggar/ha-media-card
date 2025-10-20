@@ -4272,7 +4272,7 @@ class SubfolderQueue {
       this.isScanning = false;
       this._log('📁 Found', subfolders.length, 'subfolders total');
       
-      // Note: Queue population is handled by discoverSubfoldersWithEarlyPopulation
+      // Note: Queue population is handled during folder discovery
       this._log('✅ Discovery and queue population complete, queue has', this.queue.length, 'items from', this.discoveredFolders.length, 'discovered folders');
       this._log('📊 Queue summary:', this.queue.slice(0, 3).map(item => item.title || 'unknown').join(', '), this.queue.length > 3 ? '...' : '');
       
@@ -4812,47 +4812,6 @@ class SubfolderQueue {
   }
 
   // Discover subfolders with immediate early population
-  async discoverSubfoldersWithEarlyPopulation(basePath, currentDepth = 0) {
-    this._log('🚀 Starting discovery with immediate early population');
-    
-    this.tempDiscoveredFolders = [];
-    // Don't reset earlyPopulationTriggered here - let it trigger when conditions are met
-    
-    try {
-      // First, check for files in the root folder and add as a "folder" to ensure equal treatment
-      const rootFiles = await this.scanFolderFiles(basePath);
-      if (rootFiles.length > 0) {
-        const rootFolder = {
-          title: 'Root Folder',
-          path: basePath,
-          files: rootFiles,
-          fileCount: rootFiles.length,
-          depth: 0
-        };
-        this.tempDiscoveredFolders.push(rootFolder);
-        this._log('📁 Added root folder with', rootFiles.length, 'files to queue consideration');
-      }
-      
-      // Start regular discovery - early population will happen automatically when we have enough folders
-      const allSubfolders = await this.discoverSubfolders(basePath, currentDepth);
-      
-      // If early population didn't happen, do final population now
-      // No final repopulation needed - progressive enhancement handles this
-      this._log('✅ Discovery complete:', allSubfolders.length, 'folders found, queue progressively enhanced during discovery');
-      
-      return allSubfolders;
-      
-    } catch (error) {
-      this._log('❌ Discovery failed:', error.message);
-      // Try to use any folders we managed to collect
-      if (this.tempDiscoveredFolders && this.tempDiscoveredFolders.length > 0 && !this.earlyPopulationTriggered) {
-        this._log('🔄 Emergency population with', this.tempDiscoveredFolders.length, 'partial folders');
-        await this.populateQueueFromFolders(this.tempDiscoveredFolders.slice(0, 5));
-      }
-      return this.tempDiscoveredFolders || [];
-    }
-  }
-
   // Stream files from a folder in real-time batches (NEW STREAMING APPROACH)
   async streamFolderFiles(folderPath, folderTitle) {
     const BATCH_SIZE = 100; // Process files in batches of 100
