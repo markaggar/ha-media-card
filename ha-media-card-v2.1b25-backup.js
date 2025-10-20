@@ -1,11 +1,47 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b721 - Reduced concurrent scans: streaming limit 3→2, added discovery concurrency limit of 2
+ * Version: 2.1b25
  */
 
 // Import Lit from CDN for standalone usage
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
+
+// Simple folder cache for subfolder support
+class SimpleFolderCache {
+  constructor(cacheMinutes = 5) {
+    this._cache = new Map();
+    this._cacheTimeout = cacheMinutes * 60 * 1000;
+  }
+
+  async getFiles(folderPath, maxFiles, scanFunction) {
+    const cached = this._cache.get(folderPath);
+    
+    // Use cache if valid and not expired
+    if (cached && (Date.now() - cached.timestamp) < this._cacheTimeout) {
+      return cached.files;
+    }
+
+    // Cache miss - scan folder
+    const files = await scanFunction(folderPath, maxFiles);
+    
+    // Cache results
+    this._cache.set(folderPath, {
+      files: files,
+      timestamp: Date.now()
+    });
+
+    return files;
+  }
+
+  invalidateFolder(folderPath) {
+    this._cache.delete(folderPath);
+  }
+
+  clearCache() {
+    this._cache.clear();
+  }
+}
 
 class MediaCard extends LitElement {
   static properties = {
@@ -18,8 +54,7 @@ class MediaCard extends LitElement {
     _folderContents: { state: true },
     _currentMediaIndex: { state: true },
     _lastRefreshTime: { state: true },
-    _isPaused: { state: true },
-    _currentMetadata: { state: true }
+    _isPaused: { state: true }
   };
 
   constructor() {
@@ -35,7 +70,6 @@ class MediaCard extends LitElement {
     this._recentlyShown = null; // Smart cycling tracking for small collections
     this._pausedForNavigation = false;
     this._isPaused = false;
-    this._currentMetadata = null; // Current media metadata (folder, filename, date)
     this._urlCreatedTime = 0; // Track when current URL was created
     this._debugMode = true; // Enable debug logging for thumbnail development
     this._initializationInProgress = false; // Prevent multiple initializations
@@ -50,9 +84,6 @@ class MediaCard extends LitElement {
     this._slideshowPosition = 0; // Current position in slideshow sequence
     this._newContentQueue = []; // Queue of new files to show with priority
     this._showingNewContent = false; // Are we currently showing priority new content?
-    
-    // Subfolder queue system
-    this._subfolderQueue = null; // Will be initialized when needed
     this._lastKnownNewest = null; // Track newest file to detect new arrivals
     this._lastKnownFolderSize = null; // Track folder size to detect new content in random mode
     this._slideshowFiles = []; // Cached list of files for slideshow (latest: newest N, random: performance subset)
@@ -62,6 +93,12 @@ class MediaCard extends LitElement {
     this._zoomOriginX = 50; // Percent
     this._zoomOriginY = 50; // Percent
     this._zoomLevel = 2.0;  // Default zoom level
+
+    // Subfolder support state
+    this._folderCache = null; // SimpleFolderCache instance
+    this._folderMap = null; // Lightweight folder structure map
+    this._shownFiles = new Set(); // Track shown files for exclusion
+    this._lastSelectedFolder = null; // Track last selected folder for cache management
   }
 
   connectedCallback() {
@@ -153,217 +190,17 @@ class MediaCard extends LitElement {
     return this._isFolderMode('latest');
   }
 
-  // Path cleaning utility
-  _cleanPath(path) {
-    if (!path) return path;
-    
-    let cleanPath = path;
-    
-    // Remove auth signatures (case-insensitive)
-    if (cleanPath.includes('?authsig=')) {
-      cleanPath = cleanPath.split('?authsig=')[0];
-    } else if (cleanPath.includes('?authSig=')) {
-      cleanPath = cleanPath.split('?authSig=')[0];
-    }
-    
-    return cleanPath;
-  }
-
-  // Metadata extraction utilities
-  _extractMetadataFromPath(mediaPath, folderContents) {
-    if (!mediaPath) return {};
-    
-    // Clean the path first
-    const cleanedPath = this._cleanPath(mediaPath);
-    const metadata = {};
-    
-    // Extract filename and clean it up
-    const pathParts = cleanedPath.split('/');
-    let filename = pathParts[pathParts.length - 1];
-    
-    // Decode URL encoding (%20 -> space, etc.)
-    try {
-      filename = decodeURIComponent(filename);
-    } catch (e) {
-      // If decoding fails, use the original filename
-      this._log('⚠️ Failed to decode filename:', filename, e);
-    }
-    
-    metadata.filename = filename;
-    
-    // Extract folder name (parent directory)
-    if (pathParts.length > 1) {
-      let folder = pathParts[pathParts.length - 2];
-      
-      // Decode URL encoding for folder name too
-      try {
-        folder = decodeURIComponent(folder);
-      } catch (e) {
-        // If decoding fails, use the original folder name
-        this._log('⚠️ Failed to decode folder name:', folder, e);
-      }
-      
-      metadata.folder = folder;
-    }
-    
-    // Try to extract date from cleaned filename (multiple formats)
-    const dateFromFilename = this._extractDateFromFilename(filename);
-    if (dateFromFilename) {
-      metadata.date = dateFromFilename;
-    }
-    
-    // Try to get file modification date from folder contents
-    if (folderContents && folderContents.children) {
-      const fileItem = folderContents.children.find(child => 
-        child.media_content_id === mediaPath || child.title === filename
-      );
-      if (fileItem && fileItem.thumbnail) {
-        // Some HA integrations include timestamp in thumbnail URL
-        const timestampFromThumbnail = this._extractTimestampFromUrl(fileItem.thumbnail);
-        if (timestampFromThumbnail && !metadata.date) {
-          metadata.date = new Date(timestampFromThumbnail);
-        }
-      }
-    }
-    
-    this._log('📊 Extracted metadata from', mediaPath, ':', metadata);
-    return metadata;
-  }
-
-  _extractDateFromFilename(filename) {
-    if (!filename) return null;
-    
-    // Common date patterns in filenames
-    const patterns = [
-      // YYYY-MM-DD format
-      /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format  
-      /(\d{4})(\d{2})(\d{2})/,
-      // MM-DD-YYYY format
-      /(\d{2})-(\d{2})-(\d{4})/,
-      // DD-MM-YYYY format (less common but possible)
-      /(\d{2})-(\d{2})-(\d{4})/
-    ];
-    
-    for (const pattern of patterns) {
-      const match = filename.match(pattern);
-      if (match) {
-        let year, month, day;
-        
-        if (pattern.source.includes('(\\d{4})-(\\d{2})-(\\d{2})') || 
-            pattern.source.includes('(\\d{4})(\\d{2})(\\d{2})')) {
-          // YYYY-MM-DD or YYYYMMDD
-          year = parseInt(match[1]);
-          month = parseInt(match[2]) - 1; // JS Date months are 0-indexed
-          day = parseInt(match[3]);
-        } else {
-          // MM-DD-YYYY format
-          month = parseInt(match[1]) - 1;
-          day = parseInt(match[2]);
-          year = parseInt(match[3]);
-        }
-        
-        const date = new Date(year, month, day);
-        if (!isNaN(date.getTime()) && year > 1900 && year < 2100) {
-          return date;
-        }
-      }
-    }
-    
-    return null;
-  }
-
-  _extractTimestampFromUrl(url) {
-    if (!url) return null;
-    
-    // Look for timestamp parameters in URLs
-    const timestampPattern = /[?&]t=(\d+)/;
-    const match = url.match(timestampPattern);
-    if (match) {
-      return parseInt(match[1]) * 1000; // Convert to milliseconds
-    }
-    
-    return null;
-  }
-
-  _formatMetadataDisplay(metadata) {
-    if (!metadata || !this.config.metadata) return '';
-    
-    const parts = [];
-    
-    if (this.config.metadata.show_folder && metadata.folder) {
-      parts.push(`📁 ${metadata.folder}`);
-    }
-    
-    if (this.config.metadata.show_filename && metadata.filename) {
-      parts.push(`📄 ${metadata.filename}`);
-    }
-    
-    if (this.config.metadata.show_date && metadata.date) {
-      const dateStr = metadata.date.toLocaleDateString();
-      parts.push(`📅 ${dateStr}`);
-    }
-    
-    return parts.join(' • ');
-  }
-
-  // Initialize subfolder queue if needed
-  _initializeSubfolderQueue() {
-    if (!this._subfolderQueue && this.config.subfolder_queue?.enabled) {
-      this._log('🚀 Initializing subfolder queue system');
-      this._subfolderQueue = new SubfolderQueue(this);
-    }
-    return this._subfolderQueue;
-  }
-
-  // Monitor queue for immediate display as soon as items are available
-  _startQueueMonitor() {
-    if (this._queueMonitorInterval) {
-      clearInterval(this._queueMonitorInterval);
-    }
-    
-    this._log('👀 Starting queue monitor for immediate display');
-    let checkCount = 0;
-    const maxChecks = 100; // 10 seconds at 100ms intervals
-    
-    this._queueMonitorInterval = setInterval(async () => {
-      checkCount++;
-      
-      if (!this._subfolderQueue || checkCount > maxChecks) {
-        this._log('⏰ Queue monitor timeout or queue unavailable - stopping');
-        clearInterval(this._queueMonitorInterval);
-        this._queueMonitorInterval = null;
-        return;
-      }
-      
-      const queueSize = this._subfolderQueue.queue.length;
-      if (queueSize > 0) {
-        this._log('🎉 QUEUE MONITOR: Found', queueSize, 'items - triggering immediate display!');
-        clearInterval(this._queueMonitorInterval);
-        this._queueMonitorInterval = null;
-        
-        // Immediately display first available item
-        const randomResult = this._getRandomFileWithIndex();
-        if (randomResult && randomResult.file) {
-          this._log('🚀 Queue monitor triggering immediate display');
-          await this._loadMediaFromItem(randomResult.file);
-          this._lastRefreshTime = Date.now();
-          
-          // Set minimal _folderContents to enable navigation controls
-          this._folderContents = [randomResult.file, {}];
-          this._log('🎮 Queue monitor enabled navigation controls');
-          
-          // Force UI update
-          this.requestUpdate();
-        }
-      } else if (checkCount % 10 === 0) {
-        this._log('👀 Queue monitor: still waiting... (check', checkCount + '/' + maxChecks + ')');
-      }
-    }, 100); // Check every 100ms for responsive display
-  }
-
   _isRandomMode() {
     return this._isFolderMode('random');
+  }
+
+  // Initialize folder cache if needed
+  _initializeFolderCache() {
+    if (!this._folderCache) {
+      const cacheMinutes = this.config.folder_cache_minutes || 5;
+      this._folderCache = new SimpleFolderCache(cacheMinutes);
+      this._log('📂 Initialized folder cache with', cacheMinutes, 'minute timeout');
+    }
   }
 
   static styles = css`
@@ -550,44 +387,68 @@ class MediaCard extends LitElement {
       to { opacity: 1; transform: translateY(0); }
     }
 
-    /* Metadata overlay */
-    .metadata-overlay {
+    /* Media Info Overlay */
+    .media-info {
       position: absolute;
       background: rgba(0, 0, 0, 0.8);
       color: white;
-      padding: 6px 12px;
-      border-radius: 4px;
-      font-size: 0.85em;
-      line-height: 1.2;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.3;
       pointer-events: none;
       z-index: 11;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      white-space: pre-line;
+      max-width: calc(100% - 24px);
+      word-wrap: break-word;
       animation: fadeIn 0.3s ease;
-      max-width: calc(100% - 16px);
-      word-break: break-word;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
     }
 
-    /* Metadata positioning */
-    .metadata-overlay.metadata-bottom-left {
-      bottom: 8px;
-      left: 8px;
-    }
-
-    .metadata-overlay.metadata-bottom-right {
-      bottom: 8px;
-      right: 8px;
-    }
-
-    .metadata-overlay.metadata-top-left {
+    .media-info-top-left {
       top: 8px;
       left: 8px;
     }
 
-    .metadata-overlay.metadata-top-right {
+    .media-info-top-right {
       top: 8px;
       right: 8px;
+    }
+
+    .media-info-bottom-left {
+      bottom: 8px;
+      left: 8px;
+    }
+
+    .media-info-bottom-right {
+      bottom: 8px;
+      right: 8px;
+    }
+
+    /* Adjust media info positioning for videos - avoid controls */
+    :host([data-media-type="video"]) .media-info-bottom-left {
+      bottom: 50px; /* Above video controls */
+    }
+
+    :host([data-media-type="video"]) .media-info-bottom-right {
+      bottom: 50px; /* Above video controls */
+    }
+
+    /* Adjust media info positioning when navigation indicators are present */
+    :host([data-has-folder-navigation]) .media-info-bottom-left {
+      bottom: 45px; /* Above position indicator */
+    }
+
+    :host([data-has-folder-navigation]) .media-info-bottom-right {
+      bottom: 45px; /* Above dots indicator */
+    }
+
+    /* Combined: Videos with navigation indicators */
+    :host([data-media-type="video"][data-has-folder-navigation]) .media-info-bottom-left,
+    :host([data-media-type="video"][data-has-folder-navigation]) .media-info-bottom-right {
+      bottom: 70px; /* Above both video controls AND navigation indicators */
     }
 
     /* Navigation Zones */
@@ -794,32 +655,11 @@ class MediaCard extends LitElement {
     
     this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
     
-    // Create new config object with metadata defaults
-    this.config = {
-      ...config,
-      metadata: {
-        show_folder: config.metadata?.show_folder !== false, // Default: true
-        show_filename: config.metadata?.show_filename !== false, // Default: true  
-        show_date: config.metadata?.show_date !== false, // Default: true
-        position: config.metadata?.position || 'bottom-left', // Default: bottom-left
-        ...config.metadata
-      },
-      subfolder_queue: {
-        enabled: config.subfolder_queue?.enabled || false, // Default: disabled for now
-        scan_depth: config.subfolder_queue?.scan_depth || 2, // Default: 2 levels deep
-        queue_size: config.subfolder_queue?.queue_size || 30,
-        initial_scan_limit: config.subfolder_queue?.initial_scan_limit || 10,
-        priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
-        equal_probability_mode: config.subfolder_queue?.equal_probability_mode || false, // True equal probability per media item
-        estimated_total_photos: config.subfolder_queue?.estimated_total_photos || null, // User estimate for better probability calculation
-        ...config.subfolder_queue
-      }
-    };
+    this.config = config;
     
     // Apply debug mode from config
-    this._debugMode = this.config.debug_mode === true;
+    this._debugMode = config.debug_mode === true;
     this._log('🔧 Debug mode:', this._debugMode ? 'ENABLED' : 'disabled');
-    this._log('🔧 Metadata config:', this.config.metadata);
     
     // Set aspect ratio mode data attribute for CSS styling
     const aspectMode = config.aspect_mode || 'default';
@@ -850,6 +690,27 @@ class MediaCard extends LitElement {
     this._mediaType = config.media_type || 'all';
     this.setAttribute('data-media-type', this._mediaType);
     this._mediaLoadedLogged = false; // Reset logging flag for new config
+    
+    // Process subfolder configuration with defaults
+    if (oldConfig && (
+      oldConfig.subfolder_scan_depth !== config.subfolder_scan_depth ||
+      oldConfig.max_files_per_folder !== config.max_files_per_folder ||
+      oldConfig.folder_cache_minutes !== config.folder_cache_minutes
+    )) {
+      this._log('🌳 Subfolder config changed - clearing cache');
+      this._folderMap = null;
+      this._shownFiles.clear();
+      if (this._folderCache) {
+        this._folderCache.clearCache();
+      }
+    }
+    
+    // Log subfolder configuration (using defaults where needed)
+    const subfolderDepth = config.subfolder_scan_depth || 0;
+    const maxFilesPerFolder = config.max_files_per_folder || 2000;
+    const cacheMinutes = config.folder_cache_minutes || 5;
+    
+    this._log('🌳 Subfolder config - depth:', subfolderDepth, 'maxFiles:', maxFilesPerFolder, 'cache:', cacheMinutes + 'min')
     
     // Set up auto-refresh if config changed or if folder mode is enabled
     if (!oldConfig || 
@@ -893,29 +754,16 @@ class MediaCard extends LitElement {
     const refreshSeconds = this.config?.auto_refresh_seconds;
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       this._log(`🔄 Setting up auto-refresh every ${refreshSeconds} seconds for ${this.config?.is_folder ? 'folder' : 'file'} mode`);
-      
-      // Start auto-refresh immediately since media should be displayed when this is called
-      this._log('🔄 Starting auto-refresh immediately - media is displayed');
-      
       this._refreshInterval = setInterval(() => {
-        // Check both pause states before running
-        if (!this._isPaused && !this._backgroundPaused) {
-          // Skip auto-refresh if folder discovery is actively in progress
-          if (this._subfolderQueue && this._subfolderQueue.isDiscoveryInProgress && this._subfolderQueue.isDiscoveryInProgress()) {
-            this._log('🔄 Auto-refresh skipped - folder discovery in progress');
-            return;
-          }
-          
-          // Reduce logging noise - only log if debug mode or occasional
-          if (this.config?.debug_mode || Math.random() < 0.1) {
-            this._log('🔄 Auto-refresh timer triggered - active');
-          }
+        // Check pause states and initialization before running
+        if (!this._isPaused && !this._backgroundPaused && !this._initializationInProgress && !this._navigationInProgress) {
+          this._log('🔄 Auto-refresh timer triggered - active');
           this._checkForMediaUpdates();
         } else {
-          this._log('🔄 Auto-refresh skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
+          this._log('🔄 Auto-refresh skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused, 'initInProgress:', this._initializationInProgress, 'navigationInProgress:', this._navigationInProgress);
         }
       }, refreshSeconds * 1000);
-      this._log('✅ Auto-refresh interval started immediately with ID:', this._refreshInterval);
+      this._log('🔄 Auto-refresh interval created with ID:', this._refreshInterval);
     } else {
       this._log('🔄 Auto-refresh disabled or not configured:', {
         refreshSeconds,
@@ -923,6 +771,17 @@ class MediaCard extends LitElement {
         hasConfig: !!this.config
       });
     }
+  }
+
+  _pauseAutoRefreshTemporarily() {
+    // Pause auto-refresh for 3 seconds to prevent interference with navigation
+    this._navigationInProgress = true;
+    this._log('🔄 Pausing auto-refresh temporarily for navigation');
+    
+    setTimeout(() => {
+      this._navigationInProgress = false;
+      this._log('🔄 Auto-refresh pause ended');
+    }, 3000);
   }
 
   async _handleFolderMode() {
@@ -935,54 +794,144 @@ class MediaCard extends LitElement {
     this._initializationInProgress = true;
     
     try {
+      this._log('🔄 STARTING _handleFolderMode - mode:', this.config.folder_mode, 'path:', this.config.media_path);
       this._log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
       
-      // Initialize subfolder queue if enabled and in random mode
-      if (this.config.subfolder_queue?.enabled && this._isRandomMode()) {
-        this._log('🚀 Initializing subfolder queue for random mode');
-        this._initializeSubfolderQueue();
-        if (this._subfolderQueue) {
-          this._log('🚀 Starting subfolder queue initialization...');
-          
-          // 🎯 IMMEDIATE DISPLAY: Start queue monitor RIGHT NOW, don't wait for initialization
-          this._startQueueMonitor();
-          
-          // Start initialization in the background (non-blocking)
-          const queueInitialized = await this._subfolderQueue.initialize();
-          if (queueInitialized) {
-            this._log('✅ Subfolder queue initialization completed (early population or full scan)');
+      // Check if subfolder support is enabled and we're in random mode
+      const subfolderDepth = this.config.subfolder_scan_depth || 0;
+      const hasSubfolderSupport = subfolderDepth > 0;
+      
+      if (hasSubfolderSupport && this._isRandomMode()) {
+        this._log('🌳 Using subfolder support for random mode');
+        this._log('🔍 Subfolder config - depth:', subfolderDepth, 'hasSupport:', hasSubfolderSupport, 'isRandom:', this._isRandomMode());
+        
+        try {
+          // First, try immediate selection if we have existing folder map
+          if (this._folderMap && !this._shouldRebuildFolderMap()) {
+            this._log('📂 Using existing folder map for immediate selection');
+            const selectedFile = await this._selectRandomFileFromSubfolders();
             
-            // Check if queue is populated
-            const queueSize = this._subfolderQueue.queue.length;
-            if (queueSize > 0) {
-              this._log('🎉 IMMEDIATE SUCCESS! Queue has', queueSize, 'items - displaying media');
-              const randomResult = this._getRandomFileWithIndex();
-              if (randomResult && randomResult.file) {
-                this._log('🚀 Using available queue item for display');
-                await this._loadMediaFromItem(randomResult.file);
+            if (selectedFile) {
+              const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+              if (resolvedUrl !== this._mediaUrl) {
+                this._setMediaUrl(resolvedUrl);
+                this._currentMediaFile = selectedFile; // Store for metadata display
+                this._currentMediaIndex = -1; // Not applicable for subfolder mode
+                this._detectMediaType(selectedFile.media_content_id);
                 this._lastRefreshTime = Date.now();
-                
-                // Set minimal _folderContents to enable navigation controls
-                this._folderContents = [randomResult.file, {}]; // At least 2 items to enable navigation
-                this._log('🎮 Set minimal folder contents for navigation controls');
-                
-                return; // Exit early - queue already available
+                this._log(`🌳 Selected media from existing folder map:`, selectedFile.title || selectedFile.media_content_id);
+                this.requestUpdate();
               }
-            } else {
-              this._log('⚠️ Queue empty after initialization - starting immediate queue monitor');
-              // Start monitoring for queue population (streaming scans are in progress)
-              this._startQueueMonitor();
-              // Also fallback to normal mode in case queue never populates
-              this._log('📁 Starting fallback scanning while waiting for queue');
+              return; // Exit early - we're done
+            }
+          }
+          
+          // If no existing map or it needs rebuild, try quick selection first
+          this._log('📂 Attempting quick subfolder selection while building folder map...');
+          
+          // Try to get a quick result from root + immediate subfolders (with timeout)
+          const quickResult = await Promise.race([
+            this._quickSubfolderSelection(),
+            new Promise(resolve => setTimeout(() => {
+              this._log('⏰ Quick selection timeout - proceeding with fallback');
+              resolve(null);
+            }, 3000)) // 3 second timeout
+          ]);
+          if (quickResult) {
+            const resolvedUrl = await this._resolveMediaPath(quickResult.media_content_id);
+            if (resolvedUrl !== this._mediaUrl) {
+              this._setMediaUrl(resolvedUrl);
+              this._currentMediaFile = quickResult; // Store for metadata display
+              this._currentMediaIndex = -1;
+              this._detectMediaType(quickResult.media_content_id);
+              this._lastRefreshTime = Date.now();
+              this._log(`🚀 Quick subfolder selection SUCCESS:`, quickResult.title || quickResult.media_content_id);
+              this.requestUpdate();
+              
+              // Continue building full folder map in background for next time
+              this._buildFolderMapInBackground();
+              return;
             }
           } else {
-            this._log('⚠️ Subfolder queue initialization failed, using normal mode');
+            this._log(`❌ Quick subfolder selection returned null - trying simple fallback`);
           }
+          
+          // Simple fallback - just scan the root folder directly
+          this._log(`🎯 Simple fallback - scanning root folder for immediate media`);
+          const rootFiles = await this._scanFolderWithLimit(this.config.media_path, 50);
+          if (rootFiles.length > 0) {
+            const selectedFile = this._selectRandomWithExclusion(rootFiles, this.config.media_path);
+            if (selectedFile) {
+              const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+              if (resolvedUrl !== this._mediaUrl) {
+                this._setMediaUrl(resolvedUrl);
+                this._currentMediaFile = selectedFile;
+                this._currentMediaIndex = -1;
+                this._detectMediaType(selectedFile.media_content_id);
+                this._lastRefreshTime = Date.now();
+                this._log(`🎯 Simple fallback SUCCESS:`, selectedFile.title || selectedFile.media_content_id);
+                this.requestUpdate();
+                
+                // Continue building full folder map in background for next time
+                this._buildFolderMapInBackground();
+                return;
+              }
+            }
+          }
+          
+          this._log(`❌ Simple fallback found no media files - trying immediate selection from first available folder`);
+          // Immediate selection - just pick the first folder we can find with media
+          const immediateFile = await this._getImmediateFileFromAnyFolder();
+          if (immediateFile) {
+            const resolvedUrl = await this._resolveMediaPath(immediateFile.media_content_id);
+            if (resolvedUrl !== this._mediaUrl) {
+              this._setMediaUrl(resolvedUrl);
+              this._currentMediaFile = immediateFile;
+              this._currentMediaIndex = -1;
+              this._detectMediaType(immediateFile.media_content_id);
+              this._lastRefreshTime = Date.now();
+              this._log(`⚡ Immediate selection SUCCESS:`, immediateFile.title || immediateFile.media_content_id);
+              this.requestUpdate();
+              
+              // Continue building full folder map in background for next time
+              this._buildFolderMapInBackground();
+              return;
+            }
+          }
+          
+          this._log(`❌ No immediate media found - skipping full scan to avoid timeout`);
+          // Skip the full scan to prevent infinite scanning
+          // const selectedFile = await Promise.race([
+          //   this._selectRandomFileFromSubfolders(),
+          //   new Promise(resolve => setTimeout(() => {
+          //     this._log('⏰ Full folder scan timeout - giving up');
+          //     resolve(null);
+          //   }, 10000)) // 10 second timeout
+          // ]);
+          
+          if (selectedFile) {
+            const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+            if (resolvedUrl !== this._mediaUrl) {
+              this._setMediaUrl(resolvedUrl);
+              this._currentMediaFile = selectedFile; // Store for metadata display
+              this._currentMediaIndex = -1; // Not applicable for subfolder mode
+              this._detectMediaType(selectedFile.media_content_id);
+              this._lastRefreshTime = Date.now();
+              this._log(`🌳 Selected media from full subfolder scan:`, selectedFile.title || selectedFile.media_content_id);
+              this.requestUpdate();
+            }
+            return; // Exit early - we're done
+          }
+        } catch (error) {
+          console.error('Subfolder selection failed, falling back to single folder mode:', error);
+          // Fall through to traditional single-folder scanning
         }
       }
       
-      // Fallback: scan folder contents for normal mode or queue failures
-      this._log('📁 Scanning root folder contents (fallback mode)');
+      // Traditional single-folder mode
+      this._log('📁 Using traditional single-folder mode');
+      
+      // Scan folder contents
       await this._scanFolderContents();
       
       if (!this._folderContents || this._folderContents.length === 0) {
@@ -992,7 +941,7 @@ class MediaCard extends LitElement {
         return;
       }
 
-      // Select media based on mode (fallback for non-queue modes or queue failures)
+      // Select media based on mode
       let selectedFile;
       let selectedIndex = 0;
       
@@ -1009,7 +958,8 @@ class MediaCard extends LitElement {
       if (selectedFile && selectedIndex >= 0) {
         const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
         if (resolvedUrl !== this._mediaUrl) {
-          this._setMediaUrl(resolvedUrl, selectedFile.media_content_id);
+          this._setMediaUrl(resolvedUrl);
+          this._currentMediaFile = selectedFile; // Store for metadata display
           this._currentMediaIndex = selectedIndex;
           this._detectMediaType(selectedFile.media_content_id);
           this._lastRefreshTime = Date.now(); // Set initial refresh time
@@ -1041,9 +991,14 @@ class MediaCard extends LitElement {
   }
 
   async _handleFolderModeRefresh(forceImmediate = false) {
-    // Exit immediately if paused
+    // Exit immediately if paused or not visible
     if (this._isPaused) {
       this._log('🔄 Folder mode refresh skipped - currently paused');
+      return;
+    }
+    
+    if (this._backgroundPaused) {
+      this._log('🔄 Folder mode refresh skipped - card not visible');
       return;
     }
 
@@ -1074,28 +1029,97 @@ class MediaCard extends LitElement {
     }
     
     try {
-      // If subfolder queue is active, use it instead of scanning folder contents
-      if (this._subfolderQueue && this._subfolderQueue.config.enabled && this._isRandomMode()) {
-        this._log('🔄 Using subfolder queue for refresh');
-        
-        // If queue is still scanning, wait rather than falling back to root folder
-        if (this._subfolderQueue.isScanning && this._subfolderQueue.queue.length === 0) {
-          this._log('⏳ Queue still initializing - skipping refresh to avoid showing root folder images');
-          this._lastRefreshTime = Date.now(); // Update timestamp to prevent rapid retries
-          return;
+      // Check if we're ACTUALLY in subfolder mode (not just configured for it)
+      const hasSubfolderConfig = this.config.is_folder && 
+                                (this.config.subfolder_scan_depth || 0) > 0 && 
+                                this._isRandomMode();
+      const hasSubfolderData = this._folderMap && Object.keys(this._folderMap).length > 0;
+      const isActuallyInSubfolderMode = hasSubfolderConfig && hasSubfolderData;
+      
+      this._log('🔄 Auto-refresh mode check - hasConfig:', hasSubfolderConfig, 'hasData:', hasSubfolderData, 'actuallyInSubfolder:', isActuallyInSubfolderMode);
+      
+      if (isActuallyInSubfolderMode) {
+        this._log('🌳 Auto-refresh using subfolder mode - trying immediate selection');
+        // Use immediate selection for navigation/refresh (fast) with timeout
+        try {
+          const selectedFile = await Promise.race([
+            this._getImmediateFileFromAnyFolder(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Selection timeout')), 2000)) // 2 second timeout
+          ]);
+          
+          if (selectedFile) {
+            this._log('✅ Immediate subfolder selection successful:', selectedFile.title || selectedFile.media_content_id);
+            
+            // Update media directly
+            const mediaUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+            this._mediaUrl = mediaUrl;
+            this._currentMediaFile = selectedFile;
+            this._mediaType = this._detectFileType(selectedFile.title) || 'image';
+            this.setAttribute('data-media-type', this._mediaType);
+            this.requestUpdate();
+          } else {
+            this._log('❌ Immediate selection returned null');
+          }
+        } catch (error) {
+          this._log('❌ Immediate selection failed or timed out:', error.message);
+          // Try fallback
+          try {
+            const fallbackFile = await this._selectRandomFileFromSubfolders();
+            if (fallbackFile) {
+              this._log('✅ Fallback subfolder selection successful:', fallbackFile.title || fallbackFile.media_content_id);
+              
+              // Update media directly
+              const mediaUrl = await this._resolveMediaPath(fallbackFile.media_content_id);
+              this._mediaUrl = mediaUrl;
+              this._currentMediaFile = fallbackFile;
+              this._mediaType = this._detectFileType(fallbackFile.title) || 'image';
+              this.setAttribute('data-media-type', this._mediaType);
+              this.requestUpdate();
+            } else {
+              this._log('❌ Fallback selection also failed');
+            }
+          } catch (fallbackError) {
+            this._log('❌ Both immediate and fallback selection failed:', fallbackError.message);
+          }
         }
+        return;
+      }
+      
+      // Simple mode - just select a new random file from current folder
+      if (this.config.is_folder && this.config.folder_mode === 'random') {
+        this._log('🎯 Simple mode auto-refresh - selecting new random file');
         
-        const randomResult = this._getRandomFileWithIndex(true);
-        if (randomResult && randomResult.file) {
-          await this._loadMediaFromItem(randomResult.file);
-          this._lastRefreshTime = Date.now();
-          return;
-        } else {
-          this._log('⚠️ Subfolder queue failed during refresh - queue empty but not scanning');
+        try {
+          const mediaPath = this.config.media_path;
+          const contents = await this._browseFolderContents(mediaPath);
+          const mediaFiles = contents.filter(item => this._isMediaFile(item));
+          
+          if (mediaFiles.length > 0) {
+            // Use exclusion to avoid showing the same file again
+            const selectedFile = this._selectRandomWithExclusion(mediaFiles, mediaPath);
+            if (selectedFile) {
+              this._log('✅ Simple mode auto-refresh selection:', selectedFile.title || selectedFile.media_content_id);
+              
+              // Update media directly
+              const mediaUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+              this._mediaUrl = mediaUrl;
+              this._currentMediaFile = selectedFile;
+              this._mediaType = this._detectFileType(selectedFile.title) || 'image';
+              this.setAttribute('data-media-type', this._mediaType);
+              this.requestUpdate();
+              return;
+            } else {
+              this._log('❌ No different file available for simple auto-refresh');
+            }
+          } else {
+            this._log('❌ No media files found in simple auto-refresh');
+          }
+        } catch (error) {
+          this._log('❌ Simple mode auto-refresh failed:', error.message);
         }
       }
       
-      // Fallback: rescan folder contents
+      // Traditional folder mode - rescan folder contents
       await this._scanFolderContents();
       
       if (!this._folderContents || this._folderContents.length === 0) {
@@ -1139,6 +1163,23 @@ class MediaCard extends LitElement {
       }
     } catch (error) {
       console.error('Error refreshing folder mode:', error);
+    }
+  }
+
+  // Browse folder contents (returns raw items, not filtered)
+  async _browseFolderContents(folderPath) {
+    if (!this.hass) return [];
+    
+    try {
+      const mediaContent = await this.hass.callWS({
+        type: "media_source/browse_media",
+        media_content_id: folderPath
+      });
+      
+      return mediaContent?.children || [];
+    } catch (error) {
+      this._log('Failed to browse folder contents:', error);
+      return [];
     }
   }
 
@@ -1285,6 +1326,466 @@ class MediaCard extends LitElement {
       this._folderContents = [];
     } finally {
       this._scanInProgress = false;
+    }
+  }
+
+  // ===== SUBFOLDER SUPPORT METHODS =====
+
+  // Build lightweight folder structure map
+  async _buildFolderMap(contentId, currentDepth, maxDepth) {
+    // Check if we should stop due to visibility
+    if (this._backgroundPaused) {
+      this._log(`🚫 Folder map build cancelled at depth ${currentDepth} - card not visible`);
+      return { path: contentId, hasFiles: false, subfolders: {}, cancelled: true };
+    }
+    
+    if (currentDepth >= maxDepth) {
+      this._log(`📂 Reached max depth ${maxDepth} at: ${contentId}`);
+      return { path: contentId, hasFiles: false, subfolders: {}, reachedDepthLimit: true };
+    }
+    
+    this._log(`📂 Scanning folder structure at depth ${currentDepth}: ${contentId}`);
+    
+    try {
+      const mediaContent = await this.hass.callWS({
+        type: "media_source/browse_media",
+        media_content_id: contentId
+      });
+
+      if (!mediaContent?.children) {
+        this._log(`📂 No children found in: ${contentId}`);
+        return { path: contentId, hasFiles: false, subfolders: {} };
+      }
+
+      const folderInfo = {
+        path: contentId,
+        hasFiles: false,
+        subfolders: {},
+        depth: currentDepth,
+        scannedAt: Date.now()
+      };
+
+      let totalItems = mediaContent.children.length;
+      this._log(`📂 Processing ${totalItems} items in: ${contentId}`);
+
+      for (const item of mediaContent.children) {
+        // Check visibility before processing each item
+        if (this._backgroundPaused) {
+          this._log('🚫 Folder map build stopping - card became invisible');
+          folderInfo.cancelled = true;
+          break;
+        }
+        
+        if (item.can_expand) {
+          // This is a subfolder - recursively map it
+          this._log(`📁 Found subfolder: ${item.title || item.media_content_id}`);
+          const subfolderInfo = await this._buildFolderMap(
+            item.media_content_id,
+            currentDepth + 1, 
+            maxDepth
+          );
+          
+          if (subfolderInfo) {
+            folderInfo.subfolders[item.media_content_id] = subfolderInfo;
+          }
+        } else if (this._isMediaFile(item.title || item.media_content_id)) {
+          // Found media file - set flag but don't store file data
+          if (!folderInfo.hasFiles) {
+            this._log(`📄 Found media files in: ${contentId}`);
+            folderInfo.hasFiles = true;
+          }
+        }
+      }
+
+      this._log(`📂 Completed folder scan: ${contentId} (hasFiles: ${folderInfo.hasFiles}, subfolders: ${Object.keys(folderInfo.subfolders).length})`);
+      return folderInfo;
+
+    } catch (error) {
+      console.error(`Error scanning folder structure ${contentId}:`, error);
+      return { path: contentId, hasFiles: false, subfolders: {} };
+    }
+  }
+
+  // Collect all folders that have media files
+  _collectFoldersWithFiles(folderMap, folders = []) {
+    if (!folderMap) return folders;
+
+    if (folderMap.hasFiles) {
+      folders.push(folderMap.path);
+      this._log(`📁 Added folder with files: ${folderMap.path}`);
+    }
+
+    if (folderMap.subfolders) {
+      for (const subfolder of Object.values(folderMap.subfolders)) {
+        this._collectFoldersWithFiles(subfolder, folders);
+      }
+    }
+
+    return folders;
+  }
+
+  // Scan specific folder with file limit protection
+  async _scanFolderWithLimit(folderPath, maxFiles) {
+    this._log(`📂 Scanning folder with limit ${maxFiles}: ${folderPath}`);
+
+    try {
+      const mediaContent = await this.hass.callWS({
+        type: "media_source/browse_media",
+        media_content_id: folderPath
+      });
+
+      if (!mediaContent?.children) {
+        this._log(`📂 No children in folder: ${folderPath}`);
+        return [];
+      }
+
+      const mediaFiles = mediaContent.children
+        .filter(item => !item.can_expand && this._isMediaFile(item.title || item.media_content_id))
+        .slice(0, maxFiles);  // Simple limit - take first N files
+
+      if (mediaContent.children.length > maxFiles) {
+        this._log(`⚠️ Large folder detected: ${folderPath} (${mediaContent.children.length} total items, limited to ${maxFiles} files)`);
+      }
+
+      this._log(`📂 Found ${mediaFiles.length} media files in: ${folderPath}`);
+      return mediaFiles;
+
+    } catch (error) {
+      console.error(`Error scanning folder ${folderPath}:`, error);
+      return [];
+    }
+  }
+
+  // Select random file with exclusion tracking
+  _selectRandomWithExclusion(files, folderPath) {
+    if (!files || files.length === 0) {
+      this._log(`⚠️ No files provided for selection from: ${folderPath}`);
+      return null;
+    }
+
+    const availableFiles = files.filter(file => 
+      !this._shownFiles.has(file.media_content_id)
+    );
+
+    if (availableFiles.length === 0) {
+      // All files shown - clear exclusion list
+      this._log(`🔄 All cached files shown in ${folderPath}, clearing exclusion list`);
+      this._shownFiles.clear();
+      
+      // Force cache refresh for this folder next time
+      if (this._folderCache) {
+        this._folderCache.invalidateFolder(folderPath);
+        this._log(`🔄 Invalidated cache for: ${folderPath}`);
+      }
+      
+      // Return random file from all files
+      const selected = files[Math.floor(Math.random() * files.length)];
+      this._shownFiles.add(selected.media_content_id);
+      this._log(`🎲 Selected file after reset: ${selected.title || selected.media_content_id}`);
+      return selected;
+    }
+
+    const selected = availableFiles[Math.floor(Math.random() * availableFiles.length)];
+    this._shownFiles.add(selected.media_content_id);  
+    this._log(`🎲 Selected random file: ${selected.title || selected.media_content_id} (${availableFiles.length} available, ${this._shownFiles.size} shown)`);
+    return selected;
+  }
+
+  // Main subfolder random selection method
+  async _selectRandomFileFromSubfolders() {
+    this._log('🎲 Starting subfolder random selection...');
+    
+    // Initialize folder cache
+    this._initializeFolderCache();
+
+    // Build or get folder map
+    const maxDepth = this.config.subfolder_scan_depth || 0;
+    if (!this._folderMap || this._shouldRebuildFolderMap()) {
+      this._log(`📂 Building folder map with max depth: ${maxDepth}`);
+      this._folderMap = await this._buildFolderMap(
+        this.config.media_path,
+        0,
+        maxDepth
+      );
+    }
+
+    // Get all folders with files
+    const foldersWithFiles = this._collectFoldersWithFiles(this._folderMap);
+    if (foldersWithFiles.length === 0) {
+      throw new Error('No folders with media files found in subfolder structure');
+    }
+
+    this._log(`📁 Found ${foldersWithFiles.length} folders with media files`);
+
+    // Pick random folder
+    const randomFolder = foldersWithFiles[Math.floor(Math.random() * foldersWithFiles.length)];
+    this._log(`🎯 Selected random folder: ${randomFolder}`);
+
+    // Get files from that folder (with caching)
+    const maxFilesPerFolder = this.config.max_files_per_folder || 2000;
+    const files = await this._folderCache.getFiles(
+      randomFolder,
+      maxFilesPerFolder,
+      (folderPath, maxFiles) => this._scanFolderWithLimit(folderPath, maxFiles)
+    );
+
+    this._lastSelectedFolder = randomFolder;
+
+    // Select random file with exclusion tracking
+    return this._selectRandomWithExclusion(files, randomFolder);
+  }
+
+  // Check if folder map should be rebuilt
+  _shouldRebuildFolderMap() {
+    if (!this._folderMap) return true;
+    
+    // Rebuild if folder map is older than cache timeout
+    const cacheTimeout = (this.config.folder_cache_minutes || 5) * 60 * 1000;
+    const age = Date.now() - (this._folderMap.scannedAt || 0);
+    
+    if (age > cacheTimeout) {
+      this._log(`🔄 Folder map expired (${Math.round(age/1000)}s old), rebuilding...`);
+      return true;
+    }
+    
+    return false;
+  }
+
+  // Quick subfolder selection - scans more folders but limits depth for speed
+  async _quickSubfolderSelection() {
+    this._log('🚀 Attempting quick subfolder selection...');
+    
+    // Skip if card is not visible
+    if (this._backgroundPaused) {
+      this._log('🚫 Quick subfolder selection skipped - card not visible');
+      return null;
+    }
+    
+    try {
+      // If we have an existing folder map, use it for better distribution
+      if (this._folderMap && !this._shouldRebuildFolderMap()) {
+        const foldersWithFiles = this._collectFoldersWithFiles(this._folderMap);
+        if (foldersWithFiles.length > 0) {
+          // Pick random folder from existing map
+          const randomFolder = foldersWithFiles[Math.floor(Math.random() * foldersWithFiles.length)];
+          this._log(`🎯 Quick selection from existing map: ${randomFolder}`);
+          
+          const maxFilesPerFolder = this.config.max_files_per_folder || 2000;
+          const files = await this._folderCache.getFiles(
+            randomFolder,
+            maxFilesPerFolder,
+            (folderPath, maxFiles) => this._scanFolderWithLimit(folderPath, maxFiles)
+          );
+          
+          if (files.length > 0) {
+            return this._selectRandomWithExclusion(files, randomFolder);
+          }
+        }
+      }
+      
+      // Initialize folder cache
+      this._initializeFolderCache();
+      
+      const maxFilesPerFolder = this.config.max_files_per_folder || 2000;
+      const candidateFolders = [];
+      
+      // Quick scan with broader but limited depth
+      const maxDepth = Math.min(this.config.subfolder_scan_depth || 0, 3); // Cap at 3 levels for speed
+      const quickFolders = await this._quickFolderScan(this.config.media_path, 0, maxDepth);
+      
+      this._log(`📁 Quick scan found ${quickFolders.length} folders with media`);
+      
+      // Check each found folder for media
+      for (const folderPath of quickFolders) {
+        try {
+          const folderFiles = await this._scanFolderWithLimit(folderPath, Math.min(100, maxFilesPerFolder));
+          if (folderFiles.length > 0) {
+            candidateFolders.push(folderPath);
+          }
+        } catch (error) {
+          this._log(`⚠️ Failed to scan folder ${folderPath}:`, error.message);
+        }
+      }
+      
+      if (candidateFolders.length === 0) {
+        this._log('🚫 No folders with media found in quick scan');
+        return null;
+      }
+      
+      this._log(`✅ Found ${candidateFolders.length} candidate folders with media`);
+      
+      // Pick random folder and get random file
+      const randomFolderPath = candidateFolders[Math.floor(Math.random() * candidateFolders.length)];
+      this._log(`🎯 Quick selection from: ${randomFolderPath}`);
+      
+      const files = await this._folderCache.getFiles(
+        randomFolderPath,
+        maxFilesPerFolder,
+        (folderPath, maxFiles) => this._scanFolderWithLimit(folderPath, maxFiles)
+      );
+      
+      if (files.length > 0) {
+        this._log(`🎯 Found ${files.length} files in selected folder, picking random file`);
+        const selectedFile = this._selectRandomWithExclusion(files, randomFolderPath);
+        this._log(`🎬 Selected file:`, selectedFile ? selectedFile.title || selectedFile.media_content_id : 'null');
+        return selectedFile;
+      }
+      
+      this._log(`❌ No files found in selected folder: ${randomFolderPath}`);
+      return null;
+    } catch (error) {
+      this._log('⚠️ Quick subfolder selection failed:', error.message);
+      return null;
+    }
+  }
+
+  // Get immediate file from any folder - very fast, just finds first available media
+  async _getImmediateFileFromAnyFolder() {
+    this._log('⚡ Attempting immediate file selection from any available folder...');
+    
+    try {
+      // First, try to use discovered folders from folder map if available
+      if (this._folderMap && Object.keys(this._folderMap).length > 0) {
+        this._log('⚡ Using discovered folders from folder map');
+        const availableFolders = Object.keys(this._folderMap).filter(folder => 
+          this._folderMap[folder] && this._folderMap[folder].length > 0
+        );
+        
+        if (availableFolders.length > 0) {
+          // Randomly pick from discovered folders
+          const randomFolder = availableFolders[Math.floor(Math.random() * availableFolders.length)];
+          const files = this._folderMap[randomFolder];
+          
+          if (files.length > 0) {
+            const selectedFile = this._selectRandomWithExclusion(files, randomFolder);
+            this._log(`⚡ Immediate selection from discovered folder ${randomFolder}:`, selectedFile?.title || selectedFile?.media_content_id);
+            return selectedFile;
+          }
+        }
+      }
+      
+      // If specific paths don't work, do a quick scan of root level
+      this._log('⚡ Checking root level subfolders...');
+      const rootContents = await this._browseFolderContents(this.config.media_path);
+      const subfolders = rootContents.filter(item => item.can_expand); // Check all subfolders
+      
+      // Collect all available files from multiple folders for better variety
+      const allAvailableFiles = [];
+      for (const subfolder of subfolders) {
+        try {
+          const files = await this._scanFolderWithLimit(subfolder.media_content_id, 10); // Reduced limit for faster scan
+          if (files.length > 0) {
+            // Add folder context to files for logging
+            files.forEach(file => {
+              file._sourceFolder = subfolder.media_content_id;
+            });
+            allAvailableFiles.push(...files);
+          }
+        } catch (error) {
+          // Continue to next subfolder
+        }
+      }
+      
+      if (allAvailableFiles.length > 0) {
+        // Select from all available files for better variety
+        const selectedFile = this._selectRandomWithExclusion(allAvailableFiles, 'immediate_selection');
+        this._log(`⚡ Immediate selection from ${allAvailableFiles.length} total files:`, selectedFile.title || selectedFile.media_content_id);
+        this._log(`⚡ Selected from folder:`, selectedFile._sourceFolder);
+        return selectedFile;
+      }
+      
+      this._log('⚡ No immediate media files found');
+      return null;
+    } catch (error) {
+      this._log('⚡ Immediate selection failed:', error.message);
+      return null;
+    }
+  }
+
+  // Quick folder scan with limited depth for faster results
+  async _quickFolderScan(folderPath, currentDepth, maxDepth) {
+    const foldersWithMedia = [];
+    
+    try {
+      // Check visibility before expensive operations
+      if (this._backgroundPaused) {
+        this._log('🚫 Quick folder scan cancelled - card not visible');
+        return foldersWithMedia;
+      }
+      
+      // Check if current folder has media files
+      const files = await this._scanFolderWithLimit(folderPath, 10); // Just check if any exist
+      if (files.length > 0) {
+        foldersWithMedia.push(folderPath);
+      }
+      
+      // Recurse into subfolders if not at max depth
+      if (currentDepth < maxDepth) {
+        const folderContents = await this._browseFolderContents(folderPath);
+        const subfolders = folderContents.filter(item => item.can_expand);
+        
+        // Limit number of subfolders to check for performance
+        const subfoldersToCheck = subfolders.slice(0, 10);
+        
+        for (const subfolder of subfoldersToCheck) {
+          // Check visibility before each recursive call
+          if (this._backgroundPaused) {
+            this._log('🚫 Quick folder scan stopping - card became invisible');
+            break;
+          }
+          
+          const subfolderResults = await this._quickFolderScan(
+            subfolder.media_content_id, 
+            currentDepth + 1, 
+            maxDepth
+          );
+          foldersWithMedia.push(...subfolderResults);
+        }
+      }
+    } catch (error) {
+      this._log(`⚠️ Quick scan failed for ${folderPath}:`, error.message);
+    }
+    
+    return foldersWithMedia;
+  }
+
+  // Utility function to shuffle an array
+  _shuffleArray(array) {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  }
+
+  // Build folder map in background without blocking UI
+  async _buildFolderMapInBackground() {
+    this._log('🔄 Building full folder map in background...');
+    
+    try {
+      // Use setTimeout to yield control back to UI
+      setTimeout(async () => {
+        try {
+          // Check if card is still visible before starting expensive operation
+          if (this._backgroundPaused) {
+            this._log('⏸️ Background folder map build cancelled - card not visible');
+            return;
+          }
+          
+          const maxDepth = this.config.subfolder_scan_depth || 0;
+          this._folderMap = await this._buildFolderMap(
+            this.config.media_path,
+            0,
+            maxDepth
+          );
+          this._log('✅ Background folder map build complete - ready for future selections');
+        } catch (error) {
+          this._log('⚠️ Background folder map build failed:', error.message);
+        }
+      }, 100); // Small delay to let UI update
+    } catch (error) {
+      this._log('⚠️ Failed to start background folder map build:', error.message);
     }
   }
 
@@ -1634,20 +2135,6 @@ class MediaCard extends LitElement {
   }
 
   _getRandomFileWithIndex(avoidCurrent = false) {
-    // Try to use subfolder queue if available and enabled
-    if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
-      this._log('🔍 Attempting to get next queue item - queue size:', this._subfolderQueue.queue?.length || 0);
-      const queueItem = this._subfolderQueue.getNextItem();
-      if (queueItem) {
-        this._log('🚀 Using item from subfolder queue:', queueItem.title, 'from path:', queueItem.media_content_id);
-        // When using queue, don't map to folder contents index - queue items may be from different folders
-        return { file: queueItem, index: -1 }; // Use -1 to indicate this is a queue item
-      } else {
-        this._log('❌ Queue getNextItem returned null/undefined - queue size:', this._subfolderQueue.queue?.length || 0, 'isScanning:', this._subfolderQueue.isScanning);
-        this._log('⚠️ Queue empty or failed, falling back to normal random selection');
-      }
-    }
-
     if (!this._folderContents || this._folderContents.length === 0) {
       return { file: null, index: 0 };
     }
@@ -1751,12 +2238,20 @@ class MediaCard extends LitElement {
     if (this._folderContents && this._currentMediaIndex >= 0 && this._currentMediaIndex < this._folderContents.length) {
       const currentFile = this._folderContents[this._currentMediaIndex];
       if (currentFile && currentFile.media_content_id) {
-        return this._detectFileType(currentFile.media_content_id) || 'image';
+        const detectedType = this._detectFileType(currentFile.media_content_id) || 'image';
+        this._log('🎯 Media type from folder contents:', detectedType, 'file:', currentFile.media_content_id, 'index:', this._currentMediaIndex);
+        return detectedType;
       }
     }
     
     // Fallback to detecting from URL (for single file mode or edge cases)
-    return this._detectFileType(this._mediaUrl) || 'image';
+    const fallbackType = this._detectFileType(this._mediaUrl) || 'image';
+    // Only log media type changes to reduce spam
+    if (!this._lastMediaType || this._lastMediaType !== fallbackType) {
+      this._log('🎯 Media type from URL fallback:', fallbackType, 'url:', this._mediaUrl, 'hasFolder:', !!this._folderContents, 'index:', this._currentMediaIndex);
+      this._lastMediaType = fallbackType;
+    }
+    return fallbackType;
   }
 
   _isMediaFile(filePath) {
@@ -2052,7 +2547,7 @@ class MediaCard extends LitElement {
     return mediaPath;
   }
 
-  _setMediaUrl(newUrl, mediaPath = null) {
+  _setMediaUrl(newUrl) {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
@@ -2060,24 +2555,7 @@ class MediaCard extends LitElement {
       if (this._retryAttempts.has(newUrl)) {
         this._retryAttempts.delete(newUrl);
       }
-      
-      // Extract metadata from the media path, clean it first
-      if (mediaPath || newUrl) {
-        const pathToAnalyze = this._cleanPath(mediaPath || newUrl);
-        const newMetadata = this._extractMetadataFromPath(pathToAnalyze, this._folderContents);
-        
-        // Only update metadata if it actually changed
-        if (JSON.stringify(newMetadata) !== JSON.stringify(this._currentMetadata)) {
-          this._currentMetadata = newMetadata;
-        }
-      } else {
-        this._currentMetadata = null;
-      }
-      
-      this._log('✅ Media URL set, triggering re-render:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
-    } else {
-      // URL didn't change - don't trigger any updates
-      this._log('🔄 URL unchanged, skipping render trigger');
+      this._log('🔗 Set new media URL, age tracking started:', newUrl.length > 50 ? newUrl.substring(0, 50) + '...' : newUrl);
     }
   }
 
@@ -2091,17 +2569,17 @@ class MediaCard extends LitElement {
   render() {
     if (!this.config) return html``;
     
-    // Debug queue mode - show queue analysis instead of media
-    // Only show debug mode if explicitly enabled (prevent auto-activation)
-    if (this.config.debug_queue_mode === true) {
-      this._log('🐛 Debug queue mode activated - showing debug interface');
-      return this._renderDebugQueueMode();
-    }
-    
     // Set navigation attribute based on folder mode, content, and configuration
-    const hasNavigation = this.config.is_folder && 
-                         this._folderContents && 
-                         this._folderContents.length > 1 &&
+    // For subfolder mode, always enable navigation since we have dynamic content
+    const isSubfolderMode = this.config.is_folder && 
+                           (this.config.subfolder_scan_depth || 0) > 0 && 
+                           this._isRandomMode();
+    
+    const hasTraditionalNavigation = this.config.is_folder && 
+                                   this._folderContents && 
+                                   this._folderContents.length > 1;
+    
+    const hasNavigation = (isSubfolderMode || hasTraditionalNavigation) &&
                          (this.config.enable_navigation_zones !== false ||
                           this.config.show_position_indicator !== false ||
                           this.config.show_dots_indicator !== false);
@@ -2133,185 +2611,9 @@ class MediaCard extends LitElement {
           ${this._renderNavigationIndicators()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
           ${this._renderPauseIndicator()}
-          ${this._renderMetadataOverlay()}
+          ${this._renderMediaInfo()}
         </div>
       </div>
-    `;
-  }
-
-  _renderDebugQueueMode() {
-    if (!this.debugQueueData) {
-      this.debugQueueData = {
-        queueEvents: [],
-        sessionStart: Date.now(),
-        totalAdded: 0,
-        folderStats: new Map(),
-        lastRefresh: null
-      };
-    }
-
-    const hasTitle = this.config.title && this.config.title.trim();
-    
-    // Debug: Log what we have access to
-    console.log('🐛 Debug render - checking subfolderQueue availability:', !!this.subfolderQueue);
-    console.log('🐛 Debug render - this keys:', Object.keys(this));
-    
-    // Access the correct queue data - it's stored as _subfolderQueue
-    let queueSize = 0;
-    let foldersFound = 0;
-    let currentQueue = [];
-    
-    if (this._subfolderQueue) {
-      queueSize = this._subfolderQueue.queue?.length || 0;
-      const discoveredCount = this._subfolderQueue.discoveredFolders?.length || 0;
-      const tempCount = this._subfolderQueue.tempDiscoveredFolders?.length || 0;
-      foldersFound = discoveredCount + tempCount;
-      currentQueue = this._subfolderQueue.queue || [];
-      console.log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'temp folders:', tempCount, 'total:', foldersFound);
-      console.log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => f.title));
-      console.log('🐛 Debug render - temp folders:', this._subfolderQueue.tempDiscoveredFolders?.map(f => f.title));
-    } else {
-      console.log('🐛 Debug render - NO _subfolderQueue found');
-    }
-    
-    return html`
-      <div class="card debug-mode ${!hasTitle ? 'no-title' : ''}">
-        ${hasTitle ? html`<div class="title">🐛 DEBUG: ${this.config.title}</div>` : html`<div class="title">🐛 DEBUG QUEUE MODE</div>`}
-        
-        <div class="debug-container">
-          <div class="debug-stats">
-            <div><strong>Session:</strong> ${Math.floor((Date.now() - this.debugQueueData.sessionStart) / 1000)}s</div>
-            <div><strong>Total Added:</strong> ${this.debugQueueData.totalAdded}</div>
-            <div><strong>Queue Size:</strong> ${queueSize}</div>
-            <div><strong>Folders Found:</strong> ${foldersFound}</div>
-            <div><strong>Last Refresh:</strong> ${this.debugQueueData.lastRefresh ? new Date(this.debugQueueData.lastRefresh).toLocaleTimeString() : 'Never'}</div>
-            <div><strong>Events Logged:</strong> ${this.debugQueueData.queueEvents.length}</div>
-            <div><strong>Has _SubfolderQueue:</strong> ${!!this._subfolderQueue ? 'Yes' : 'No'}</div>
-          </div>
-          
-          <div class="debug-controls">
-            <button @click=${this._debugRefreshQueue} style="margin: 5px; padding: 5px 10px;">🔄 Refresh Queue</button>
-            <button @click=${this._debugClearEvents} style="margin: 5px; padding: 5px 10px;">🗑️ Clear Events</button>
-            <button @click=${this._debugCopyQueue} style="margin: 5px; padding: 5px 10px;">📋 Copy Queue</button>
-          </div>
-          
-          <div class="debug-current-queue">
-            <h4>📄 Current Queue (${queueSize} items):</h4>
-            <textarea id="debug-queue-list" readonly style="width: 100%; height: 150px; font-family: monospace; font-size: 11px; background: #ffffff; color: #000000; border: 1px solid #000; resize: vertical; padding: 8px;">
-${currentQueue.map((item, index) => {
-  const filename = item.title || item.media_content_id?.split('/').pop() || 'Unknown';
-  const folder = item.media_content_id?.split('/').slice(-2, -1)[0] || 'Unknown';
-  return `${(index + 1).toString().padStart(3, ' ')}: ${folder.padEnd(20, ' ')} → ${filename}`;
-}).join('\n')}
-            </textarea>
-          </div>
-          
-          <div class="debug-folder-stats">
-            <h4>📊 Folder Statistics:</h4>
-            <div style="background: #ffffff; border: 1px solid #000; padding: 8px; font-family: monospace;">
-              ${foldersFound > 0 || (this._subfolderQueue?.tempDiscoveredFolders?.length > 0) ? html`
-                ${([...(this._subfolderQueue?.discoveredFolders || []), ...(this._subfolderQueue?.tempDiscoveredFolders || [])]).map(folder => {
-                  const queueItems = currentQueue.filter(item => 
-                    item.media_content_id?.includes(folder.title) || 
-                    item.media_content_id?.split('/').slice(-2, -1)[0] === folder.title
-                  ).length;
-                  const percentage = queueSize > 0 ? (queueItems / queueSize * 100).toFixed(1) : '0.0';
-                  return html`
-                    <div style="margin: 4px 0; font-size: 12px; user-select: text; color: #000000;">
-                      <span style="color: #0066cc; font-weight: bold;">${folder.title}</span>: 
-                      <span style="color: #000000;">
-                        ${folder.fileCount || 0} total, 
-                        ${queueItems} in queue 
-                        (${percentage}%) 
-                        ${folder.isSynthetic ? '(synthetic)' : ''}
-                      </span>
-                    </div>
-                  `;
-                })}
-              ` : html`
-                <div style="color: #cc0000; font-style: italic;">
-                  No folders discovered yet... 
-                  (_subfolderQueue: ${!!this._subfolderQueue})
-                </div>
-              `}
-            </div>
-          </div>
-          
-          <div class="debug-history">
-            <h4>📚 Queue History (${(this._subfolderQueue?.queueHistory || []).length} files added):</h4>
-            <textarea id="debug-history-list" readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 11px; background: #ffffff; color: #000000; border: 1px solid #000; resize: vertical; padding: 8px;">
-${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
-  const timestamp = new Date(entry.timestamp).toLocaleTimeString();
-  const filename = entry.file.title || entry.file.media_content_id?.split('/').pop() || 'Unknown';
-  const folder = entry.folderName || 'Unknown';
-  const source = entry.source || 'unknown';
-  return `${(index + 1).toString().padStart(4, ' ')}: [${timestamp}] ${folder.padEnd(15, ' ')} → ${filename.padEnd(25, ' ')} (${source})`;
-}).join('\n')}
-            </textarea>
-            <button @click=${this._debugCopyHistory} style="margin: 5px 0; padding: 5px 10px;">📋 Copy History</button>
-          </div>
-          
-          <div class="debug-events" style="max-height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin: 10px 0;">
-            <h4>📝 Queue Events (Last 50):</h4>
-            <div style="font-family: monospace; font-size: 11px; user-select: text;">
-              ${this.debugQueueData.queueEvents.slice(-50).reverse().map((event, index) => html`
-                <div style="margin: 4px 0; padding: 6px; background: ${event.type === 'queue_refill' ? '#fff3cd' : event.type === 'folder_added' ? '#cce5ff' : '#d4edda'}; border-radius: 3px; border: 1px solid ${event.type === 'queue_refill' ? '#ffeaa7' : event.type === 'folder_added' ? '#a3dcff' : '#c3e6cb'};">
-                  <div style="font-weight: bold; color: #000000;">
-                    [${new Date(event.timestamp).toLocaleTimeString()}] ${event.type.toUpperCase()}
-                  </div>
-                  <div style="margin-left: 10px; color: #333333;">
-                    ${event.type === 'file_added' ? 
-                      `📁 ${event.folder} → 📄 ${event.filename}` : 
-                      event.type === 'folder_added' ? 
-                      `📁 ${event.folder} (${event.fileCount} files, ${event.slots} slots, weight: ${event.weight})` : 
-                      event.details
-                    }
-                  </div>
-                </div>
-              `)}
-              ${this.debugQueueData.queueEvents.length === 0 ? html`
-                <div style="color: #cc0000; font-style: italic; padding: 20px; text-align: center; background: #ffffff; border: 1px solid #000;">
-                  No events yet... waiting for queue activity
-                </div>
-              ` : ''}
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <style>
-        .debug-mode .debug-container {
-          padding: 10px;
-          font-family: Arial, sans-serif;
-          font-size: 13px;
-          background: #f0f0f0;
-          border: 1px solid #000;
-        }
-        .debug-mode .debug-stats {
-          background: #ffffff;
-          color: #000000;
-          padding: 10px;
-          border: 1px solid #000;
-          border-radius: 5px;
-          margin-bottom: 10px;
-        }
-        .debug-mode .debug-stats div {
-          margin: 3px 0;
-          color: #000000;
-        }
-        .debug-mode .debug-folder-stats {
-          background: #ffffff;
-          padding: 0;
-          border-radius: 5px;
-          margin: 10px 0;
-          max-height: 200px;
-          overflow-y: auto;
-        }
-        .debug-mode h4 {
-          color: #000000;
-          margin: 10px 0 5px 0;
-        }
-      </style>
     `;
   }
 
@@ -2328,37 +2630,98 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _renderPauseIndicator() {
-    // Show pause indicator when paused and in random mode OR subfolder queue mode
-    const isRandomOrQueue = this._isRandomMode() || (this.config.subfolder_queue?.enabled && this._isRandomMode());
-    if (!this._isPaused || !isRandomOrQueue) {
+    // Only show pause indicator when paused in random mode
+    if (!this._isPaused || this.config.folder_mode !== 'random') {
       return html``;
     }
 
-    this._log('🔴 Rendering pause indicator - isPaused:', this._isPaused, 'mode:', this.config.folder_mode);
     return html`
       <div class="pause-indicator">⏸️</div>
     `;
   }
 
-  _renderMetadataOverlay() {
-    // Only show if metadata is configured and available
-    if (!this.config.metadata || !this._currentMetadata) {
+  _renderMediaInfo() {
+    // Only show media info if enabled and we have media loaded
+    if (!this.config.show_media_info || !this._mediaUrl || !this._currentMediaFile) {
       return html``;
     }
 
-    const metadataText = this._formatMetadataDisplay(this._currentMetadata);
-    if (!metadataText) {
+    const position = this.config.media_info_position || 'bottom-left';
+    const mediaInfo = this._getMediaInfoText();
+    
+    if (!mediaInfo) {
       return html``;
     }
-
-    const position = this.config.metadata.position || 'bottom-left';
-    const positionClass = `metadata-${position}`;
 
     return html`
-      <div class="metadata-overlay ${positionClass}">
-        ${metadataText}
+      <div class="media-info media-info-${position}">
+        ${mediaInfo}
       </div>
     `;
+  }
+
+  _getMediaInfoText() {
+    if (!this._currentMediaFile) return '';
+
+    const parts = [];
+    
+    // Extract folder path from media_content_id
+    if (this._currentMediaFile.media_content_id) {
+      const path = this._currentMediaFile.media_content_id;
+      // Remove media-source prefix and get folder path
+      const cleanPath = path.replace(/^media-source:\/\/media_source\/local\//, '');
+      const folderPath = cleanPath.split('/').slice(0, -1).join('/');
+      if (folderPath) {
+        parts.push(`📁 ${folderPath}`);
+      }
+    }
+    
+    // Try to extract date from filename or use estimated mtime
+    const filename = this._getItemDisplayName(this._currentMediaFile);
+    let dateText = '';
+    
+    if (this._currentMediaFile.estimated_mtime) {
+      const date = new Date(this._currentMediaFile.estimated_mtime);
+      if (!isNaN(date.getTime())) {
+        dateText = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      }
+    }
+    
+    // Try filename extraction if no mtime available (with caching to prevent spam)
+    if (!dateText && filename) {
+      // Cache timestamp extraction to prevent excessive logging
+      if (!this._timestampCache) {
+        this._timestampCache = new Map();
+      }
+      
+      let timestamp = this._timestampCache.get(filename);
+      if (timestamp === undefined) {
+        timestamp = this._extractTimestampFromFilename(filename);
+        this._timestampCache.set(filename, timestamp || null);
+      }
+      
+      if (timestamp) {
+        const date = new Date(timestamp);
+        if (!isNaN(date.getTime())) {
+          dateText = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        }
+      }
+    }
+    
+    if (dateText) {
+      parts.push(`📅 ${dateText}`);
+    }
+    
+    // Add filename if it's meaningful (not just random characters)
+    if (filename && filename.length > 0) {
+      // Only show filename if it's not just a timestamp or random string
+      const hasLetters = /[a-zA-Z]{3,}/.test(filename);
+      if (hasLetters) {
+        parts.push(`📄 ${filename}`);
+      }
+    }
+    
+    return parts.join('\n');
   }
 
   async _manualRefresh() {
@@ -2442,6 +2805,17 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
     
     // Handle folder mode that hasn't been initialized yet
+    // Reduced logging to prevent spam - only log when conditions change
+    if (!this._lastRenderState || 
+        this._lastRenderState.mediaUrl !== !!this._mediaUrl || 
+        this._lastRenderState.initInProgress !== this._initializationInProgress) {
+      this._log('🔍 Render condition check - mediaUrl:', !!this._mediaUrl, 'isFolder:', this.config?.is_folder, 'folderMode:', this.config?.folder_mode, 'hass:', !!this.hass, 'initInProgress:', this._initializationInProgress);
+      this._lastRenderState = {
+        mediaUrl: !!this._mediaUrl,
+        initInProgress: this._initializationInProgress
+      };
+    }
+    
     if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass && !this._initializationInProgress) {
       this._log('🔧 No media URL but have folder config - triggering initialization');
       // Trigger folder mode initialization asynchronously
@@ -2453,19 +2827,6 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">Loading Folder...</div>
           <div style="font-size: 0.9em; opacity: 0.8; line-height: 1.4;">
             Scanning for media files in folder
-          </div>
-        </div>
-      `;
-    }
-
-    // Show loading state during initialization
-    if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass && this._initializationInProgress) {
-      return html`
-        <div class="placeholder">
-          <div style="font-size: 64px; margin-bottom: 24px; opacity: 0.3;">⚡</div>
-          <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">Scanning Folders...</div>
-          <div style="font-size: 0.9em; opacity: 0.8; line-height: 1.4;">
-            Discovering media files and populating queue
           </div>
         </div>
       `;
@@ -2503,12 +2864,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // CRITICAL FIX: Use the corrected media type detection method
     // This uses the original filename from folder contents instead of the resolved URL
     const currentMediaType = this._getCurrentMediaType();
-    
-    // Only log rendering info once per media URL to avoid spam
-    if (!this._lastRenderedUrl || this._lastRenderedUrl !== this._mediaUrl) {
-      this._log('🎬 Rendering media with type:', currentMediaType, 'URL:', this._mediaUrl);
-      this._lastRenderedUrl = this._mediaUrl;
-    }
+    this._log('🎬 Rendering media with type:', currentMediaType, 'URL:', this._mediaUrl);
     
     if (currentMediaType === 'video') {
       return html`
@@ -2555,20 +2911,21 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _renderNavigationZones() {
-    // Show navigation zones if:
-    // 1. In folder mode with multiple items, OR
-    // 2. In random mode with subfolder queue (even during initialization)
-    const isFolder = this.config.is_folder;
-    const hasMultipleContents = this._folderContents && this._folderContents.length > 1;
-    const isRandomWithQueue = this._isRandomMode() && this.config.subfolder_queue?.enabled;
-    const navigationDisabled = this.config.enable_navigation_zones === false;
+    // Check if we should show navigation zones
+    const isSubfolderMode = this.config.is_folder && 
+                           (this.config.subfolder_scan_depth || 0) > 0 && 
+                           this._isRandomMode();
     
-    const shouldShowNavigation = isFolder && (hasMultipleContents || isRandomWithQueue);
+    const hasTraditionalNavigation = this.config.is_folder && 
+                                   this._folderContents && 
+                                   this._folderContents.length > 1;
     
-    if (!shouldShowNavigation || navigationDisabled) {
+    // Only show navigation zones if enabled, in folder mode and have content (or subfolder mode)
+    if (!this.config.is_folder || 
+        this.config.enable_navigation_zones === false ||
+        (!isSubfolderMode && (!this._folderContents || this._folderContents.length <= 1))) {
       return html``;
     }
-    
 
     return html`
       <div class="navigation-zones">
@@ -2604,21 +2961,35 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _renderNavigationIndicators() {
-    // Don't show traditional navigation indicators in subfolder queue mode
-    if (this._subfolderQueue && this._subfolderQueue.config.enabled && this._isRandomMode()) {
+    // Check if we're in subfolder mode
+    const isSubfolderMode = this.config.is_folder && 
+                           (this.config.subfolder_scan_depth || 0) > 0 && 
+                           this._isRandomMode();
+    
+    // Only show indicators if in folder mode and have content (or subfolder mode)
+    if (!this.config.is_folder || 
+        (!isSubfolderMode && (!this._folderContents || this._folderContents.length <= 1))) {
       return html``;
     }
 
-    // Only show indicators if in folder mode and have multiple items
-    if (!this.config.is_folder || !this._folderContents || this._folderContents.length <= 1) {
-      return html``;
+    // Handle subfolder mode indicators
+    if (isSubfolderMode) {
+      // Show special indicators for subfolder mode
+      let positionIndicator = html``;
+      if (this.config.show_position_indicator !== false) {
+        positionIndicator = html`
+          <div class="position-indicator">
+            Random Mode
+          </div>
+        `;
+      }
+
+      // Don't show dots indicator for subfolder mode (not applicable)
+      return html`${positionIndicator}`;
     }
 
+    // Traditional folder mode indicators
     const currentIndex = this._getCurrentMediaIndex();
-    if (currentIndex < 0) {
-      // If we can't find the current index, don't show indicators
-      return html``;
-    }
     const totalCount = this._folderContents.length;
 
     // Show position indicator if enabled
@@ -2824,6 +3195,15 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
   _onVideoEnded() {
     this._log('Video ended:', this._mediaUrl);
+    
+    // Prevent rapid-fire video ended events
+    const now = Date.now();
+    if (this._lastVideoEndedTime && (now - this._lastVideoEndedTime) < 500) {
+      this._log('Ignoring rapid-fire video ended event');
+      return;
+    }
+    this._lastVideoEndedTime = now;
+    
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
@@ -3088,11 +3468,6 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
-    // Clean up queue monitor
-    if (this._queueMonitorInterval) {
-      clearInterval(this._queueMonitorInterval);
-      this._queueMonitorInterval = null;
-    }
     // Clean up hold timer
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
@@ -3175,22 +3550,6 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     const significantChange = !changedProperties.has('hass') || changedProperties.size > 1;
     if (significantChange && this._debugMode) {
       this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
-    }
-    
-    // 🎯 IMMEDIATE DISPLAY: Check if queue has been populated and we need to display first item
-    if (this._subfolderQueue && this._subfolderQueue.queue.length > 0 && !this._mediaUrl && this.config.subfolder_queue?.enabled) {
-      this._log('🎉 UPDATED: Queue has', this._subfolderQueue.queue.length, 'items - checking for immediate display');
-      const randomResult = this._getRandomFileWithIndex();
-      if (randomResult && randomResult.file) {
-        this._log('🚀 UPDATED: Triggering immediate display from queue');
-        this._loadMediaFromItem(randomResult.file).then(() => {
-          this._lastRefreshTime = Date.now();
-          this._folderContents = [randomResult.file, {}]; // Enable navigation
-          this._log('🎮 UPDATED: Set folder contents for navigation');
-        }).catch(error => {
-          this._log('❌ UPDATED: Failed to load media:', error.message);
-        });
-      }
     }
     
     // Only handle hass changes for INITIAL setup - ignore subsequent hass updates to prevent loops
@@ -3313,130 +3672,9 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
   }
 
-  // Debug mode control methods
-  _debugRefreshQueue() {
-    this._log('🐛 DEBUG: Manual queue refresh triggered');
-    this._debugLogEvent('queue_refill', 'Manual refresh triggered');
-    this.debugQueueData.lastRefresh = Date.now();
-    if (this._subfolderQueue) {
-      this._subfolderQueue.refillQueue();
-    }
-    // Force update debug stats
-    this._updateDebugStats();
-    this.requestUpdate();
-  }
-
-  _updateDebugStats() {
-    if (!this.debugQueueData || !this._subfolderQueue) return;
-    
-    // Update last refresh time when queue activities happen
-    if (this._subfolderQueue.queue && this._subfolderQueue.queue.length > 0) {
-      this.debugQueueData.lastRefresh = Date.now();
-    }
-    
-    // Force re-render to show updated stats
-    this.requestUpdate();
-  }
-
-  _debugClearEvents() {
-    this._log('🐛 DEBUG: Clearing event log');
-    this.debugQueueData.queueEvents = [];
-    this.debugQueueData.folderStats.clear();
-    this.debugQueueData.totalAdded = 0;
-    this.requestUpdate();
-  }
-
-  _debugCopyQueue() {
-    if (!this._subfolderQueue?.queue) {
-      alert('No queue available to copy');
-      return;
-    }
-    
-    const queueText = this._subfolderQueue.queue.map((item, index) => {
-      const filename = item.title || item.media_content_id?.split('/').pop() || 'Unknown';
-      const folder = item.media_content_id?.split('/').slice(-2, -1)[0] || 'Unknown';
-      return `${(index + 1).toString().padStart(3, ' ')}: ${folder.padEnd(20, ' ')} → ${filename}`;
-    }).join('\n');
-    
-    navigator.clipboard.writeText(queueText).then(() => {
-      this._log('🐛 DEBUG: Queue copied to clipboard');
-    }).catch(err => {
-      this._log('🐛 DEBUG: Failed to copy queue:', err);
-      // Fallback - select the textarea content
-      const textarea = this.shadowRoot.getElementById('debug-queue-list');
-      if (textarea) {
-        textarea.select();
-      }
-    });
-  }
-
-  _debugCopyHistory() {
-    if (!this._subfolderQueue?.queueHistory) {
-      alert('No queue history available to copy');
-      return;
-    }
-    
-    const historyText = this._subfolderQueue.queueHistory.map((entry, index) => {
-      const timestamp = new Date(entry.timestamp).toLocaleTimeString();
-      const filename = entry.file.title || entry.file.media_content_id?.split('/').pop() || 'Unknown';
-      const folder = entry.folderName || 'Unknown';
-      const source = entry.source || 'unknown';
-      return `${(index + 1).toString().padStart(4, ' ')}: [${timestamp}] ${folder.padEnd(15, ' ')} → ${filename.padEnd(25, ' ')} (${source})`;
-    }).join('\n');
-    
-    navigator.clipboard.writeText(historyText).then(() => {
-      this._log('🐛 DEBUG: Queue history copied to clipboard');
-    }).catch(err => {
-      this._log('🐛 DEBUG: Failed to copy history:', err);
-      // Fallback - select the textarea content
-      const textarea = this.shadowRoot.getElementById('debug-history-list');
-      if (textarea) {
-        textarea.select();
-      }
-    });
-  }
-
-  _debugLogEvent(type, details, extraData = {}) {
-    if (!this.debugQueueData) return;
-    
-    const event = {
-      timestamp: Date.now(),
-      type: type,
-      details: details,
-      ...extraData
-    };
-    
-    this.debugQueueData.queueEvents.push(event);
-    
-    // Update folder stats for file additions
-    if (type === 'file_added' && extraData.folder && extraData.filename) {
-      const folder = extraData.folder;
-      if (!this.debugQueueData.folderStats.has(folder)) {
-        this.debugQueueData.folderStats.set(folder, {
-          count: 0,
-          files: [],
-          percentage: 0
-        });
-      }
-      
-      const stats = this.debugQueueData.folderStats.get(folder);
-      stats.count++;
-      stats.files.push(extraData.filename);
-      this.debugQueueData.totalAdded++;
-      
-      // Update percentages
-      this.debugQueueData.folderStats.forEach(folderStats => {
-        folderStats.percentage = (folderStats.count / this.debugQueueData.totalAdded) * 100;
-      });
-      
-      this.requestUpdate();
-    }
-  }
-
   // Navigation zone event handlers
   _handlePrevClick(e) {
     e.stopPropagation();
-    this._log('🖱️ Previous button clicked');
     // Reset zoom before navigating
     try {
       const img = this.renderRoot?.querySelector('.zoomable-container img');
@@ -3446,14 +3684,27 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handleNextClick(e) {
-    e.stopPropagation();
-    this._log('🖱️ Next button clicked');
+    this._log('🔄 Next button clicked!');
+    this._log('🔄 Event details - type:', e?.type, 'target:', e?.target?.tagName, 'button:', e?.button);
+    
+    e?.stopPropagation(); 
+    e?.preventDefault();
+    
     // Reset zoom before navigating
     try {
       const img = this.renderRoot?.querySelector('.zoomable-container img');
       if (img) this._resetZoom(img);
     } catch {}
-    this._navigateNext().catch(err => console.error('Navigation error:', err));
+    
+    try {
+      this._navigateNext().catch(err => {
+        console.error('Navigation error:', err);
+        this._log('❌ Navigation error:', err.message);
+      });
+    } catch (error) {
+      console.error('Click handler error:', error);
+      this._log('❌ Click handler error:', error.message);
+    }
   }
 
   _setPauseState(isPaused) {
@@ -3581,68 +3832,181 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   async _navigatePrevious() {
-    // If subfolder queue is enabled, use history for backward navigation
-    if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
-      this._log('◀️ Navigate Previous: Using subfolder queue history');
+    // Check if we're ACTUALLY in subfolder mode (same logic as _navigateNext)
+    const hasSubfolderConfig = this.config.is_folder && 
+                              (this.config.subfolder_scan_depth || 0) > 0 && 
+                              this._isRandomMode();
+    const hasSubfolderData = this._folderMap && Object.keys(this._folderMap).length > 0;
+    const isActuallyInSubfolderMode = hasSubfolderConfig && hasSubfolderData;
+    
+    if (isActuallyInSubfolderMode) {
+      this._log('🔄 Navigate Previous (subfolder mode): selecting new random file');
       
-      // Handle auto-advance mode
-      this._handleAutoAdvanceMode();
+      // Update last refresh time to prevent immediate auto-refresh
+      this._lastRefreshTime = Date.now();
       
-      const previousItem = this._subfolderQueue.getPreviousItem();
-      if (previousItem) {
-        this._log('✅ Got previous item from history:', previousItem.title);
-        await this._loadMediaFromItem(previousItem);
-        return;
+      // Select a new random file from subfolders (same as next in random mode)
+      const selectedFile = await this._getImmediateFileFromAnyFolder();
+      if (selectedFile) {
+        this._log('✅ Previous navigation selection successful:', selectedFile.title || selectedFile.media_content_id);
+        
+        // Update media directly
+        const mediaUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+        this._mediaUrl = mediaUrl;
+        this._currentMediaFile = selectedFile;
+        this._mediaType = this._detectFileType(selectedFile.title) || 'image';
+        this.setAttribute('data-media-type', this._mediaType);
+        this.requestUpdate();
       } else {
-        this._log('⚠️ No previous item in history, staying at current');
-        return;
+        this._log('❌ Previous navigation selection failed');
       }
+      return;
     }
     
-    // Fallback to standard folder navigation
-    if (!this._folderContents || this._folderContents.length <= 1) return;
-    
-    const currentIndex = this._getCurrentMediaIndex();
-    const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
-    
-    this._log(`🔄 Navigate Previous (folder): ${currentIndex} -> ${newIndex}`);
-    
-    // Handle auto-advance mode
-    this._handleAutoAdvanceMode();
-    
-    await this._loadMediaAtIndex(newIndex);
+    // Traditional folder navigation OR simple random mode  
+    if (this._folderContents && this._folderContents.length > 1) {
+      // Traditional navigation with folder contents
+      const currentIndex = this._getCurrentMediaIndex();
+      const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
+      
+      this._log(`🔄 Navigate Previous: ${currentIndex} -> ${newIndex}`);
+      
+      // Update last refresh time to prevent immediate auto-refresh after manual navigation
+      this._lastRefreshTime = Date.now();
+      
+      await this._loadMediaAtIndex(newIndex);
+    } else {
+      // Simple mode - just select a new random file (same as next in random mode)
+      this._log('🔄 Simple mode navigation (previous) - selecting new random file');
+      
+      try {
+        const mediaPath = this.config.media_path;
+        const contents = await this._browseFolderContents(mediaPath);
+        const mediaFiles = contents.filter(item => this._isMediaFile(item));
+        
+        if (mediaFiles.length > 0) {
+          // Use exclusion to avoid showing the same file again
+          const selectedFile = this._selectRandomWithExclusion(mediaFiles, mediaPath);
+          if (selectedFile) {
+            this._log('✅ Simple navigation (previous) selection:', selectedFile.title || selectedFile.media_content_id);
+            
+            // Update media directly
+            const mediaUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+            this._mediaUrl = mediaUrl;
+            this._currentMediaFile = selectedFile;
+            this._mediaType = this._detectFileType(selectedFile.title) || 'image';
+            this.setAttribute('data-media-type', this._mediaType);
+            this._lastRefreshTime = Date.now();
+            this.requestUpdate();
+          } else {
+            this._log('❌ No different file available for simple navigation (previous)');
+          }
+        } else {
+          this._log('❌ No media files found in simple navigation (previous)');
+        }
+      } catch (error) {
+        this._log('❌ Simple navigation (previous) failed:', error.message);
+      }
+    }
   }
 
   async _navigateNext() {
-    // If subfolder queue is enabled, use queue for forward navigation
-    if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
-      this._log('▶️ Navigate Next: Using subfolder queue');
+    this._log('🔄 _navigateNext() called - checking mode...');
+    
+    // Check if we're ACTUALLY in subfolder mode (not just configured for it)
+    // We're in subfolder mode if we have a folder map OR if we initialized with subfolder support
+    const hasSubfolderConfig = this.config.is_folder && 
+                              (this.config.subfolder_scan_depth || 0) > 0 && 
+                              this._isRandomMode();
+    const hasSubfolderData = this._folderMap && Object.keys(this._folderMap).length > 0;
+    const isActuallyInSubfolderMode = hasSubfolderConfig && hasSubfolderData;
+    
+    this._log('🔄 Navigation mode check - hasConfig:', hasSubfolderConfig, 'hasData:', hasSubfolderData, 'actuallyInSubfolder:', isActuallyInSubfolderMode);
+    this._log('🔄 Current state - folderContents:', !!this._folderContents, 'folderContentsLength:', this._folderContents?.length);
+    
+    if (isActuallyInSubfolderMode) {
+      this._log('🔄 Navigate Next (subfolder mode): selecting new random file');
       
-      // Handle auto-advance mode
-      this._handleAutoAdvanceMode();
+      // Select a NEW random file from subfolders (not a refresh)
+      this._log('🔄 Selecting different random file for navigation...');
       
-      const nextItem = this._subfolderQueue.getNextItem();
-      if (nextItem) {
-        this._log('✅ Got next item from queue/history:', nextItem.title);
-        await this._loadMediaFromItem(nextItem);
-        return;
-      } else {
-        this._log('⚠️ Queue navigation failed, falling back to folder navigation');
+      // Temporarily pause auto-refresh during navigation to prevent interference
+      this._pauseAutoRefreshTemporarily();
+      
+      // Add timeout for navigation responsiveness
+      try {
+        const selectedFile = await Promise.race([
+          this._getImmediateFileFromAnyFolder(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Navigation timeout')), 1500)) // 1.5 second timeout for navigation
+        ]);
+      if (selectedFile) {
+        this._log('✅ Navigation selection successful:', selectedFile.title || selectedFile.media_content_id);
+        
+        // Update media directly
+        const mediaUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+        this._mediaUrl = mediaUrl;
+        this._currentMediaFile = selectedFile;
+        this._mediaType = this._detectFileType(selectedFile.title) || 'image';
+          this.setAttribute('data-media-type', this._mediaType);
+          
+          // Update last refresh time to prevent immediate auto-refresh
+          this._lastRefreshTime = Date.now();
+          
+          this.requestUpdate();
+        } else {
+          this._log('❌ Navigation selection failed');
+        }
+      } catch (error) {
+        this._log('❌ Navigation selection failed or timed out:', error.message);
       }
+      return;
     }
     
-    // Fallback to standard folder navigation
-    if (!this._folderContents || this._folderContents.length <= 1) return;
-    
-    const currentIndex = this._getCurrentMediaIndex();
-    const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
-    
-    this._log(`🔄 Navigate Next (folder): ${currentIndex} -> ${newIndex}`);
-    
-    // Handle auto-advance mode
-    this._handleAutoAdvanceMode();
-    
-    await this._loadMediaAtIndex(newIndex);
+    // Traditional folder navigation OR simple random mode
+    if (this._folderContents && this._folderContents.length > 1) {
+      // Traditional navigation with folder contents
+      const currentIndex = this._getCurrentMediaIndex();
+      const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
+      
+      this._log(`🔄 Navigate Next: ${currentIndex} -> ${newIndex}`);
+      
+      // Update last refresh time to prevent immediate auto-refresh after manual navigation
+      this._lastRefreshTime = Date.now();
+      
+      await this._loadMediaAtIndex(newIndex);
+    } else {
+      // Simple mode - just select a new random file from the current folder
+      this._log('🔄 Simple mode navigation - selecting new random file');
+      
+      try {
+        const mediaPath = this.config.media_path;
+        const contents = await this._browseFolderContents(mediaPath);
+        const mediaFiles = contents.filter(item => this._isMediaFile(item));
+        
+        if (mediaFiles.length > 0) {
+          // Use exclusion to avoid showing the same file again
+          const selectedFile = this._selectRandomWithExclusion(mediaFiles, mediaPath);
+          if (selectedFile) {
+            this._log('✅ Simple navigation selection:', selectedFile.title || selectedFile.media_content_id);
+            
+            // Update media directly
+            const mediaUrl = await this._resolveMediaPath(selectedFile.media_content_id);
+            this._mediaUrl = mediaUrl;
+            this._currentMediaFile = selectedFile;
+            this._mediaType = this._detectFileType(selectedFile.title) || 'image';
+            this.setAttribute('data-media-type', this._mediaType);
+            this._lastRefreshTime = Date.now();
+            this.requestUpdate();
+          } else {
+            this._log('❌ No different file available for simple navigation');
+          }
+        } else {
+          this._log('❌ No media files found in simple navigation');
+        }
+      } catch (error) {
+        this._log('❌ Simple navigation failed:', error.message);
+      }
+    }
   }
 
   async _navigateToIndex(targetIndex) {
@@ -3666,7 +4030,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       return; // No auto-refresh configured
     }
 
-    const mode = this.config.auto_advance_mode || 'reset';
+    const mode = this.config.auto_advance_mode || 'pause';
     
     switch (mode) {
       case 'pause':
@@ -3722,10 +4086,6 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Fallback: Find current media in folder contents by comparing media_content_id
     // Extract the base path from the current media URL for comparison
     const currentIndex = this._folderContents.findIndex(item => {
-      // Safety check: ensure item and media_content_id exist
-      if (!item || !item.media_content_id || !this._mediaUrl) {
-        return false;
-      }
       // Try to match using the media_content_id portion
       return this._mediaUrl.includes(item.media_content_id.split('/').pop());
     });
@@ -3743,33 +4103,23 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     if (!this._folderContents || index < 0 || index >= this._folderContents.length) return;
     
     const item = this._folderContents[index];
-    await this._loadMediaFromItem(item, index);
-  }
-
-  async _loadMediaFromItem(item, index = -1) {
-    if (!item) return;
     
-    this._log(`📂 Loading media item:`, item.title);
+    this._log(`📂 Loading media at index ${index}:`, item.title);
     
     try {
       const mediaUrl = await this._resolveMediaPath(item.media_content_id);
       
-      // Extract metadata from the item and its path
-      const metadata = this._extractMetadataFromPath(mediaUrl, null);
-      
       // Update current media
       this._mediaUrl = mediaUrl;
+      this._currentMediaFile = item; // Store for metadata display
       this._mediaType = this._detectFileType(item.title) || 'image'; // Default to image if unknown
       this.setAttribute('data-media-type', this._mediaType);
-      this._currentMediaIndex = index >= 0 ? index : (this._folderContents ? this._folderContents.findIndex(f => f.media_content_id === item.media_content_id) : -1);
-      this._currentMetadata = metadata;
-      
-      this._log('✅ Media URL set, triggering re-render:', this._mediaUrl);
+      this._currentMediaIndex = index;
       
       // Force re-render
       this.requestUpdate();
     } catch (error) {
-      console.error('Error loading media item:', item.title, error);
+      console.error('Error loading media at index:', index, error);
     }
   }
 
@@ -3929,2111 +4279,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       show_position_indicator: true, 
       show_dots_indicator: true,
       enable_keyboard_navigation: true,
-      auto_advance_mode: 'reset',
-      // Debug options
-      debug_queue_mode: false
+      auto_advance_mode: 'pause'
     };
-  }
-}
-
-// Subfolder Queue System for Random Mode
-class SubfolderQueue {
-  constructor(card) {
-    this.card = card;
-    this.config = card.config.subfolder_queue;
-    this.queue = [];
-    this.shownItems = new Set();
-    this.discoveredFolders = [];
-    this.folderWeights = new Map();
-    this.isScanning = false;
-    this.scanProgress = { current: 0, total: 0 };
-    this.discoveryStartTime = null;
-    this.discoveryInProgress = false;
-    
-    // Queue history - tracks every file ever added to the queue for debug purposes
-    this.queueHistory = [];
-    
-    // Batch scheduler for interleaving batches from different folders
-    this.batchScheduler = {
-      scheduledBatches: [],
-      isProcessing: false,
-      intervalId: null
-    };
-    
-    // Navigation history for back/forward functionality
-    this.history = []; // Array of shown items in chronological order
-    this.historyIndex = -1; // Current position in history (-1 = latest)
-    
-    this._log('🚀 SubfolderQueue initialized with config:', this.config);
-    this._log('📋 Priority patterns configured:', this.config.priority_folder_patterns);
-  }
-
-  _log(...args) {
-    if (this.card._debugMode) {
-      console.log('📂 SubfolderQueue:', ...args);
-    }
-  }
-
-  // Check if folder discovery is actively in progress
-  isDiscoveryInProgress() {
-    if (!this.discoveryInProgress) return false;
-    
-    // Consider discovery finished after 30 seconds to prevent permanent blocking
-    const discoveryDuration = Date.now() - (this.discoveryStartTime || 0);
-    if (discoveryDuration > 30000) {
-      this._log('⏰ Discovery timeout reached - allowing auto-refresh');
-      this.discoveryInProgress = false;
-      return false;
-    }
-    
-    return true;
-  }
-
-  // Calculate weight multiplier based on folder path patterns
-  getPathWeightMultiplier(folderPath) {
-    let multiplier = 1.0;
-    
-    if (this.config.priority_folder_patterns.length === 0) {
-      this._log('⚠️ No priority patterns configured');
-      return multiplier;
-    }
-    
-    this._log('🔍 Checking path:', folderPath, 'against', this.config.priority_folder_patterns.length, 'patterns');
-    
-    for (const pattern of this.config.priority_folder_patterns) {
-      const patternPath = pattern.path || pattern; // Handle both old and new format
-      this._log('  • Testing pattern:', patternPath, 'against path:', folderPath);
-      
-      if (folderPath.includes(patternPath)) {
-        multiplier = Math.max(multiplier, pattern.weight_multiplier || 3.0);
-        this._log('✨ Path weight match:', folderPath, 'pattern:', patternPath, 'multiplier:', pattern.weight_multiplier || 3.0);
-      }
-    }
-    
-    if (multiplier === 1.0) {
-      this._log('📍 No pattern matches for:', folderPath);
-    }
-    
-    return multiplier;
-  }
-
-  // Calculate folder weight based on file count and path patterns
-  calculateFolderWeight(folder) {
-    // Balanced weighting system that prevents massive folder dominance
-    // Use logarithmic scaling to compress the range between small and large folders
-    
-    let baseWeight;
-    if (folder.fileCount === 0) {
-      return 0; // Empty folders get no weight
-    } else if (folder.fileCount < 5) {
-      baseWeight = folder.fileCount * 0.5; // Very small folders get minimal weight
-    } else {
-      // Logarithmic scaling prevents massive folders from completely dominating
-      // This compresses the range significantly: 100 files ≈ 2.0, 10,000 files ≈ 4.0
-      baseWeight = Math.log10(folder.fileCount) * 10;
-    }
-    
-    const pathMultiplier = this.getPathWeightMultiplier(folder.path);
-    
-    // Much more balanced bonus system - prevents 10K+ folders from getting 5x advantage
-    let sizeMultiplier = 1.0;
-    if (folder.fileCount > 10000) {
-      sizeMultiplier = 1.8; // Modest bonus for ultra-large folders
-    } else if (folder.fileCount > 1000) {
-      sizeMultiplier = 1.5; // Small bonus for large folders  
-    } else if (folder.fileCount > 100) {
-      sizeMultiplier = 1.2; // Tiny bonus for medium folders
-    }
-    
-    const finalWeight = baseWeight * pathMultiplier * sizeMultiplier;
-    
-    // Log with percentage representation to make bias clear
-    this._log('📊 Weight calculation:', folder.title, 'files:', folder.fileCount, 'weight:', finalWeight.toFixed(1), 
-              'log10:', Math.log10(folder.fileCount).toFixed(1), 'multiplier:', sizeMultiplier);
-    
-    return finalWeight;
-  }
-
-  // Start the queue system
-  async initialize() {
-    if (!this.config.enabled || this.card.config.folder_mode !== 'random') {
-      this._log('❌ Queue disabled or not in random mode');
-      return false;
-    }
-
-    this._log('🚀 Starting subfolder queue initialization');
-    this.isScanning = true;
-    this.discoveryInProgress = true;
-    this.discoveryStartTime = Date.now();
-    this.earlyPopulationTriggered = false; // Reset the early population flag at start of initialization
-    
-    // Create a promise that resolves when early population completes
-    this.earlyPopulationComplete = new Promise((resolve) => {
-      this.resolveEarlyPopulation = resolve;
-    });
-    
-    try {
-      // Start quick initial scan in the background and wait for either early population or completion
-      const scanPromise = this.quickScan();
-      
-      // Race between early population completion and full scan completion
-      const result = await Promise.race([
-        this.earlyPopulationComplete,
-        scanPromise
-      ]);
-      
-      if (result === 'early-population-complete') {
-        this._log('🎉 Initialize completed via early population - continuing scan in background');
-        // Let the scan continue in the background but return success immediately
-        scanPromise.catch(error => {
-          this._log('⚠️ Background scan error (non-critical):', error.message);
-        });
-      } else {
-        this._log('✅ Initialize completed via full scan');
-      }
-      
-      return true;
-    } catch (error) {
-      this._log('❌ Queue initialization failed:', error);
-      this.isScanning = false;
-      this.discoveryInProgress = false;
-      return false;
-    } finally {
-      // Always clear discovery flag when initialization completes or fails
-      this.discoveryInProgress = false;
-    }
-  }
-
-  // Quick initial scan of first few folders
-  async quickScan() {
-    this._log('⚡ Starting quick scan for first', this.config.initial_scan_limit, 'folders');
-    
-    try {
-      // Get the base media path from the card's configuration
-      const basePath = this.card.config.media_path;
-      if (!basePath) {
-        this._log('❌ No base media path configured');
-        this.isScanning = false;
-        return false;
-      }
-
-      this._log('🔍 Discovering subfolders from base path:', basePath, 'max depth:', this.config.scan_depth);
-      
-      // Use a progressive approach - scan what we can and complete even if some folders timeout
-      let subfolders = [];
-      
-      try {
-        // NEW: Use streaming initialization instead of early population
-        this._log('🚀 Starting streaming folder scan...');
-        
-        const streamingSuccess = await this.initializeWithStreamingScans(basePath);
-        
-        if (!streamingSuccess) {
-          this._log('⚠️ No subfolders found, subfolder queue disabled');
-          this.isScanning = false;
-          return false;
-        }
-        
-        this._log('✅ Streaming initialization started - queue will populate as scans complete');
-        
-      } catch (error) {
-        this._log('⚠️ Streaming initialization failed:', error.message);
-        this.isScanning = false;
-        return false;
-      }
-      
-      // Scanning continues in background, mark as complete
-      this.isScanning = false;
-      this._log('📁 Found', subfolders.length, 'subfolders total');
-      
-      // Note: Queue population is handled by discoverSubfoldersWithEarlyPopulation
-      this._log('✅ Discovery and queue population complete, queue has', this.queue.length, 'items from', this.discoveredFolders.length, 'discovered folders');
-      this._log('📊 Queue summary:', this.queue.slice(0, 3).map(item => item.title || 'unknown').join(', '), this.queue.length > 3 ? '...' : '');
-      
-      // Start background expansion for deeper scanning if we have a shallow scan
-      if (subfolders.length > 0 && this.config.scan_depth > 1) {
-        this.startProgressiveDeepening(basePath, subfolders);
-      } else if (subfolders.length > this.config.initial_scan_limit) {
-        this.startProgressiveScanning(subfolders.slice(this.config.initial_scan_limit));
-      }
-      
-      return true;
-      
-    } catch (error) {
-      this._log('❌ Quick scan failed:', error);
-      this.isScanning = false;
-      return false;
-    }
-  }
-
-  // Discover all subfolders under the base path (recursive with reliability)
-  async discoverSubfolders(basePath, currentDepth = 0, forceMaxDepth = null) {
-    const maxDepth = forceMaxDepth || this.config.scan_depth || 2;
-    this._log('🔍 Starting recursive subfolder discovery from:', basePath, 'depth:', currentDepth, 'max:', maxDepth);
-    
-    if (currentDepth >= maxDepth) {
-      this._log('📁 Max depth reached:', currentDepth);
-      return [];
-    }
-    
-    try {
-      // Get folder contents with timeout (increased for large Camera folders)
-      const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 12000)
-      );
-      
-      const folderContents = await Promise.race([
-        this.card.hass.callWS({
-          type: "media_source/browse_media",
-          media_content_id: basePath
-        }),
-        apiTimeout
-      ]);
-
-      const allSubfolders = [];
-      
-      if (!folderContents || !folderContents.children) {
-        this._log('📁 No children found at depth:', currentDepth);
-        return [];
-      }
-      
-      this._log('📁 Found', folderContents.children.length, 'items at depth:', currentDepth);
-      
-      // Process directories only - RANDOMIZE ORDER for variety
-      const directories = folderContents.children.filter(item => item.media_class === 'directory');
-      
-      // Shuffle directories to ensure different folders get early population each time
-      const shuffledDirectories = [...directories];
-      for (let i = shuffledDirectories.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffledDirectories[i], shuffledDirectories[j]] = [shuffledDirectories[j], shuffledDirectories[i]];
-      }
-      this._log('🎲 Randomized folder processing order - starting with:', shuffledDirectories.slice(0, 3).map(d => d.title).join(', '));
-      
-      // Start batch scheduler for processing concurrent results
-      this.startBatchScheduler();
-      this._log('🎛️ Batch scheduler started for concurrent folder processing');
-      
-      // Start all folder scans concurrently instead of sequentially
-      const folderScanPromises = shuffledDirectories.map(async (dir) => {
-        let folderInfo = null;
-        try {
-          this._log('🚀 CONCURRENT: Processing folder:', dir.title, 'at depth:', currentDepth + 1);
-          
-          // Scan this folder for files (with timeout)
-          const folderScanStartTime = Date.now();
-          this._log('🕐 Concurrent scan starting at', folderScanStartTime, 'for', dir.title);
-          
-          const folderScanTimeout = new Promise((_, reject) => 
-            setTimeout(() => {
-              const elapsed = Date.now() - folderScanStartTime;
-              this._log('⏰ Concurrent timeout triggered after', elapsed + 'ms for', dir.title);
-              reject(new Error(`Folder scan timeout: ${dir.title}`));
-            }, 20000) // 20 second timeout - balance between thoroughness and UX
-          );
-          
-          folderInfo = await Promise.race([
-            this.scanFolderFiles(dir.media_content_id).then(result => {
-              const elapsed = Date.now() - folderScanStartTime;
-              this._log('✅ Main folder scan completed after', elapsed + 'ms for', dir.title);
-              return result;
-            }).catch(error => {
-              const elapsed = Date.now() - folderScanStartTime;
-              this._log('❌ Main folder scan failed after', elapsed + 'ms for', dir.title, ':', error.message);
-              throw error;
-            }),
-            folderScanTimeout
-          ]);
-          
-          // Add this folder if it has files
-          if (folderInfo.fileCount > 0) {
-            const sampleInfo = folderInfo.isSampled ? ` (random sampled 1:${folderInfo.sampleRatio})` : '';
-            this._log('✅ Folder has files:', dir.title, 'count:', folderInfo.fileCount + sampleInfo);
-            const folderData = {
-              path: dir.media_content_id,
-              title: dir.title,
-              fileCount: folderInfo.fileCount,
-              files: folderInfo.files,
-              depth: currentDepth + 1,
-              isSampled: folderInfo.isSampled,
-              sampleRatio: folderInfo.sampleRatio
-            };
-            allSubfolders.push(folderData);
-            
-            // Also track for early population
-            if (this.tempDiscoveredFolders) {
-              this.tempDiscoveredFolders.push(folderData);
-              this._log('📦 Added to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
-              
-              // Progressive queue enhancement: Add this folder to queue immediately
-              if (!this.earlyPopulationTriggered && this.tempDiscoveredFolders.length >= 2) {
-                this._log('⚡ IMMEDIATE early population triggered with', this.tempDiscoveredFolders.length, 'folders');
-                this.earlyPopulationTriggered = true;
-                
-                // Trigger population immediately in the background
-                this.triggerEarlyPopulation().catch(error => {
-                  this._log('⚠️ Early population failed:', error.message);
-                });
-              } else if (this.earlyPopulationTriggered) {
-                // Queue already exists, add this new folder's files progressively
-                this._log('🔄 Progressive enhancement: Adding', folderData.title, 'to existing queue');
-                this.addFolderToQueue(folderData).catch(error => {
-                  this._log('⚠️ Progressive folder addition failed:', error.message);
-                });
-              }
-            }
-          }
-          
-          // Recursively scan deeper if within depth limit
-          if (currentDepth + 1 < maxDepth) {
-            this._log('� Recursing into:', dir.title, 'next depth:', currentDepth + 2);
-            
-            // Skip recursion for large folders to prevent timeouts and hangs
-            if (folderInfo.fileCount > 3000) {
-              this._log('⚡ Skipping recursion for large folder (performance):', dir.title, 'files:', folderInfo.fileCount);
-            } else {
-              this._log('🔄 Recursing into:', dir.title, 'next depth:', currentDepth + 2, 'files:', folderInfo.fileCount);
-              
-              try {
-                // Simple recursive call with timeout
-                const recursiveTimeout = new Promise((_, reject) => 
-                  setTimeout(() => reject(new Error(`Recursive timeout: ${dir.title}`)), 15000) // 15 seconds max
-                );
-                
-                const nestedFolders = await Promise.race([
-                  this.discoverSubfolders(dir.media_content_id, currentDepth + 1, maxDepth),
-                  recursiveTimeout
-                ]);
-                
-                if (nestedFolders && nestedFolders.length > 0) {
-                  this._log('📂 Found', nestedFolders.length, 'nested folders in:', dir.title);
-                  allSubfolders.push(...nestedFolders);
-                }
-                
-              } catch (recursiveError) {
-                this._log('⚠️ Recursive scan failed for:', dir.title, recursiveError.message);
-                // Continue processing other folders - don't let one failure stop everything
-              }
-            }
-          }
-          
-        } catch (error) {
-          this._log('⚠️ Folder processing error:', dir.title, 'error:', error.message);
-          
-          // Emergency timeout recovery for large folders
-          const isTimeoutError = error.message.toLowerCase().includes('timeout');
-          
-          // Apply emergency recovery to any folder that times out
-          if (isTimeoutError) {
-            this._log(`🚨 Emergency quick scan timeout for ${dir.title} - attempting recovery (error: ${error.message})`);
-            try {
-              const emergencyResult = await this.emergencyQuickScan(dir.media_content_id, dir.title);
-              if (emergencyResult) {
-                this._log(`✅ Emergency scan successful for ${dir.title} - adding to discovered folders`);
-                // Add the emergency result to discovered folders
-                if (!this.tempDiscoveredFolders) {
-                  this.tempDiscoveredFolders = [];
-                }
-                this.tempDiscoveredFolders.push(emergencyResult);
-                
-                // Also try to add to queue immediately if we have one
-                if (this.queue && this.queue.length > 0) {
-                  try {
-                    await this.addFolderToQueue(emergencyResult);
-                    this._log(`✅ Emergency folder ${dir.title} added to queue immediately`);
-                  } catch (queueError) {
-                    this._log(`⚠️ Could not add emergency folder to queue: ${queueError.message}`);
-                  }
-                }
-                return { dir, folderInfo: emergencyResult, success: true };
-              } else {
-                this._log(`❌ Emergency scan returned null for ${dir.title} - no synthetic folder created`);
-              }
-            } catch (emergencyError) {
-              this._log(`❌ Emergency scan also failed for ${dir.title}: ${emergencyError.message}`);
-              // Emergency scan failed completely - create a synthetic folder as last resort
-              const syntheticFolder = this.createSyntheticFolderEntry(dir.media_content_id, dir.title);
-              if (!this.tempDiscoveredFolders) {
-                this.tempDiscoveredFolders = [];
-              }
-              this.tempDiscoveredFolders.push(syntheticFolder);
-              this._log(`🔄 Created last-resort synthetic folder for ${dir.title} with estimated ${syntheticFolder.fileCount} files`);
-              return { dir, folderInfo: syntheticFolder, success: true };
-            }
-          } else if (isTimeoutError) {
-            this._log(`⏰ Timeout detected for non-camera folder: ${dir.title}`);
-          }
-          
-          // If we at least got the file count, add this folder anyway (important for large folders)
-          if (folderInfo && folderInfo.fileCount > 0) {
-            this._log('🚨 Adding folder despite error (has', folderInfo.fileCount, 'files):', dir.title);
-            const folderData = {
-              path: dir.media_content_id,
-              title: dir.title,
-              fileCount: folderInfo.fileCount,
-              files: folderInfo.files,
-              depth: currentDepth + 1,
-              isSampled: folderInfo.isSampled,
-              sampleRatio: folderInfo.sampleRatio,
-              hasError: true
-            };
-            allSubfolders.push(folderData);
-            
-            // Also track for early population and progressive enhancement
-            if (this.tempDiscoveredFolders) {
-              this.tempDiscoveredFolders.push(folderData);
-              this._log('📦 Added error-recovered folder to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
-              
-              if (this.earlyPopulationTriggered) {
-                // Queue already exists, add this folder's files progressively
-                this._log('🔄 Progressive enhancement: Adding error-recovered', folderData.title, 'to existing queue');
-                this.addFolderToQueue(folderData).catch(error => {
-                  this._log('⚠️ Progressive folder addition failed for error-recovered folder:', error.message);
-                });
-              }
-            }
-          } else if (error.message && error.message.includes('timeout')) {
-            // Special handling for timeouts - try a quick emergency scan
-            this._log('🚨 Timeout detected, attempting emergency quick scan for:', dir.title);
-            try {
-              const emergencyInfo = await this.emergencyQuickScan(dir.media_content_id, dir.title);
-              if (emergencyInfo && emergencyInfo.fileCount > 0) {
-                this._log('✅ Emergency scan successful for', dir.title, '- found', emergencyInfo.fileCount, 'files');
-                allSubfolders.push(emergencyInfo);
-                
-                if (this.tempDiscoveredFolders) {
-                  this.tempDiscoveredFolders.push(emergencyInfo);
-                  this._log('📦 Added emergency-scanned folder to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
-                  
-                  if (this.earlyPopulationTriggered) {
-                    this._log('🔄 Progressive enhancement: Adding emergency-scanned', emergencyInfo.title, 'to existing queue');
-                    this.addFolderToQueue(emergencyInfo).catch(error => {
-                      this._log('⚠️ Progressive folder addition failed for emergency-scanned folder:', error.message);
-                    });
-                  }
-                }
-              }
-            } catch (emergencyError) {
-              this._log('⚠️ Emergency scan also failed for:', dir.title, emergencyError.message);
-            }
-          }
-          // Continue with other folders even if one fails
-        }
-        
-        return { dir, folderInfo, success: true };
-      });
-      
-      // Limit concurrent execution to prevent I/O overload
-      const MAX_DISCOVERY_CONCURRENT = 2; 
-      this._log('⏳ Executing', folderScanPromises.length, 'folder scans with max', MAX_DISCOVERY_CONCURRENT, 'concurrent...');
-      const results = await this.executeWithConcurrencyLimit(folderScanPromises, MAX_DISCOVERY_CONCURRENT);
-      
-      // Process results from concurrent scans
-      results.forEach((result, index) => {
-        if (result.status === 'fulfilled' && result.value.folderInfo && result.value.folderInfo.fileCount > 0) {
-          const { dir, folderInfo } = result.value;
-          this._log('✅ CONCURRENT: Successfully processed', dir.title, 'with', folderInfo.fileCount, 'files');
-          
-          const folderData = {
-            path: dir.media_content_id,
-            title: dir.title,
-            fileCount: folderInfo.fileCount,
-            files: folderInfo.files,
-            depth: currentDepth + 1,
-            isSampled: folderInfo.isSampled,
-            sampleRatio: folderInfo.sampleRatio
-          };
-          allSubfolders.push(folderData);
-          
-          // Add to temp discovered folders for early population
-          if (this.tempDiscoveredFolders) {
-            this.tempDiscoveredFolders.push(folderData);
-          }
-          
-        } else if (result.status === 'rejected') {
-          this._log('❌ CONCURRENT: Folder scan failed:', shuffledDirectories[index]?.title, result.reason?.message);
-        }
-      });
-
-      // Sort by file count (largest first) at the top level only
-      if (currentDepth === 0) {
-        allSubfolders.sort((a, b) => b.fileCount - a.fileCount);
-        this._log('✅ Recursive discovery complete:', allSubfolders.length, 'total subfolders found');
-        
-        // Log depth distribution
-        const depthCounts = {};
-        allSubfolders.forEach(folder => {
-          depthCounts[folder.depth] = (depthCounts[folder.depth] || 0) + 1;
-        });
-        this._log('📊 Depth distribution:', depthCounts);
-        
-        // Log all discovered paths for debugging
-        this._log('📁 All discovered folder paths:');
-        allSubfolders.forEach(folder => {
-          this._log(`  • ${folder.title} (${folder.fileCount} files) - Path: ${folder.path}`);
-        });
-      }
-      
-      return allSubfolders;
-      
-    } catch (error) {
-      this._log('❌ Failed at depth', currentDepth, ':', error.message);
-      return [];
-    }
-  }
-
-  // Helper method to execute promises with concurrency limit
-  async executeWithConcurrencyLimit(promises, limit) {
-    const results = [];
-    const executing = [];
-    
-    for (const promise of promises) {
-      const p = promise.then(result => {
-        executing.splice(executing.indexOf(p), 1);
-        return { status: 'fulfilled', value: result };
-      }).catch(error => {
-        executing.splice(executing.indexOf(p), 1);
-        return { status: 'rejected', reason: error };
-      });
-      
-      results.push(p);
-      executing.push(p);
-      
-      if (executing.length >= limit) {
-        await Promise.race(executing);
-      }
-    }
-    
-    return Promise.all(results);
-  }
-
-  // Discover subfolders with immediate early population
-  async discoverSubfoldersWithEarlyPopulation(basePath, currentDepth = 0) {
-    this._log('🚀 Starting discovery with immediate early population');
-    
-    this.tempDiscoveredFolders = [];
-    // Don't reset earlyPopulationTriggered here - let it trigger when conditions are met
-    
-    try {
-      // First, check for files in the root folder and add as a "folder" to ensure equal treatment
-      const rootFiles = await this.scanFolderFiles(basePath);
-      if (rootFiles.length > 0) {
-        const rootFolder = {
-          title: 'Root Folder',
-          path: basePath,
-          files: rootFiles,
-          fileCount: rootFiles.length,
-          depth: 0
-        };
-        this.tempDiscoveredFolders.push(rootFolder);
-        this._log('📁 Added root folder with', rootFiles.length, 'files to queue consideration');
-        
-        // Trigger early population if root folder has enough files
-        if (!this.earlyPopulationTriggered) {
-          await this.triggerEarlyPopulation();
-        }
-      }
-      
-      // Start regular discovery - early population will happen automatically when we have enough folders
-      const allSubfolders = await this.discoverSubfolders(basePath, currentDepth);
-      
-      // If early population didn't happen, do final population now
-      // No final repopulation needed - progressive enhancement handles this
-      this._log('✅ Discovery complete:', allSubfolders.length, 'folders found, queue progressively enhanced during discovery');
-      
-      return allSubfolders;
-      
-    } catch (error) {
-      this._log('❌ Discovery failed:', error.message);
-      // Try to use any folders we managed to collect
-      if (this.tempDiscoveredFolders && this.tempDiscoveredFolders.length > 0 && !this.earlyPopulationTriggered) {
-        this._log('🔄 Emergency population with', this.tempDiscoveredFolders.length, 'partial folders');
-        await this.populateQueueFromFolders(this.tempDiscoveredFolders.slice(0, 5));
-      }
-      return this.tempDiscoveredFolders || [];
-    }
-  }
-
-  // Trigger early population when we have enough IMAGES in queue, not folders
-  async triggerEarlyPopulation() {
-    // Check if we have at least one folder with files
-    if (!this.tempDiscoveredFolders || this.tempDiscoveredFolders.length === 0) {
-      return;
-    }
-    
-    // Start populating from any folder that has files
-    const sortedFolders = [...this.tempDiscoveredFolders].sort((a, b) => b.fileCount - a.fileCount);
-    const goodFolders = sortedFolders.filter(f => f.fileCount > 0);
-    
-    if (goodFolders.length === 0) {
-      return; // No folders with files yet
-    }
-    
-    // Use up to 3 good folders for more balanced early population
-    const foldersToUse = goodFolders.slice(0, Math.min(3, goodFolders.length));
-    this._log('🎯 Early population with', foldersToUse.length, 'folders:', foldersToUse.map(f => `${f.title}(${f.fileCount})`).join(', '));
-    
-    // Temporarily reduce queue size for early population to get variety
-    const originalQueueSize = this.config.queue_size;
-    this.config.queue_size = Math.min(50, originalQueueSize); // Limit early queue to 50 items
-    
-    await this.populateQueueFromFolders(foldersToUse);
-    
-    // Restore original queue size
-    this.config.queue_size = originalQueueSize;
-    this._log('✅ Early queue populated! Queue has', this.queue.length, 'items');
-    
-    // Check if we have enough items in queue to start showing (minimum 3 items)
-    if (this.queue.length >= 3) {
-      // Set discovered folders so the initialization can proceed
-      this.discoveredFolders = this.tempDiscoveredFolders;
-      
-      // Signal that early population is complete
-      if (this.resolveEarlyPopulation) {
-        this.resolveEarlyPopulation('early-population-complete');
-        this._log('🎯 Early population completion signaled to main process - queue has', this.queue.length, 'items ready');
-      }
-      
-      // Start background expansion to target size
-      setTimeout(async () => {
-        try {
-          await this.expandQueueToTargetSize();
-        } catch (error) {
-          this._log('⚠️ Background queue expansion failed:', error.message);
-        }
-      }, 2000);
-      
-    } else {
-      this._log('🔄 Queue only has', this.queue.length, 'items - continuing to scan for more...');
-    }
-  }
-
-  // Stream files from a folder in real-time batches (NEW STREAMING APPROACH)
-  async streamFolderFiles(folderPath, folderTitle) {
-    const BATCH_SIZE = 100; // Process files in batches of 100
-    const TIMEOUT_MS = 300000; // 5 minutes safety timeout
-    
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const batchBuffer = [];
-      let totalProcessed = 0;
-      let isComplete = false;
-      
-      // Safety timeout
-      const safetyTimeout = setTimeout(() => {
-        const elapsed = Date.now() - startTime;
-        this._log('⏰ SAFETY TIMEOUT after', Math.round(elapsed/1000) + 's for folder:', folderTitle);
-        isComplete = true;
-        reject(new Error(`Safety timeout: ${folderTitle}`));
-      }, TIMEOUT_MS);
-      
-      this._log('🚀 Starting streaming scan for:', folderTitle);
-      
-      // Start the WebSocket call
-      this.card.hass.callWS({
-        type: "media_source/browse_media", 
-        media_content_id: folderPath
-      }).then(folderContents => {
-        clearTimeout(safetyTimeout);
-        
-        if (isComplete) return; // Already timed out
-        
-        const totalChildren = folderContents?.children?.length || 0;
-        this._log('📁 Streaming folder has', totalChildren, 'total items:', folderTitle);
-        
-        if (!folderContents || !folderContents.children || folderContents.children.length === 0) {
-          this._log('📂 Empty folder:', folderTitle);
-          resolve({ files: [], fileCount: 0, title: folderTitle, path: folderPath });
-          return;
-        }
-        
-        // Process files in streaming batches using the batch scheduler
-        this.processFolderChildrenInBatches(folderContents.children, BATCH_SIZE, (batch, batchIndex, isLastBatch) => {
-          if (isComplete) return;
-          
-          totalProcessed += batch.length;
-          this._log('📦 Processing batch', batchIndex + 1, 'of', folderTitle + ':', batch.length, 'files (total processed:', totalProcessed + ')');
-          
-          // Schedule batch for interleaved processing instead of adding directly
-          if (batch.length > 0) {
-            const onComplete = isLastBatch ? () => {
-              isComplete = true;
-              this._log('✅ Completed streaming scan for:', folderTitle, '- total files:', totalProcessed);
-              resolve({ 
-                files: [], // Don't return files (already added to queue via scheduler)
-                fileCount: totalProcessed, 
-                title: folderTitle, 
-                path: folderPath,
-                streamingComplete: true
-              });
-            } : null;
-            
-            this.scheduleBatch(batch, folderTitle, batchIndex, onComplete);
-          } else if (isLastBatch) {
-            // Handle edge case of empty last batch
-            isComplete = true;
-            resolve({ 
-              files: [], 
-              fileCount: totalProcessed, 
-              title: folderTitle, 
-              path: folderPath,
-              streamingComplete: true
-            });
-          }
-        }, folderTitle);
-        
-      }).catch(error => {
-        clearTimeout(safetyTimeout);
-        if (!isComplete) {
-          isComplete = true;
-          this._log('❌ Streaming scan failed for:', folderTitle, error.message);
-          reject(error);
-        }
-      });
-    });
-  }
-
-  // Process folder children in batches with sampling and staggered timing for interleaving
-  processFolderChildrenInBatches(children, batchSize, onBatch, folderTitle) {
-    const allMediaFiles = [];
-    
-    // Filter media files first
-    for (const child of children) {
-      if (child.media_class === 'image' || child.media_class === 'video') {
-        if (child.media_content_type && 
-            (child.media_content_type.startsWith('image/') || 
-             child.media_content_type.startsWith('video/'))) {
-          allMediaFiles.push(child);
-        }
-      }
-    }
-    
-    this._log('📄 Found', allMediaFiles.length, 'media files out of', children.length, 'total children in', folderTitle);
-    
-    // SAMPLING LOGIC - Don't take all files, sample based on folder size
-    const maxFilesPerFolder = this.calculateMaxFilesForFolder(allMediaFiles.length, folderTitle);
-    const mediaFiles = this.selectRandomFiles(allMediaFiles, maxFilesPerFolder);
-    
-    this._log('🎲 SAMPLING:', folderTitle, '-', mediaFiles.length, 'sampled from', allMediaFiles.length, 'available (max allowed:', maxFilesPerFolder, ', queue size target:', this.config.queue_size + ')');
-    
-    // Process in batches with randomized delays to encourage interleaving
-    const totalBatches = Math.ceil(mediaFiles.length / batchSize);
-    for (let i = 0; i < mediaFiles.length; i += batchSize) {
-      const batch = mediaFiles.slice(i, i + batchSize);
-      const batchIndex = Math.floor(i / batchSize);
-      const isLastBatch = (i + batchSize) >= mediaFiles.length;
-      
-      // Use variable delays to encourage interleaving between folders
-      const baseDelay = batchIndex * 50; // Base delay increases per batch
-      const randomOffset = Math.random() * 100; // Random offset 0-100ms
-      const totalDelay = baseDelay + randomOffset;
-      
-      setTimeout(() => {
-        onBatch(batch, batchIndex, isLastBatch);
-      }, totalDelay);
-    }
-  }
-
-  // Legacy method kept for compatibility - now uses streaming internally
-  async scanFolderFiles(folderPath) {
-    try {
-      const folderTitle = folderPath.split('/').pop() || 'Unknown';
-      const result = await this.streamFolderFiles(folderPath, folderTitle);
-      
-      // For legacy compatibility, return the folder info
-      return {
-        files: result.files,
-        fileCount: result.fileCount,
-        title: result.title,
-        path: result.path
-      };
-    } catch (error) {
-      this._log('❌ Legacy scan fallback failed:', error.message);
-      return { files: [], fileCount: 0, title: folderPath.split('/').pop() || 'Unknown', path: folderPath };
-    }
-  }
-
-  // Calculate threshold for switching from local to global sampling
-  calculateSufficientQueueSize() {
-    const refreshRate = this.config.refresh_seconds || 5; // Default 5 seconds
-    const targetMinutes = 3; // 3 minutes worth of content (180 seconds)
-    const sufficientSize = Math.ceil((targetMinutes * 60) / refreshRate);
-    return Math.max(sufficientSize, 30); // Minimum 30 items
-  }
-
-  // Calculate maximum files to sample from a folder using adaptive strategy
-  calculateMaxFilesForFolder(folderSize, folderTitle) {
-    const currentQueueSize = this.queue.length;
-    const sufficientQueueSize = this.calculateSufficientQueueSize();
-    const useGlobalSampling = currentQueueSize >= sufficientQueueSize;
-    
-    // Check if we're switching from local to global sampling mode
-    if (this.samplingModeLogged !== useGlobalSampling && useGlobalSampling) {
-      this._log('🔄 SWITCHING TO GLOBAL SAMPLING - Clearing queue for statistical rebuild (was:', currentQueueSize, 'items)');
-      // Clear existing queue to rebuild with proper statistical sampling
-      this.queue = [];
-      this.queueHistory = [];
-    }
-    
-    // Log sampling mode switch for first few folders
-    if (this.samplingModeLogged !== useGlobalSampling) {
-      this.samplingModeLogged = useGlobalSampling;
-      const mode = useGlobalSampling ? 'GLOBAL probability' : 'LOCAL folder-based';
-      this._log('🔄 SAMPLING MODE:', mode, '(queue:', this.queue.length, '/', sufficientQueueSize, 'threshold)');
-    }
-    
-    if (useGlobalSampling && this.config.estimated_total_photos) {
-      // Phase 2: Use global probability-based sampling (true statistical distribution)
-      return this.calculateGlobalProbabilitySampling(folderSize, folderTitle);
-    } else {
-      // Phase 1: Use local folder-based sampling (fast initial population)
-      return this.calculateLocalFolderSampling(folderSize, folderTitle);
-    }
-  }
-
-  // Phase 1: Local folder-based sampling for initial queue population
-  calculateLocalFolderSampling(folderSize, folderTitle) {
-    const targetQueueSize = this.config.queue_size || 1000;
-    const estimatedFolderCount = Math.max(this.discoveredFolders.length, 10);
-    
-    // Base allocation per folder
-    const baseAllocation = Math.floor(targetQueueSize / estimatedFolderCount);
-    
-    let result;
-    let category;
-    
-    // Smart sampling based on folder size
-    if (folderSize <= 50) {
-      // Small folders: take most files (up to 80%)
-      result = Math.min(folderSize, Math.floor(folderSize * 0.8));
-      category = 'small';
-    } else if (folderSize <= 200) {
-      // Medium folders: take moderate sample
-      result = Math.min(baseAllocation * 2, Math.floor(folderSize * 0.5));
-      category = 'medium';
-    } else if (folderSize <= 1000) {
-      // Large folders: take smaller percentage but reasonable absolute amount
-      result = Math.min(baseAllocation * 3, Math.floor(folderSize * 0.3));
-      category = 'large';
-    } else {
-      // Massive folders: take small percentage but cap at reasonable limit
-      const maxForMassive = Math.min(200, baseAllocation * 4); // Cap at 200 files max
-      const percentageSample = Math.floor(folderSize * 0.1); // 10% of massive folders
-      result = Math.min(maxForMassive, percentageSample);
-      category = 'massive';
-    }
-    
-    this._log('📊 LOCAL sampling for', folderTitle + ':', category, 'folder with', folderSize, 'files → sample', result, 'files (base allocation:', baseAllocation + ')');
-    
-    return result;
-  }
-
-  // Phase 2: True per-file probability sampling using estimated_total_photos
-  calculateGlobalProbabilitySampling(folderSize, folderTitle) {
-    const totalPhotos = this.config.estimated_total_photos;
-    
-    if (!totalPhotos || totalPhotos <= 0) {
-      this._log('⚠️ No estimated_total_photos configured, falling back to folder-based sampling');
-      return Math.min(folderSize, 10); // Fallback to reasonable limit
-    }
-    
-    // TRUE PER-FILE PROBABILITY: Each file has exactly 1/total_photos chance
-    const perFileProbability = 1 / totalPhotos;
-    
-    // Evaluate each file in this folder independently
-    let selectedCount = 0;
-    for (let i = 0; i < folderSize; i++) {
-      if (Math.random() < perFileProbability) {
-        selectedCount++;
-      }
-    }
-    
-    this._log('📊 GLOBAL per-file sampling for', folderTitle + ':', folderSize, 'files, per-file probability:', (perFileProbability * 100).toFixed(4) + '%,', selectedCount, 'files selected');
-    
-    return selectedCount;
-  }
-
-  // BATCH SCHEDULER - ensures batches from different folders are interleaved
-  startBatchScheduler() {
-    if (this.batchScheduler.isProcessing) return;
-    
-    this.batchScheduler.isProcessing = true;
-    this._log('🎛️ Starting batch scheduler for interleaved processing');
-    
-    // Process batches every 200ms
-    this.batchScheduler.intervalId = setInterval(() => {
-      if (this.batchScheduler.scheduledBatches.length === 0) return;
-      
-      // Take the next batch (FIFO)
-      const batchInfo = this.batchScheduler.scheduledBatches.shift();
-      
-      this._log('🔄 Scheduler processing batch from', batchInfo.folderTitle, '- batch', batchInfo.batchIndex + 1, 'with', batchInfo.batch.length, 'files');
-      
-      // Add batch to queue
-      if (batchInfo.batch.length > 0) {
-        this.addFilesToQueue(batchInfo.batch, batchInfo.folderTitle, 'streaming_scan');
-        this._log('✨ Scheduler streamed', batchInfo.batch.length, 'files from', batchInfo.folderTitle, '- queue size now:', this.queue.length);
-        
-        // 🎯 IMMEDIATE DISPLAY: Trigger card update if this is the first batch
-        if (this.queue.length === batchInfo.batch.length && this.card && !this.card._mediaUrl) {
-          this._log('🚀 FIRST BATCH: Triggering immediate display - queue has', this.queue.length, 'items');
-          // Notify card that queue has content and should display immediately
-          setTimeout(() => {
-            if (this.card && typeof this.card.requestUpdate === 'function') {
-              this.card.requestUpdate();
-              this._log('🎬 Requested card update for immediate display');
-            }
-          }, 50); // Small delay to ensure queue is fully populated
-        }
-        
-        // Debug mode event logging
-        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-          this.card._debugLogEvent('batch_streamed', `Batch scheduled and processed`, {
-            folder: batchInfo.folderTitle,
-            batchSize: batchInfo.batch.length,
-            queueSize: this.queue.length,
-            batchIndex: batchInfo.batchIndex + 1,
-            schedulerQueue: this.batchScheduler.scheduledBatches.length
-          });
-        }
-      }
-      
-      // Call completion callback if this was the last batch
-      if (batchInfo.onComplete) {
-        batchInfo.onComplete();
-      }
-      
-    }, 200); // Process batches every 200ms for smooth interleaving
-  }
-  
-  stopBatchScheduler() {
-    if (this.batchScheduler.intervalId) {
-      clearInterval(this.batchScheduler.intervalId);
-      this.batchScheduler.intervalId = null;
-    }
-    this.batchScheduler.isProcessing = false;
-    this._log('⏸️ Batch scheduler stopped');
-  }
-  
-  scheduleBatch(batch, folderTitle, batchIndex, onComplete = null) {
-    this.batchScheduler.scheduledBatches.push({
-      batch: batch,
-      folderTitle: folderTitle,
-      batchIndex: batchIndex,
-      onComplete: onComplete
-    });
-    
-    this._log('📅 Scheduled batch', batchIndex + 1, 'from', folderTitle, '- scheduler queue:', this.batchScheduler.scheduledBatches.length);
-  }
-
-  // NEW CONCURRENT STREAMING SCAN MANAGER
-  async startConcurrentStreamingScans(folders) {
-    const MAX_CONCURRENT = 2; // Maximum concurrent folder scans - reduced to prevent I/O overload
-    const scanQueue = [...folders]; // Copy of folders to scan
-    const activescans = new Set(); // Track active scans
-    const completedScans = [];
-    
-    this._log('🎯 Starting concurrent streaming scans for', folders.length, 'folders (max concurrent:', MAX_CONCURRENT + ')');
-    
-    // Start the batch scheduler for interleaving
-    this.startBatchScheduler();
-    
-    return new Promise((resolve) => {
-      const tryStartNextScan = () => {
-        // Start new scans if we have capacity and folders waiting
-        while (activescans.size < MAX_CONCURRENT && scanQueue.length > 0) {
-          const folder = scanQueue.shift();
-          const scanPromise = this.streamFolderFiles(folder.path, folder.title);
-          
-          activescans.add(scanPromise);
-          this._log('▶️ Started streaming scan for:', folder.title, '(active scans:', activescans.size + ')');
-          
-          scanPromise.then(result => {
-            activescans.delete(scanPromise);
-            completedScans.push({ folder, result });
-            this._log('✅ Completed streaming scan for:', folder.title, '(remaining active:', activescans.size, 'queue:', scanQueue.length + ')');
-            
-            // Try to start next scan
-            tryStartNextScan();
-            
-            // Check if all scans complete
-            if (activescans.size === 0 && scanQueue.length === 0) {
-              // Wait a bit for scheduler to finish processing remaining batches
-              setTimeout(() => {
-                this.stopBatchScheduler();
-                this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
-                resolve(completedScans);
-              }, 1000);
-            }
-          }).catch(error => {
-            activescans.delete(scanPromise);
-            this._log('❌ Streaming scan failed for:', folder.title, '-', error.message);
-            
-            // Continue with other scans
-            tryStartNextScan();
-            
-            // Check if all scans complete
-            if (activescans.size === 0 && scanQueue.length === 0) {
-              // Wait a bit for scheduler to finish processing remaining batches
-              setTimeout(() => {
-                this.stopBatchScheduler();
-                this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
-                resolve(completedScans);
-              }, 1000);
-            }
-          });
-        }
-        
-        // If no folders to scan and no active scans, we're done
-        if (scanQueue.length === 0 && activescans.size === 0) {
-          setTimeout(() => {
-            this.stopBatchScheduler();
-            this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
-            resolve(completedScans);
-          }, 1000);
-        }
-      };
-      
-      // Start initial scans
-      tryStartNextScan();
-    });
-  }
-
-  // NEW STREAMING INITIALIZATION - replaces early population approach
-  async initializeWithStreamingScans(basePath) {
-    this._log('🚀 Initializing with streaming approach...');
-    
-    try {
-      // First discover folders (but don't scan their files yet)
-      const allFolders = await this.discoverSubfolders(basePath, 0);
-      
-      if (allFolders.length === 0) {
-        this._log('⚠️ No subfolders found');
-        return false;
-      }
-      
-      this._log('📁 Discovered', allFolders.length, 'folders, starting concurrent streaming scans...');
-      
-      // Store folders for reference
-      this.discoveredFolders = allFolders;
-      
-      // Randomize folder order for scanning
-      const randomizedFolders = [...allFolders].sort(() => Math.random() - 0.5);
-      
-      // Start concurrent streaming scans (non-blocking)
-      this.startConcurrentStreamingScans(randomizedFolders).then(results => {
-        this._log('🎉 All streaming scans completed! Queue final size:', this.queue.length);
-        
-        // Update folder statistics with actual file counts
-        results.forEach(({ folder, result }) => {
-          const folderIndex = this.discoveredFolders.findIndex(f => f.path === folder.path);
-          if (folderIndex >= 0) {
-            this.discoveredFolders[folderIndex].fileCount = result.fileCount;
-          }
-        });
-        
-        // Update debug stats if in debug mode
-        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-          this.card._updateDebugStats();
-        }
-      }).catch(error => {
-        this._log('❌ Streaming scans failed:', error.message);
-      });
-      
-      // Return immediately - scans continue in background
-      this._log('✅ Streaming initialization started - queue will grow as scans complete');
-      return true;
-      
-    } catch (error) {
-      this._log('❌ Streaming initialization failed:', error.message);
-      return false;
-    }
-  }
-
-  // LEGACY CODE BELOW - keeping for reference but will be replaced
-  async scanFolderFiles_OLD(folderPath) {
-    try {
-      const folderContents = await this.card.hass.callWS({
-        type: "media_source/browse_media", 
-        media_content_id: folderPath
-      });
-
-      const files = [];
-      let totalChildren = 0;
-      
-      if (folderContents && folderContents.children) {
-        totalChildren = folderContents.children.length;
-        this._log('📁 Folder has', totalChildren, 'total items:', folderPath.split('/').pop());
-        
-        // Smart handling for different folder sizes
-        if (totalChildren > 5000) {
-          // MASSIVE folders (5K+): Random sampling for performance
-          const sampleRatio = 10;
-          const targetSamples = Math.floor(totalChildren / sampleRatio);
-          this._log('🚀 MASSIVE folder detected (', totalChildren, 'items) - random sampling', targetSamples, 'items');
-          
-          // Create array of random indices
-          const randomIndices = [];
-          for (let i = 0; i < targetSamples; i++) {
-            randomIndices.push(Math.floor(Math.random() * totalChildren));
-          }
-          // Remove duplicates and sort
-          const uniqueIndices = [...new Set(randomIndices)].sort((a, b) => a - b);
-          
-          for (const index of uniqueIndices) {
-            const item = folderContents.children[index];
-            if (item && item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
-              files.push(item);
-            }
-          }
-          
-          // Estimate total files based on sample
-          const estimatedFileCount = Math.floor(files.length * sampleRatio);
-          this._log('📊 Random sampled', files.length, 'files, estimated total:', estimatedFileCount);
-          
-          return {
-            fileCount: estimatedFileCount,
-            files: files,
-            isSampled: true,
-            sampleRatio: sampleRatio
-          };
-          
-        } else if (totalChildren > 1000) {
-          // LARGE folders (1K-5K): Random sampling 
-          const sampleRatio = 3;
-          const targetSamples = Math.floor(totalChildren / sampleRatio);
-          this._log('📂 LARGE folder detected (', totalChildren, 'items) - random sampling', targetSamples, 'items');
-          
-          // Create array of random indices
-          const randomIndices = [];
-          for (let i = 0; i < targetSamples; i++) {
-            randomIndices.push(Math.floor(Math.random() * totalChildren));
-          }
-          // Remove duplicates and sort
-          const uniqueIndices = [...new Set(randomIndices)].sort((a, b) => a - b);
-          
-          for (const index of uniqueIndices) {
-            const item = folderContents.children[index];
-            if (item && item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
-              files.push(item);
-            }
-          }
-          
-          // Estimate total files based on sample
-          const estimatedFileCount = Math.floor(files.length * sampleRatio);
-          this._log('📊 Random sampled', files.length, 'files, estimated total:', estimatedFileCount);
-          
-          return {
-            fileCount: estimatedFileCount,
-            files: files,
-            isSampled: true,
-            sampleRatio: sampleRatio
-          };
-          
-        } else {
-          // NORMAL folders (<1K): Scan all files
-          for (const item of folderContents.children) {
-            if (item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
-              files.push(item);
-            }
-          }
-          
-          return {
-            fileCount: files.length,
-            files: files,
-            isSampled: false
-          };
-        }
-      }
-
-      return {
-        fileCount: 0,
-        files: [],
-        isSampled: false
-      };
-      
-    } catch (error) {
-      this._log('❌ Failed to scan folder files:', folderPath, error);
-      return { fileCount: 0, files: [], isSampled: false };
-    }
-  }
-
-  // Emergency quick scan for folders that timeout - minimal sampling for basic info
-  async emergencyQuickScan(folderPath, folderTitle, customTimeoutMs = null) {
-    try {
-      this._log('🚨 Emergency quick scan starting for:', folderTitle);
-      
-      // For known massive folders, use estimated approach instead of enumeration
-      const isMassiveFolder = folderTitle.toLowerCase().includes('camera roll') || 
-                              folderTitle.toLowerCase().includes('dcim') ||
-                              folderTitle.toLowerCase().includes('photos');
-      
-      if (isMassiveFolder) {
-        return this.handleMassiveFolderEstimation(folderPath, folderTitle);
-      }
-      
-      // For other folders, try normal emergency scan with extended timeout
-      const isCriticalFolder = folderTitle.toLowerCase().includes('camera') || 
-                               folderTitle.toLowerCase().includes('dcim') ||
-                               folderTitle.toLowerCase().includes('roll');
-      
-      // Use custom timeout if provided, otherwise use defaults
-      const timeoutMs = customTimeoutMs || (isCriticalFolder ? 60000 : 30000); // 60s for critical, 30s for others
-      
-      this._log('⏰ Emergency timeout set to', timeoutMs + 'ms for', folderTitle, '(critical:', isCriticalFolder, 'custom:', !!customTimeoutMs + ')');
-      
-      const startTime = Date.now();
-      this._log('🕐 Emergency scan starting at', startTime, 'for', folderTitle);
-      
-      const emergencyTimeout = new Promise((_, reject) => 
-        setTimeout(() => {
-          const elapsed = Date.now() - startTime;
-          this._log('⏰ Emergency timeout triggered after', elapsed + 'ms for', folderTitle);
-          reject(new Error(`Emergency scan timeout: ${folderTitle}`));
-        }, timeoutMs)
-      );
-      
-      const folderContents = await Promise.race([
-        this.card.hass.callWS({
-          type: "media_source/browse_media", 
-          media_content_id: folderPath
-        }).then(result => {
-          const elapsed = Date.now() - startTime;
-          this._log('✅ WebSocket call completed after', elapsed + 'ms for', folderTitle);
-          return result;
-        }).catch(error => {
-          const elapsed = Date.now() - startTime;
-          this._log('❌ WebSocket call failed after', elapsed + 'ms for', folderTitle, ':', error.message);
-          throw error;
-        }),
-        emergencyTimeout
-      ]);
-
-      if (folderContents && folderContents.children && folderContents.children.length > 0) {
-        const totalChildren = folderContents.children.length;
-        this._log('🚨 Emergency scan found', totalChildren, 'total items in:', folderTitle);
-        
-        // Take only first 50 items for emergency sampling
-        const emergencySampleSize = Math.min(50, totalChildren);
-        const files = [];
-        
-        for (let i = 0; i < emergencySampleSize; i++) {
-          const item = folderContents.children[i];
-          if (item && item.media_class !== 'directory' && this.isMediaFile(item.media_content_id)) {
-            files.push(item);
-          }
-        }
-        
-        // Estimate total based on sample
-        const estimatedFileCount = Math.floor((files.length / emergencySampleSize) * totalChildren);
-        this._log('🚨 Emergency scan: sampled', files.length, 'files from first', emergencySampleSize, 'items, estimated total:', estimatedFileCount);
-        
-        return {
-          path: folderPath,
-          title: folderTitle,
-          fileCount: Math.max(estimatedFileCount, files.length),
-          files: files,
-          depth: 1, // Assume depth 1 for simplicity
-          isSampled: true,
-          sampleRatio: Math.ceil(totalChildren / emergencySampleSize),
-          hasError: true,
-          isEmergencyScan: true
-        };
-      }
-      
-      return null;
-    } catch (error) {
-      this._log('❌ Emergency scan failed for:', folderTitle, error.message);
-      
-      // Create a synthetic folder entry for timed-out folders
-      // This allows the system to acknowledge the folder exists even if we can't scan it
-      return this.createSyntheticFolderEntry(folderPath, folderTitle);
-    }
-  }
-
-  // Handle massive folders with estimation instead of full enumeration
-  handleMassiveFolderEstimation(folderPath, folderTitle) {
-    this._log('🚀 Using estimation approach for massive folder:', folderTitle);
-    
-    // Create synthetic folder entry for massive folders
-    const syntheticFolder = this.createSyntheticFolderEntry(folderPath, folderTitle);
-    syntheticFolder.isLargeFolder = true;
-    syntheticFolder.estimationReason = 'massive_folder_detection';
-    
-    this._log('📊 Created synthetic entry for massive folder:', folderTitle, 'estimated files:', syntheticFolder.fileCount);
-    return syntheticFolder;
-  }
-
-  // Create a synthetic folder entry for folders that timeout during scanning
-  createSyntheticFolderEntry(folderPath, folderTitle) {
-    // Estimate folder size based on folder name patterns and context
-    const estimatedFileCount = this.estimateFolderSize(folderTitle);
-    
-    this._log('🔄 Creating synthetic folder entry for:', folderTitle, 'estimated files:', estimatedFileCount);
-    
-    return {
-      title: folderTitle,
-      path: folderPath,
-      media_content_id: folderPath,
-      fileCount: estimatedFileCount,
-      files: [], // Empty files array - will be populated via lazy loading if needed
-      isSynthetic: true,
-      isLargeFolder: true,
-      depth: 1, // Assume shallow depth for synthetic entries
-      hasError: true,
-      errorType: 'timeout',
-      canLazyLoad: true // Flag to indicate this folder can attempt lazy loading later
-    };
-  }
-
-  // Estimate folder size based on name patterns and context
-  estimateFolderSize(folderTitle) {
-    const titleLower = folderTitle.toLowerCase();
-    
-    // Large photo repositories
-    if (titleLower.includes('camera roll') || titleLower.includes('camera_roll')) {
-      return 3000; // Typical camera roll size
-    }
-    if (titleLower.includes('dcim') || titleLower.includes('camera')) {
-      return 2000; // DCIM folders are usually large
-    }
-    if (titleLower.includes('photos') || titleLower.includes('pictures')) {
-      return 1500; // General photo folders
-    }
-    if (titleLower.includes('screenshot')) {
-      return 200; // Screenshots folder
-    }
-    if (titleLower.includes('download')) {
-      return 100; // Download folders
-    }
-    
-    // Default estimate for unknown folders that timeout
-    return 500; // Conservative estimate - if it times out, it's probably substantial
-  }
-
-  // Check if file is a media file
-  isMediaFile(filePath) {
-    const fileName = filePath.split('/').pop() || filePath;
-    const extension = fileName.split('.').pop()?.toLowerCase();
-    return ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
-  }
-
-  // Add a single folder to existing queue progressively
-  async addFolderToQueue(folder) {
-    try {
-      this._log('➕ Adding folder to existing queue:', folder.title, 'files:', folder.fileCount, folder.isSynthetic ? '(synthetic)' : '');
-      
-      // Handle synthetic folders that need lazy loading
-      if (folder.isSynthetic && (!folder.files || folder.files.length === 0)) {
-        this._log('🔄 Attempting lazy load for synthetic folder:', folder.title);
-        try {
-          // Attempt a quick emergency scan with a very short timeout for lazy loading
-          const lazyLoadResult = await this.emergencyQuickScan(folder.path, folder.title, 8000); // 8 second timeout for lazy loading
-          if (lazyLoadResult && lazyLoadResult.files && lazyLoadResult.files.length > 0) {
-            // Update the folder with real data
-            folder.files = lazyLoadResult.files;
-            folder.fileCount = lazyLoadResult.fileCount;
-            folder.isSynthetic = false; // No longer synthetic
-            this._log('✅ Lazy load successful for', folder.title, '- now has', folder.fileCount, 'real files');
-          } else {
-            this._log('❌ Lazy load failed for', folder.title, '- skipping queue addition for now');
-            return; // Skip adding this folder to queue for now
-          }
-        } catch (error) {
-          this._log('❌ Lazy load error for', folder.title, ':', error.message);
-          return; // Skip adding this folder to queue
-        }
-      }
-      
-      // Calculate how many files to add from this folder (more balanced approach)
-      const currentQueueSize = this.queue.length;
-      
-      // Progressive balancing: add more files if queue is small or if this folder is large
-      let targetSlots;
-      if (currentQueueSize < 50) {
-        // Early stage: add significant portions to quickly build diversity
-        targetSlots = Math.min(25, Math.max(15, Math.floor(folder.fileCount / 5)));
-      } else if (currentQueueSize < 100) {
-        // Medium stage: moderate additions
-        targetSlots = Math.min(15, Math.max(10, Math.floor(folder.fileCount / 8)));
-      } else {
-        // Late stage: smaller additions
-        targetSlots = Math.min(10, Math.max(5, Math.floor(folder.fileCount / 10)));
-      }
-      
-      this._log('🎯 Adding', targetSlots, 'files from', folder.title, 'to queue of', currentQueueSize);
-      
-      // Select random files from this folder
-      const selectedFiles = this.selectRandomFiles(folder.files || [], targetSlots);
-      
-      if (selectedFiles.length > 0) {
-        // Add to queue with history tracking
-        this.addFilesToQueue(selectedFiles, folder.title, 'addFolderToQueue');
-        
-        // Update debug stats
-        if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-          this.card._updateDebugStats();
-        }
-      } else {
-        this._log('⚠️ No new files available from', folder.title);
-      }
-      
-    } catch (error) {
-      this._log('❌ Error adding folder to queue:', folder.title, error);
-    }
-  }
-
-  // Populate queue from discovered folders using weighted selection
-  async populateQueueFromFolders(folders, customQueueSize = null) {
-    try {
-      const targetQueueSize = customQueueSize || this.config.queue_size;
-      this._log('🎲 Populating queue from', folders.length, 'folders, target size:', targetQueueSize);
-      
-      if (folders.length === 0) {
-        this._log('❌ No folders provided for queue population');
-        return;
-      }
-      
-      // Calculate weights for each folder
-      for (const folder of folders) {
-        try {
-          const weight = this.calculateFolderWeight(folder);
-          this.folderWeights.set(folder.path, weight);
-          this._log('📊 Folder weight:', folder.title, 'files:', folder.fileCount, 'weight:', weight.toFixed(2));
-        } catch (error) {
-          this._log('❌ Error calculating weight for folder:', folder.title, error);
-        }
-      }
-
-      // Choose allocation method based on configuration
-      const queueSize = Math.max(targetQueueSize || 15, folders.length * 10);
-      
-      // For expansion, don't clear the queue, just add to it
-      if (!customQueueSize) {
-        this.queue = [];
-      }
-      
-      const allocations = this.config.equal_probability_mode 
-        ? this.calculateEqualProbabilityAllocations(folders, queueSize)
-        : this.calculateBalancedFolderAllocations(folders, queueSize);
-      
-      // Now populate queue with allocated slots
-      for (const allocation of allocations) {
-        try {
-          const allocatedSlots = allocation.proportionalSlots;
-          
-          this._log('🎯 Allocating', allocatedSlots, 'slots to', allocation.folder.title, 'weight:', allocation.weight.toFixed(1));
-          
-          // Randomly select files from this folder
-          const selectedFiles = this.selectRandomFiles(allocation.folder.files || [], allocatedSlots);
-          this._log('📄 Selected', selectedFiles.length, 'files from', allocation.folder.title);
-          
-          // Add files with history tracking - this handles shuffling automatically
-          if (selectedFiles.length > 0) {
-            this.addFilesToQueue(selectedFiles, allocation.folder.title, 'populateQueueFromFolders');
-            
-            // Log folder allocation for debug mode
-            if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-              this.card._debugLogEvent('folder_added', `Folder allocated slots`, {
-                folder: allocation.folder.title,
-                fileCount: allocation.folder.fileCount || 0,
-                slots: allocatedSlots,
-                weight: allocation.weight
-              });
-            }
-          }
-          
-          // Update debug stats after queue population
-          if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-            this.card._updateDebugStats();
-          }
-        } catch (error) {
-          this._log('❌ Error processing folder:', allocation.folder.title, error);
-        }
-      }
-
-      this._log('✅ Queue populated with', this.queue.length, 'items from', folders.length, 'folders');
-      
-      // Final shuffle to ensure complete randomization
-      this.shuffleQueue();
-      
-      // Log detailed queue composition
-      if (this.queue.length > 0) {
-        const folderCounts = {};
-        this.queue.forEach(item => {
-          // Extract folder name from path
-          const pathParts = item.media_content_id.split('/');
-          const folderName = pathParts[pathParts.length - 2] || 'root'; // Get parent folder name
-          folderCounts[folderName] = (folderCounts[folderName] || 0) + 1;
-        });
-        
-        this._log('📊 Queue composition by folder:');
-        Object.entries(folderCounts)
-          .sort(([,a], [,b]) => b - a) // Sort by count descending
-          .forEach(([folder, count]) => {
-            this._log(`   • ${folder}: ${count} items (${((count/this.queue.length)*100).toFixed(1)}%)`);
-          });
-        
-        this._log('📋 First queue items:', this.queue.slice(0, 3).map(item => `${item.title} (${item.media_content_id.split('/').pop()})`).join(', '));
-      } else {
-        this._log('⚠️ Queue is empty after population attempt!');
-      }
-    } catch (error) {
-      this._log('❌ Critical error in populateQueueFromFolders:', error);
-    }
-  }
-
-  // Calculate equal probability allocation - each media item has equal chance
-  calculateEqualProbabilityAllocations(folders, queueSize) {
-    this._log('🎯 Using EQUAL PROBABILITY allocation - each media item has equal selection chance');
-    this._log('📊 Working with', folders.length, 'discovered folders (more may be found later)');
-    
-    // Count synthetic vs real folders
-    const syntheticFolders = folders.filter(f => f.isSynthetic);
-    const realFolders = folders.filter(f => !f.isSynthetic);
-    
-    if (syntheticFolders.length > 0) {
-      this._log('🔄 Including', syntheticFolders.length, 'synthetic folders in calculations (large folders that timed out)');
-      syntheticFolders.forEach(folder => {
-        this._log('   📁 Synthetic:', folder.title, 'estimated files:', folder.fileCount);
-      });
-    }
-    
-    // Calculate total number of media items
-    const discoveredMediaItems = folders.reduce((sum, folder) => sum + folder.fileCount, 0);
-    
-    // Use user estimate if provided, otherwise use discovered count
-    const totalMediaItems = this.config.estimated_total_photos || discoveredMediaItems;
-    
-    if (this.config.estimated_total_photos) {
-      this._log('📊 Using user estimate of', totalMediaItems, 'total photos (discovered:', discoveredMediaItems + ')');
-    } else {
-      this._log('📊 Using discovered count of', totalMediaItems, 'photos (adaptive - will adjust as more folders found)');
-    }
-    
-    if (totalMediaItems === 0) {
-      this._log('❌ No media items found in folders');
-      return [];
-    }
-    
-    // Each item in the queue should represent (totalMediaItems / queueSize) items
-    // So each folder gets slots proportional to its file count
-    const allocations = [];
-    let totalAllocated = 0;
-    
-    folders.forEach(folder => {
-      // Exact proportional allocation based on file count
-      const exactSlots = (folder.fileCount / totalMediaItems) * queueSize;
-      
-      // Use probabilistic rounding instead of guaranteed minimum
-      // Small folders should sometimes get 0 slots for true statistical fairness
-      let allocatedSlots;
-      
-      if (exactSlots < 1.0) {
-        // For small allocations, use probabilistic rounding
-        // e.g., if exactSlots = 0.3, there's a 30% chance of getting 1 slot, 70% chance of 0
-        const random = Math.random();
-        allocatedSlots = (random < exactSlots) ? 1 : 0;
-        
-        if (allocatedSlots === 0) {
-          this._log('🎲 Small folder', folder.title, 'gets 0 slots this round (exact:', exactSlots.toFixed(3), ', random:', random.toFixed(3), ')');
-        } else {
-          this._log('🎲 Small folder', folder.title, 'gets 1 slot (exact:', exactSlots.toFixed(3), ', random:', random.toFixed(3), ')');
-        }
-      } else {
-        // For larger allocations, use normal rounding
-        allocatedSlots = Math.round(exactSlots);
-      }
-      
-      // ALWAYS add folder to allocations list (even with 0 slots) so it can be selected during refills
-      allocations.push({
-        folder: folder,
-        proportionalSlots: allocatedSlots,
-        weight: Math.max(allocatedSlots, 0.1), // Minimum weight ensures folders can be selected during refills
-        exactProbability: folder.fileCount / totalMediaItems,
-        itemProbability: allocatedSlots > 0 ? (allocatedSlots / folder.fileCount) : (exactSlots / folder.fileCount) // Use exact probability even when slots = 0
-      });
-      
-      totalAllocated += allocatedSlots;
-      
-      if (allocatedSlots > 0) {
-        this._log('🎯 EQUAL PROBABILITY allocation:', folder.title, 
-                  'files:', folder.fileCount, 
-                  'slots:', allocatedSlots, 
-                  'exact:', exactSlots.toFixed(2),
-                  'per-item prob:', (allocatedSlots / folder.fileCount * 100).toFixed(2) + '%',
-                  folder.isSynthetic ? '(synthetic)' : '');
-      } else {
-        this._log('🎯 EQUAL PROBABILITY allocation:', folder.title, 
-                  'files:', folder.fileCount, 
-                  'slots: 0 (kept in allocations with weight 0.1 for refills)',
-                  'exact:', exactSlots.toFixed(2),
-                  folder.isSynthetic ? '(synthetic)' : '');
-      }
-    });
-    
-    this._log('📊 Equal probability allocation complete:', totalAllocated, 'total slots,', totalMediaItems, 'total items');
-    this._log('📊 Target per-item probability:', (queueSize / totalMediaItems * 100).toFixed(3) + '%');
-    
-    return allocations;
-  }
-
-  // Calculate balanced folder allocation - each folder gets fair representation  
-  calculateBalancedFolderAllocations(folders, queueSize) {
-    this._log('🎯 Using BALANCED FOLDER allocation - each folder gets fair representation');
-    
-    // Give each folder a more equal share (minimum 5 items per folder, rest distributed evenly)
-    const minItemsPerFolder = Math.min(5, Math.floor(queueSize / folders.length));
-    const baseSlotsNeeded = folders.length * minItemsPerFolder;
-    const extraSlotsPool = Math.max(0, queueSize - baseSlotsNeeded);
-    const bonusSlotsPerFolder = Math.floor(extraSlotsPool / folders.length);
-    const extraSlots = extraSlotsPool % folders.length;
-    
-    const allocations = [];
-    let totalAllocated = 0;
-    
-    for (let i = 0; i < folders.length; i++) {
-      const folder = folders[i];
-      
-      // Each folder gets: minimum + bonus + (1 extra if needed)
-      const baseSlots = minItemsPerFolder + bonusSlotsPerFolder;
-      const extraSlot = i < extraSlots ? 1 : 0;
-      const finalSlots = baseSlots + extraSlot;
-      
-      allocations.push({
-        folder: folder,
-        proportionalSlots: finalSlots,
-        weight: finalSlots,  // Use slot count as weight for balanced allocation
-        itemProbability: finalSlots / folder.fileCount // Probability per item in this folder
-      });
-      
-      totalAllocated += finalSlots;
-      this._log('🎯 BALANCED FOLDER allocation:', folder.title, 
-                'gets', finalSlots, 'slots',
-                'per-item prob:', (finalSlots / folder.fileCount * 100).toFixed(2) + '%',
-                '(min:', minItemsPerFolder, '+ bonus:', bonusSlotsPerFolder, '+ extra:', extraSlot, ')');
-    }
-    
-    this._log('📊 Balanced folder allocation complete:', totalAllocated, 'total slots allocated');
-    
-    return allocations;
-  }
-
-  // Shuffle the queue to mix items from different folders
-  shuffleQueue() {
-    this._log('🎲 Shuffling queue to mix items from different folders - queue size:', this.queue.length);
-    
-    // Show first few items BEFORE shuffle
-    this._log('📋 BEFORE shuffle - first 5 items:', this.queue.slice(0, 5).map(item => {
-      const pathParts = item.media_content_id.split('/');
-      const folderName = pathParts[pathParts.length - 2] || 'root';
-      return `${item.title} (${folderName})`;
-    }).join(', '));
-    
-    // Fisher-Yates shuffle algorithm
-    for (let i = this.queue.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
-    }
-    
-    // Show first few items AFTER shuffle
-    this._log('📋 AFTER shuffle - first 5 items:', this.queue.slice(0, 5).map(item => {
-      const pathParts = item.media_content_id.split('/');
-      const folderName = pathParts[pathParts.length - 2] || 'root';
-      return `${item.title} (${folderName})`;
-    }).join(', '));
-  }
-
-  // Add files to queue with history tracking and shuffling
-  addFilesToQueue(files, folderName = null, source = 'unknown') {
-    if (!files || files.length === 0) return;
-    
-    // Add to main queue
-    this.queue.push(...files);
-    
-    // Add to history with metadata
-    files.forEach(file => {
-      const historyEntry = {
-        file: file,
-        timestamp: new Date().toISOString(),
-        folderName: folderName || this.extractFolderName(file),
-        source: source
-      };
-      this.queueHistory.push(historyEntry);
-      
-      // Debug logging for debug mode
-      if (this.card && this.card.config && this.card.config.debug_queue_mode) {
-        this.card._debugLogEvent('file_added', `Added to queue`, {
-          folder: historyEntry.folderName,
-          filename: file.title || file.media_content_id.split('/').pop(),
-          source: source,
-          queueSize: this.queue.length,
-          historySize: this.queueHistory.length
-        });
-      }
-    });
-    
-    // Shuffle immediately for proper mixing
-    this.shuffleQueue();
-    
-    this._log('✅ Added', files.length, 'files from', folderName, '- queue now has', this.queue.length, 'items, history has', this.queueHistory.length, 'entries');
-  }
-  
-  // Helper to extract folder name from file path
-  extractFolderName(file) {
-    if (!file || !file.media_content_id) return 'unknown';
-    const pathParts = file.media_content_id.split('/');
-    return pathParts[pathParts.length - 2] || 'root';
-  }
-
-  // Select N random files from an array, excluding already shown items
-  selectRandomFiles(files, count) {
-    if (!files || files.length === 0) {
-      this._log('⚠️ selectRandomFiles: No files provided or empty array');
-      return [];
-    }
-    
-    // Filter out already shown items AND items already in queue
-    const existingQueueIds = new Set(this.queue.map(item => item.media_content_id));
-    const availableFiles = files.filter(file => 
-      !this.shownItems.has(file.media_content_id) && 
-      !existingQueueIds.has(file.media_content_id)
-    );
-    
-    this._log('📁 Folder selection: available', availableFiles.length, 'of', files.length, 'total files (excluding shown:', this.shownItems.size, 'and queued:', existingQueueIds.size, ')');
-    
-    if (availableFiles.length === 0) {
-      this._log('⚠️ All files in this folder have been shown or queued - skipping folder entirely');
-      return []; // Don't add any items from this folder - critical fix!
-    }
-    
-    if (availableFiles.length <= count) {
-      return [...availableFiles]; // Return all available files if we need more than available
-    }
-    
-    // Enhanced randomization with time-based seed and better distribution
-    const timeSeed = Date.now() % 1000; // Use time as additional randomness
-    const shuffledFiles = [...availableFiles];
-    
-    // Multi-pass shuffle for better randomization
-    for (let pass = 0; pass < 3; pass++) {
-      for (let i = shuffledFiles.length - 1; i > 0; i--) {
-        const j = Math.floor((Math.random() + timeSeed / 1000) * (i + 1)) % (i + 1);
-        [shuffledFiles[i], shuffledFiles[j]] = [shuffledFiles[j], shuffledFiles[i]];
-      }
-    }
-    
-    // Select from different parts of the shuffled array for more variety
-    const selected = [];
-    const segmentSize = Math.floor(shuffledFiles.length / count);
-    
-    for (let i = 0; i < count; i++) {
-      const segmentStart = i * segmentSize;
-      const segmentEnd = Math.min(segmentStart + segmentSize, shuffledFiles.length);
-      
-      if (segmentStart < shuffledFiles.length) {
-        const localIndex = Math.floor(Math.random() * (segmentEnd - segmentStart));
-        const fileIndex = segmentStart + localIndex;
-        
-        if (shuffledFiles[fileIndex]) {
-          selected.push(shuffledFiles[fileIndex]);
-          shuffledFiles.splice(fileIndex, 1); // Remove to avoid duplicates
-        }
-      }
-    }
-    
-    // If we didn't get enough from segments, fill from remaining
-    while (selected.length < count && shuffledFiles.length > 0) {
-      const randomIndex = Math.floor(Math.random() * shuffledFiles.length);
-      selected.push(shuffledFiles.splice(randomIndex, 1)[0]);
-    }
-    
-    return selected;
-  }
-
-
-
-  // Start progressive scanning of remaining folders
-  startProgressiveScanning(remainingFolders) {
-    this._log('🔄 Starting progressive scan for', remainingFolders.length, 'remaining folders');
-    
-    // For now, just log that we would do this
-    // In a full implementation, we'd scan these folders in batches and update the queue
-    setTimeout(() => {
-      this._log('📈 Progressive scanning complete (simulated)');
-    }, 5000);
-  }
-
-  // Start progressive deepening to find more subfolders
-  async startProgressiveDeepening(basePath, initialFolders) {
-    this._log('🔄 Starting progressive deepening from', initialFolders.length, 'initial folders');
-    
-    // Background task to find deeper folders
-    setTimeout(async () => {
-      try {
-        // Set discovery flag to prevent auto-refresh interruption
-        this.discoveryInProgress = true;
-        this.discoveryStartTime = Date.now();
-        
-        this._log('🔍 Background: Searching for deeper folders...');
-        
-        // Look for folders that might have subfolders we haven't scanned yet
-        const deeperFolders = [];
-        
-        for (const folder of initialFolders.slice(0, 3)) { // Only check top 3 folders
-          if (folder.depth === 1) { // Only go deeper if we're at shallow depth
-            try {
-              this._log('🔍 Background: Checking', folder.title, 'for subfolders...');
-              
-              const nestedFolders = await this.discoverSubfolders(folder.path, folder.depth);
-              if (nestedFolders.length > 0) {
-                this._log('✅ Background: Found', nestedFolders.length, 'nested folders in', folder.title);
-                deeperFolders.push(...nestedFolders);
-              }
-            } catch (error) {
-              this._log('⚠️ Background: Failed to scan', folder.title, ':', error.message);
-            }
-          }
-        }
-        
-        if (deeperFolders.length > 0) {
-          this._log('🎉 Background: Found', deeperFolders.length, 'additional deep folders');
-          
-          // Add to discovered folders and expand queue
-          this.discoveredFolders.push(...deeperFolders);
-          
-          // Refresh queue with new folders to reach target size
-          const additionalFiles = deeperFolders.reduce((sum, f) => sum + f.fileCount, 0);
-          this._log('📈 Background: Adding', additionalFiles, 'additional files to pool - expanding queue to target size');
-          
-          // Expand queue to target size with all available folders
-          await this.expandQueueToTargetSize();
-        } else {
-          this._log('📭 Background: No additional deep folders found');
-        }
-        
-      } catch (error) {
-        this._log('❌ Background deepening failed:', error.message);
-      } finally {
-        // Clear discovery flag when background deepening completes
-        this.discoveryInProgress = false;
-        this._log('🏁 Background discovery complete - auto-refresh resumed');
-      }
-    }, 3000); // Start background scan after 3 seconds
-  }
-
-  // Expand queue to target size using all available folders
-  async expandQueueToTargetSize() {
-    const targetSize = this.config.queue_size;
-    const currentSize = this.queue.length;
-    
-    this._log('🎯 Expanding queue from', currentSize, 'to target', targetSize);
-    
-    if (currentSize >= targetSize) {
-      this._log('✅ Queue already at target size');
-      return;
-    }
-    
-    const neededItems = targetSize - currentSize;
-    this._log('📊 Need', neededItems, 'more items for queue');
-    
-    // Use all discovered folders for expansion
-    const availableFolders = this.discoveredFolders.filter(folder => 
-      folder.files && folder.files.length > 0
-    );
-    
-    if (availableFolders.length === 0) {
-      this._log('⚠️ No folders available for queue expansion');
-      return;
-    }
-    
-    this._log('📁 Using', availableFolders.length, 'folders for expansion');
-    
-    // Use the same allocation logic but for the additional items needed
-    await this.populateQueueFromFolders(availableFolders, neededItems);
-    
-    this._log('✅ Queue expansion complete - queue now has', this.queue.length, 'items');
-  }
-
-  // Get next item from queue (forward navigation)
-  getNextItem() {
-    this._log('🎯 getNextItem called - queue size:', this.queue.length, 'folders:', this.discoveredFolders.length, 'historyIndex:', this.historyIndex);
-    
-    // If we're navigating within history (not at the latest position)
-    if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
-      this.historyIndex++;
-      const item = this.history[this.historyIndex];
-      this._log('▶️ Moving forward in history to index:', this.historyIndex, 'item:', item.title);
-      return item;
-    }
-
-    // We're at the latest position, get a new item from queue
-    if (this.queue.length === 0) {
-      this._log('⚠️ Queue empty, attempting to refill');
-      this.refillQueue();
-      if (this.queue.length === 0) {
-        this._log('❌ Queue refill failed, no items available');
-        return null;
-      }
-    }
-
-    // Find first unshown item (don't remove from queue, just mark as shown)
-    for (let i = 0; i < this.queue.length; i++) {
-      const item = this.queue[i];
-      if (!this.shownItems.has(item.media_content_id)) {
-        // Add to blacklist but keep in queue for potential navigation
-        this.shownItems.add(item.media_content_id);
-        
-        // Add to history for navigation
-        this.history.push(item);
-        this.historyIndex = this.history.length - 1; // Move to latest position
-        
-        // Limit history size to prevent memory issues
-        if (this.history.length > 100) {
-          this.history.shift(); // Remove oldest item
-          this.historyIndex = this.history.length - 1;
-        }
-        
-        // Extract folder name for logging
-        const pathParts = item.media_content_id.split('/');
-        const folderName = pathParts[pathParts.length - 2] || 'root';
-        
-        this._log('✅ Served and added to history:', item.title, `from folder: ${folderName}`, 'history size:', this.history.length);
-        
-        // Check if we need to refill queue
-        if (this.needsRefill()) {
-          this._log('🔄 Queue running low, scheduling refill');
-          setTimeout(() => this.refillQueue(), 1000);
-        }
-        
-        return item;
-      }
-    }
-
-    this._log('⚠️ Queue is empty or all items shown (' + this.shownItems.size + ' total), aging out blacklist and refilling');
-    this.ageOutShownItems();
-    this.refillQueue();
-    
-    // Try again after refill
-    if (this.queue.length > 0) {
-      const item = this.queue[0];
-      this.shownItems.add(item.media_content_id);
-      
-      // Add to history
-      this.history.push(item);
-      this.historyIndex = this.history.length - 1;
-      
-      this._log('✅ Served item after refill:', item.title, 'history size:', this.history.length);
-      return item;
-    }
-    
-    this._log('❌ No items available even after refill');
-    return null;
-  }
-
-  // Get previous item from navigation history (backward navigation)
-  getPreviousItem() {
-    this._log('🎯 getPreviousItem called - history size:', this.history.length, 'historyIndex:', this.historyIndex);
-    
-    if (this.history.length === 0) {
-      this._log('⚠️ No history available for backward navigation');
-      return null;
-    }
-
-    // If we're at the latest position (historyIndex = -1 or at the end)
-    if (this.historyIndex === -1) {
-      this.historyIndex = this.history.length - 2; // Go to second-to-last item
-    } else if (this.historyIndex > 0) {
-      this.historyIndex--; // Go back one more step
-    } else {
-      this._log('⚠️ Already at the beginning of history');
-      return this.history[0]; // Stay at first item
-    }
-
-    if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
-      const item = this.history[this.historyIndex];
-      this._log('◀️ Moving backward in history to index:', this.historyIndex, 'item:', item.title);
-      return item;
-    }
-
-    this._log('⚠️ Invalid history index:', this.historyIndex);
-    return null;
-  }
-
-  // Get count of remaining items in queue (all items are unshown now)
-  getRemainingCount() {
-    return this.queue.length; // Since we remove items when shown, all remaining items are unshown
-  }
-
-  // Check if queue needs refilling (since items stay in queue, check available unshown items)
-  needsRefill() {
-    const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
-    return unshownCount < 10; // Refill when < 10 unshown items left
-  }
-
-  // Clear shown items tracking (reset exclusions)
-  clearShownItems() {
-    this._log('🔄 Clearing shown items tracking, resetting exclusions');
-    this.shownItems.clear();
-  }
-
-  // Age out older shown items (partial clearing for better variety)
-  ageOutShownItems() {
-    const totalShown = this.shownItems.size;
-    if (totalShown === 0) return;
-    
-    // Keep the most recent 30% of shown items, age out the rest
-    const keepPercentage = 0.3;
-    const itemsToKeep = Math.ceil(totalShown * keepPercentage);
-    const itemsToAge = totalShown - itemsToKeep;
-    
-    if (itemsToAge <= 0) {
-      this._log('🔄 Not enough shown items to age out, clearing all');
-      this.clearShownItems();
-      return;
-    }
-    
-    // Convert Set to Array, keep the last N items (most recently shown)
-    const shownArray = Array.from(this.shownItems);
-    const itemsToKeep_array = shownArray.slice(-itemsToKeep);
-    
-    this._log('📅 Aging out', itemsToAge, 'older items, keeping', itemsToKeep, 'recent items');
-    
-    // Replace set with aged-out version
-    this.shownItems.clear();
-    itemsToKeep_array.forEach(item => this.shownItems.add(item));
-  }
-
-  // Refill queue with new random selections
-  refillQueue() {
-    if (this.isScanning) {
-      this._log('⏳ Scan in progress, skipping refill');
-      return;
-    }
-
-    this._log('🔄 Refilling queue from discovered folders, available:', this.discoveredFolders.length);
-    
-    if (this.discoveredFolders.length === 0) {
-      this._log('❌ No folders available for refill - rescanning');
-      // Try to rescan folders
-      this.quickScan();
-      return;
-    }
-
-    // Count total files available across all folders
-    const totalFiles = this.discoveredFolders.reduce((sum, folder) => sum + (folder.files ? folder.files.length : 0), 0);
-    this._log('📊 Total files available across all folders:', totalFiles);
-    
-    if (totalFiles === 0) {
-      this._log('❌ No files found in any folder - rescanning');
-      this.quickScan();
-      return;
-    }
-
-    // Re-populate queue from discovered folders (this will add to existing queue)
-    const currentQueueSize = this.queue.length;
-    this.populateQueueFromFolders(this.discoveredFolders.slice(0, this.config.initial_scan_limit));
-    this._log('🔄 Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
   }
 }
 
@@ -6385,6 +4632,31 @@ class MediaCardEditor extends LitElement {
               <div class="help-text">How much to zoom when clicked (1.5x to 5.0x)</div>
             </div>
           </div>
+          
+          <div class="config-row">
+            <label>Show Media Info</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.show_media_info || false}
+                @change=${this._showMediaInfoChanged}
+              />
+              <div class="help-text">Display date taken and folder path overlay on media</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Media Info Position</label>
+            <div>
+              <select @change=${this._mediaInfoPositionChanged} .value=${this._config.media_info_position || 'bottom-left'}>
+                <option value="top-left">Top Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="bottom-right">Bottom Right</option>
+              </select>
+              <div class="help-text">Where to display the media information overlay</div>
+            </div>
+          </div>
         </div>
 
         ${this._config.is_folder ? html`
@@ -6442,7 +4714,7 @@ class MediaCardEditor extends LitElement {
             <div class="config-row">
               <label>Auto-Advance on Navigate</label>
               <div>
-                <select @change=${this._autoAdvanceModeChanged} .value=${this._config.auto_advance_mode || 'reset'}>
+                <select @change=${this._autoAdvanceModeChanged} .value=${this._config.auto_advance_mode || 'pause'}>
                   <option value="pause">Pause auto-refresh when navigating manually</option>
                   <option value="continue">Continue auto-refresh during manual navigation</option>
                   <option value="reset">Reset auto-refresh timer on manual navigation</option>
@@ -6481,158 +4753,56 @@ class MediaCardEditor extends LitElement {
           </div>
         ` : ''}
 
-        <div class="section">
-          <div class="section-title">� Metadata Display</div>
-          
-          <div class="config-row">
-            <label>Show Folder Name</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.metadata?.show_folder !== false}
-                @change=${this._metadataShowFolderChanged}
-              />
-              <div class="help-text">Display the parent folder name</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Show File Name</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.metadata?.show_filename !== false}
-                @change=${this._metadataShowFilenameChanged}
-              />
-              <div class="help-text">Display the media file name</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Show Date</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.metadata?.show_date !== false}
-                @change=${this._metadataShowDateChanged}
-              />
-              <div class="help-text">Display the file date (if available in filename)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Metadata Position</label>
-            <div>
-              <select @change=${this._metadataPositionChanged} .value=${this._config.metadata?.position || 'bottom-left'}>
-                <option value="bottom-left">Bottom Left</option>
-                <option value="bottom-right">Bottom Right</option>
-                <option value="top-left">Top Left</option>
-                <option value="top-right">Top Right</option>
-              </select>
-              <div class="help-text">Where to display the metadata overlay</div>
-            </div>
-          </div>
-        </div>
-
         ${this._config.is_folder && this._config.folder_mode === 'random' ? html`
           <div class="section">
-            <div class="section-title">🚀 Subfolder Queue (Random Mode)</div>
+            <div class="section-title">📁 Subfolder Options</div>
             
             <div class="config-row">
-              <label>Enable Subfolder Queue</label>
+              <label>Subfolder Scan Depth</label>
               <div>
                 <input
-                  type="checkbox"
-                  .checked=${this._config.subfolder_queue?.enabled || false}
-                  @change=${this._subfolderQueueEnabledChanged}
+                  type="number"
+                  min="0"
+                  max="10"
+                  .value=${this._config.subfolder_scan_depth || 0}
+                  @change=${this._subfolderScanDepthChanged}
                 />
-                <div class="help-text">Use background queue for faster multi-folder random selection</div>
+                <div class="help-text">How deep to scan for subfolders (0 = disabled, 1-10 = depth levels). Enables memory-efficient random selection from nested folders.</div>
               </div>
             </div>
             
-            ${this._config.subfolder_queue?.enabled ? html`
-              <div class="config-row">
-                <label>Scan Depth</label>
-                <div>
-                  <input
-                    type="number"
-                    min="1"
-                    max="5"
-                    .value=${this._config.subfolder_queue?.scan_depth || 2}
-                    @input=${this._subfolderScanDepthChanged}
-                  />
-                  <div class="help-text">How many folder levels to scan (1-5). Higher = more subfolders, slower scan.</div>
-                </div>
+            <div class="config-row">
+              <label>Max Files Per Folder</label>
+              <div>
+                <input
+                  type="number"
+                  min="10"
+                  max="10000"
+                  .value=${this._config.max_files_per_folder || 1000}
+                  @change=${this._maxFilesPerFolderChanged}
+                />
+                <div class="help-text">Maximum files to scan per folder for performance (10-10000)</div>
               </div>
-              
-              <div class="config-row">
-                <label>Randomization Pool Size</label>
-                <div>
-                  <input
-                    type="number"
-                    min="10"
-                    max="100"
-                    .value=${this._config.subfolder_queue?.queue_size || 30}
-                    @input=${this._subfolderQueueSizeChanged}
-                  />
-                  <div class="help-text">Larger pool = better randomization, prevents repetition</div>
-                </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Folder Cache Minutes</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  .value=${this._config.folder_cache_minutes || 5}
+                  @change=${this._folderCacheMinutesChanged}
+                />
+                <div class="help-text">How long to cache folder contents in memory (1-60 minutes)</div>
               </div>
-              
-              <div class="config-row">
-                <label>Priority Folder Patterns</label>
-                <div>
-                  <textarea
-                    rows="4"
-                    .value=${this._formatPriorityPatterns()}
-                    @input=${this._priorityPatternsChanged}
-                    placeholder="DCIM/Camera&#10;Photos/Camera Roll&#10;Photos/2024"
-                  ></textarea>
-                  <div class="help-text">Folder paths to prioritize (one per line). Paths containing these patterns get 3x weight.</div>
-                </div>
-              </div>
-              
-              <div class="config-row">
-                <label class="switch-container">
-                  <input
-                    type="checkbox"
-                    .checked=${this._config.subfolder_queue?.equal_probability_mode === true}
-                    @change=${this._equalProbabilityModeChanged}
-                  />
-                  <span class="switch-slider"></span>
-                  Equal Probability Mode
-                </label>
-                <div class="help-text">
-                  <strong>Checked:</strong> Every media item has equal chance of selection (true statistical fairness)<br>
-                  <strong>Unchecked:</strong> Each folder gets equal representation (folders with few items are overrepresented)
-                </div>
-              </div>
-              
-              ${this._config.subfolder_queue?.equal_probability_mode ? html`
-                <div class="config-row">
-                  <label>Estimated Total Photos (Optional)</label>
-                  <div>
-                    <input
-                      type="number"
-                      min="100"
-                      max="100000"
-                      .value=${this._config.subfolder_queue?.estimated_total_photos || ''}
-                      @input=${this._estimatedTotalChanged}
-                      placeholder="e.g., 5000"
-                    />
-                    <div class="help-text">
-                      If you know roughly how many photos you have total, this improves probability calculations.<br>
-                      <strong>Leave empty</strong> for adaptive mode (adjusts as folders are discovered).
-                    </div>
-                  </div>
-                </div>
-              ` : ''}
-            ` : ''}
+            </div>
           </div>
         ` : ''}
 
         <div class="section">
-          <div class="section-title">�👆 Interactions</div>
+          <div class="section-title">👆 Interactions</div>
           
           <div class="config-row">
             <label>Tap Action</label>
@@ -6679,22 +4849,6 @@ class MediaCardEditor extends LitElement {
               </select>
               <div class="help-text">Action when card is double-tapped</div>
               ${this._renderActionConfig('double_tap_action')}
-            </div>
-          </div>
-        </div>
-        
-        <div class="section">
-          <div class="section-title">🐛 Debug Options</div>
-          
-          <div class="config-row">
-            <label>Debug Queue Mode</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.debug_queue_mode || false}
-                @change=${this._debugQueueModeChanged}
-              />
-              <div class="help-text">Show queue analysis instead of media for troubleshooting randomization</div>
             </div>
           </div>
         </div>
@@ -7005,7 +5159,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Counter for limiting debug output
     let processedCount = 0;
     
-    // Check if this folder contains media files (not just subfolders)
+    // Check if this folder contains media files OR subfolders (for subfolder support)
     // For performance with large folders, just check the first 50 items
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
     const hasMediaFiles = itemsToCheck.some(item => {
@@ -7019,15 +5173,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       return isMedia;
     });
     
-    this._log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
-    this._log('Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
+    const hasSubfolders = itemsToCheck.some(item => item.can_expand);
     
-    // If we're in a folder (not root) with media files, add special folder options at the top
-    if ((currentPath && currentPath !== '') && hasMediaFiles) {
-      this._log('Adding folder options for path:', currentPath);
+    this._log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
+    this._log('Has subfolders:', hasSubfolders);
+    this._log('Should show folder options:', (currentPath && currentPath !== '') && (hasMediaFiles || hasSubfolders));
+    
+    // If we're in a folder (not root) with media files OR subfolders, add special folder options at the top
+    if ((currentPath && currentPath !== '') && (hasMediaFiles || hasSubfolders)) {
+      this._log('Adding folder options for path:', currentPath, '(has media:', hasMediaFiles, ', has subfolders:', hasSubfolders, ')');
       this._addFolderOptions(container, dialog, currentPath);
     } else {
-      this._log('Not adding folder options - currentPath:', currentPath, 'hasMediaFiles:', hasMediaFiles);
+      this._log('Not adding folder options - currentPath:', currentPath, 'hasMediaFiles:', hasMediaFiles, 'hasSubfolders:', hasSubfolders);
     }
     
     // Filter items to display based on media type configuration
@@ -7744,6 +5901,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _subfolderScanDepthChanged(ev) {
+    const depth = parseInt(ev.target.value) || 0;
+    this._config = { ...this._config, subfolder_scan_depth: Math.max(0, Math.min(10, depth)) };
+    this._fireConfigChanged();
+  }
+
+  _maxFilesPerFolderChanged(ev) {
+    const maxFiles = parseInt(ev.target.value) || 1000;
+    this._config = { ...this._config, max_files_per_folder: Math.max(10, Math.min(10000, maxFiles)) };
+    this._fireConfigChanged();
+  }
+
+  _folderCacheMinutesChanged(ev) {
+    const minutes = parseInt(ev.target.value) || 5;
+    this._config = { ...this._config, folder_cache_minutes: Math.max(1, Math.min(60, minutes)) };
+    this._fireConfigChanged();
+  }
+
+  _showMediaInfoChanged(ev) {
+    this._config = { ...this._config, show_media_info: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _mediaInfoPositionChanged(ev) {
+    this._config = { ...this._config, media_info_position: ev.target.value };
+    this._fireConfigChanged();
+  }
+
   _renderActionConfig(actionType) {
     const action = this._config[actionType];
     if (!action || action.action === 'none') return '';
@@ -7892,139 +6077,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     } else {
       this._config = { ...this._config, double_tap_action: { action } };
     }
-    this._fireConfigChanged();
-  }
-
-  _debugQueueModeChanged(ev) {
-    this._config = { ...this._config, debug_queue_mode: ev.target.checked };
-    this._fireConfigChanged();
-  }
-
-  // Metadata configuration event handlers
-  _metadataShowFolderChanged(ev) {
-    this._config = {
-      ...this._config,
-      metadata: {
-        ...this._config.metadata,
-        show_folder: ev.target.checked
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _metadataShowFilenameChanged(ev) {
-    this._config = {
-      ...this._config,
-      metadata: {
-        ...this._config.metadata,
-        show_filename: ev.target.checked
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _metadataShowDateChanged(ev) {
-    this._config = {
-      ...this._config,
-      metadata: {
-        ...this._config.metadata,
-        show_date: ev.target.checked
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _metadataPositionChanged(ev) {
-    this._config = {
-      ...this._config,
-      metadata: {
-        ...this._config.metadata,
-        position: ev.target.value
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  // Subfolder queue configuration event handlers
-  _subfolderQueueEnabledChanged(ev) {
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        enabled: ev.target.checked
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _subfolderScanDepthChanged(ev) {
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        scan_depth: Math.max(1, Math.min(5, parseInt(ev.target.value) || 2))
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _subfolderQueueSizeChanged(ev) {
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        queue_size: parseInt(ev.target.value) || 30
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _priorityPatternsChanged(ev) {
-    // Debounce the input to avoid constant config changes while typing
-    clearTimeout(this._patternInputTimeout);
-    this._patternInputTimeout = setTimeout(() => {
-      const patterns = ev.target.value
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(path => ({ path, weight_multiplier: 3.0 }));
-
-      this._config = {
-        ...this._config,
-        subfolder_queue: {
-          ...this._config.subfolder_queue,
-          priority_folder_patterns: patterns
-        }
-      };
-      this._fireConfigChanged();
-    }, 1000); // Wait 1 second after user stops typing
-  }
-
-  _formatPriorityPatterns() {
-    const patterns = this._config.subfolder_queue?.priority_folder_patterns || [];
-    return patterns.map(p => p.path).join('\n');
-  }
-
-  _equalProbabilityModeChanged(ev) {
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        equal_probability_mode: ev.target.checked
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _estimatedTotalChanged(ev) {
-    const value = ev.target.value ? parseInt(ev.target.value) : null;
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        estimated_total_photos: value
-      }
-    };
     this._fireConfigChanged();
   }
 
