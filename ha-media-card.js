@@ -5888,38 +5888,10 @@ class SubfolderQueue {
       return [...availableFiles]; // Return all available files if we need more than available
     }
     
-    // Enhanced randomization with time-based seed and better distribution
-    const timeSeed = Date.now() % 1000; // Use time as additional randomness
-    const shuffledFiles = [...availableFiles];
-    
-    // Multi-pass shuffle for better randomization
-    for (let pass = 0; pass < 3; pass++) {
-      for (let i = shuffledFiles.length - 1; i > 0; i--) {
-        const j = Math.floor((Math.random() + timeSeed / 1000) * (i + 1)) % (i + 1);
-        [shuffledFiles[i], shuffledFiles[j]] = [shuffledFiles[j], shuffledFiles[i]];
-      }
-    }
-    
-    // Select from different parts of the shuffled array for more variety
+    // Simple random selection - Math.random() is already random enough
     const selected = [];
-    const segmentSize = Math.floor(shuffledFiles.length / count);
+    const shuffledFiles = [...availableFiles]; // Copy to avoid modifying original
     
-    for (let i = 0; i < count; i++) {
-      const segmentStart = i * segmentSize;
-      const segmentEnd = Math.min(segmentStart + segmentSize, shuffledFiles.length);
-      
-      if (segmentStart < shuffledFiles.length) {
-        const localIndex = Math.floor(Math.random() * (segmentEnd - segmentStart));
-        const fileIndex = segmentStart + localIndex;
-        
-        if (shuffledFiles[fileIndex]) {
-          selected.push(shuffledFiles[fileIndex]);
-          shuffledFiles.splice(fileIndex, 1); // Remove to avoid duplicates
-        }
-      }
-    }
-    
-    // If we didn't get enough from segments, fill from remaining
     while (selected.length < count && shuffledFiles.length > 0) {
       const randomIndex = Math.floor(Math.random() * shuffledFiles.length);
       selected.push(shuffledFiles.splice(randomIndex, 1)[0]);
