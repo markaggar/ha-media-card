@@ -351,7 +351,8 @@ class MediaCard extends LitElement {
           this._log('🚀 Queue monitor triggering immediate display');
           await this._loadMediaFromItem(randomResult.file);
           
-          // Set _lastRefreshTime to allow immediate next refresh (subtract interval so next auto-refresh can happen right away)
+          // Set _lastRefreshTime to allow immediate next refresh
+          // (subtract interval so next auto-refresh can happen right away)
           const configuredInterval = (this.config?.auto_refresh_seconds || 30) * 1000;
           this._lastRefreshTime = Date.now() - configuredInterval;
           this._log('🕒 Set _lastRefreshTime to allow immediate next refresh in', configuredInterval, 'ms');
@@ -3304,7 +3305,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       }
     }
     
-    // ONLY set up auto-refresh on INITIAL hass/config changes - NOT on subsequent hass or _folderContents changes
+    // ONLY set up auto-refresh on INITIAL hass/config changes
+    // NOT on subsequent hass or _folderContents changes
     const shouldSetupAutoRefresh = (
       (isInitialHassSetup || isConfigChange)
     ) && 
@@ -4331,7 +4333,8 @@ class SubfolderQueue {
     }
     
     try {
-      // Get folder contents with timeout (3 minutes for all folders - processing in parallel handles the wait)
+      // Get folder contents with timeout (3 minutes for all folders)
+      // Processing in parallel handles the wait
       const timeoutDuration = 180000; // 3 minutes for all folders
       
       const apiTimeout = new Promise((_, reject) => 
@@ -8000,6 +8003,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     container.appendChild(videoIcon);
     
     // TODO: Future enhancement - generate actual video thumbnails
+    // Would require server-side thumbnail generation or canvas-based extraction
     // This would involve creating a video element, loading the video,
     // seeking to a specific time, and drawing to canvas
   }
