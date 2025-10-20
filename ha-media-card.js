@@ -4170,30 +4170,10 @@ class SubfolderQueue {
     this.discoveryInProgress = true;
     this.discoveryStartTime = Date.now();
     
-    // Create a promise that resolves when early population completes
-    this.earlyPopulationComplete = new Promise((resolve) => {
-      this.resolveEarlyPopulation = resolve;
-    });
-    
     try {
-      // Start quick initial scan in the background and wait for either early population or completion
-      const scanPromise = this.quickScan();
-      
-      // Race between early population completion and full scan completion
-      const result = await Promise.race([
-        this.earlyPopulationComplete,
-        scanPromise
-      ]);
-      
-      if (result === 'early-population-complete') {
-        this._log('🎉 Initialize completed via early population - continuing scan in background');
-        // Let the scan continue in the background but return success immediately
-        scanPromise.catch(error => {
-          this._log('⚠️ Background scan error (non-critical):', error.message);
-        });
-      } else {
-        this._log('✅ Initialize completed via full scan');
-      }
+      // Start scan and wait for completion
+      await this.quickScan();
+      this._log('✅ Initialize completed via full scan');
       
       return true;
     } catch (error) {
@@ -4851,11 +4831,6 @@ class SubfolderQueue {
         };
         this.tempDiscoveredFolders.push(rootFolder);
         this._log('📁 Added root folder with', rootFiles.length, 'files to queue consideration');
-        
-        // Trigger early population if root folder has enough files
-        if (!this.earlyPopulationTriggered) {
-          await this.triggerEarlyPopulation();
-        }
       }
       
       // Start regular discovery - early population will happen automatically when we have enough folders
@@ -4875,60 +4850,6 @@ class SubfolderQueue {
         await this.populateQueueFromFolders(this.tempDiscoveredFolders.slice(0, 5));
       }
       return this.tempDiscoveredFolders || [];
-    }
-  }
-
-  // Trigger early population when we have enough IMAGES in queue, not folders
-  async triggerEarlyPopulation() {
-    // Check if we have at least one folder with files
-    if (!this.tempDiscoveredFolders || this.tempDiscoveredFolders.length === 0) {
-      return;
-    }
-    
-    // Start populating from any folder that has files
-    const sortedFolders = [...this.tempDiscoveredFolders].sort((a, b) => b.fileCount - a.fileCount);
-    const goodFolders = sortedFolders.filter(f => f.fileCount > 0);
-    
-    if (goodFolders.length === 0) {
-      return; // No folders with files yet
-    }
-    
-    // Use up to 3 good folders for more balanced early population
-    const foldersToUse = goodFolders.slice(0, Math.min(3, goodFolders.length));
-    this._log('🎯 Early population with', foldersToUse.length, 'folders:', foldersToUse.map(f => `${f.title}(${f.fileCount})`).join(', '));
-    
-    // Temporarily reduce queue size for early population to get variety
-    const originalQueueSize = this.config.queue_size;
-    this.config.queue_size = Math.min(50, originalQueueSize); // Limit early queue to 50 items
-    
-    await this.populateQueueFromFolders(foldersToUse);
-    
-    // Restore original queue size
-    this.config.queue_size = originalQueueSize;
-    this._log('✅ Early queue populated! Queue has', this.queue.length, 'items');
-    
-    // Check if we have enough items in queue to start showing (minimum 3 items)
-    if (this.queue.length >= 3) {
-      // Set discovered folders so the initialization can proceed
-      this.discoveredFolders = this.tempDiscoveredFolders;
-      
-      // Signal that early population is complete
-      if (this.resolveEarlyPopulation) {
-        this.resolveEarlyPopulation('early-population-complete');
-        this._log('🎯 Early population completion signaled to main process - queue has', this.queue.length, 'items ready');
-      }
-      
-      // Start background expansion to target size
-      setTimeout(async () => {
-        try {
-          await this.expandQueueToTargetSize();
-        } catch (error) {
-          this._log('⚠️ Background queue expansion failed:', error.message);
-        }
-      }, 2000);
-      
-    } else {
-      this._log('🔄 Queue only has', this.queue.length, 'items - continuing to scan for more...');
     }
   }
 
