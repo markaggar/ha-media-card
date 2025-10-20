@@ -812,6 +812,7 @@ class MediaCard extends LitElement {
         priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
         equal_probability_mode: config.subfolder_queue?.equal_probability_mode || false, // True equal probability per media item
         estimated_total_photos: config.subfolder_queue?.estimated_total_photos || null, // User estimate for better probability calculation
+        use_hierarchical_scan: config.subfolder_queue?.use_hierarchical_scan !== false, // Default: true (use new hierarchical approach)
         ...config.subfolder_queue
       }
     };
@@ -4123,28 +4124,71 @@ class SubfolderQueue {
 
       this._log('🔍 Discovering subfolders from base path:', basePath, 'max depth:', this.config.scan_depth);
       
+      // Check if hierarchical scan is enabled (Phase 2.3 integration)
+      if (this.config.use_hierarchical_scan) {
+        this._log('🏗️ Using NEW hierarchical scan architecture');
+        
+        try {
+          // Use the new hierarchical scan approach
+          const scanResult = await this.hierarchicalScanAndPopulate(basePath, 0);
+          
+          if (!scanResult || scanResult.error) {
+            this._log('⚠️ Hierarchical scan failed:', scanResult?.error || 'unknown error');
+            // Fallback to legacy system
+            this._log('🔄 Falling back to legacy streaming scan...');
+            return await this.legacyQuickScan(basePath);
+          }
+          
+          this._log('✅ Hierarchical scan completed:', 
+                   'files processed:', scanResult.filesProcessed,
+                   'files added:', scanResult.filesAdded, 
+                   'folders processed:', scanResult.foldersProcessed,
+                   'queue size:', this.queue.length);
+          
+          // Early population complete since we populated immediately during scan
+          if (this.resolveEarlyPopulation) {
+            this.resolveEarlyPopulation('early-population-complete');
+          }
+          
+          return true;
+          
+        } catch (error) {
+          this._log('❌ Hierarchical scan error:', error.message);
+          // Fallback to legacy system on error
+          this._log('🔄 Falling back to legacy streaming scan...');
+          return await this.legacyQuickScan(basePath);
+        }
+      } else {
+        // Use legacy streaming approach
+        this._log('🔄 Using legacy streaming scan architecture');
+        return await this.legacyQuickScan(basePath);
+      }
+      
+    } catch (error) {
+      this._log('❌ Quick scan failed:', error);
+      this.isScanning = false;
+      return false;
+    }
+  }
+
+  // Legacy quickScan implementation (preserved for compatibility)
+  async legacyQuickScan(basePath) {
+    try {
       // Use a progressive approach - scan what we can and complete even if some folders timeout
       let subfolders = [];
       
-      try {
-        // NEW: Use streaming initialization instead of early population
-        this._log('🚀 Starting streaming folder scan...');
-        
-        const streamingSuccess = await this.initializeWithStreamingScans(basePath);
-        
-        if (!streamingSuccess) {
-          this._log('⚠️ No subfolders found, subfolder queue disabled');
-          this.isScanning = false;
-          return false;
-        }
-        
-        this._log('✅ Streaming initialization started - queue will populate as scans complete');
-        
-      } catch (error) {
-        this._log('⚠️ Streaming initialization failed:', error.message);
+      // Use streaming initialization instead of early population
+      this._log('🚀 Starting legacy streaming folder scan...');
+      
+      const streamingSuccess = await this.initializeWithStreamingScans(basePath);
+      
+      if (!streamingSuccess) {
+        this._log('⚠️ No subfolders found, subfolder queue disabled');
         this.isScanning = false;
         return false;
       }
+      
+      this._log('✅ Legacy streaming initialization started - queue will populate as scans complete');
       
       // Scanning continues in background, mark as complete
       this.isScanning = false;
@@ -4164,7 +4208,7 @@ class SubfolderQueue {
       return true;
       
     } catch (error) {
-      this._log('❌ Quick scan failed:', error);
+      this._log('⚠️ Legacy streaming initialization failed:', error.message);
       this.isScanning = false;
       return false;
     }
@@ -4177,20 +4221,26 @@ class SubfolderQueue {
    * Replaces the two-phase discovery/streaming system with elegant level-by-level processing
    * @param {string} basePath - The root media path to scan
    * @param {number} currentDepth - Current scanning depth (0 = root level)  
-   * @param {number} maxDepth - Maximum depth to scan (default: 3)
+   * @param {number} maxDepth - Maximum depth to scan (uses config.scan_depth if not provided)
    */
-  async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = 3) {
-    this._log('🏗️ Hierarchical scan starting at:', basePath, 'depth:', currentDepth, 'max:', maxDepth);
+  async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = null) {
+    // Use configured scan depth if maxDepth not explicitly provided
+    const effectiveMaxDepth = maxDepth !== null ? maxDepth : (this.config.scan_depth || 2);
     
-    if (currentDepth >= maxDepth) {
-      this._log('📁 Max depth reached:', currentDepth);
-      return;
+    this._log('🏗️ Hierarchical scan starting at:', basePath, 'depth:', currentDepth, 'max:', effectiveMaxDepth);
+    
+    // Depth limiting with configuration support
+    if (currentDepth >= effectiveMaxDepth) {
+      this._log('📁 Max depth reached:', currentDepth, '(configured limit:', effectiveMaxDepth, ')');
+      return { filesProcessed: 0, foldersProcessed: 0 };
     }
     
     try {
-      // Get folder contents with timeout protection
+      // Get folder contents with timeout (3 minutes for all folders - processing in parallel handles the wait)
+      const timeoutDuration = 180000; // 3 minutes for all folders
+      
       const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 12000)
+        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth} after ${timeoutDuration/1000}s`)), timeoutDuration)
       );
       
       const folderContents = await Promise.race([
@@ -4206,25 +4256,77 @@ class SubfolderQueue {
         return;
       }
 
+      // Extract folder name for metadata tracking
+      const folderName = basePath.split('/').pop() || 'root';
+      
       // Separate files and subfolders
       const files = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
       const subfolders = folderContents.children.filter(child => child.can_expand);
 
-      // Process files in current folder with probability sampling
+      this._log('📁 Processing folder:', folderName, 'files:', files.length, 'subfolders:', subfolders.length, 'depth:', currentDepth);
+
+      // Process files in current folder with weighted probability sampling
+      let filesAdded = 0;
+      const basePerFileProbability = this.calculatePerFileProbability();
+      const weightMultiplier = this.getPathWeightMultiplier(basePath);
+      const perFileProbability = Math.min(basePerFileProbability * weightMultiplier, 1.0); // Cap at 100%
+      
+      // Log priority weighting info
+      if (weightMultiplier > 1.0) {
+        this._log('⭐ PRIORITY FOLDER detected:', folderName, 'weight multiplier:', weightMultiplier + 'x', 
+                  'probability boosted from', (basePerFileProbability * 100).toFixed(4) + '%', 
+                  'to', (perFileProbability * 100).toFixed(4) + '%');
+      }
+      
       for (const file of files) {
-        const probability = this.calculateGlobalProbabilitySampling();
-        if (Math.random() < probability) {
-          await this.addFileToQueueWithBatching(file, this.queueShuffleCounter);
+        if (Math.random() < perFileProbability) {
+          await this.addFileToQueueWithBatching(file, folderName);
+          filesAdded++;
         }
       }
+      
+      // Log sampling results for this folder
+      this._log('📊 HIERARCHICAL sampling for', folderName + ':', files.length, 'files, per-file probability:', 
+                (perFileProbability * 100).toFixed(4) + '%' + (weightMultiplier > 1.0 ? ' (boosted ' + weightMultiplier + 'x)' : ''), 
+                filesAdded, 'files selected');
 
-      // Process subfolders concurrently if we haven't reached max depth
-      if (subfolders.length > 0 && currentDepth < maxDepth - 1) {
-        await this.processLevelConcurrently(subfolders, 2, currentDepth + 1, maxDepth);
+      if (filesAdded > 0) {
+        this._log('✅ Added', filesAdded, 'files from folder:', folderName, 'total queue size:', this.queue.length);
       }
+
+      // Process subfolders recursively with proper depth control and async coordination
+      let subfoldersProcessed = 0;
+      if (subfolders.length > 0 && currentDepth < effectiveMaxDepth - 1) {
+        this._log('🔄 Recursing into', subfolders.length, 'subfolders at depth:', currentDepth + 1);
+        
+        const subfolderResults = await this.processLevelConcurrently(
+          subfolders, 
+          2, // maxConcurrent 
+          currentDepth + 1, 
+          effectiveMaxDepth
+        );
+        
+        subfoldersProcessed = subfolderResults?.foldersProcessed || subfolders.length;
+      }
+
+      // Return progress tracking information
+      return {
+        filesProcessed: files.length,
+        filesAdded: filesAdded,
+        foldersProcessed: subfoldersProcessed,
+        depth: currentDepth
+      };
 
     } catch (error) {
       this._log('⚠️ Hierarchical scan error at depth', currentDepth, ':', error.message);
+      // Return error state but don't fail completely  
+      return {
+        filesProcessed: 0,
+        filesAdded: 0, 
+        foldersProcessed: 0,
+        depth: currentDepth,
+        error: error.message
+      };
     }
   }
 
@@ -4236,38 +4338,69 @@ class SubfolderQueue {
    * @param {number} maxDepth - Maximum scan depth
    */
   async processLevelConcurrently(folders, maxConcurrent = 2, nextDepth, maxDepth) {
-    this._log('🔄 Processing', folders.length, 'folders concurrently (max:', maxConcurrent, ')');
+    if (!folders || folders.length === 0) return;
+    
+    this._log('🔄 Processing', folders.length, 'folders concurrently (max:', maxConcurrent, 'depth:', nextDepth, ')');
+    
+    let processedCount = 0;
+    let errorCount = 0;
     
     // Process folders in batches to control concurrency
     for (let i = 0; i < folders.length; i += maxConcurrent) {
       const batch = folders.slice(i, i + maxConcurrent);
+      const batchSize = batch.length;
       
-      const batchPromises = batch.map(folder => 
+      this._log('📦 Processing batch', Math.floor(i / maxConcurrent) + 1, 'of', Math.ceil(folders.length / maxConcurrent), '(' + batchSize + ' folders)');
+      
+      const batchPromises = batch.map((folder, index) => 
         this.hierarchicalScanAndPopulate(folder.media_content_id, nextDepth, maxDepth)
+          .then(() => {
+            processedCount++;
+            this._log('✅ Completed folder:', folder.title || 'unnamed', `(${processedCount}/${folders.length})`);
+          })
+          .catch(error => {
+            errorCount++;
+            this._log('❌ Failed folder:', folder.title || 'unnamed', error.message);
+          })
       );
       
       try {
         await Promise.allSettled(batchPromises);
       } catch (error) {
-        this._log('⚠️ Batch processing error:', error.message);
+        this._log('⚠️ Unexpected batch processing error:', error.message);
       }
     }
+    
+    this._log('🏁 Level processing complete:', processedCount, 'successful,', errorCount, 'errors, queue size:', this.queue.length);
+    
+    // Return progress information for async coordination
+    return {
+      foldersProcessed: processedCount,
+      folderErrors: errorCount,
+      totalFolders: folders.length,
+      depth: nextDepth
+    };
   }
 
   /**
    * Add file to queue with batched shuffling optimization  
    * @param {Object} file - Media file object to add
-   * @param {number} shuffleCounter - Current shuffle counter value
+   * @param {string} folderName - Optional folder name for history tracking
    */
-  async addFileToQueueWithBatching(file, shuffleCounter) {
-    // Add file to queue
-    this.queue.push({
-      media_content_id: file.media_content_id,
-      title: file.title,
-      media_class: file.media_class,
-      can_play: file.can_play,
-      folder: file.media_content_id.split('/').slice(-2, -1)[0] || 'root'
-    });
+  async addFileToQueueWithBatching(file, folderName = null) {
+    if (!file) return;
+
+    // Add file to main queue (use original file format like existing implementation)
+    this.queue.push(file);
+
+    // Add to history with metadata (matching existing addFilesToQueue pattern)
+    const historyEntry = {
+      file: file,
+      timestamp: new Date().toISOString(),
+      folderName: folderName || this.extractFolderName(file),
+      source: 'hierarchical_scan'
+    };
+    this.queueHistory.push(historyEntry);
 
     // Increment shuffle counter
     this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
@@ -4277,6 +4410,11 @@ class SubfolderQueue {
       this.shuffleQueue();
       this.queueShuffleCounter = 0;
       this._log('🔀 Queue shuffled at', this.queue.length, 'items (batch size:', this.SHUFFLE_BATCH_SIZE, ')');
+    }
+
+    // Log file addition for first few files (debug purposes)
+    if (this.queue.length <= 5) {
+      this._log('📎 Added file to queue:', file.title, 'queue size:', this.queue.length);
     }
   }
 
@@ -4291,9 +4429,9 @@ class SubfolderQueue {
     }
     
     try {
-      // Get folder contents with timeout (increased for large Camera folders)
+      // Get folder contents with timeout (3 minutes for all folders)
       const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 12000)
+        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth} after 180s`)), 180000)
       );
       
       const folderContents = await Promise.race([
@@ -4945,14 +5083,15 @@ class SubfolderQueue {
   // Phase 2: True per-file probability sampling using estimated_total_photos
   calculateGlobalProbabilitySampling(folderSize, folderTitle) {
     const totalPhotos = this.config.estimated_total_photos;
+    const targetQueueSize = this.config.queue_size || 1000;
     
     if (!totalPhotos || totalPhotos <= 0) {
       this._log('⚠️ No estimated_total_photos configured, falling back to folder-based sampling');
       return Math.min(folderSize, 10); // Fallback to reasonable limit
     }
     
-    // TRUE PER-FILE PROBABILITY: Each file has exactly 1/total_photos chance
-    const perFileProbability = 1 / totalPhotos;
+    // CORRECT FORMULA: targetQueueSize / totalPhotos (not 1 / totalPhotos)
+    const perFileProbability = targetQueueSize / totalPhotos;
     
     // Evaluate each file in this folder independently
     let selectedCount = 0;
@@ -4965,6 +5104,25 @@ class SubfolderQueue {
     this._log('📊 GLOBAL per-file sampling for', folderTitle + ':', folderSize, 'files, per-file probability:', (perFileProbability * 100).toFixed(4) + '%,', selectedCount, 'files selected');
     
     return selectedCount;
+  }
+
+  // Calculate per-file probability for hierarchical scanning (Option A approach)
+  calculatePerFileProbability() {
+    const totalPhotos = this.config.estimated_total_photos;
+    const targetQueueSize = this.config.queue_size || 1000;
+    
+    if (!totalPhotos || totalPhotos <= 0) {
+      this._log('⚠️ No estimated_total_photos configured for per-file probability');
+      return 0.01; // Fallback: 1% chance per file
+    }
+    
+    // Correct formula: targetQueueSize / totalPhotos
+    const probability = targetQueueSize / totalPhotos;
+    
+    this._log('🎲 Per-file probability calculated:', (probability * 100).toFixed(4) + '%', 
+              '(target:', targetQueueSize, '/ total:', totalPhotos, ')');
+    
+    return probability;
   }
 
   // BATCH SCHEDULER - ensures batches from different folders are interleaved
