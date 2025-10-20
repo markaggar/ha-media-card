@@ -2180,8 +2180,11 @@ class MediaCard extends LitElement {
     const hasTitle = this.config.title && this.config.title.trim();
     
     // Debug: Log what we have access to
-    this._log('🐛 Debug render - checking subfolderQueue availability:', !!this.subfolderQueue);
-    this._log('🐛 Debug render - this keys:', Object.keys(this));
+    this._log('🐛 Debug render - checking subfolderQueue availability:', !!this._subfolderQueue);
+    if (this._subfolderQueue) {
+      this._log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => `${f.title} (${f.path})`));
+      this._log('🐛 Debug render - queue sample paths:', this._subfolderQueue.queue?.slice(0, 3).map(item => item.media_content_id));
+    }
     
     // Access the correct queue data - it's stored as _subfolderQueue
     let queueSize = 0;
@@ -2194,7 +2197,8 @@ class MediaCard extends LitElement {
       foldersFound = discoveredCount;
       currentQueue = this._subfolderQueue.queue || [];
       this._log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'total:', foldersFound);
-      this._log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => f.title));
+      this._log('🐛 Debug render - discoveredFolders array:', this._subfolderQueue.discoveredFolders);
+      this._log('🐛 Debug render - foldersFound value:', foldersFound, 'type:', typeof foldersFound);
     } else {
       this._log('🐛 Debug render - NO _subfolderQueue found');
     }
@@ -2234,12 +2238,22 @@ ${currentQueue.map((item, index) => {
           <div class="debug-folder-stats">
             <h4>📊 Folder Statistics:</h4>
             <div style="background: #ffffff; border: 1px solid #000; padding: 8px; font-family: monospace;">
-              ${foldersFound > 0 ? html`
+              <!-- Debug: foldersFound = ${foldersFound}, discoveredFolders length = ${this._subfolderQueue?.discoveredFolders?.length || 0} -->
+              ${foldersFound > 0 && this._subfolderQueue?.discoveredFolders?.length > 0 ? html`
                 ${(this._subfolderQueue?.discoveredFolders || []).map(folder => {
-                  const queueItems = currentQueue.filter(item => 
-                    item.media_content_id?.includes(folder.title) || 
-                    item.media_content_id?.split('/').slice(-2, -1)[0] === folder.title
-                  ).length;
+                  // Improved folder matching - use both title and path-based matching
+                  const queueItems = currentQueue.filter(item => {
+                    if (!item.media_content_id) return false;
+                    
+                    // Extract folder name from the file path (second to last part)
+                    const itemFolderName = item.media_content_id.split('/').slice(-2, -1)[0];
+                    
+                    // Match by folder title or by path inclusion
+                    return itemFolderName === folder.title || 
+                           item.media_content_id.includes(folder.path) ||
+                           item.media_content_id.includes('/' + folder.title + '/');
+                  }).length;
+                  
                   const percentage = queueSize > 0 ? (queueItems / queueSize * 100).toFixed(1) : '0.0';
                   return html`
                     <div style="margin: 4px 0; font-size: 12px; user-select: text; color: #000000;">
@@ -2256,7 +2270,9 @@ ${currentQueue.map((item, index) => {
               ` : html`
                 <div style="color: #cc0000; font-style: italic;">
                   No folders discovered yet... 
-                  (_subfolderQueue: ${!!this._subfolderQueue})
+                  <br>Debug: foldersFound=${foldersFound}, discoveredFolders.length=${this._subfolderQueue?.discoveredFolders?.length || 0}
+                  <br>_subfolderQueue exists: ${!!this._subfolderQueue}
+                  <br>discoveredFolders exists: ${!!this._subfolderQueue?.discoveredFolders}
                 </div>
               `}
             </div>
@@ -4338,6 +4354,28 @@ class SubfolderQueue {
       const subfolders = folderContents.children.filter(child => child.can_expand);
 
       this._log('📁 Processing folder:', folderName, 'files:', files.length, 'subfolders:', subfolders.length, 'depth:', currentDepth);
+
+      // Track this folder in discoveredFolders for debug interface
+      if (files.length > 0 || subfolders.length > 0) {
+        const folderInfo = {
+          path: basePath,
+          title: folderName,
+          fileCount: files.length,
+          files: files,
+          depth: currentDepth,
+          isSampled: false // This is hierarchical, not sampled
+        };
+        
+        // Add to discoveredFolders if not already present
+        const existingIndex = this.discoveredFolders.findIndex(f => f.path === basePath);
+        if (existingIndex === -1) {
+          this.discoveredFolders.push(folderInfo);
+          this._log('📂 Added folder to discoveredFolders:', folderName, '(total:', this.discoveredFolders.length, ')');
+        } else {
+          // Update existing entry
+          this.discoveredFolders[existingIndex] = folderInfo;
+        }
+      }
 
       // Process files in current folder with weighted probability sampling
       let filesAdded = 0;
@@ -6831,22 +6869,6 @@ class MediaCardEditor extends LitElement {
             </div>
           </div>
         </div>
-        
-        <div class="section">
-          <div class="section-title">🐛 Debug Options</div>
-          
-          <div class="config-row">
-            <label>Debug Queue Mode</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.debug_queue_mode || false}
-                @change=${this._debugQueueModeChanged}
-              />
-              <div class="help-text">Show queue analysis instead of media for troubleshooting randomization</div>
-            </div>
-          </div>
-        </div>
       </div>
     `;
   }
@@ -8042,11 +8064,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     } else {
       this._config = { ...this._config, double_tap_action: { action } };
     }
-    this._fireConfigChanged();
-  }
-
-  _debugQueueModeChanged(ev) {
-    this._config = { ...this._config, debug_queue_mode: ev.target.checked };
     this._fireConfigChanged();
   }
 
