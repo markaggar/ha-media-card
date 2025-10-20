@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b714 - Added immediate display: shows first image as soon as available instead of waiting for full scan
+ * Version: 2.3b716 - Implemented adaptive sampling: local folder-based initially, then global probability-based once queue sufficient
  */
 
 // Import Lit from CDN for standalone usage
@@ -943,6 +943,11 @@ class MediaCard extends LitElement {
         this._initializeSubfolderQueue();
         if (this._subfolderQueue) {
           this._log('🚀 Starting subfolder queue initialization...');
+          
+          // 🎯 IMMEDIATE DISPLAY: Start queue monitor RIGHT NOW, don't wait for initialization
+          this._startQueueMonitor();
+          
+          // Start initialization in the background (non-blocking)
           const queueInitialized = await this._subfolderQueue.initialize();
           if (queueInitialized) {
             this._log('✅ Subfolder queue initialization completed (early population or full scan)');
@@ -964,9 +969,11 @@ class MediaCard extends LitElement {
                 return; // Exit early - queue already available
               }
             } else {
-              this._log('⚠️ Queue empty after initialization - starting queue monitor for immediate display');
+              this._log('⚠️ Queue empty after initialization - starting immediate queue monitor');
               // Start monitoring for queue population (streaming scans are in progress)
               this._startQueueMonitor();
+              // Also fallback to normal mode in case queue never populates
+              this._log('📁 Starting fallback scanning while waiting for queue');
             }
           } else {
             this._log('⚠️ Subfolder queue initialization failed, using normal mode');
@@ -3168,6 +3175,22 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       this._log('📱 Component updated, changed properties:', Array.from(changedProperties.keys()));
     }
     
+    // 🎯 IMMEDIATE DISPLAY: Check if queue has been populated and we need to display first item
+    if (this._subfolderQueue && this._subfolderQueue.queue.length > 0 && !this._mediaUrl && this.config.subfolder_queue?.enabled) {
+      this._log('🎉 UPDATED: Queue has', this._subfolderQueue.queue.length, 'items - checking for immediate display');
+      const randomResult = this._getRandomFileWithIndex();
+      if (randomResult && randomResult.file) {
+        this._log('🚀 UPDATED: Triggering immediate display from queue');
+        this._loadMediaFromItem(randomResult.file).then(() => {
+          this._lastRefreshTime = Date.now();
+          this._folderContents = [randomResult.file, {}]; // Enable navigation
+          this._log('🎮 UPDATED: Set folder contents for navigation');
+        }).catch(error => {
+          this._log('❌ UPDATED: Failed to load media:', error.message);
+        });
+      }
+    }
+    
     // Only handle hass changes for INITIAL setup - ignore subsequent hass updates to prevent loops
     const isInitialHassSetup = changedProperties.has('hass') && !this._hasInitializedHass && this.hass;
     const isConfigChange = changedProperties.has('config');
@@ -4696,10 +4719,40 @@ class SubfolderQueue {
     }
   }
 
-  // Calculate maximum files to sample from a folder based on queue size and folder count
+  // Calculate threshold for switching from local to global sampling
+  calculateSufficientQueueSize() {
+    const refreshRate = this.config.refresh_seconds || 5; // Default 5 seconds
+    const targetMinutes = 3; // 3 minutes worth of content (180 seconds)
+    const sufficientSize = Math.ceil((targetMinutes * 60) / refreshRate);
+    return Math.max(sufficientSize, 30); // Minimum 30 items
+  }
+
+  // Calculate maximum files to sample from a folder using adaptive strategy
   calculateMaxFilesForFolder(folderSize, folderTitle) {
+    const currentQueueSize = this.queue.length;
+    const sufficientQueueSize = this.calculateSufficientQueueSize();
+    const useGlobalSampling = currentQueueSize >= sufficientQueueSize;
+    
+    // Log sampling mode switch for first few folders
+    if (this.samplingModeLogged !== useGlobalSampling) {
+      this.samplingModeLogged = useGlobalSampling;
+      const mode = useGlobalSampling ? 'GLOBAL probability' : 'LOCAL folder-based';
+      this._log('🔄 SAMPLING MODE:', mode, '(queue:', currentQueueSize, '/', sufficientQueueSize, 'threshold)');
+    }
+    
+    if (useGlobalSampling && this.config.estimated_total_photos) {
+      // Phase 2: Use global probability-based sampling (true statistical distribution)
+      return this.calculateGlobalProbabilitySampling(folderSize, folderTitle);
+    } else {
+      // Phase 1: Use local folder-based sampling (fast initial population)
+      return this.calculateLocalFolderSampling(folderSize, folderTitle);
+    }
+  }
+
+  // Phase 1: Local folder-based sampling for initial queue population
+  calculateLocalFolderSampling(folderSize, folderTitle) {
     const targetQueueSize = this.config.queue_size || 1000;
-    const estimatedFolderCount = Math.max(this.discoveredFolders.length, 10); // Estimate at least 10 folders
+    const estimatedFolderCount = Math.max(this.discoveredFolders.length, 10);
     
     // Base allocation per folder
     const baseAllocation = Math.floor(targetQueueSize / estimatedFolderCount);
@@ -4728,9 +4781,32 @@ class SubfolderQueue {
       category = 'massive';
     }
     
-    this._log('📊 Sampling calculation for', folderTitle + ':', category, 'folder with', folderSize, 'files → sample', result, 'files (base allocation:', baseAllocation + ')');
+    this._log('📊 LOCAL sampling for', folderTitle + ':', category, 'folder with', folderSize, 'files → sample', result, 'files (base allocation:', baseAllocation + ')');
     
     return result;
+  }
+
+  // Phase 2: Global probability-based sampling using estimated_total_photos
+  calculateGlobalProbabilitySampling(folderSize, folderTitle) {
+    const totalPhotos = this.config.estimated_total_photos;
+    const queueTargetSize = this.config.queue_size || 100;
+    
+    // Calculate true probability: folder_size / total_photos 
+    const folderProbability = folderSize / totalPhotos;
+    
+    // Expected slots for this folder in the queue
+    const expectedSlots = folderProbability * queueTargetSize;
+    
+    // Use probabilistic rounding instead of guaranteed allocation
+    const guaranteedSlots = Math.floor(expectedSlots);
+    const fractionalPart = expectedSlots - guaranteedSlots;
+    const bonusSlot = Math.random() < fractionalPart ? 1 : 0;
+    
+    const result = guaranteedSlots + bonusSlot;
+    
+    this._log('📊 GLOBAL sampling for', folderTitle + ':', folderSize, 'files, probability:', (folderProbability * 100).toFixed(4) + '%, expected slots:', expectedSlots.toFixed(2), '→ sample', result, 'files');
+    
+    return Math.max(0, result); // Never negative
   }
 
   // BATCH SCHEDULER - ensures batches from different folders are interleaved
