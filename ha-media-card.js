@@ -4687,14 +4687,6 @@ class SubfolderQueue {
             if (this.tempDiscoveredFolders) {
               this.tempDiscoveredFolders.push(folderData);
               this._log('📦 Added error-recovered folder to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
-              
-              if (this.earlyPopulationTriggered) {
-                // Queue already exists, add this folder's files progressively
-                this._log('🔄 Progressive enhancement: Adding error-recovered', folderData.title, 'to existing queue');
-                this.addFolderToQueue(folderData).catch(error => {
-                  this._log('⚠️ Progressive folder addition failed for error-recovered folder:', error.message);
-                });
-              }
             }
           } else if (error.message && error.message.includes('timeout')) {
             // Special handling for timeouts - try a quick emergency scan
@@ -4708,13 +4700,6 @@ class SubfolderQueue {
                 if (this.tempDiscoveredFolders) {
                   this.tempDiscoveredFolders.push(emergencyInfo);
                   this._log('📦 Added emergency-scanned folder to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
-                  
-                  if (this.earlyPopulationTriggered) {
-                    this._log('🔄 Progressive enhancement: Adding emergency-scanned', emergencyInfo.title, 'to existing queue');
-                    this.addFolderToQueue(emergencyInfo).catch(error => {
-                      this._log('⚠️ Progressive folder addition failed for emergency-scanned folder:', error.message);
-                    });
-                  }
                 }
               }
             } catch (emergencyError) {
