@@ -2191,12 +2191,10 @@ class MediaCard extends LitElement {
     if (this._subfolderQueue) {
       queueSize = this._subfolderQueue.queue?.length || 0;
       const discoveredCount = this._subfolderQueue.discoveredFolders?.length || 0;
-      const tempCount = this._subfolderQueue.tempDiscoveredFolders?.length || 0;
-      foldersFound = discoveredCount + tempCount;
+      foldersFound = discoveredCount;
       currentQueue = this._subfolderQueue.queue || [];
-      this._log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'temp folders:', tempCount, 'total:', foldersFound);
+      this._log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'total:', foldersFound);
       this._log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => f.title));
-      this._log('🐛 Debug render - temp folders:', this._subfolderQueue.tempDiscoveredFolders?.map(f => f.title));
     } else {
       this._log('🐛 Debug render - NO _subfolderQueue found');
     }
@@ -2236,8 +2234,8 @@ ${currentQueue.map((item, index) => {
           <div class="debug-folder-stats">
             <h4>📊 Folder Statistics:</h4>
             <div style="background: #ffffff; border: 1px solid #000; padding: 8px; font-family: monospace;">
-              ${foldersFound > 0 || (this._subfolderQueue?.tempDiscoveredFolders?.length > 0) ? html`
-                ${([...(this._subfolderQueue?.discoveredFolders || []), ...(this._subfolderQueue?.tempDiscoveredFolders || [])]).map(folder => {
+              ${foldersFound > 0 ? html`
+                ${(this._subfolderQueue?.discoveredFolders || []).map(folder => {
                   const queueItems = currentQueue.filter(item => 
                     item.media_content_id?.includes(folder.title) || 
                     item.media_content_id?.split('/').slice(-2, -1)[0] === folder.title
@@ -4171,7 +4169,6 @@ class SubfolderQueue {
     this.isScanning = true;
     this.discoveryInProgress = true;
     this.discoveryStartTime = Date.now();
-    this.earlyPopulationTriggered = false; // Reset the early population flag at start of initialization
     
     // Create a promise that resolves when early population completes
     this.earlyPopulationComplete = new Promise((resolve) => {
@@ -4613,29 +4610,6 @@ class SubfolderQueue {
               sampleRatio: folderInfo.sampleRatio
             };
             allSubfolders.push(folderData);
-            
-            // Also track for early population
-            if (this.tempDiscoveredFolders) {
-              this.tempDiscoveredFolders.push(folderData);
-              this._log('📦 Added to temp discovered folders (now', this.tempDiscoveredFolders.length, 'total)');
-              
-              // Progressive queue enhancement: Add this folder to queue immediately
-              if (!this.earlyPopulationTriggered && this.tempDiscoveredFolders.length >= 2) {
-                this._log('⚡ IMMEDIATE early population triggered with', this.tempDiscoveredFolders.length, 'folders');
-                this.earlyPopulationTriggered = true;
-                
-                // Trigger population immediately in the background
-                this.triggerEarlyPopulation().catch(error => {
-                  this._log('⚠️ Early population failed:', error.message);
-                });
-              } else if (this.earlyPopulationTriggered) {
-                // Queue already exists, add this new folder's files progressively
-                this._log('🔄 Progressive enhancement: Adding', folderData.title, 'to existing queue');
-                this.addFolderToQueue(folderData).catch(error => {
-                  this._log('⚠️ Progressive folder addition failed:', error.message);
-                });
-              }
-            }
           }
           
           // Recursively scan deeper if within depth limit
@@ -4707,10 +4681,6 @@ class SubfolderQueue {
               this._log(`❌ Emergency scan also failed for ${dir.title}: ${emergencyError.message}`);
               // Emergency scan failed completely - create a synthetic folder as last resort
               const syntheticFolder = this.createSyntheticFolderEntry(dir.media_content_id, dir.title);
-              if (!this.tempDiscoveredFolders) {
-                this.tempDiscoveredFolders = [];
-              }
-              this.tempDiscoveredFolders.push(syntheticFolder);
               this._log(`🔄 Created last-resort synthetic folder for ${dir.title} with estimated ${syntheticFolder.fileCount} files`);
               return { dir, folderInfo: syntheticFolder, success: true };
             }
