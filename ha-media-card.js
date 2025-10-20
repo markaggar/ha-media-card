@@ -3953,6 +3953,10 @@ class SubfolderQueue {
     // Queue history - tracks every file ever added to the queue for debug purposes
     this.queueHistory = [];
     
+    // NEW: Hierarchical scan queue management - Phase 1.2
+    this.queueShuffleCounter = 0; // Tracks files added since last shuffle for batch optimization
+    this.SHUFFLE_BATCH_SIZE = 10; // Shuffle queue every N file additions (batch optimization)
+    
     // Batch scheduler for interleaving batches from different folders
     this.batchScheduler = {
       scheduledBatches: [],
@@ -4163,6 +4167,116 @@ class SubfolderQueue {
       this._log('❌ Quick scan failed:', error);
       this.isScanning = false;
       return false;
+    }
+  }
+
+  // NEW HIERARCHICAL SCAN METHODS - Phase 1.1 Implementation
+  
+  /**
+   * Hierarchical scan and populate - single-pass folder scanning with immediate queue population
+   * Replaces the two-phase discovery/streaming system with elegant level-by-level processing
+   * @param {string} basePath - The root media path to scan
+   * @param {number} currentDepth - Current scanning depth (0 = root level)  
+   * @param {number} maxDepth - Maximum depth to scan (default: 3)
+   */
+  async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = 3) {
+    this._log('🏗️ Hierarchical scan starting at:', basePath, 'depth:', currentDepth, 'max:', maxDepth);
+    
+    if (currentDepth >= maxDepth) {
+      this._log('📁 Max depth reached:', currentDepth);
+      return;
+    }
+    
+    try {
+      // Get folder contents with timeout protection
+      const apiTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth}`)), 12000)
+      );
+      
+      const folderContents = await Promise.race([
+        this.card.hass.callWS({
+          type: "media_source/browse_media",
+          media_content_id: basePath
+        }),
+        apiTimeout
+      ]);
+
+      if (!folderContents?.children) {
+        this._log('📁 No children found at depth:', currentDepth);
+        return;
+      }
+
+      // Separate files and subfolders
+      const files = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
+      const subfolders = folderContents.children.filter(child => child.can_expand);
+
+      // Process files in current folder with probability sampling
+      for (const file of files) {
+        const probability = this.calculateGlobalProbabilitySampling();
+        if (Math.random() < probability) {
+          await this.addFileToQueueWithBatching(file, this.queueShuffleCounter);
+        }
+      }
+
+      // Process subfolders concurrently if we haven't reached max depth
+      if (subfolders.length > 0 && currentDepth < maxDepth - 1) {
+        await this.processLevelConcurrently(subfolders, 2, currentDepth + 1, maxDepth);
+      }
+
+    } catch (error) {
+      this._log('⚠️ Hierarchical scan error at depth', currentDepth, ':', error.message);
+    }
+  }
+
+  /**
+   * Process multiple folders concurrently with controlled parallelism
+   * @param {Array} folders - Folders to process
+   * @param {number} maxConcurrent - Maximum concurrent operations (default: 2)
+   * @param {number} nextDepth - Depth for recursive calls
+   * @param {number} maxDepth - Maximum scan depth
+   */
+  async processLevelConcurrently(folders, maxConcurrent = 2, nextDepth, maxDepth) {
+    this._log('🔄 Processing', folders.length, 'folders concurrently (max:', maxConcurrent, ')');
+    
+    // Process folders in batches to control concurrency
+    for (let i = 0; i < folders.length; i += maxConcurrent) {
+      const batch = folders.slice(i, i + maxConcurrent);
+      
+      const batchPromises = batch.map(folder => 
+        this.hierarchicalScanAndPopulate(folder.media_content_id, nextDepth, maxDepth)
+      );
+      
+      try {
+        await Promise.allSettled(batchPromises);
+      } catch (error) {
+        this._log('⚠️ Batch processing error:', error.message);
+      }
+    }
+  }
+
+  /**
+   * Add file to queue with batched shuffling optimization  
+   * @param {Object} file - Media file object to add
+   * @param {number} shuffleCounter - Current shuffle counter value
+   */
+  async addFileToQueueWithBatching(file, shuffleCounter) {
+    // Add file to queue
+    this.queue.push({
+      media_content_id: file.media_content_id,
+      title: file.title,
+      media_class: file.media_class,
+      can_play: file.can_play,
+      folder: file.media_content_id.split('/').slice(-2, -1)[0] || 'root'
+    });
+
+    // Increment shuffle counter
+    this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
+
+    // Shuffle every SHUFFLE_BATCH_SIZE files (batch optimization)
+    if (this.queueShuffleCounter >= this.SHUFFLE_BATCH_SIZE) {
+      this.shuffleQueue();
+      this.queueShuffleCounter = 0;
+      this._log('🔀 Queue shuffled at', this.queue.length, 'items (batch size:', this.SHUFFLE_BATCH_SIZE, ')');
     }
   }
 
