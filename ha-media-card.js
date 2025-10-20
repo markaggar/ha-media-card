@@ -2176,8 +2176,8 @@ class MediaCard extends LitElement {
     const hasTitle = this.config.title && this.config.title.trim();
     
     // Debug: Log what we have access to
-    console.log('🐛 Debug render - checking subfolderQueue availability:', !!this.subfolderQueue);
-    console.log('🐛 Debug render - this keys:', Object.keys(this));
+    this._log('🐛 Debug render - checking subfolderQueue availability:', !!this.subfolderQueue);
+    this._log('🐛 Debug render - this keys:', Object.keys(this));
     
     // Access the correct queue data - it's stored as _subfolderQueue
     let queueSize = 0;
@@ -2190,11 +2190,11 @@ class MediaCard extends LitElement {
       const tempCount = this._subfolderQueue.tempDiscoveredFolders?.length || 0;
       foldersFound = discoveredCount + tempCount;
       currentQueue = this._subfolderQueue.queue || [];
-      console.log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'temp folders:', tempCount, 'total:', foldersFound);
-      console.log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => f.title));
-      console.log('🐛 Debug render - temp folders:', this._subfolderQueue.tempDiscoveredFolders?.map(f => f.title));
+      this._log('🐛 Debug render - _subfolderQueue found, queue size:', queueSize, 'discovered folders:', discoveredCount, 'temp folders:', tempCount, 'total:', foldersFound);
+      this._log('🐛 Debug render - discovered folders:', this._subfolderQueue.discoveredFolders?.map(f => f.title));
+      this._log('🐛 Debug render - temp folders:', this._subfolderQueue.tempDiscoveredFolders?.map(f => f.title));
     } else {
-      console.log('🐛 Debug render - NO _subfolderQueue found');
+      this._log('🐛 Debug render - NO _subfolderQueue found');
     }
     
     return html`
