@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b721 - Reduced concurrent scans: streaming limit 3→2, added discovery concurrency limit of 2
+ * Version: 2.3b731 - Fixed slideshow stalling: continue auto-refresh during background scan when queue has items
  */
 
 // Import Lit from CDN for standalone usage
@@ -35,6 +35,9 @@ class MediaCard extends LitElement {
     this._recentlyShown = null; // Smart cycling tracking for small collections
     this._pausedForNavigation = false;
     this._isPaused = false;
+    this._pausedByVideo = false; // Track if pause was caused by video pause
+    this._loggedPausedState = false; // Prevent log spam when paused
+    this._loggedPauseIndicator = false; // Prevent log spam for pause indicator
     this._currentMetadata = null; // Current media metadata (folder, filename, date)
     this._urlCreatedTime = 0; // Track when current URL was created
     this._debugMode = true; // Enable debug logging for thumbnail development
@@ -347,7 +350,11 @@ class MediaCard extends LitElement {
         if (randomResult && randomResult.file) {
           this._log('🚀 Queue monitor triggering immediate display');
           await this._loadMediaFromItem(randomResult.file);
-          this._lastRefreshTime = Date.now();
+          
+          // Set _lastRefreshTime to allow immediate next refresh (subtract interval so next auto-refresh can happen right away)
+          const configuredInterval = (this.config?.auto_refresh_seconds || 30) * 1000;
+          this._lastRefreshTime = Date.now() - configuredInterval;
+          this._log('🕒 Set _lastRefreshTime to allow immediate next refresh in', configuredInterval, 'ms');
           
           // Set minimal _folderContents to enable navigation controls
           this._folderContents = [randomResult.file, {}];
@@ -881,8 +888,15 @@ class MediaCard extends LitElement {
 
     // Don't set up auto-refresh if paused or not visible
     if (this._isPaused) {
-      this._log('🔄 Auto-refresh setup skipped - currently paused');
+      // Only log once when transitioning to paused state
+      if (!this._loggedPausedState) {
+        this._log('🔄 Auto-refresh setup skipped - currently paused');
+        this._loggedPausedState = true;
+      }
       return;
+    } else {
+      // Reset flag when not paused
+      this._loggedPausedState = false;
     }
     
     if (this._backgroundPaused) {
@@ -901,10 +915,15 @@ class MediaCard extends LitElement {
       this._refreshInterval = setInterval(() => {
         // Check both pause states before running
         if (!this._isPaused && !this._backgroundPaused) {
-          // Skip auto-refresh if folder discovery is actively in progress
+          // Skip auto-refresh if folder discovery is actively in progress AND queue is empty
           if (this._subfolderQueue && this._subfolderQueue.isDiscoveryInProgress && this._subfolderQueue.isDiscoveryInProgress()) {
-            this._log('🔄 Auto-refresh skipped - folder discovery in progress');
-            return;
+            // Only block if queue is empty - if we have items, continue slideshow while scanning in background
+            if (this._subfolderQueue.queue.length === 0) {
+              this._log('🔄 Auto-refresh skipped - folder discovery in progress (queue empty)');
+              return;
+            } else {
+              this._log('🔄 Auto-refresh proceeding - discovery in progress but queue has', this._subfolderQueue.queue.length, 'items');
+            }
           }
           
           // Reduce logging noise - only log if debug mode or occasional
@@ -1089,6 +1108,8 @@ class MediaCard extends LitElement {
         const randomResult = this._getRandomFileWithIndex(true);
         if (randomResult && randomResult.file) {
           await this._loadMediaFromItem(randomResult.file);
+          // Don't reset _lastRefreshTime to current time as this would delay the next auto-refresh
+          // The next refresh should happen after the normal interval from now
           this._lastRefreshTime = Date.now();
           return;
         } else {
@@ -1868,7 +1889,7 @@ class MediaCard extends LitElement {
       return;
     }
 
-    // Check if current media is a video and if it's still playing
+    // Check if current media is a video and if we should wait for completion
     if (this._mediaType === 'video' && await this._shouldWaitForVideoCompletion()) {
       this._log('🔄 Auto-refresh skipped - waiting for video to complete');
       return;
@@ -2335,7 +2356,12 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       return html``;
     }
 
-    this._log('🔴 Rendering pause indicator - isPaused:', this._isPaused, 'mode:', this.config.folder_mode);
+    // Only log once when rendering pause indicator to avoid spam
+    if (!this._loggedPauseIndicator) {
+      this._log('🔴 Rendering pause indicator - isPaused:', this._isPaused, 'mode:', this.config.folder_mode);
+      this._loggedPauseIndicator = true;
+    }
+    
     return html`
       <div class="pause-indicator">⏸️</div>
     `;
@@ -2527,6 +2553,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           @canplay=${this._onVideoCanPlay}
           @loadedmetadata=${this._onVideoLoadedMetadata}
           @play=${this._onVideoPlay}
+          @pause=${this._onVideoPause}
           @ended=${this._onVideoEnded}
           style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
         >
@@ -2821,6 +2848,24 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     this._log('Video started playing:', this._mediaUrl);
     // Reset video wait timer when video starts playing
     this._videoWaitStartTime = null;
+    
+    // If slideshow was paused due to video pause, resume it when video plays
+    if (this._isPaused && this._pausedByVideo) {
+      this._log('🎬 Video resumed - resuming slideshow');
+      this._setPauseState(false);
+      this._pausedByVideo = false;
+    }
+  }
+
+  _onVideoPause() {
+    this._log('Video paused by user');
+    // Only pause slideshow if video was manually paused (not ended)
+    const videoElement = this.renderRoot?.querySelector('video');
+    if (videoElement && !videoElement.ended && !this._isPaused) {
+      this._log('🎬 Video manually paused - pausing slideshow');
+      this._pausedByVideo = true;
+      this._setPauseState(true);
+    }
   }
 
   _onVideoEnded() {
@@ -2866,8 +2911,12 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       const img = container?.querySelector('img');
       if (img) this._resetZoom(img);
     }
-    // Clear any previous error states
+    // Clear any previous error states and auto-advance timeout
     this._errorState = null;
+    if (this._errorAutoAdvanceTimeout) {
+      clearTimeout(this._errorAutoAdvanceTimeout);
+      this._errorAutoAdvanceTimeout = null;
+    }
     this.requestUpdate();
   }
 
@@ -3027,13 +3076,49 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     // Force re-render to show error state
     this.requestUpdate();
+    
+    // In folder mode with auto-refresh enabled, automatically advance to next image after a brief delay
+    if (this.config?.is_folder && this.config?.auto_refresh_seconds > 0 && !this._isPaused) {
+      const autoAdvanceDelay = Math.min(5000, (this.config.auto_refresh_seconds * 1000) / 2); // Max 5 seconds or half the refresh interval
+      
+      this._log(`⏭️ Auto-advancing to next image in ${autoAdvanceDelay}ms due to media error`);
+      
+      // Clear any existing auto-advance timeout
+      if (this._errorAutoAdvanceTimeout) {
+        clearTimeout(this._errorAutoAdvanceTimeout);
+      }
+      
+      this._errorAutoAdvanceTimeout = setTimeout(async () => {
+        if (this._errorState && !this._isPaused) {
+          this._log('⏭️ Auto-advancing to next image after error');
+          // Clear error state
+          this._errorState = null;
+          
+          // Force next image without interfering with normal refresh timing
+          try {
+            // Save current refresh time to restore it after advancing
+            const savedRefreshTime = this._lastRefreshTime;
+            await this._handleFolderModeRefresh(true);
+            // Restore the refresh time so normal auto-refresh timing isn't affected
+            this._lastRefreshTime = savedRefreshTime;
+            this._log('🕒 Restored refresh timing after error auto-advance');
+          } catch (error) {
+            this._log('❌ Auto-advance after error failed:', error);
+          }
+        }
+      }, autoAdvanceDelay);
+    }
   }
 
   async _handleRetryClick(forceRefresh = false) {
     this._log('🔄 Manual retry requested, force refresh:', forceRefresh);
     
-    // Clear error state
+    // Clear error state and any auto-advance timeout
     this._errorState = null;
+    if (this._errorAutoAdvanceTimeout) {
+      clearTimeout(this._errorAutoAdvanceTimeout);
+      this._errorAutoAdvanceTimeout = null;
+    }
     
     // Reset retry attempts for this URL since user manually requested retry
     const currentUrl = this._mediaUrl || 'unknown';
@@ -3098,6 +3183,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
+    }
+    // Clean up error auto-advance timeout
+    if (this._errorAutoAdvanceTimeout) {
+      clearTimeout(this._errorAutoAdvanceTimeout);
+      this._errorAutoAdvanceTimeout = null;
     }
   }
 
@@ -3459,6 +3549,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
   _setPauseState(isPaused) {
     this._isPaused = isPaused;
+    
+    // Reset log flags when pause state changes to allow new logs
+    this._loggedPausedState = false;
+    this._loggedPauseIndicator = false;
+    
     // Update DOM attribute for CSS styling
     if (isPaused) {
       this.setAttribute('data-is-paused', '');
@@ -5106,23 +5201,49 @@ class SubfolderQueue {
     return selectedCount;
   }
 
-  // Calculate per-file probability for hierarchical scanning (Option A approach)
+  // Calculate per-file probability for hierarchical scanning with dynamic queue-based adjustment
   calculatePerFileProbability() {
     const totalPhotos = this.config.estimated_total_photos;
     const targetQueueSize = this.config.queue_size || 1000;
+    const currentQueueSize = this.queue.length;
     
     if (!totalPhotos || totalPhotos <= 0) {
       this._log('⚠️ No estimated_total_photos configured for per-file probability');
       return 0.01; // Fallback: 1% chance per file
     }
     
-    // Correct formula: targetQueueSize / totalPhotos
-    const probability = targetQueueSize / totalPhotos;
+    // Base probability: targetQueueSize / totalPhotos
+    const baseProbability = targetQueueSize / totalPhotos;
     
-    this._log('🎲 Per-file probability calculated:', (probability * 100).toFixed(4) + '%', 
-              '(target:', targetQueueSize, '/ total:', totalPhotos, ')');
+    // Dynamic adjustment based on current queue size - only boost, never reduce
+    let adjustmentMultiplier = 1.0;
+    let reason = 'normal';
     
-    return probability;
+    if (currentQueueSize < 10) {
+      // Queue critically low - boost significantly to fill quickly
+      adjustmentMultiplier = 10.0; // 4% → 40%
+      reason = 'queue critically low (<10)';
+    } else if (currentQueueSize < 30) {
+      // Queue low - moderate boost
+      adjustmentMultiplier = 3.0; // 4% → 12%  
+      reason = 'queue low (<30)';
+    } else if (currentQueueSize < 50) {
+      // Queue adequate - slight boost
+      adjustmentMultiplier = 1.5; // 4% → 6%
+      reason = 'queue adequate (<50)';
+    }
+    // else: normal probability (multiplier = 1.0) - never reduce below base probability
+    
+    const adjustedProbability = Math.min(baseProbability * adjustmentMultiplier, 1.0); // Cap at 100%
+    
+    this._log('🎲 Dynamic per-file probability:', 
+              'base:', (baseProbability * 100).toFixed(4) + '%',
+              'adjusted:', (adjustedProbability * 100).toFixed(4) + '%',
+              'multiplier:', adjustmentMultiplier + 'x',
+              'reason:', reason,
+              'queue size:', currentQueueSize);
+    
+    return adjustedProbability;
   }
 
   // BATCH SCHEDULER - ensures batches from different folders are interleaved
