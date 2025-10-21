@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.49 - Fixed queue reconnection: added queue check to connectedCallback
+ * Version: 2.4.52 - CACHE BUST: Ensure no DOM spam + proper pause (no 'already paused' msg)
  */
 
 // Import Lit from CDN for standalone usage
@@ -4144,20 +4144,24 @@ class SubfolderQueue {
     
     // ULTRA-SIMPLE SOLUTION: Only check DOM presence, skip all complex visibility
     const cardInDOM = document.contains(this.card);
-    this._log('🔍 DOM Check: Card in DOM =', cardInDOM, 'Auto-paused =', !!this._autoPaused);
+    
+    // Only log DOM status occasionally to avoid spam
+    if (!this._lastDomCheckLog || (Date.now() - this._lastDomCheckLog) > 5000) {
+      this._log('🔍 DOM Check: Card in DOM =', cardInDOM, 'Auto-paused =', !!this._autoPaused);
+      this._lastDomCheckLog = Date.now();
+    }
     
     if (!cardInDOM) {
       if (!this._autoPaused) {
         this._log('⏸️ Card not in DOM - auto-pausing all scanning');
         this._autoPaused = true;
+        this.isScanning = false; // Stop the scanning flag
         
         // Store queue globally for reconnection
         if (!window.mediaCardSubfolderQueue) {
           window.mediaCardSubfolderQueue = this;
           this._log('💾 Stored queue globally for reconnection');
         }
-      } else {
-        this._log('⏸️ Already paused - staying paused (card not in DOM)');
       }
       
       // Just return - don't continue if card not in DOM
@@ -4168,12 +4172,10 @@ class SubfolderQueue {
     if (this._autoPaused) {
       this._log('▶️ Card back in DOM - resuming scanning');  
       this._autoPaused = false;
+      // Note: Don't restart isScanning here - let the initialization process handle it
     }
     
-    // REMOVE ALL COMPLEX VISIBILITY SYSTEM CHECKS
-    // No more _backgroundPaused, _isVisible, _isPageVisible checks
-    // Just continue with scanning
-    this._log('✅ Card in DOM - continuing with scanning');
+    // Continue with scanning if we get here
     return;
   }
 
@@ -4183,39 +4185,7 @@ class SubfolderQueue {
       return;
     }
     
-    const message = args.join(' ');
-    
-    // TEMPORARY: Only show visibility-related messages to reduce noise
-    const visibilityKeywords = [
-      '🔧 Setting up visibility',
-      '✅ IntersectionObserver',
-      '✅ Page visibility handler',
-      '👁️ Card visibility changed',
-      '📄 Page visibility changed',
-      '⏸️ Pausing background activity',
-      '🔄 Resuming background activity',
-      '⏸️ Background paused detected',
-      '⏳ Still waiting for background resume',
-      '▶️ Background resumed',
-      '🔍 _waitIfBackgroundPaused',
-      '⚠️ Visibility system not ready',
-      '✅ Visibility system now ready',
-      '⚠️ IntersectionObserver not set up',
-      '⚠️ Page visibility handler not set up',
-      '🐛 DEBUG',
-      '✅ Home Assistant navigation handlers set up',
-      '🚪 Home Assistant navigation detected',
-      '✅ Beforeunload handler set up',
-      '🛑 SubfolderQueue: Stopping', // Add cleanup messages
-      '🧹 Stopping SubfolderQueue'   // Add cleanup messages
-    ];
-    
-    const isVisibilityMessage = visibilityKeywords.some(keyword => message.includes(keyword));
-    
-    if (!isVisibilityMessage) {
-      return; // Skip non-visibility messages temporarily
-    }
-    
+    // REMOVED: No more message filtering - show all SubfolderQueue debug messages
     console.log('📂 SubfolderQueue:', ...args);
   }
 
@@ -4489,6 +4459,13 @@ class SubfolderQueue {
   async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = null) {
     // Pause scanning if the card has background activity paused (e.g., not visible)
     await this._waitIfBackgroundPaused();
+    
+    // Check if scanning has been stopped/paused
+    if (!this.isScanning) {
+      this._log('🛑 Scanning stopped/paused - exiting hierarchical scan');
+      return { filesProcessed: 0, foldersProcessed: 0 };
+    }
+    
     // Use configured scan depth if maxDepth not explicitly provided
     const effectiveMaxDepth = maxDepth !== null ? maxDepth : (this.config.scan_depth || 2);
     
@@ -4511,6 +4488,12 @@ class SubfolderQueue {
       
       // Pause before making API call if background is paused
       await this._waitIfBackgroundPaused();
+      
+      // Check if scanning has been stopped/paused
+      if (!this.isScanning) {
+        this._log('🛑 Scanning stopped/paused - exiting before API call');
+        return { filesProcessed: 0, foldersProcessed: 0 };
+      }
       
       const folderContents = await Promise.race([
         this.card.hass.callWS({
