@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.54 - Cached total count system: consistent probability calculations in equal probability mode
+ * Version: 2.4.55 - Cached total count system: consistent probability calculations in equal probability mode
  */
 
 // Import Lit from CDN for standalone usage
