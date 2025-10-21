@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.52 - CACHE BUST: Ensure no DOM spam + proper pause (no 'already paused' msg)
+ * Version: 2.4.54 - Cached total count system: consistent probability calculations in equal probability mode
  */
 
 // Import Lit from CDN for standalone usage
@@ -4140,6 +4140,12 @@ class SubfolderQueue {
     this.history = []; // Array of shown items in chronological order
     this.historyIndex = -1; // Current position in history (-1 = latest)
     
+    // Cache for probability calculations - prevents recalculation on every refill
+    this.cachedTotalCount = null;
+    this.cachedCountSource = null; // 'user_estimate' | 'adaptive' | 'discovery_complete'
+    this.lastDiscoveredCount = 0;
+    this.totalCountLocked = false; // Prevent recalculation once stable
+    
     this._log('🚀 SubfolderQueue initialized with config:', this.config);
     this._log('📋 Priority patterns configured:', this.config.priority_folder_patterns);
   }
@@ -4323,6 +4329,52 @@ class SubfolderQueue {
     return finalWeight;
   }
 
+  // Get cached total media count to ensure consistent probability calculations
+  getTotalMediaCount(currentDiscoveredCount) {
+    // 1. If user provided estimate, always use it (highest priority)
+    if (this.config.estimated_total_photos) {
+      if (this.cachedTotalCount !== this.config.estimated_total_photos) {
+        this.cachedTotalCount = this.config.estimated_total_photos;
+        this.cachedCountSource = 'user_estimate';
+        this._log('📊 Using user estimate for total count:', this.cachedTotalCount);
+      }
+      return this.cachedTotalCount;
+    }
+    
+    // 2. If we've locked the count (discovery complete), use cached value
+    if (this.totalCountLocked && this.cachedTotalCount) {
+      return this.cachedTotalCount;
+    }
+    
+    // 3. If significant change in discovered count, recalculate
+    const changeThreshold = 0.2; // 20% change
+    const countGrowth = this.lastDiscoveredCount > 0 
+      ? (currentDiscoveredCount - this.lastDiscoveredCount) / this.lastDiscoveredCount 
+      : 1.0;
+    
+    if (!this.cachedTotalCount || countGrowth > changeThreshold) {
+      // Use conservative adaptive estimate
+      const conservativeMultiplier = this.discoveryInProgress ? 3.0 : 1.2;
+      this.cachedTotalCount = Math.max(currentDiscoveredCount, Math.round(currentDiscoveredCount * conservativeMultiplier));
+      this.lastDiscoveredCount = currentDiscoveredCount;
+      this.cachedCountSource = 'adaptive';
+      
+      this._log('📊 Updated adaptive total count estimate:', this.cachedTotalCount, 
+                'discovered:', currentDiscoveredCount, 'growth:', (countGrowth * 100).toFixed(1) + '%');
+    }
+    
+    return this.cachedTotalCount;
+  }
+
+  // Lock the total count when discovery is complete
+  lockTotalCount() {
+    if (!this.config.estimated_total_photos && this.cachedTotalCount) {
+      this.totalCountLocked = true;
+      this.cachedCountSource = 'discovery_complete';
+      this._log('🔒 Total count locked at discovery completion:', this.cachedTotalCount);
+    }
+  }
+
   // Start the queue system
   async initialize() {
     if (!this.config.enabled || this.card.config.folder_mode !== 'random') {
@@ -4349,6 +4401,8 @@ class SubfolderQueue {
     } finally {
       // Always clear discovery flag when initialization completes or fails
       this.discoveryInProgress = false;
+      // Lock total count for consistent probability calculations
+      this.lockTotalCount();
     }
   }
 
@@ -5915,14 +5969,11 @@ class SubfolderQueue {
     // Calculate total number of media items
     const discoveredMediaItems = folders.reduce((sum, folder) => sum + folder.fileCount, 0);
     
-    // Use user estimate if provided, otherwise use discovered count
-    const totalMediaItems = this.config.estimated_total_photos || discoveredMediaItems;
+    // Use cached total count instead of recalculating every time
+    const totalMediaItems = this.getTotalMediaCount(discoveredMediaItems);
     
-    if (this.config.estimated_total_photos) {
-      this._log('📊 Using user estimate of', totalMediaItems, 'total photos (discovered:', discoveredMediaItems + ')');
-    } else {
-      this._log('📊 Using discovered count of', totalMediaItems, 'photos (adaptive - will adjust as more folders found)');
-    }
+    this._log('📊 Probability calculation - discovered:', discoveredMediaItems, 
+              'total (cached):', totalMediaItems, 'source:', this.cachedCountSource);
     
     if (totalMediaItems === 0) {
       this._log('❌ No media items found in folders');
@@ -6202,6 +6253,8 @@ class SubfolderQueue {
       } finally {
         // Clear discovery flag when background deepening completes
         this.discoveryInProgress = false;
+        // Lock total count for consistent probability calculations
+        this.lockTotalCount();
         this._log('🏁 Background discovery complete - auto-refresh resumed');
       }
     }, 3000); // Start background scan after 3 seconds
@@ -7012,8 +7065,8 @@ class MediaCardEditor extends LitElement {
                       placeholder="e.g., 5000"
                     />
                     <div class="help-text">
-                      If you know roughly how many photos you have total, this improves probability calculations.<br>
-                      <strong>Leave empty</strong> for adaptive mode (adjusts as folders are discovered).
+                      If you know roughly how many photos you have total, this ensures consistent probability calculations.<br>
+                      <strong>Leave empty</strong> for adaptive mode (estimates total and caches for stability).
                     </div>
                   </div>
                 </div>
