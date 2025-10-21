@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.58 - Fixed SubfolderQueue _isMediaFile scope: Fixed "this._isMediaFile is not a function" error
+ * Version: 3.0.0 - Major release: Fixed pause button positioning, random mode availability in empty folders with subfolders, and pause state persistence
  */
 
 // Import Lit from CDN for standalone usage
@@ -547,7 +547,7 @@ class MediaCard extends LitElement {
     /* Pause indicator */
     .pause-indicator {
       position: absolute;
-      top: 8px;
+      top: 76px;  /* Match pause button position to avoid metadata overlap */
       right: 8px;
       width: 60px;
       height: 60px;
@@ -654,19 +654,14 @@ class MediaCard extends LitElement {
       border-radius: 8px;
     }
 
-    /* Pause button - top right corner */
+    /* Pause button - positioned lower to avoid metadata overlap */
     .nav-zone-center {
-      top: 8px;
+      top: 76px;  /* Consistent lower position regardless of metadata */
       right: 8px;
       width: 60px;
       height: 60px;
       cursor: pointer;
       border-radius: 8px;
-    }
-
-    /* Move pause button down when metadata is in top-right to avoid overlap */
-    :host([data-metadata-position="top-right"]) .nav-zone-center {
-      top: 76px; /* Move below metadata overlay */
     }
 
     /* Main action area - center region, excluding button areas */
@@ -819,7 +814,16 @@ class MediaCard extends LitElement {
     const wasFolder = !!(oldConfig?.is_folder && oldConfig?.folder_mode);
     const isFolder = !!(config.is_folder && config.folder_mode);
     
+    // Preserve pause state when switching between modes on the same folder path
+    const preservePauseState = oldConfig?.media_path === config.media_path && 
+                               wasFolder && isFolder && 
+                               oldConfig?.folder_mode !== config.folder_mode;
+    const savedPauseState = preservePauseState ? this._isPaused : false;
+    
     this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
+    if (preservePauseState) {
+      this._log('🔧 Preserving pause state:', savedPauseState, 'for same path folder mode switch');
+    }
     
     // Create new config object with metadata defaults
     this.config = {
@@ -900,6 +904,14 @@ class MediaCard extends LitElement {
       // For single file mode, ensure media loads even if auto-refresh is disabled
       this._log('🔧 Config set with single file mode - loading media');
       setTimeout(() => this._loadSingleFile(), 50);
+    }
+    
+    // Restore pause state if we preserved it (after folder mode initialization)
+    if (preservePauseState && savedPauseState) {
+      setTimeout(() => {
+        this._setPauseState(true);
+        this._log('🔧 Restored pause state after folder mode switch');
+      }, 100);
     }
   }
 
@@ -4137,8 +4149,10 @@ class SubfolderQueue {
     this.queueHistory = [];
     
     // NEW: Hierarchical scan queue management - Phase 1.2
-    this.queueShuffleCounter = 0; // Tracks files added since last shuffle for batch optimization
-    this.SHUFFLE_BATCH_SIZE = 10; // Shuffle queue every N file additions (batch optimization)
+    this.queueShuffleCounter = 0; // Tracks files added since last shuffle for percentage-based optimization
+    this.SHUFFLE_MIN_BATCH = 10; // Minimum batch size for small queues
+    this.SHUFFLE_MAX_BATCH = 1000; // Maximum batch size for very large queues
+    this.SHUFFLE_PERCENTAGE = 0.10; // Shuffle when new items >= 10% of current queue size
     
     // Removed batch scheduler - unnecessary complexity, direct queue addition works better
     
@@ -4447,6 +4461,13 @@ class SubfolderQueue {
                    'files added:', scanResult.filesAdded, 
                    'folders processed:', scanResult.foldersProcessed,
                    'queue size:', this.queue.length);
+          
+          // Final shuffle to ensure good randomization of all items
+          if (this.queue.length > 0) {
+            this.shuffleQueue();
+            this.queueShuffleCounter = 0;
+            this._log('🔀 Final shuffle completed after hierarchical scan - queue size:', this.queue.length);
+          }
           
           // Early population complete since we populated immediately during scan
           if (this.resolveEarlyPopulation) {
@@ -4765,11 +4786,17 @@ class SubfolderQueue {
     // Increment shuffle counter
     this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
 
-    // Shuffle every SHUFFLE_BATCH_SIZE files (batch optimization)
-    if (this.queueShuffleCounter >= this.SHUFFLE_BATCH_SIZE) {
+    // Calculate dynamic shuffle threshold based on current queue size (10% with min/max limits)
+    const shuffleThreshold = Math.min(
+      this.SHUFFLE_MAX_BATCH, 
+      Math.max(this.SHUFFLE_MIN_BATCH, Math.floor(this.queue.length * this.SHUFFLE_PERCENTAGE))
+    );
+
+    // Shuffle when counter reaches the dynamic threshold
+    if (this.queueShuffleCounter >= shuffleThreshold) {
       this.shuffleQueue();
       this.queueShuffleCounter = 0;
-      this._log('🔀 Queue shuffled at', this.queue.length, 'items (batch size:', this.SHUFFLE_BATCH_SIZE, ')');
+      this._log('🔀 Queue shuffled at', this.queue.length, 'items (threshold:', shuffleThreshold, '- 10% of', this.queue.length, ')');
     }
 
     // Log file addition for first few files (debug purposes)
@@ -5459,6 +5486,14 @@ class SubfolderQueue {
             // Check if all scans complete
             if (activescans.size === 0 && scanQueue.length === 0) {
               this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+              
+              // Final shuffle to ensure good randomization of all items
+              if (this.queue.length > 0) {
+                this.shuffleQueue();
+                this.queueShuffleCounter = 0;
+                this._log('🔀 Final shuffle completed after streaming scan - queue size:', this.queue.length);
+              }
+              
               resolve(completedScans);
             }
           });
@@ -5467,6 +5502,14 @@ class SubfolderQueue {
         // If no folders to scan and no active scans, we're done
         if (scanQueue.length === 0 && activescans.size === 0) {
           this._log('🎉 All streaming scans completed! Total folders scanned:', completedScans.length);
+          
+          // Final shuffle to ensure good randomization of all items
+          if (this.queue.length > 0) {
+            this.shuffleQueue();
+            this.queueShuffleCounter = 0;
+            this._log('🔀 Final shuffle completed after streaming scan - queue size:', this.queue.length);
+          }
+          
           resolve(completedScans);
         }
       };
@@ -7457,11 +7500,15 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       return isMedia;
     });
     
-    this._log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
-    this._log('Should show folder options:', (currentPath && currentPath !== '') && hasMediaFiles);
+    // Also check if there are subfolders (for random mode with subfolder queue)
+    const hasSubfolders = itemsToCheck.some(item => item.can_expand);
     
-    // If we're in a folder (not root) with media files, add special folder options at the top
-    if ((currentPath && currentPath !== '') && hasMediaFiles) {
+    this._log('Has media files (checked first', itemsToCheck.length, 'items):', hasMediaFiles);
+    this._log('Has subfolders:', hasSubfolders);
+    this._log('Should show folder options:', (currentPath && currentPath !== '') && (hasMediaFiles || hasSubfolders));
+    
+    // If we're in a folder (not root) with media files OR subfolders, add special folder options at the top
+    if ((currentPath && currentPath !== '') && (hasMediaFiles || hasSubfolders)) {
       this._log('Adding folder options for path:', currentPath);
       this._addFolderOptions(container, dialog, currentPath);
     } else {
