@@ -1,52 +1,59 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card 🎬
+# HA Media Card v2.4+ 🎬
 
-A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **advanced folder management**, and **intelligent content prioritization**. Features include **folder-based media display**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
-## 🚀 What's New in v2.0
+## 🚀 What's New in v2.4+
 
-### 🎯 **Smart Slideshow System**
+### 📂 **Hierarchical Folder Scanning System (v2.3+)**
+*Revolutionary approach to handling large media collections*
+
+- **Smart Queue Management**: Intelligently discovers and processes thousands of folders
+- **Progressive Content Discovery**: Shows content immediately while continuing background scanning
+- **Balanced Folder Weighting**: Ensures fair representation from all folders regardless of size
+- **Priority Folder Patterns**: Configure specific folders (like "Camera Roll") to receive higher priority
+- **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery
+- **Auto-Pause/Resume**: Scanning pauses when navigating away and resumes seamlessly when returning
+
+### 🖼️ **Rich Metadata Display System (v2.2+)**
+*Professional information overlay for media content*
+
+- **📁 Folder Information**: Shows source folder path with clean presentation
+- **📄 Filename Display**: Clean filename with auth signature removal
+- **📅 Smart Date Extraction**: Automatic date parsing from filenames (YYYY-MM-DD, YYYYMMDD, MM-DD-YYYY formats)
+- **Flexible Positioning**: 4 corner placement options (bottom-left, bottom-right, top-left, top-right)
+- **Individual Component Toggles**: Enable/disable folder, filename, or date display independently
+- **Smart Layout**: Pause button automatically moves when metadata is in top-right corner
+
+### ⏸️ **Video-Aware Slideshow Pausing**
+*Smart pause detection for video content*
+
+- **Smart Pause Detection**: Slideshow automatically pauses when a video is manually paused
+- **Seamless Integration**: Works with existing video controls and navigation
+- **User-Friendly**: Prevents videos from being skipped while paused
+
+### 🎯 **Smart Slideshow System (v2.0)**
 - **Three slideshow behaviors**: `static`, `cycle`, and `smart_slideshow` modes
 - **New Content Prioritization**: Automatically interrupts slideshow to show new arrivals
 - **Intelligent Timing**: Context-aware advancement that respects content type
 - **Performance Protection**: Configurable slideshow window (default: 1000 files)
 
-### 🎬 **Video Completion Intelligence** 
+### 🎬 **Video Completion Intelligence (v2.0)** 
 - **Auto-advance after completion**: Videos advance immediately when finished
 - **Smart wait detection**: Automatic handling of video duration vs refresh intervals
-- **Background playback optimization**: Pauses processing when tab is inactive
+- **Background playbook optimization**: Pauses processing when tab is inactive
 
-### 🔍 **Image Zoom**
-- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
-- **Second Click/Tap**: Resets zoom back to normal
-- **Image-only**: Videos are unaffected
-- **Simple & Safe**: No pan/drag, minimal CSS transforms
-
-### 🎮 **Precision Navigation Controls**
-- **Focused click areas**: Small rectangular zones around actual buttons
-- **Top-right pause control**: Dedicated corner area for pause/resume
-- **Video-aware zones**: Navigation areas avoid video controls automatically
-- **Center action preservation**: Main area reserved for tap/hold actions
-
-### ⚡ **Performance Optimizations**
+### ⚡ **Enterprise Performance**
 - **Background activity management**: Pauses updates when not visible
-- **Large folder optimization**: Handles 1000+ file folders efficiently
+- **Large folder optimization**: Handles 1000+ file folders efficiently with cached total count system
 - **Smart caching**: Reduced API calls with intelligent content detection
 - **Enhanced Synology support**: Improved video detection and authentication
 
-## 🐛 **Bug Fixes**
-
-- Fixed media browser dialog not removing keydown event listeners
-- Fixed thumbnail timeout accumulation causing memory bloat
-- Fixed file extension detection for Synology shared space items
-- Fixed debug logging spam with large media collections
-- Enhanced error handling for thumbnail loading failures
-
-## ✨ Pre 2.0 Features
+## ✨ Features
 
 ### 🎬 **Media Display**
 - **Images**: JPG, PNG, GIF, WebP, SVG, BMP
@@ -75,10 +82,28 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 ### 📁 **Built-in Media Browser**
 - **GUI file selection** - No more typing file paths!
 - **Folder Mode Selection** - Choose between single file, latest, or random display
-- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling (v2.0)
+- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling
+- **Enhanced Video Icons** - Styled video thumbnails with "VIDEO" labels
 - **Multi-source Support** - Works with Synology DSM, local files, and other media sources
 - Browse through your Home Assistant media folders
 - Navigate subfolders with intuitive back/forward navigation
+
+### 🔍 **Image Zoom (v2.0)**
+- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
+- **Second Click/Tap**: Resets zoom back to normal
+- **Image-only**: Videos are unaffected
+- **Simple & Safe**: No pan/drag, minimal CSS transforms
+
+Enable in card options (GUI editor), or via YAML:
+
+```yaml
+type: custom:media-card
+title: "Photo Viewer"
+media_type: image
+media_path: media-source://media_source/local/photos/
+enable_image_zoom: true
+zoom_level: 2.0  # optional (default 2.0, supports 1.5–5.0)
+```
 
 ### 🔄 **Auto-Refresh System**
 - **Automatic updates** - Monitor files for changes every N seconds
@@ -130,6 +155,12 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 YAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
 
+```yaml
+type: custom:media-card
+title: "Security Camera"
+media_type: image
+media_path: media-source://media_source/local/cameras/front_door.jpg
+```
 ## ⚙️ Configuration Options
 
 ### Basic Configuration
@@ -151,6 +182,24 @@ YAML Configuration (but use the UI, it's way simpler, and then you can show code
 | `random_count` | number | `1` | Number of random files to cycle through |
 | `slideshow_behavior` | string | `static` | `static`, `cycle`, or `smart_slideshow` - Controls slideshow advancement behavior |
 | `slideshow_window` | number | `1000` | Number of files to include in slideshow (performance protection) |
+
+### Hierarchical Scanning Configuration (v2.3+)
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
+| `subfolder_queue.initial_scan_limit` | number | `20` | Number of folders to scan initially before progressive discovery |
+| `subfolder_queue.max_concurrent_scans` | number | `3` | Maximum folders to scan simultaneously |
+| `subfolder_queue.queue_size` | number | `30` | Size of the active media queue for slideshow rotation |
+| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations) |
+
+### Metadata Display Configuration (v2.2+)
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `show_metadata` | boolean | `false` | Enable metadata overlay display |
+| `metadata_position` | string | `bottom-left` | Metadata position: `bottom-left`, `bottom-right`, `top-left`, `top-right` |
+| `show_folder` | boolean | `true` | Show source folder path in metadata |
+| `show_filename` | boolean | `true` | Show filename in metadata |
+| `show_date` | boolean | `true` | Show extracted date from filename in metadata |
 
 ### Navigation Controls
 | Option | Type | Default | Description |
@@ -187,6 +236,27 @@ The `aspect_mode` configuration helps optimize image display for different layou
 | `smart-scale` | Limits image height to 90% viewport, prevents scrolling | Panel layouts with mixed orientations |
 | `viewport-fit` | Scales image to fit entirely within viewport | Fullscreen panel layouts |
 | `viewport-fill` | Scales image to fill entire viewport (may crop) | Background/wallpaper displays |
+
+### **Panel Layout Examples**
+
+#### Smart Scale (Recommended for Panels)
+```yaml
+type: custom:media-card
+title: "Security Camera Feed"
+media_path: media-source://media_source/local/cameras/
+folder_mode: latest
+aspect_mode: smart-scale  # Prevents scrolling on tall images
+auto_refresh_seconds: 30
+```
+
+#### Viewport Fit (Full Panel Coverage)
+```yaml
+type: custom:media-card
+media_path: media-source://media_source/local/wallpapers/
+folder_mode: random
+aspect_mode: viewport-fit  # Fits entire image in viewport
+hide_title: true
+auto_refresh_seconds: 300
 ```
 
 ## �📝 Configuration Examples
@@ -207,6 +277,22 @@ enable_navigation_zones: true
 show_file_position: true
 ```
 
+#### Random Dashcam Clips
+
+```yaml
+type: custom:media-card
+title: "Random Dashcam Footage"
+media_type: video
+media_path: media-source://media_source/local/dashcam/
+folder_mode: random
+random_count: 5
+auto_refresh_seconds: 60
+video_autoplay: true
+video_muted: true
+enable_keyboard_navigation: true
+show_navigation_indicators: true
+```
+
 #### Family Photo Gallery with Navigation
 
 ```yaml
@@ -223,7 +309,81 @@ show_navigation_indicators: true
 show_file_position: true
 ```
 
-### 🚀 **New v2.0 Features Examples**
+### � **Hierarchical Scanning Examples (v2.3+)**
+
+#### Large Photo Collection with Smart Discovery
+
+```yaml
+type: custom:media-card
+title: "Photo Collection (25,000+ photos)"
+media_type: image
+media_path: media-source://media_source/local/photos/
+folder_mode: random
+subfolder_queue:
+  enabled: true
+  initial_scan_limit: 20      # Start with 20 folders
+  max_concurrent_scans: 3     # Scan 3 folders at once
+  queue_size: 50              # Keep 50 items in rotation
+  estimated_total_photos: 25000  # Critical for consistent probabilities
+auto_refresh_seconds: 60
+```
+
+#### Camera Roll Priority Configuration
+
+```yaml
+type: custom:media-card
+title: "Recent Photos with Camera Roll Priority"
+media_type: image
+media_path: media-source://media_source/local/photos/
+folder_mode: random
+subfolder_queue:
+  enabled: true
+  initial_scan_limit: 15
+  max_concurrent_scans: 2
+  queue_size: 30
+  priority_folder_patterns:
+    - path: "Camera Roll"      # Recent photos get 3x weight
+      weight_multiplier: 3.0
+    - path: "Screenshots"      # Screenshots get 2x weight  
+      weight_multiplier: 2.0
+auto_refresh_seconds: 30
+```
+
+### 🖼️ **Metadata Display Examples (v2.2+)**
+
+#### Professional Photo Display with Full Metadata
+
+```yaml
+type: custom:media-card
+title: "Photo Gallery with Info"
+media_type: image
+media_path: media-source://media_source/local/photos/
+folder_mode: random
+show_metadata: true
+metadata_position: "bottom-left"    # Bottom-left corner
+show_folder: true                   # Show source folder
+show_filename: true                 # Show clean filename  
+show_date: true                     # Show extracted date
+auto_refresh_seconds: 120
+```
+
+#### Security Camera with Top-Right Metadata
+
+```yaml
+type: custom:media-card
+title: "Security Feed"
+media_type: image
+media_path: media-source://media_source/local/security/
+folder_mode: latest
+show_metadata: true
+metadata_position: "top-right"      # Pause button auto-moves for this
+show_folder: true
+show_filename: false                # Don't show filename for security
+show_date: true                     # Show timestamp
+auto_refresh_seconds: 10
+```
+
+### 🚀 **Smart Slideshow Examples (v2.0)**
 
 #### Smart Slideshow with New Content Priority
 
@@ -271,6 +431,69 @@ enable_navigation_zones: true
 enable_keyboard_navigation: true
 ```
 
+### 🎯 **Complete v2.4+ Configuration (All New Features)**
+
+#### Professional Photo Display with Everything Enabled
+
+```yaml
+type: custom:media-card
+title: "Complete Photo Gallery"
+media_type: all                      # Show both images and videos
+media_path: media-source://media_source/local/photos/
+folder_mode: random
+
+# 📂 Hierarchical Scanning (v2.3+) - For Large Collections
+subfolder_queue:
+  enabled: true
+  initial_scan_limit: 25             # Start with 25 folders  
+  max_concurrent_scans: 3            # Process 3 folders simultaneously
+  queue_size: 40                     # Keep 40 media items in rotation
+  estimated_total_photos: 15000      # 🎯 Critical for consistent probabilities
+  priority_folder_patterns:
+    - path: "Camera Roll"            # Recent photos get priority
+      weight_multiplier: 3.0
+    - path: "Favorites"              # Favorites get extra weight
+      weight_multiplier: 2.5
+
+# 🖼️ Rich Metadata Display (v2.2+) 
+show_metadata: true
+metadata_position: "bottom-left"     # Professional placement
+show_folder: true                    # Show source folder path
+show_filename: true                  # Show clean filename
+show_date: true                      # Show extracted date
+
+# 🎬 Smart Slideshow (v2.0+)
+slideshow_behavior: smart_slideshow  # Prioritize new content
+slideshow_window: 1500              # Handle large datasets
+auto_refresh_seconds: 90            # 90-second intervals
+
+# 🎮 Navigation & Controls
+enable_navigation_zones: true       # Left/right click navigation
+enable_keyboard_navigation: true    # Arrow key support
+show_navigation_indicators: true    # Visual navigation hints  
+show_file_position: true           # "5 of 40" position display
+
+# 🎥 Video Settings (with pause-aware slideshow)
+video_autoplay: true               # Auto-start videos
+video_muted: true                  # Start muted
+video_loop: false                  # Don't loop videos
+
+# 👆 Interactive Actions
+tap_action:
+  action: more-info               # Tap for details
+hold_action:
+  action: navigate               # Hold to navigate
+  navigation_path: "/dashboard"
+```
+
+**Why This Configuration Works:**
+- ✅ **`estimated_total_photos: 15000`** - Ensures consistent probability calculations across all folders
+- ✅ **`queue_size: 40`** - Provides smooth slideshow experience with good variety
+- ✅ **`slideshow_window: 1500`** - Balances performance with content coverage
+- ✅ **Priority patterns** - Recent photos (Camera Roll) get 3x more visibility
+- ✅ **Smart metadata** - Professional info display without UI conflicts
+- ✅ **Video-aware pausing** - Slideshow respects manual video pauses
+
 ### 📸 **Single File Examples**
 
 #### Security Camera Snapshot
@@ -282,6 +505,19 @@ media_type: image
 media_path: media-source://media_source/local/cameras/front_door.jpg
 auto_refresh_seconds: 30
 show_refresh_button: true
+```
+
+#### Dashcam Video
+
+```yaml
+type: custom:media-card
+title: "Latest Dashcam Footage"
+media_type: video
+media_path: media-source://media_source/local/dashcam/latest.mp4
+video_autoplay: true
+video_muted: true
+video_loop: true
+hide_video_controls_display: true
 ```
 
 ### 👆 **Interactive Media Card**
@@ -305,6 +541,65 @@ hold_action:
 double_tap_action:
   action: navigate
   navigation_path: /lovelace/security
+```
+
+## ⚙️ **Configuration Parameter Guide**
+
+### 📊 **Key Parameters for Large Collections**
+
+| Parameter | Small Collections (<1K files) | Medium Collections (1K-10K files) | Large Collections (10K+ files) | Purpose |
+|-----------|----------------------------|-----------------------------------|-------------------------------|---------|
+| `estimated_total_photos` | Optional | **Recommended** | **Critical** | Ensures consistent probability calculations |
+| `queue_size` | 20-30 | 30-50 | 40-60 | Active slideshow rotation pool |
+| `slideshow_window` | 500-1000 | 1000-1500 | 1500-2000+ | Performance protection limit |
+| `initial_scan_limit` | 10-15 | 15-25 | 20-30 | Folders to scan before progressive discovery |
+| `max_concurrent_scans` | 2-3 | 3-4 | 3-5 | Balance speed vs system load |
+
+### 🎯 **Why `estimated_total_photos` is Critical**
+
+```yaml
+# ❌ Without estimate - probability drift during scanning
+subfolder_queue:
+  enabled: true
+  # Missing estimated_total_photos causes inconsistent folder representation
+
+# ✅ With estimate - consistent statistical fairness  
+subfolder_queue:
+  enabled: true
+  estimated_total_photos: 25000  # Prevents early folder bias
+```
+
+**The Problem:** Without `estimated_total_photos`, early folders get over-represented because the total count grows during discovery.
+
+**The Solution:** Setting this value locks probability calculations, ensuring true statistical fairness across all folders.
+
+### 📈 **Recommended Values by Collection Size**
+
+#### Small Collection (< 1,000 photos)
+```yaml
+subfolder_queue:
+  enabled: true
+  queue_size: 25
+  estimated_total_photos: 500    # Conservative estimate
+```
+
+#### Medium Collection (1,000 - 10,000 photos)  
+```yaml
+subfolder_queue:
+  enabled: true
+  queue_size: 40
+  slideshow_window: 1200
+  estimated_total_photos: 5000   # Reasonable estimate
+```
+
+#### Large Collection (10,000+ photos)
+```yaml
+subfolder_queue:
+  enabled: true
+  queue_size: 50
+  slideshow_window: 2000
+  estimated_total_photos: 25000  # Critical for fairness
+  max_concurrent_scans: 4        # More aggressive scanning
 ```
 
 ## 📅 **Filename Conventions for "Show Latest" Mode**
@@ -585,5 +880,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Home Assistant community for inspiration and support
 - Lit Element for the excellent web component framework
 - All users who provide feedback and suggestions
+
+---
+
+**Enjoy your new Media Card!** 🎉
 
 If you find this card useful, please consider giving it a ⭐ on GitHub!
