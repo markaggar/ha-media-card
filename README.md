@@ -1,7 +1,7 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card v2.0 🎬
+# HA Media Card 🎬
 
 A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **advanced folder management**, and **intelligent content prioritization**. Features include **folder-based media display**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
@@ -20,19 +20,33 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - **Smart wait detection**: Automatic handling of video duration vs refresh intervals
 - **Background playback optimization**: Pauses processing when tab is inactive
 
+### 🔍 **Image Zoom**
+- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
+- **Second Click/Tap**: Resets zoom back to normal
+- **Image-only**: Videos are unaffected
+- **Simple & Safe**: No pan/drag, minimal CSS transforms
+
 ### 🎮 **Precision Navigation Controls**
 - **Focused click areas**: Small rectangular zones around actual buttons
 - **Top-right pause control**: Dedicated corner area for pause/resume
 - **Video-aware zones**: Navigation areas avoid video controls automatically
 - **Center action preservation**: Main area reserved for tap/hold actions
 
-### ⚡ **Enterprise Performance**
+### ⚡ **Performance Optimizations**
 - **Background activity management**: Pauses updates when not visible
 - **Large folder optimization**: Handles 1000+ file folders efficiently
 - **Smart caching**: Reduced API calls with intelligent content detection
 - **Enhanced Synology support**: Improved video detection and authentication
 
-## ✨ Features
+## 🐛 **Bug Fixes**
+
+- Fixed media browser dialog not removing keydown event listeners
+- Fixed thumbnail timeout accumulation causing memory bloat
+- Fixed file extension detection for Synology shared space items
+- Fixed debug logging spam with large media collections
+- Enhanced error handling for thumbnail loading failures
+
+## ✨ Pre 2.0 Features
 
 ### 🎬 **Media Display**
 - **Images**: JPG, PNG, GIF, WebP, SVG, BMP
@@ -61,28 +75,10 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 ### 📁 **Built-in Media Browser**
 - **GUI file selection** - No more typing file paths!
 - **Folder Mode Selection** - Choose between single file, latest, or random display
-- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling
-- **Enhanced Video Icons** - Styled video thumbnails with "VIDEO" labels
+- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling (v2.0)
 - **Multi-source Support** - Works with Synology DSM, local files, and other media sources
 - Browse through your Home Assistant media folders
 - Navigate subfolders with intuitive back/forward navigation
-
-### 🔍 **Image Zoom (v2.0)**
-- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
-- **Second Click/Tap**: Resets zoom back to normal
-- **Image-only**: Videos are unaffected
-- **Simple & Safe**: No pan/drag, minimal CSS transforms
-
-Enable in card options (GUI editor), or via YAML:
-
-```yaml
-type: custom:media-card
-title: "Photo Viewer"
-media_type: image
-media_path: media-source://media_source/local/photos/
-enable_image_zoom: true
-zoom_level: 2.0  # optional (default 2.0, supports 1.5–5.0)
-```
 
 ### 🔄 **Auto-Refresh System**
 - **Automatic updates** - Monitor files for changes every N seconds
@@ -134,12 +130,6 @@ zoom_level: 2.0  # optional (default 2.0, supports 1.5–5.0)
 
 YAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
 
-```yaml
-type: custom:media-card
-title: "Security Camera"
-media_type: image
-media_path: media-source://media_source/local/cameras/front_door.jpg
-```
 ## ⚙️ Configuration Options
 
 ### Basic Configuration
@@ -197,27 +187,6 @@ The `aspect_mode` configuration helps optimize image display for different layou
 | `smart-scale` | Limits image height to 90% viewport, prevents scrolling | Panel layouts with mixed orientations |
 | `viewport-fit` | Scales image to fit entirely within viewport | Fullscreen panel layouts |
 | `viewport-fill` | Scales image to fill entire viewport (may crop) | Background/wallpaper displays |
-
-### **Panel Layout Examples**
-
-#### Smart Scale (Recommended for Panels)
-```yaml
-type: custom:media-card
-title: "Security Camera Feed"
-media_path: media-source://media_source/local/cameras/
-folder_mode: latest
-aspect_mode: smart-scale  # Prevents scrolling on tall images
-auto_refresh_seconds: 30
-```
-
-#### Viewport Fit (Full Panel Coverage)
-```yaml
-type: custom:media-card
-media_path: media-source://media_source/local/wallpapers/
-folder_mode: random
-aspect_mode: viewport-fit  # Fits entire image in viewport
-hide_title: true
-auto_refresh_seconds: 300
 ```
 
 ## �📝 Configuration Examples
@@ -236,22 +205,6 @@ auto_refresh_seconds: 30
 show_refresh_button: true
 enable_navigation_zones: true
 show_file_position: true
-```
-
-#### Random Dashcam Clips
-
-```yaml
-type: custom:media-card
-title: "Random Dashcam Footage"
-media_type: video
-media_path: media-source://media_source/local/dashcam/
-folder_mode: random
-random_count: 5
-auto_refresh_seconds: 60
-video_autoplay: true
-video_muted: true
-enable_keyboard_navigation: true
-show_navigation_indicators: true
 ```
 
 #### Family Photo Gallery with Navigation
@@ -329,19 +282,6 @@ media_type: image
 media_path: media-source://media_source/local/cameras/front_door.jpg
 auto_refresh_seconds: 30
 show_refresh_button: true
-```
-
-#### Dashcam Video
-
-```yaml
-type: custom:media-card
-title: "Latest Dashcam Footage"
-media_type: video
-media_path: media-source://media_source/local/dashcam/latest.mp4
-video_autoplay: true
-video_muted: true
-video_loop: true
-hide_video_controls_display: true
 ```
 
 ### 👆 **Interactive Media Card**
@@ -645,9 +585,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Home Assistant community for inspiration and support
 - Lit Element for the excellent web component framework
 - All users who provide feedback and suggestions
-
----
-
-**Enjoy your new Media Card!** 🎉
 
 If you find this card useful, please consider giving it a ⭐ on GitHub!
