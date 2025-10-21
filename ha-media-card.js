@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.56 - Fixed WMV filtering: Added proper file extension checks to hierarchical scanning
+ * Version: 2.4.57 - Fixed SubfolderQueue null reference: Added null safety checks to prevent race condition errors
  */
 
 // Import Lit from CDN for standalone usage
@@ -943,11 +943,11 @@ class MediaCard extends LitElement {
           // Skip auto-refresh if folder discovery is actively in progress AND queue is empty
           if (this._subfolderQueue && this._subfolderQueue.isDiscoveryInProgress && this._subfolderQueue.isDiscoveryInProgress()) {
             // Only block if queue is empty - if we have items, continue slideshow while scanning in background
-            if (this._subfolderQueue.queue.length === 0) {
+            if (this._subfolderQueue.queue && this._subfolderQueue.queue.length === 0) {
               this._log('🔄 Auto-refresh skipped - folder discovery in progress (queue empty)');
               return;
             } else {
-              this._log('🔄 Auto-refresh proceeding - discovery in progress but queue has', this._subfolderQueue.queue.length, 'items');
+              this._log('🔄 Auto-refresh proceeding - discovery in progress but queue has', this._subfolderQueue.queue?.length || 0, 'items');
             }
           }
           
@@ -997,10 +997,11 @@ class MediaCard extends LitElement {
           if (queueInitialized) {
             this._log('✅ Subfolder queue initialization completed (early population or full scan)');
             
-            // Check if queue is populated
-            const queueSize = this._subfolderQueue.queue.length;
-            if (queueSize > 0) {
-              this._log('🎉 IMMEDIATE SUCCESS! Queue has', queueSize, 'items - displaying media');
+            // Check if queue is populated (with null safety)
+            if (this._subfolderQueue && this._subfolderQueue.queue) {
+              const queueSize = this._subfolderQueue.queue.length;
+              if (queueSize > 0) {
+                this._log('🎉 IMMEDIATE SUCCESS! Queue has', queueSize, 'items - displaying media');
               const randomResult = this._getRandomFileWithIndex();
               if (randomResult && randomResult.file) {
                 this._log('🚀 Using available queue item for display');
@@ -1019,6 +1020,11 @@ class MediaCard extends LitElement {
               this._startQueueMonitor();
               // Also fallback to normal mode in case queue never populates
               this._log('📁 Starting fallback scanning while waiting for queue');
+            }
+            } else {
+              this._log('⚠️ SubfolderQueue became null after initialization - reinitializing');
+              // Queue was nullified (likely by disconnectedCallback), try to reconnect
+              this._initializeSubfolderQueue();
             }
           } else {
             this._log('⚠️ Subfolder queue initialization failed, using normal mode');
@@ -1129,7 +1135,7 @@ class MediaCard extends LitElement {
         }
         
         // If queue is still scanning, wait rather than falling back to root folder
-        if (this._subfolderQueue.isScanning && this._subfolderQueue.queue.length === 0) {
+        if (this._subfolderQueue.isScanning && this._subfolderQueue.queue && this._subfolderQueue.queue.length === 0) {
           this._log('⏳ Queue still initializing - skipping refresh to avoid showing root folder images');
           this._lastRefreshTime = Date.now(); // Update timestamp to prevent rapid retries
           return;
@@ -3348,7 +3354,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
     
     // 🎯 IMMEDIATE DISPLAY: Check if queue has been populated and we need to display first item
-    if (this._subfolderQueue && this._subfolderQueue.queue.length > 0 && !this._mediaUrl && this.config.subfolder_queue?.enabled) {
+    if (this._subfolderQueue && this._subfolderQueue.queue && this._subfolderQueue.queue.length > 0 && !this._mediaUrl && this.config.subfolder_queue?.enabled) {
       this._log('🎉 UPDATED: Queue has', this._subfolderQueue.queue.length, 'items - checking for immediate display');
       const randomResult = this._getRandomFileWithIndex();
       if (randomResult && randomResult.file) {
