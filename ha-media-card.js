@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.57 - Fixed SubfolderQueue null reference: Added null safety checks to prevent race condition errors
+ * Version: 2.4.58 - Fixed SubfolderQueue _isMediaFile scope: Fixed "this._isMediaFile is not a function" error
  */
 
 // Import Lit from CDN for standalone usage
@@ -4583,7 +4583,7 @@ class SubfolderQueue {
       
       // Separate files and subfolders - filter for supported media files only
       const allFiles = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
-      const files = allFiles.filter(file => this._isMediaFile(file.media_content_id || file.title || ''));
+      const files = allFiles.filter(file => this.card._isMediaFile(file.media_content_id || file.title || ''));
       const subfolders = folderContents.children.filter(child => child.can_expand);
 
       this._log('📁 Processing folder:', folderName, 'files:', files.length, 'subfolders:', subfolders.length, 'depth:', currentDepth);
@@ -5185,7 +5185,7 @@ class SubfolderQueue {
             (child.media_content_type.startsWith('image/') || 
              child.media_content_type.startsWith('video/'))) {
           // Additional check: ensure file extension is supported
-          if (this._isMediaFile(child.media_content_id || child.title || '')) {
+          if (this.card._isMediaFile(child.media_content_id || child.title || '')) {
             allMediaFiles.push(child);
           }
         }
