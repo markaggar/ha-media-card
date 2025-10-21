@@ -664,6 +664,11 @@ class MediaCard extends LitElement {
       border-radius: 8px;
     }
 
+    /* Move pause button down when metadata is in top-right to avoid overlap */
+    :host([data-metadata-position="top-right"]) .nav-zone-center {
+      top: 76px; /* Move below metadata overlay */
+    }
+
     /* Main action area - center region, excluding button areas */
     .nav-zone-neutral {
       left: 100px;
@@ -872,6 +877,11 @@ class MediaCard extends LitElement {
     
     this._mediaType = config.media_type || 'all';
     this.setAttribute('data-media-type', this._mediaType);
+    
+    // Set metadata position attribute for CSS targeting
+    const metadataPosition = config.metadata?.position || 'bottom-left';
+    this.setAttribute('data-metadata-position', metadataPosition);
+    
     this._mediaLoadedLogged = false; // Reset logging flag for new config
     
     // Set up auto-refresh if config changed or if folder mode is enabled
