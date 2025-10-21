@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.3b731 - Fixed slideshow stalling: continue auto-refresh during background scan when queue has items
+ * Version: 2.4.49 - Fixed queue reconnection: added queue check to connectedCallback
  */
 
 // Import Lit from CDN for standalone usage
@@ -115,7 +115,9 @@ class MediaCard extends LitElement {
     if (this._debugMode || window.location.hostname === 'localhost') {
       const message = args.join(' ');
       
-      // Throttle frequent messages to avoid spam
+      // REMOVED: No more message filtering - show all debug messages
+      
+      // Still throttle certain frequent messages to avoid spam
       const throttlePatterns = [
         'hass setter called',
         'Component updated',
@@ -317,8 +319,16 @@ class MediaCard extends LitElement {
   // Initialize subfolder queue if needed
   _initializeSubfolderQueue() {
     if (!this._subfolderQueue && this.config.subfolder_queue?.enabled) {
-      this._log('🚀 Initializing subfolder queue system');
-      this._subfolderQueue = new SubfolderQueue(this);
+      // Check if there's a paused queue from a previous card instance
+      if (window.mediaCardSubfolderQueue) {
+        this._log('� Reconnecting to existing SubfolderQueue');
+        this._subfolderQueue = window.mediaCardSubfolderQueue;
+        this._subfolderQueue.resumeWithNewCard(this);
+        window.mediaCardSubfolderQueue = null; // Clear global reference
+      } else {
+        this._log('�🚀 Initializing new subfolder queue system');
+        this._subfolderQueue = new SubfolderQueue(this);
+      }
     }
     return this._subfolderQueue;
   }
@@ -1083,9 +1093,12 @@ class MediaCard extends LitElement {
     
     const timeSinceLastRefresh = now - this._lastRefreshTime;
     
-    this._log('Refreshing folder mode:', this.config.folder_mode, 'forceImmediate:', forceImmediate);
-    this._log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
-    this._log('Timestamps - now:', now, 'last:', this._lastRefreshTime);
+    // Only log detailed timing info in debug mode to reduce spam
+    if (this._debugMode) {
+      this._log('Refreshing folder mode:', this.config.folder_mode, 'forceImmediate:', forceImmediate);
+      this._log('Time since last refresh:', timeSinceLastRefresh, 'ms, configured interval:', configuredInterval, 'ms');
+      this._log('Timestamps - now:', now, 'last:', this._lastRefreshTime);
+    }
     
     // Check if enough time has passed since last refresh (prevent rapid-fire refreshing)
     // BUT allow immediate refresh when forced (e.g., video ended)
@@ -1101,7 +1114,9 @@ class MediaCard extends LitElement {
     try {
       // If subfolder queue is active, use it instead of scanning folder contents
       if (this._subfolderQueue && this._subfolderQueue.config.enabled && this._isRandomMode()) {
-        this._log('🔄 Using subfolder queue for refresh');
+        if (this._debugMode) {
+          this._log('🔄 Using subfolder queue for refresh');
+        }
         
         // If queue is still scanning, wait rather than falling back to root folder
         if (this._subfolderQueue.isScanning && this._subfolderQueue.queue.length === 0) {
@@ -1663,7 +1678,10 @@ class MediaCard extends LitElement {
   _getRandomFileWithIndex(avoidCurrent = false) {
     // Try to use subfolder queue if available and enabled
     if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
-      this._log('🔍 Attempting to get next queue item - queue size:', this._subfolderQueue.queue?.length || 0);
+      if (this._debugMode) {
+        this._log('🔍 Attempting to get next queue item - queue size:', this._subfolderQueue.queue?.length || 0);
+      }
+      // Get item from queue (no special marking needed)
       const queueItem = this._subfolderQueue.getNextItem();
       if (queueItem) {
         this._log('🚀 Using item from subfolder queue:', queueItem.title, 'from path:', queueItem.media_content_id);
@@ -1917,7 +1935,10 @@ class MediaCard extends LitElement {
       }
     }
     
-    this._log('Checking for media updates...', this.config.media_path);
+    // Only log detailed refresh info in debug mode to reduce spam
+    if (this._debugMode) {
+      this._log('Checking for media updates...', this.config.media_path);
+    }
     
     // Handle folder mode updates
     if (this.config.is_folder && this.config.folder_mode) {
@@ -2109,6 +2130,11 @@ class MediaCard extends LitElement {
   }
 
   _isUrlExpired() {
+    // Don't consider URL expired if we haven't set a creation time yet
+    if (!this._urlCreatedTime || this._urlCreatedTime === 0) {
+      return false;
+    }
+    
     // Consider URL expired after 45 minutes (before typical 1-hour timeout)
     const URL_EXPIRY_TIME = 45 * 60 * 1000; // 45 minutes in ms
     const urlAge = Date.now() - this._urlCreatedTime;
@@ -3028,8 +3054,17 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           if (this.config.is_folder && this.config.folder_mode) {
-            // For folder mode, refresh the current file
-            if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
+            // For subfolder queue mode, get current item from queue
+            if (this.config.subfolder_queue?.enabled && this._subfolderQueue && this._subfolderQueue.history.length > 0) {
+              const currentItem = this._subfolderQueue.history[this._subfolderQueue.historyIndex];
+              if (currentItem) {
+                this._log(`🔄 Refreshing queue file (attempt ${attempt}/${maxRetries}):`, currentItem.media_content_id);
+                refreshedUrl = await this._resolveMediaPath(currentItem.media_content_id);
+                this._log('🔄 Refreshed queue media URL:', refreshedUrl ? refreshedUrl.substring(0, 100) + '...' : 'null');
+              }
+            }
+            // For traditional folder mode, refresh the current file
+            else if (this._folderContents && this._folderContents[this._currentMediaIndex]) {
               const currentFile = this._folderContents[this._currentMediaIndex];
               this._log(`🔄 Refreshing folder file (attempt ${attempt}/${maxRetries}):`, currentFile.media_content_id);
               refreshedUrl = await this._resolveMediaPath(currentFile.media_content_id);
@@ -3171,6 +3206,12 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Set up visibility observers to pause background activity when not visible
     this._setupVisibilityObservers();
     
+    // Check for existing queue to reconnect after navigation
+    if (window.mediaCardSubfolderQueue && !this._subfolderQueue) {
+      this._log('🔗 Connected: Found existing queue - attempting reconnection');
+      this._initializeSubfolderQueue();
+    }
+    
     // Ensure auto-refresh is set up when component is connected/reconnected
     if (this.config && this.hass && !this._isPaused) {
       this._log('🔌 Component connected - setting up auto-refresh');
@@ -3185,8 +3226,20 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   disconnectedCallback() {
     super.disconnectedCallback();
     
+    this._log('🔌 Component disconnected - cleaning up resources');
+    
     // Clean up visibility observers
     this._cleanupVisibilityObservers();
+    
+    // PAUSE SubfolderQueue instead of destroying it - preserve valuable scan data
+    if (this._subfolderQueue) {
+      this._log('⏸️ Pausing SubfolderQueue scanning (preserving queue data)');
+      this._subfolderQueue.pauseScanning();
+      
+      // Store queue reference globally so new instances can reconnect
+      window.mediaCardSubfolderQueue = this._subfolderQueue;
+      this._subfolderQueue = null; // Clear local reference but don't destroy
+    }
     
     // Clean up the refresh interval when component is removed
     if (this._refreshInterval) {
@@ -3211,71 +3264,68 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _setupVisibilityObservers() {
-    // Set up Intersection Observer to detect when card is visible
-    if ('IntersectionObserver' in window) {
-      this._intersectionObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          const wasVisible = this._isVisible;
-          this._isVisible = entry.isIntersecting;
-          
-          if (wasVisible !== this._isVisible) {
-            this._log('👁️ Card visibility changed:', this._isVisible ? 'visible' : 'hidden');
-            this._handleVisibilityChange();
-          }
-        });
-      }, {
-        threshold: 0.1, // Trigger when 10% visible
-        rootMargin: '50px' // Start observing 50px before entering viewport
-      });
-      
-      this._intersectionObserver.observe(this);
-    }
+    this._log('🔧 Skipping visibility observers setup - using simple DOM-based pause only');
     
-    // Set up Page Visibility API to detect when page/tab is hidden
-    this._handlePageVisibility = () => {
-      const wasPageVisible = this._isPageVisible;
-      this._isPageVisible = !document.hidden;
-      
-      if (wasPageVisible !== this._isPageVisible) {
-        this._log('📄 Page visibility changed:', this._isPageVisible ? 'visible' : 'hidden');
-        this._handleVisibilityChange();
-      }
-    };
+    // DISABLED: Complex visibility detection not needed anymore
+    // Just set basic defaults
+    this._isVisible = true;
+    this._isPageVisible = true;
+    this._backgroundPaused = false;
     
-    document.addEventListener('visibilitychange', this._handlePageVisibility);
-    
-    // Initialize visibility states
-    this._isVisible = true; // Assume visible initially
-    this._isPageVisible = !document.hidden;
+    // Note: We now only use document.contains(this.card) for pause detection
   }
 
   _cleanupVisibilityObservers() {
-    if (this._intersectionObserver) {
-      this._intersectionObserver.disconnect();
-      this._intersectionObserver = null;
-    }
-    
-    if (this._handlePageVisibility) {
-      document.removeEventListener('visibilitychange', this._handlePageVisibility);
-      this._handlePageVisibility = null;
-    }
+    // DISABLED: No observers to clean up anymore - simple DOM-based pause only
+    this._log('🧹 Cleanup visibility observers (none to clean up)');
   }
 
-  _handleVisibilityChange() {
-    const shouldBeActive = this._isVisible && this._isPageVisible;
+  // DEBUG METHOD: Manual pause/resume for testing
+  _debugPauseResume(shouldPause = null) {
+    if (shouldPause === null) {
+      // Toggle current state
+      shouldPause = !this._backgroundPaused;
+    }
     
-    if (shouldBeActive && this._backgroundPaused) {
-      this._log('🔄 Resuming background activity - card is now visible');
-      this._backgroundPaused = false;
-      this._setupAutoRefresh();
-    } else if (!shouldBeActive && !this._backgroundPaused) {
-      this._log('⏸️ Pausing background activity - card is not visible');
-      this._backgroundPaused = true;
+    this._log('🐛 DEBUG: Manual pause/resume called - setting to:', shouldPause);
+    this._backgroundPaused = shouldPause;
+    
+    if (shouldPause) {
+      this._log('⏸️ DEBUG: Manually paused background activity');
       if (this._refreshInterval) {
         clearInterval(this._refreshInterval);
         this._refreshInterval = null;
       }
+    } else {
+      this._log('▶️ DEBUG: Manually resumed background activity');
+      this._setupAutoRefresh();
     }
+    
+    return `Background activity ${shouldPause ? 'paused' : 'resumed'}`;
+  }
+
+  // SIMPLIFIED: Force pause when user navigates away - manual test approach
+  _debugSimulateHidden() {
+    this._log('🐛 DEBUG: Simulating card hidden - forcing pause');
+    this._log('🐛 DEBUG: Before - _backgroundPaused:', this._backgroundPaused);
+    this._backgroundPaused = true;
+    this._log('🐛 DEBUG: After - _backgroundPaused:', this._backgroundPaused);
+    this._log('🐛 DEBUG: Card instance ID:', this._componentStartTime, 'SubfolderQueue exists:', !!this._subfolderQueue);
+    
+    if (this._refreshInterval) {
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
+    return 'Simulated hidden state - scanning should pause';
+  }
+
+  _debugSimulateVisible() {
+    this._log('🐛 DEBUG: Simulating card visible - forcing resume');
+    this._log('🐛 DEBUG: Before - _backgroundPaused:', this._backgroundPaused);
+    this._backgroundPaused = false;
+    this._log('🐛 DEBUG: After - _backgroundPaused:', this._backgroundPaused);
+    this._setupAutoRefresh();
+    return 'Simulated visible state - scanning should resume';
   }
 
   updated(changedProperties) {
@@ -4065,6 +4115,7 @@ class SubfolderQueue {
     this.scanProgress = { current: 0, total: 0 };
     this.discoveryStartTime = null;
     this.discoveryInProgress = false;
+    this._queueCreatedTime = Date.now(); // Track when this queue instance was created
     
     // Queue history - tracks every file ever added to the queue for debug purposes
     this.queueHistory = [];
@@ -4083,10 +4134,133 @@ class SubfolderQueue {
     this._log('📋 Priority patterns configured:', this.config.priority_folder_patterns);
   }
 
-  _log(...args) {
-    if (this.card._debugMode) {
-      console.log('📂 SubfolderQueue:', ...args);
+  // Wait while the parent card has background activity paused (visibility/page hidden)
+  async _waitIfBackgroundPaused(timeoutMs = 60000) {
+    // If queue has been stopped, don't continue
+    if (!this.card) {
+      this._log('❌ Queue has no card reference - stopping');
+      return; // Queue has been stopped/destroyed
     }
+    
+    // ULTRA-SIMPLE SOLUTION: Only check DOM presence, skip all complex visibility
+    const cardInDOM = document.contains(this.card);
+    this._log('🔍 DOM Check: Card in DOM =', cardInDOM, 'Auto-paused =', !!this._autoPaused);
+    
+    if (!cardInDOM) {
+      if (!this._autoPaused) {
+        this._log('⏸️ Card not in DOM - auto-pausing all scanning');
+        this._autoPaused = true;
+        
+        // Store queue globally for reconnection
+        if (!window.mediaCardSubfolderQueue) {
+          window.mediaCardSubfolderQueue = this;
+          this._log('💾 Stored queue globally for reconnection');
+        }
+      } else {
+        this._log('⏸️ Already paused - staying paused (card not in DOM)');
+      }
+      
+      // Just return - don't continue if card not in DOM
+      return;
+    }
+    
+    // Reset auto-pause flag if card is in DOM
+    if (this._autoPaused) {
+      this._log('▶️ Card back in DOM - resuming scanning');  
+      this._autoPaused = false;
+    }
+    
+    // REMOVE ALL COMPLEX VISIBILITY SYSTEM CHECKS
+    // No more _backgroundPaused, _isVisible, _isPageVisible checks
+    // Just continue with scanning
+    this._log('✅ Card in DOM - continuing with scanning');
+    return;
+  }
+
+  _log(...args) {
+    // Safety check - if card reference is cleared, skip logging
+    if (!this.card || !this.card._debugMode) {
+      return;
+    }
+    
+    const message = args.join(' ');
+    
+    // TEMPORARY: Only show visibility-related messages to reduce noise
+    const visibilityKeywords = [
+      '🔧 Setting up visibility',
+      '✅ IntersectionObserver',
+      '✅ Page visibility handler',
+      '👁️ Card visibility changed',
+      '📄 Page visibility changed',
+      '⏸️ Pausing background activity',
+      '🔄 Resuming background activity',
+      '⏸️ Background paused detected',
+      '⏳ Still waiting for background resume',
+      '▶️ Background resumed',
+      '🔍 _waitIfBackgroundPaused',
+      '⚠️ Visibility system not ready',
+      '✅ Visibility system now ready',
+      '⚠️ IntersectionObserver not set up',
+      '⚠️ Page visibility handler not set up',
+      '🐛 DEBUG',
+      '✅ Home Assistant navigation handlers set up',
+      '🚪 Home Assistant navigation detected',
+      '✅ Beforeunload handler set up',
+      '🛑 SubfolderQueue: Stopping', // Add cleanup messages
+      '🧹 Stopping SubfolderQueue'   // Add cleanup messages
+    ];
+    
+    const isVisibilityMessage = visibilityKeywords.some(keyword => message.includes(keyword));
+    
+    if (!isVisibilityMessage) {
+      return; // Skip non-visibility messages temporarily
+    }
+    
+    console.log('📂 SubfolderQueue:', ...args);
+  }
+
+  // Pause all scanning activity - called when card is destroyed but preserve queue data
+  pauseScanning() {
+    this._log('⏸️ SubfolderQueue: Pausing scanning activity (preserving queue data)');
+    
+    this.isScanning = false;
+    this.discoveryInProgress = false;
+    
+    // Clear any running timers/intervals
+    if (this._scanTimeout) {
+      clearTimeout(this._scanTimeout);
+      this._scanTimeout = null;
+    }
+    
+    // Keep the card reference and queue data intact for reconnection
+    this._log('⏸️ SubfolderQueue: Scanning paused - queue preserved with', this.queue.length, 'items');
+  }
+
+  // Resume scanning activity with a new card instance
+  resumeWithNewCard(newCard) {
+    this._log('▶️ SubfolderQueue: Resuming with new card instance');
+    this._log('▶️ SubfolderQueue: Previous card:', !!this.card, 'New card:', !!newCard);
+    this.card = newCard;
+    this._log('▶️ SubfolderQueue: Reconnected - queue has', this.queue.length, 'items,', this.discoveredFolders.length, 'folders');
+    this._log('▶️ SubfolderQueue: isScanning:', this.isScanning, 'discoveryInProgress:', this.discoveryInProgress);
+  }
+
+  // Stop all scanning activity - called when card is destroyed
+  stopScanning() {
+    this._log('🛑 SubfolderQueue: Stopping all scanning activity');
+    this._log('🛑 SubfolderQueue: Scanning stopped and card reference will be cleared');
+    
+    this.isScanning = false;
+    this.discoveryInProgress = false;
+    
+    // Clear any running timers/intervals
+    if (this._scanTimeout) {
+      clearTimeout(this._scanTimeout);
+      this._scanTimeout = null;
+    }
+    
+    // Clear the card reference LAST to prevent further activity
+    this.card = null;
   }
 
   // Check if folder discovery is actively in progress
@@ -4313,6 +4487,8 @@ class SubfolderQueue {
    * @param {number} maxDepth - Maximum depth to scan (uses config.scan_depth if not provided)
    */
   async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = null) {
+    // Pause scanning if the card has background activity paused (e.g., not visible)
+    await this._waitIfBackgroundPaused();
     // Use configured scan depth if maxDepth not explicitly provided
     const effectiveMaxDepth = maxDepth !== null ? maxDepth : (this.config.scan_depth || 2);
     
@@ -4332,6 +4508,9 @@ class SubfolderQueue {
       const apiTimeout = new Promise((_, reject) => 
         setTimeout(() => reject(new Error(`API timeout at depth ${currentDepth} after ${timeoutDuration/1000}s`)), timeoutDuration)
       );
+      
+      // Pause before making API call if background is paused
+      await this._waitIfBackgroundPaused();
       
       const folderContents = await Promise.race([
         this.card.hass.callWS({
@@ -4390,7 +4569,19 @@ class SubfolderQueue {
                   'to', (perFileProbability * 100).toFixed(4) + '%');
       }
       
-      for (const file of files) {
+      // Filter files to exclude already shown items and items already in queue
+      const existingQueueIds = new Set(this.queue.map(item => item.media_content_id));
+      const availableFiles = files.filter(file => 
+        !this.shownItems.has(file.media_content_id) && 
+        !existingQueueIds.has(file.media_content_id)
+      );
+      
+      this._log('📁 Hierarchical filtering:', availableFiles.length, 'of', files.length, 'files available (excluding shown:', this.shownItems.size, 'and queued:', existingQueueIds.size, ')');
+      
+      for (const file of availableFiles) {
+        // Check if we should pause before processing each file
+        await this._waitIfBackgroundPaused();
+        
         if (Math.random() < perFileProbability) {
           await this.addFileToQueueWithBatching(file, folderName);
           filesAdded++;
@@ -4398,7 +4589,7 @@ class SubfolderQueue {
       }
       
       // Log sampling results for this folder
-      this._log('📊 HIERARCHICAL sampling for', folderName + ':', files.length, 'files, per-file probability:', 
+      this._log('📊 HIERARCHICAL sampling for', folderName + ':', availableFiles.length, 'available files, per-file probability:', 
                 (perFileProbability * 100).toFixed(4) + '%' + (weightMultiplier > 1.0 ? ' (boosted ' + weightMultiplier + 'x)' : ''), 
                 filesAdded, 'files selected');
 
@@ -4410,7 +4601,9 @@ class SubfolderQueue {
       let subfoldersProcessed = 0;
       if (subfolders.length > 0 && currentDepth < effectiveMaxDepth - 1) {
         this._log('🔄 Recursing into', subfolders.length, 'subfolders at depth:', currentDepth + 1);
-        
+        // Ensure we don't proceed while background activity is paused
+        await this._waitIfBackgroundPaused();
+
         const subfolderResults = await this.processLevelConcurrently(
           subfolders, 
           2, // maxConcurrent 
@@ -4464,17 +4657,18 @@ class SubfolderQueue {
       
       this._log('📦 Processing batch', Math.floor(i / maxConcurrent) + 1, 'of', Math.ceil(folders.length / maxConcurrent), '(' + batchSize + ' folders)');
       
-      const batchPromises = batch.map((folder, index) => 
-        this.hierarchicalScanAndPopulate(folder.media_content_id, nextDepth, maxDepth)
-          .then(() => {
-            processedCount++;
-            this._log('✅ Completed folder:', folder.title || 'unnamed', `(${processedCount}/${folders.length})`);
-          })
-          .catch(error => {
-            errorCount++;
-            this._log('❌ Failed folder:', folder.title || 'unnamed', error.message);
-          })
-      );
+      const batchPromises = batch.map((folder, index) => (async () => {
+        // Respect background pause before starting each folder scan
+        await this._waitIfBackgroundPaused();
+        try {
+          await this.hierarchicalScanAndPopulate(folder.media_content_id, nextDepth, maxDepth);
+          processedCount++;
+          this._log('✅ Completed folder:', folder.title || 'unnamed', `(${processedCount}/${folders.length})`);
+        } catch (error) {
+          errorCount++;
+          this._log('❌ Failed folder:', folder.title || 'unnamed', error.message);
+        }
+      })());
       
       try {
         await Promise.allSettled(batchPromises);
@@ -4527,6 +4721,17 @@ class SubfolderQueue {
     // Log file addition for first few files (debug purposes)
     if (this.queue.length <= 5) {
       this._log('📎 Added file to queue:', file.title, 'queue size:', this.queue.length);
+    }
+
+    // Debug logging for debug mode (matching existing pattern from addFilesToQueue)
+    if (this.card && this.card.config && this.card.config.debug_queue_mode) {
+      this.card._debugLogEvent('file_added', `Added to queue`, {
+        folder: historyEntry.folderName,
+        filename: file.title || file.media_content_id.split('/').pop(),
+        source: 'hierarchical_scan',
+        queueSize: this.queue.length,
+        historySize: this.queueHistory.length
+      });
     }
   }
 
@@ -6068,10 +6273,10 @@ class SubfolderQueue {
     for (let i = 0; i < this.queue.length; i++) {
       const item = this.queue[i];
       if (!this.shownItems.has(item.media_content_id)) {
-        // Add to blacklist but keep in queue for potential navigation
+        // Add to blacklist
         this.shownItems.add(item.media_content_id);
         
-        // Add to history for navigation
+        // Add to navigation history
         this.history.push(item);
         this.historyIndex = this.history.length - 1; // Move to latest position
         
@@ -6081,11 +6286,14 @@ class SubfolderQueue {
           this.historyIndex = this.history.length - 1;
         }
         
+        // Remove item from queue since it's now shown
+        this.queue.splice(i, 1);
+        
         // Extract folder name for logging
         const pathParts = item.media_content_id.split('/');
         const folderName = pathParts[pathParts.length - 2] || 'root';
         
-        this._log('✅ Served and added to history:', item.title, `from folder: ${folderName}`, 'history size:', this.history.length);
+        this._log('✅ Served and removed from queue:', item.title, `from folder: ${folderName}`, 'queue size:', this.queue.length, 'history size:', this.history.length);
         
         // Check if we need to refill queue
         if (this.needsRefill()) {
@@ -6106,11 +6314,14 @@ class SubfolderQueue {
       const item = this.queue[0];
       this.shownItems.add(item.media_content_id);
       
-      // Add to history
+      // Add to navigation history
       this.history.push(item);
       this.historyIndex = this.history.length - 1;
       
-      this._log('✅ Served item after refill:', item.title, 'history size:', this.history.length);
+      // Remove from queue since it's now shown
+      this.queue.shift();
+      
+      this._log('✅ Served item after refill:', item.title, 'queue size:', this.queue.length, 'history size:', this.history.length);
       return item;
     }
     
