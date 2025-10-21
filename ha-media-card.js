@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 2.4.55 - Cached total count system: consistent probability calculations in equal probability mode
+ * Version: 2.4.56 - Fixed WMV filtering: Added proper file extension checks to hierarchical scanning
  */
 
 // Import Lit from CDN for standalone usage
@@ -4575,8 +4575,9 @@ class SubfolderQueue {
       // Extract folder name for metadata tracking
       const folderName = basePath.split('/').pop() || 'root';
       
-      // Separate files and subfolders
-      const files = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
+      // Separate files and subfolders - filter for supported media files only
+      const allFiles = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
+      const files = allFiles.filter(file => this._isMediaFile(file.media_content_id || file.title || ''));
       const subfolders = folderContents.children.filter(child => child.can_expand);
 
       this._log('📁 Processing folder:', folderName, 'files:', files.length, 'subfolders:', subfolders.length, 'depth:', currentDepth);
@@ -5171,13 +5172,16 @@ class SubfolderQueue {
   processFolderChildrenInBatches(children, batchSize, onBatch, folderTitle) {
     const allMediaFiles = [];
     
-    // Filter media files first
+    // Filter media files first - check both media class and file extension
     for (const child of children) {
       if (child.media_class === 'image' || child.media_class === 'video') {
         if (child.media_content_type && 
             (child.media_content_type.startsWith('image/') || 
              child.media_content_type.startsWith('video/'))) {
-          allMediaFiles.push(child);
+          // Additional check: ensure file extension is supported
+          if (this._isMediaFile(child.media_content_id || child.title || '')) {
+            allMediaFiles.push(child);
+          }
         }
       }
     }
