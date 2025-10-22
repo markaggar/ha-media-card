@@ -348,6 +348,14 @@ class MediaCard extends LitElement {
       const queueSize = this._subfolderQueue.queue.length;
       if (queueSize > 0) {
         this._log('🎉 QUEUE MONITOR: Found', queueSize, 'items - triggering immediate display!');
+        
+        // Prevent race condition with main initialization
+        if (this._initializingMedia) {
+          this._log('🚫 Queue monitor blocked - main initialization in progress');
+          return;
+        }
+        this._initializingMedia = true;
+        
         clearInterval(this._queueMonitorInterval);
         this._queueMonitorInterval = null;
         
@@ -369,6 +377,9 @@ class MediaCard extends LitElement {
           
           // Force UI update
           this.requestUpdate();
+          
+          // Clear initialization flag
+          this._initializingMedia = false;
         }
       } else if (checkCount % 10 === 0) {
         this._log('👀 Queue monitor: still waiting... (check', checkCount + '/' + maxChecks + ')');
@@ -1007,6 +1018,21 @@ class MediaCard extends LitElement {
                 const queueSize = this._subfolderQueue.queue.length;
                 if (queueSize > 0) {
                   this._log('🎉 IMMEDIATE SUCCESS! Queue has', queueSize, 'items - displaying media');
+                  
+                  // Prevent race condition with queue monitor
+                  if (this._initializingMedia) {
+                    this._log('🚫 Main initialization blocked - queue monitor in progress');
+                    return;
+                  }
+                  this._initializingMedia = true;
+                  
+                  // Cancel queue monitor since we have items now
+                  if (this._queueMonitorInterval) {
+                    clearInterval(this._queueMonitorInterval);
+                    this._queueMonitorInterval = null;
+                    this._log('⏹️ Cancelled queue monitor - items available');
+                  }
+                  
                   const randomResult = this._getRandomFileWithIndex();
                   if (randomResult && randomResult.file) {
                     this._log('🚀 Using available queue item for display');
@@ -1016,6 +1042,9 @@ class MediaCard extends LitElement {
                     // Set minimal _folderContents to enable navigation controls
                     this._folderContents = [randomResult.file, {}]; // At least 2 items to enable navigation
                     this._log('🎮 Set minimal folder contents for navigation controls');
+                    
+                    // Clear initialization flag
+                    this._initializingMedia = false;
                     
                     return; // Exit early - queue already available
                   }
@@ -3432,6 +3461,23 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       this._subfolderQueue.isScanning = true;
     }
     return 'All activity forcibly resumed';
+  }
+
+  _debugResetScanning() {
+    this._log('🔄 Resetting scanning state');
+    if (this._subfolderQueue) {
+      this._log('📂 Before reset - isScanning:', this._subfolderQueue.isScanning, 'queue size:', this._subfolderQueue.queue?.length || 0);
+      this._subfolderQueue.isScanning = false;
+      this._subfolderQueue.discoveryInProgress = false;
+      this._log('📂 After reset - isScanning:', this._subfolderQueue.isScanning, 'queue size:', this._subfolderQueue.queue?.length || 0);
+      
+      // Force a refill attempt
+      setTimeout(() => {
+        this._log('🔄 Attempting refill after reset');
+        this._subfolderQueue.refillQueue();
+      }, 100);
+    }
+    return 'Scanning state reset and refill triggered';
   }
 
   updated(changedProperties) {
@@ -6499,7 +6545,7 @@ class SubfolderQueue {
         // Check if we need to refill queue
         if (this.needsRefill()) {
           this._log('🔄 Queue running low, scheduling refill');
-          setTimeout(() => this.refillQueue(), 1000);
+          setTimeout(() => this.refillQueue(), 100);
         }
         
         return item;
@@ -6567,7 +6613,7 @@ class SubfolderQueue {
   // Check if queue needs refilling (since items stay in queue, check available unshown items)
   needsRefill() {
     const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
-    return unshownCount < 10; // Refill when < 10 unshown items left
+    return unshownCount < 15; // Refill when < 15 unshown items left for more proactive refilling
   }
 
   // Clear shown items tracking (reset exclusions)
