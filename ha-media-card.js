@@ -67,15 +67,7 @@ class MediaCard extends LitElement {
     this._zoomLevel = 2.0;  // Default zoom level
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    // Set initial data attributes when element is connected to DOM
-    this.setAttribute('data-media-type', this._mediaType || 'image');
-    // Initialize pause state attribute
-    if (this._isPaused) {
-      this.setAttribute('data-is-paused', '');
-    }
-  }
+
 
   // Home Assistant calls this setter when hass becomes available
   set hass(hass) {
@@ -1005,41 +997,50 @@ class MediaCard extends LitElement {
           this._startQueueMonitor();
           
           // Start initialization in the background (non-blocking)
-          const queueInitialized = await this._subfolderQueue.initialize();
-          if (queueInitialized) {
-            this._log('✅ Subfolder queue initialization completed (early population or full scan)');
+          try {
+            const queueInitialized = await this._subfolderQueue.initialize();
+            if (queueInitialized) {
+              this._log('✅ Subfolder queue initialization completed (early population or full scan)');
             
-            // Check if queue is populated (with null safety)
-            if (this._subfolderQueue && this._subfolderQueue.queue) {
-              const queueSize = this._subfolderQueue.queue.length;
-              if (queueSize > 0) {
-                this._log('🎉 IMMEDIATE SUCCESS! Queue has', queueSize, 'items - displaying media');
-              const randomResult = this._getRandomFileWithIndex();
-              if (randomResult && randomResult.file) {
-                this._log('🚀 Using available queue item for display');
-                await this._loadMediaFromItem(randomResult.file);
-                this._lastRefreshTime = Date.now();
-                
-                // Set minimal _folderContents to enable navigation controls
-                this._folderContents = [randomResult.file, {}]; // At least 2 items to enable navigation
-                this._log('🎮 Set minimal folder contents for navigation controls');
-                
-                return; // Exit early - queue already available
+              // Check if queue is populated (with null safety)
+              if (this._subfolderQueue && this._subfolderQueue.queue) {
+                const queueSize = this._subfolderQueue.queue.length;
+                if (queueSize > 0) {
+                  this._log('🎉 IMMEDIATE SUCCESS! Queue has', queueSize, 'items - displaying media');
+                  const randomResult = this._getRandomFileWithIndex();
+                  if (randomResult && randomResult.file) {
+                    this._log('🚀 Using available queue item for display');
+                    await this._loadMediaFromItem(randomResult.file);
+                    this._lastRefreshTime = Date.now();
+                    
+                    // Set minimal _folderContents to enable navigation controls
+                    this._folderContents = [randomResult.file, {}]; // At least 2 items to enable navigation
+                    this._log('🎮 Set minimal folder contents for navigation controls');
+                    
+                    return; // Exit early - queue already available
+                  }
+                } else {
+                  this._log('⚠️ Queue empty after initialization - starting immediate queue monitor');
+                  // Start monitoring for queue population (streaming scans are in progress)
+                  this._startQueueMonitor();
+                  // Also fallback to normal mode in case queue never populates
+                  this._log('📁 Starting fallback scanning while waiting for queue');
+                }
+              } else {
+                this._log('⚠️ SubfolderQueue became null after initialization - reinitializing');
+                // Queue was nullified (likely by disconnectedCallback), try to reconnect
+                this._initializeSubfolderQueue();
               }
             } else {
-              this._log('⚠️ Queue empty after initialization - starting immediate queue monitor');
-              // Start monitoring for queue population (streaming scans are in progress)
-              this._startQueueMonitor();
-              // Also fallback to normal mode in case queue never populates
-              this._log('📁 Starting fallback scanning while waiting for queue');
+              this._log('⚠️ Subfolder queue initialization failed, using normal mode');
             }
+          } catch (error) {
+            if (error.message === 'SCAN_PAUSED_NOT_VISIBLE') {
+              this._log('⏸️ Scanning paused - card not visible');
+              return; // Exit gracefully when card is not visible
             } else {
-              this._log('⚠️ SubfolderQueue became null after initialization - reinitializing');
-              // Queue was nullified (likely by disconnectedCallback), try to reconnect
-              this._initializeSubfolderQueue();
+              this._log('❌ Subfolder queue initialization error:', error);
             }
-          } else {
-            this._log('⚠️ Subfolder queue initialization failed, using normal mode');
           }
         }
       }
@@ -1836,7 +1837,7 @@ class MediaCard extends LitElement {
     // Extract filename from the full path and get extension  
     const fileName = filePath.split('/').pop() || filePath;
     const extension = this._getFileExtension(fileName);
-    const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+    const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
     if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
       this._log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
     }
@@ -1863,7 +1864,7 @@ class MediaCard extends LitElement {
     
     const extension = this._getFileExtension(cleanFileName);
     
-    if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       return 'video';
     } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
       return 'image';
@@ -3231,8 +3232,15 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   connectedCallback() {
     super.connectedCallback();
     
-    // Set up visibility observers to pause background activity when not visible
-    this._setupVisibilityObservers();
+    // Set initial data attributes when element is connected to DOM
+    this.setAttribute('data-media-type', this._mediaType || 'image');
+    // Initialize pause state attribute
+    if (this._isPaused) {
+      this.setAttribute('data-is-paused', '');
+    }
+    
+    // Set up visibility detection for scanning pause
+    this._setupVisibilityDetection();
     
     // Check for existing queue to reconnect after navigation
     if (window.mediaCardSubfolderQueue && !this._subfolderQueue) {
@@ -3291,21 +3299,79 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
   }
 
-  _setupVisibilityObservers() {
-    this._log('🔧 Skipping visibility observers setup - using simple DOM-based pause only');
+  _setupVisibilityDetection() {
+    this._log('�️ Setting up visibility detection for scanning pause');
     
-    // DISABLED: Complex visibility detection not needed anymore
-    // Just set basic defaults
-    this._isVisible = true;
-    this._isPageVisible = true;
-    this._backgroundPaused = false;
+    // Set up Intersection Observer to detect when card is visible
+    if ('IntersectionObserver' in window) {
+      this._intersectionObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          const wasVisible = this._isCardVisible;
+          this._isCardVisible = entry.isIntersecting;
+          
+          if (wasVisible !== this._isCardVisible) {
+            this._log('👁️ Card visibility changed:', this._isCardVisible ? 'visible' : 'hidden');
+            this._handleVisibilityChange();
+          }
+        });
+      }, {
+        threshold: 0.1, // Trigger when 10% visible
+        rootMargin: '50px' // Start observing 50px before entering viewport
+      });
+      
+      this._intersectionObserver.observe(this);
+    }
     
-    // Note: We now only use document.contains(this.card) for pause detection
+    // Set up Page Visibility API to detect when page/tab is hidden
+    this._handlePageVisibility = () => {
+      const wasPageVisible = this._isPageVisible;
+      this._isPageVisible = !document.hidden;
+      
+      if (wasPageVisible !== this._isPageVisible) {
+        this._log('📄 Page visibility changed:', this._isPageVisible ? 'visible' : 'hidden');
+        this._handleVisibilityChange();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', this._handlePageVisibility);
+    
+    // Initialize visibility states - assume visible and active by default
+    this._isCardVisible = true; 
+    this._isPageVisible = !document.hidden;
+    this._backgroundPaused = false; // CRITICAL: Start as active, not paused
+    
+    this._log('🟢 Visibility detection initialized - backgroundPaused:', this._backgroundPaused);
   }
 
   _cleanupVisibilityObservers() {
-    // DISABLED: No observers to clean up anymore - simple DOM-based pause only
-    this._log('🧹 Cleanup visibility observers (none to clean up)');
+    this._log('🧹 Cleaning up visibility observers');
+    
+    if (this._intersectionObserver) {
+      this._intersectionObserver.disconnect();
+      this._intersectionObserver = null;
+    }
+    
+    if (this._handlePageVisibility) {
+      document.removeEventListener('visibilitychange', this._handlePageVisibility);
+      this._handlePageVisibility = null;
+    }
+  }
+
+  _handleVisibilityChange() {
+    const shouldBeActive = this._isCardVisible && this._isPageVisible;
+    
+    // Add debug info about visibility state
+    this._log('👁️ Visibility check - cardVisible:', this._isCardVisible, 'pageVisible:', this._isPageVisible, 'shouldBeActive:', shouldBeActive, 'currentlyPaused:', this._backgroundPaused);
+    
+    if (shouldBeActive && this._backgroundPaused) {
+      this._log('🔄 Resuming - card is now visible');
+      this._backgroundPaused = false;
+    } else if (!shouldBeActive && !this._backgroundPaused) {
+      this._log('⏸️ Pausing - card is not visible');
+      this._backgroundPaused = true;
+    }
+    
+    // The SubfolderQueue will check this._backgroundPaused in its _waitIfBackgroundPaused method
   }
 
   // DEBUG METHOD: Manual pause/resume for testing
@@ -3354,6 +3420,18 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     this._log('🐛 DEBUG: After - _backgroundPaused:', this._backgroundPaused);
     this._setupAutoRefresh();
     return 'Simulated visible state - scanning should resume';
+  }
+
+  _debugForceResume() {
+    this._log('🔓 Force resuming all background activity');
+    this._backgroundPaused = false;
+    this._isCardVisible = true;
+    this._isPageVisible = true;
+    this._setupAutoRefresh();
+    if (this._subfolderQueue) {
+      this._subfolderQueue.isScanning = true;
+    }
+    return 'All activity forcibly resumed';
   }
 
   updated(changedProperties) {
@@ -4178,20 +4256,34 @@ class SubfolderQueue {
       return; // Queue has been stopped/destroyed
     }
     
-    // ULTRA-SIMPLE SOLUTION: Only check DOM presence, skip all complex visibility
+    // Check both DOM presence and visibility state
     const cardInDOM = document.contains(this.card);
+    const cardBackgroundPaused = this.card._backgroundPaused;
     
-    // Only log DOM status occasionally to avoid spam
-    if (!this._lastDomCheckLog || (Date.now() - this._lastDomCheckLog) > 5000) {
-      this._log('🔍 DOM Check: Card in DOM =', cardInDOM, 'Auto-paused =', !!this._autoPaused);
-      this._lastDomCheckLog = Date.now();
+    // SIMPLIFIED: Don't force pause based on DOM detection - rely only on visibility observers
+    // The IntersectionObserver and Page Visibility API will handle proper pause detection
+    
+    // Only log status occasionally to avoid spam
+    if (!this._lastStatusLog || (Date.now() - this._lastStatusLog) > 5000) {
+      this._log('🔍 Status: Card in DOM =', cardInDOM, 'Background paused =', !!this.card._backgroundPaused);
+      this._lastStatusLog = Date.now();
     }
     
-    if (!cardInDOM) {
+    // Check if we should be paused - only use explicit background pause, not DOM detection
+    const shouldPause = this.card._backgroundPaused;
+    
+    if (shouldPause) {
       if (!this._autoPaused) {
-        this._log('⏸️ Card not in DOM - auto-pausing all scanning');
+        this._log('⏸️ Pausing scanning - DOM:', cardInDOM, 'Background paused:', !!this.card._backgroundPaused);
         this._autoPaused = true;
         this.isScanning = false; // Stop the scanning flag
+        
+        // AGGRESSIVE: Also clear any scanning timers
+        if (this._scanTimeout) {
+          clearTimeout(this._scanTimeout);
+          this._scanTimeout = null;
+          this._log('🛑 Cleared scan timeout');
+        }
         
         // Store queue globally for reconnection
         if (!window.mediaCardSubfolderQueue) {
@@ -4200,13 +4292,13 @@ class SubfolderQueue {
         }
       }
       
-      // Just return - don't continue if card not in DOM
-      return;
+      // AGGRESSIVE: Throw an error to completely stop the async chain
+      throw new Error('SCAN_PAUSED_NOT_VISIBLE');
     }
     
-    // Reset auto-pause flag if card is in DOM
+    // Reset auto-pause flag if conditions are good
     if (this._autoPaused) {
-      this._log('▶️ Card back in DOM - resuming scanning');  
+      this._log('▶️ Resuming scanning - conditions are good');  
       this._autoPaused = false;
       // Note: Don't restart isScanning here - let the initialization process handle it
     }
@@ -4221,7 +4313,11 @@ class SubfolderQueue {
       return;
     }
     
-    // REMOVED: No more message filtering - show all SubfolderQueue debug messages
+    // Check if SubfolderQueue logging is suppressed
+    if (this.card.config?.suppress_subfolder_logging) {
+      return;
+    }
+    
     console.log('📂 SubfolderQueue:', ...args);
   }
 
@@ -4399,6 +4495,12 @@ class SubfolderQueue {
   async initialize() {
     if (!this.config.enabled || this.card.config.folder_mode !== 'random') {
       this._log('❌ Queue disabled or not in random mode');
+      return false;
+    }
+
+    // SIMPLIFIED: Only check if explicitly paused, don't check DOM at initialization
+    if (this.card._backgroundPaused) {
+      this._log('❌ Skipping initialization - explicitly paused:', !!this.card._backgroundPaused);
       return false;
     }
 
@@ -6562,7 +6664,20 @@ class MediaCardEditor extends LitElement {
     // Extract filename from the full path and get extension  
     const fileName = filePath.split('/').pop() || filePath;
     const extension = fileName.split('.').pop()?.toLowerCase();
-    return ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+    return ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+  }
+
+  _detectFileType(filePath) {
+    const fileName = filePath.split('/').pop() || filePath;
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
+      return 'video';
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+      return 'image';
+    }
+    
+    return null;
   }
 
   static styles = css`
@@ -8516,17 +8631,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       composed: true
     });
     this.dispatchEvent(event);
-  }
-
-  _isMediaFile(filePath) {
-    // Extract filename from the full path and get extension
-    const fileName = filePath.split('/').pop() || filePath;
-    const extension = fileName.split('.').pop()?.toLowerCase();
-    const isMedia = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
-    if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
-      this._log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
-    }
-    return isMedia;
   }
 
   _detectFileType(filePath) {
