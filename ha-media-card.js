@@ -1024,6 +1024,13 @@ class MediaCard extends LitElement {
                     this._log('🚫 Main initialization blocked - queue monitor in progress');
                     return;
                   }
+                  
+                  // Check if media is already loaded (queue monitor may have loaded it)
+                  if (this._mediaUrl) {
+                    this._log('🚫 Main initialization skipped - media already loaded by queue monitor');
+                    return;
+                  }
+                  
                   this._initializingMedia = true;
                   
                   // Cancel queue monitor since we have items now
