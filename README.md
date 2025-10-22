@@ -1,25 +1,25 @@
 ![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-# HA Media Card v2.4+ 🎬
+# HA Media Card 🎬
 
 A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
-## 🚀 What's New in v2.4+
+## 🚀 What's New in v3.0
 
-### 📂 **Hierarchical Folder Scanning System (v2.3+)**
+### 📂 **Hierarchical Folder Scanning System**
 *Revolutionary approach to handling large media collections*
 
-- **Smart Queue Management**: Intelligently discovers and processes thousands of folders
+- **Smart Queue Management**: Intelligently discovers and processes thousands of videos and images across hundreds of folders
 - **Progressive Content Discovery**: Shows content immediately while continuing background scanning
 - **Balanced Folder Weighting**: Ensures fair representation from all folders regardless of size
 - **Priority Folder Patterns**: Configure specific folders (like "Camera Roll") to receive higher priority
-- **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery
-- **Auto-Pause/Resume**: Scanning pauses when navigating away and resumes seamlessly when returning
+- **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery and avoid blocking on large folders
+- **Auto-Pause/Resume**: Scanning pauses when navigating away or pausing the slideshow and resumes seamlessly when returning/unpausing
 
-### 🖼️ **Rich Metadata Display System (v2.2+)**
+### 🖼️ **Rich Metadata Display System**
 *Professional information overlay for media content*
 
 - **📁 Folder Information**: Shows source folder path with clean presentation
@@ -72,7 +72,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 ### 🎮 **Manual Navigation System**
 
 - **Click Navigation Zones**: Left/right areas of media for previous/next file browsing
-- **Center Pause/Resume**: Click center area to pause auto-refresh in random mode
+- **Center Pause/Resume**: Click top right area to pause auto-refresh in random mode
 - **Keyboard Controls**: Arrow keys, space bar, Enter for navigation, P for pause/resume
 - **Visual Indicators**: Subtle navigation hints and current file position display
 - **Configurable Controls**: Enable/disable navigation features independently
@@ -88,7 +88,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - Browse through your Home Assistant media folders
 - Navigate subfolders with intuitive back/forward navigation
 
-### 🔍 **Image Zoom (v2.0)**
+### 🔍 **Image Zoom**
 - **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
 - **Second Click/Tap**: Resets zoom back to normal
 - **Image-only**: Videos are unaffected
@@ -183,16 +183,15 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | `slideshow_behavior` | string | `static` | `static`, `cycle`, or `smart_slideshow` - Controls slideshow advancement behavior |
 | `slideshow_window` | number | `1000` | Number of files to include in slideshow (performance protection) |
 
-### Hierarchical Scanning Configuration (v2.3+)
+### Hierarchical Scanning Configuration
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
-| `subfolder_queue.initial_scan_limit` | number | `20` | Number of folders to scan initially before progressive discovery |
-| `subfolder_queue.max_concurrent_scans` | number | `3` | Maximum folders to scan simultaneously |
+| `subfolder_queue.initial_scan_limit` | number | `10` | Number of folders to scan initially before progressive discovery |
 | `subfolder_queue.queue_size` | number | `30` | Size of the active media queue for slideshow rotation |
 | `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations) |
 
-### Metadata Display Configuration (v2.2+)
+### Metadata Display Configuration
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `show_metadata` | boolean | `false` | Enable metadata overlay display |
@@ -309,7 +308,7 @@ show_navigation_indicators: true
 show_file_position: true
 ```
 
-### � **Hierarchical Scanning Examples (v2.3+)**
+### � **Hierarchical Scanning Examples**
 
 #### Large Photo Collection with Smart Discovery
 
@@ -349,7 +348,7 @@ subfolder_queue:
 auto_refresh_seconds: 30
 ```
 
-### 🖼️ **Metadata Display Examples (v2.2+)**
+### 🖼️ **Metadata Display Examples**
 
 #### Professional Photo Display with Full Metadata
 
@@ -383,7 +382,7 @@ show_date: true                     # Show timestamp
 auto_refresh_seconds: 10
 ```
 
-### 🚀 **Smart Slideshow Examples (v2.0)**
+### 🚀 **Smart Slideshow Examples**
 
 #### Smart Slideshow with New Content Priority
 
@@ -431,7 +430,7 @@ enable_navigation_zones: true
 enable_keyboard_navigation: true
 ```
 
-### 🎯 **Complete v2.4+ Configuration (All New Features)**
+### 🎯 **Complete Configuration (All New Features)**
 
 #### Professional Photo Display with Everything Enabled
 
@@ -442,11 +441,10 @@ media_type: all                      # Show both images and videos
 media_path: media-source://media_source/local/photos/
 folder_mode: random
 
-# 📂 Hierarchical Scanning (v2.3+) - For Large Collections
+# 📂 Hierarchical Scanning - For Large Collections
 subfolder_queue:
   enabled: true
   initial_scan_limit: 25             # Start with 25 folders  
-  max_concurrent_scans: 3            # Process 3 folders simultaneously
   queue_size: 40                     # Keep 40 media items in rotation
   estimated_total_photos: 15000      # 🎯 Critical for consistent probabilities
   priority_folder_patterns:
@@ -455,14 +453,14 @@ subfolder_queue:
     - path: "Favorites"              # Favorites get extra weight
       weight_multiplier: 2.5
 
-# 🖼️ Rich Metadata Display (v2.2+) 
+# 🖼️ Rich Metadata Display 
 show_metadata: true
 metadata_position: "bottom-left"     # Professional placement
 show_folder: true                    # Show source folder path
 show_filename: true                  # Show clean filename
 show_date: true                      # Show extracted date
 
-# 🎬 Smart Slideshow (v2.0+)
+# 🎬 Smart Slideshow
 slideshow_behavior: smart_slideshow  # Prioritize new content
 slideshow_window: 1500              # Handle large datasets
 auto_refresh_seconds: 90            # 90-second intervals
