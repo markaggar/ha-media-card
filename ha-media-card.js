@@ -6614,8 +6614,19 @@ class SubfolderQueue {
     
     if (this.discoveredFolders.length === 0) {
       this._log('❌ No folders available for refill - rescanning');
-      // Try to rescan folders
-      this.quickScan();
+      // Set scanning flag and run async rescan without blocking caller
+      this.isScanning = true;
+      this.quickScan()
+        .then(() => {
+          this._log('✅ Refill rescan completed successfully');
+        })
+        .catch((error) => {
+          this._log('❌ Refill rescan failed:', error);
+        })
+        .finally(() => {
+          this.isScanning = false;
+          this._log('🔓 Refill rescan flag cleared');
+        });
       return;
     }
 
@@ -6625,7 +6636,19 @@ class SubfolderQueue {
     
     if (totalFiles === 0) {
       this._log('❌ No files found in any folder - rescanning');
-      this.quickScan();
+      // Set scanning flag and run async rescan without blocking caller
+      this.isScanning = true;
+      this.quickScan()
+        .then(() => {
+          this._log('✅ Refill rescan completed successfully');
+        })
+        .catch((error) => {
+          this._log('❌ Refill rescan failed:', error);
+        })
+        .finally(() => {
+          this.isScanning = false;
+          this._log('🔓 Refill rescan flag cleared');
+        });
       return;
     }
 
