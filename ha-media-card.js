@@ -816,16 +816,23 @@ class MediaCard extends LitElement {
     const oldConfig = this.config;
     const wasFolder = !!(oldConfig?.is_folder && oldConfig?.folder_mode);
     const isFolder = !!(config.is_folder && config.folder_mode);
+    const pathChanged = oldConfig?.media_path !== config.media_path;
     
     // Preserve pause state when switching between modes on the same folder path
-    const preservePauseState = oldConfig?.media_path === config.media_path && 
+    const preservePauseState = !pathChanged && 
                                wasFolder && isFolder && 
                                oldConfig?.folder_mode !== config.folder_mode;
     const savedPauseState = preservePauseState ? this._isPaused : false;
     
-    this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder);
+    this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder, 'path changed:', pathChanged);
     if (preservePauseState) {
       this._log('🔧 Preserving pause state:', savedPauseState, 'for same path folder mode switch');
+    }
+    
+    // Reset subfolder queue if path changed
+    if (pathChanged && this._subfolderQueue) {
+      this._log('🔄 Media path changed - resetting subfolder queue');
+      this._subfolderQueue = null;
     }
     
     // Create new config object with metadata defaults
@@ -869,11 +876,11 @@ class MediaCard extends LitElement {
       this.removeAttribute('data-has-actions');
     }
     
-    // Only reset URL if switching between folder/file modes or if it's a new config
-    if (!oldConfig || (wasFolder !== isFolder)) {
-      this._log('🔧 Resetting media URL due to mode change');
+    // Reset URL if switching between folder/file modes, path changed, or if it's a new config
+    if (!oldConfig || (wasFolder !== isFolder) || pathChanged) {
+      this._log('🔧 Resetting media URL due to', pathChanged ? 'path change' : 'mode change');
       this._mediaUrl = '';
-      this._folderContents = null; // Reset folder contents when mode changes
+      this._folderContents = null; // Reset folder contents when mode/path changes
       // Reset smart cycling tracking when folder contents are reset
       if (this._recentlyShown) {
         this._recentlyShown.clear();
