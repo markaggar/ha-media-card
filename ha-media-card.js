@@ -842,7 +842,6 @@ class MediaCard extends LitElement {
         enabled: config.subfolder_queue?.enabled || false, // Default: disabled for now
         scan_depth: config.subfolder_queue?.scan_depth || 2, // Default: 2 levels deep
         queue_size: config.subfolder_queue?.queue_size || 30,
-        initial_scan_limit: config.subfolder_queue?.initial_scan_limit || 10,
         priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
         equal_probability_mode: config.subfolder_queue?.equal_probability_mode || false, // True equal probability per media item
         estimated_total_photos: config.subfolder_queue?.estimated_total_photos || null, // User estimate for better probability calculation
@@ -4581,9 +4580,9 @@ class SubfolderQueue {
     }
   }
 
-  // Quick initial scan of first few folders
+  // Quick initial scan of all available folders (legacy mode)
   async quickScan() {
-    this._log('⚡ Starting quick scan for first', this.config.initial_scan_limit, 'folders');
+    this._log('⚡ Starting legacy quick scan for all folders');
     
     try {
       // Get the base media path from the card's configuration
@@ -4677,12 +4676,7 @@ class SubfolderQueue {
       this._log('✅ Discovery and queue population complete, queue has', this.queue.length, 'items from', this.discoveredFolders.length, 'discovered folders');
       this._log('📊 Queue summary:', this.queue.slice(0, 3).map(item => item.title || 'unknown').join(', '), this.queue.length > 3 ? '...' : '');
       
-      // Start background expansion for deeper scanning if we have a shallow scan
-      if (subfolders.length > 0 && this.config.scan_depth > 1) {
-        this.startProgressiveDeepening(basePath, subfolders);
-      } else if (subfolders.length > this.config.initial_scan_limit) {
-        this.startProgressiveScanning(subfolders.slice(this.config.initial_scan_limit));
-      }
+      // Legacy mode complete - hierarchical scan is now the preferred method
       
       return true;
       
@@ -6397,109 +6391,7 @@ class SubfolderQueue {
 
 
 
-  // Start progressive scanning of remaining folders
-  startProgressiveScanning(remainingFolders) {
-    this._log('🔄 Starting progressive scan for', remainingFolders.length, 'remaining folders');
-    
-    // For now, just log that we would do this
-    // In a full implementation, we'd scan these folders in batches and update the queue
-    setTimeout(() => {
-      this._log('📈 Progressive scanning complete (simulated)');
-    }, 5000);
-  }
 
-  // Start progressive deepening to find more subfolders
-  async startProgressiveDeepening(basePath, initialFolders) {
-    this._log('🔄 Starting progressive deepening from', initialFolders.length, 'initial folders');
-    
-    // Background task to find deeper folders
-    setTimeout(async () => {
-      try {
-        // Set discovery flag to prevent auto-refresh interruption
-        this.discoveryInProgress = true;
-        this.discoveryStartTime = Date.now();
-        
-        this._log('🔍 Background: Searching for deeper folders...');
-        
-        // Look for folders that might have subfolders we haven't scanned yet
-        const deeperFolders = [];
-        
-        for (const folder of initialFolders.slice(0, 3)) { // Only check top 3 folders
-          if (folder.depth === 1) { // Only go deeper if we're at shallow depth
-            try {
-              this._log('🔍 Background: Checking', folder.title, 'for subfolders...');
-              
-              const nestedFolders = await this.discoverSubfolders(folder.path, folder.depth);
-              if (nestedFolders.length > 0) {
-                this._log('✅ Background: Found', nestedFolders.length, 'nested folders in', folder.title);
-                deeperFolders.push(...nestedFolders);
-              }
-            } catch (error) {
-              this._log('⚠️ Background: Failed to scan', folder.title, ':', error.message);
-            }
-          }
-        }
-        
-        if (deeperFolders.length > 0) {
-          this._log('🎉 Background: Found', deeperFolders.length, 'additional deep folders');
-          
-          // Add to discovered folders and expand queue
-          this.discoveredFolders.push(...deeperFolders);
-          
-          // Refresh queue with new folders to reach target size
-          const additionalFiles = deeperFolders.reduce((sum, f) => sum + f.fileCount, 0);
-          this._log('📈 Background: Adding', additionalFiles, 'additional files to pool - expanding queue to target size');
-          
-          // Expand queue to target size with all available folders
-          await this.expandQueueToTargetSize();
-        } else {
-          this._log('📭 Background: No additional deep folders found');
-        }
-        
-      } catch (error) {
-        this._log('❌ Background deepening failed:', error.message);
-      } finally {
-        // Clear discovery flag when background deepening completes
-        this.discoveryInProgress = false;
-        // Lock total count for consistent probability calculations
-        this.lockTotalCount();
-        this._log('🏁 Background discovery complete - auto-refresh resumed');
-      }
-    }, 3000); // Start background scan after 3 seconds
-  }
-
-  // Expand queue to target size using all available folders
-  async expandQueueToTargetSize() {
-    const targetSize = this.config.queue_size;
-    const currentSize = this.queue.length;
-    
-    this._log('🎯 Expanding queue from', currentSize, 'to target', targetSize);
-    
-    if (currentSize >= targetSize) {
-      this._log('✅ Queue already at target size');
-      return;
-    }
-    
-    const neededItems = targetSize - currentSize;
-    this._log('📊 Need', neededItems, 'more items for queue');
-    
-    // Use all discovered folders for expansion
-    const availableFolders = this.discoveredFolders.filter(folder => 
-      folder.files && folder.files.length > 0
-    );
-    
-    if (availableFolders.length === 0) {
-      this._log('⚠️ No folders available for queue expansion');
-      return;
-    }
-    
-    this._log('📁 Using', availableFolders.length, 'folders for expansion');
-    
-    // Use the same allocation logic but for the additional items needed
-    await this.populateQueueFromFolders(availableFolders, neededItems);
-    
-    this._log('✅ Queue expansion complete - queue now has', this.queue.length, 'items');
-  }
 
   // Get next item from queue (forward navigation)
   getNextItem() {
@@ -6705,9 +6597,9 @@ class SubfolderQueue {
       return;
     }
 
-    // Re-populate queue from discovered folders (this will add to existing queue)
+    // Re-populate queue from ALL discovered folders (this will add to existing queue)
     const currentQueueSize = this.queue.length;
-    this.populateQueueFromFolders(this.discoveredFolders.slice(0, this.config.initial_scan_limit));
+    this.populateQueueFromFolders(this.discoveredFolders);
     this._log('🔄 Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
   }
 }
@@ -7254,7 +7146,7 @@ class MediaCardEditor extends LitElement {
               </div>
               
               <div class="config-row">
-                <label>Randomization Pool Size</label>
+                <label>Queue Size</label>
                 <div>
                   <input
                     type="number"

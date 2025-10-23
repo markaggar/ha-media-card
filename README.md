@@ -187,7 +187,6 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
-| `subfolder_queue.initial_scan_limit` | number | `10` | Number of folders to scan initially before progressive discovery |
 | `subfolder_queue.queue_size` | number | `30` | Size of the active media queue for slideshow rotation |
 | `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations) |
 
@@ -320,8 +319,6 @@ media_path: media-source://media_source/local/photos/
 folder_mode: random
 subfolder_queue:
   enabled: true
-  initial_scan_limit: 20      # Start with 20 folders
-  max_concurrent_scans: 3     # Scan 3 folders at once
   queue_size: 50              # Keep 50 items in rotation
   estimated_total_photos: 25000  # Critical for consistent probabilities
 auto_refresh_seconds: 60
@@ -337,8 +334,6 @@ media_path: media-source://media_source/local/photos/
 folder_mode: random
 subfolder_queue:
   enabled: true
-  initial_scan_limit: 15
-  max_concurrent_scans: 2
   queue_size: 30
   priority_folder_patterns:
     - path: "Camera Roll"      # Recent photos get 3x weight
@@ -444,7 +439,6 @@ folder_mode: random
 # 📂 Hierarchical Scanning - For Large Collections
 subfolder_queue:
   enabled: true
-  initial_scan_limit: 25             # Start with 25 folders  
   queue_size: 40                     # Keep 40 media items in rotation
   estimated_total_photos: 15000      # 🎯 Critical for consistent probabilities
   priority_folder_patterns:
@@ -550,8 +544,6 @@ double_tap_action:
 | `estimated_total_photos` | Optional | **Recommended** | **Critical** | Ensures consistent probability calculations |
 | `queue_size` | 20-30 | 30-50 | 40-60 | Active slideshow rotation pool |
 | `slideshow_window` | 500-1000 | 1000-1500 | 1500-2000+ | Performance protection limit |
-| `initial_scan_limit` | 10-15 | 15-25 | 20-30 | Folders to scan before progressive discovery |
-| `max_concurrent_scans` | 2-3 | 3-4 | 3-5 | Balance speed vs system load |
 
 ### 🎯 **Why `estimated_total_photos` is Critical**
 
@@ -597,7 +589,6 @@ subfolder_queue:
   queue_size: 50
   slideshow_window: 2000
   estimated_total_photos: 25000  # Critical for fairness
-  max_concurrent_scans: 4        # More aggressive scanning
 ```
 
 ## 📅 **Filename Conventions for "Show Latest" Mode**
