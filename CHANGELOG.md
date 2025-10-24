@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0.37] - 2025-10-24
+
+### Changed
+
+- **BREAKING (Minor)**: Deprecated `subfolder_queue.queue_size` setting in favor of unified `slideshow_window` setting
+- `slideshow_window` now serves dual purpose:
+  - Legacy mode: Hard limit (slices first N files)
+  - SubfolderQueue mode: Probability target for sampling
+- Automatic migration: Existing `queue_size` configs automatically migrate to `slideshow_window` on load
+- Default value: 1000 (suitable for both modes)
+- Removed queue_size field from UI editor
+
+### Fixed
+
+- Improved clarity: Eliminated confusion between queue_size and slideshow_window
+- Better documentation: All examples updated to use slideshow_window
+
 ## [1.3.2] - 2025-09-23
 
 ### Fixed

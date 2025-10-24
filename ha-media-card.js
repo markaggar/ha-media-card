@@ -48,6 +48,7 @@ class MediaCard extends LitElement {
     this._lastScanTime = 0; // Track when we last scanned folder contents to prevent rapid re-scanning
     this._errorState = null; // Track media loading errors with retry options
     this._retryAttempts = new Map(); // Track retry attempts per URL to prevent endless loops
+    this._isLoadingMedia = false; // Prevent duplicate media loads during queue initialization
     
     // Slideshow behavior state tracking 
     this._slideshowPosition = 0; // Current position in slideshow sequence
@@ -859,7 +860,6 @@ class MediaCard extends LitElement {
       subfolder_queue: {
         enabled: config.subfolder_queue?.enabled || false, // Default: disabled for now
         scan_depth: config.subfolder_queue?.scan_depth || 2, // Default: 2 levels deep
-        queue_size: config.subfolder_queue?.queue_size || 30,
         priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
         equal_probability_mode: config.subfolder_queue?.equal_probability_mode || false, // True equal probability per media item
         estimated_total_photos: config.subfolder_queue?.estimated_total_photos || null, // User estimate for better probability calculation
@@ -867,6 +867,17 @@ class MediaCard extends LitElement {
         ...config.subfolder_queue
       }
     };
+    
+    // MIGRATION: If queue_size is set but slideshow_window is not, migrate queue_size to slideshow_window
+    if (config.subfolder_queue?.queue_size && !config.slideshow_window) {
+      this.config.slideshow_window = config.subfolder_queue.queue_size;
+      this._log('📦 Migrating queue_size', config.subfolder_queue.queue_size, 'to slideshow_window');
+    }
+    
+    // Set slideshow_window default if not configured (used by both legacy and SubfolderQueue modes)
+    if (!this.config.slideshow_window) {
+      this.config.slideshow_window = 1000; // Default for both modes
+    }
     
     // Apply debug mode from config
     this._debugMode = this.config.debug_mode === true;
@@ -3551,17 +3562,22 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
     
     // 🎯 IMMEDIATE DISPLAY: Check if queue has been populated and we need to display first item
-    if (this._subfolderQueue && this._subfolderQueue.queue && this._subfolderQueue.queue.length > 0 && !this._mediaUrl && this.config.subfolder_queue?.enabled) {
+    // Only trigger if: 1) queue has items, 2) no media URL set yet, 3) not currently loading media
+    if (this._subfolderQueue && this._subfolderQueue.queue && this._subfolderQueue.queue.length > 0 && 
+        !this._mediaUrl && !this._isLoadingMedia && this.config.subfolder_queue?.enabled) {
       this._log('🎉 UPDATED: Queue has', this._subfolderQueue.queue.length, 'items - checking for immediate display');
       const randomResult = this._getRandomFileWithIndex();
       if (randomResult && randomResult.file) {
         this._log('🚀 UPDATED: Triggering immediate display from queue');
+        this._isLoadingMedia = true; // Prevent duplicate loads
         this._loadMediaFromItem(randomResult.file).then(() => {
           this._lastRefreshTime = Date.now();
           this._folderContents = [randomResult.file, {}]; // Enable navigation
           this._log('🎮 UPDATED: Set folder contents for navigation');
         }).catch(error => {
           this._log('❌ UPDATED: Failed to load media:', error.message);
+        }).finally(() => {
+          this._isLoadingMedia = false;
         });
       }
     }
@@ -4635,11 +4651,10 @@ class SubfolderQueue {
       return true;
     } catch (error) {
       this._log('❌ Queue initialization failed:', error);
-      this.isScanning = false;
-      this.discoveryInProgress = false;
       return false;
     } finally {
-      // Always clear discovery flag when initialization completes or fails
+      // Always clear scanning flags when initialization completes or fails
+      this.isScanning = false;
       this.discoveryInProgress = false;
       // Lock total count for consistent probability calculations
       this.lockTotalCount();
@@ -5440,7 +5455,7 @@ class SubfolderQueue {
     const maxFilesPerFolder = this.calculateMaxFilesForFolder(allMediaFiles.length, folderTitle);
     const mediaFiles = this.selectRandomFiles(allMediaFiles, maxFilesPerFolder);
     
-    this._log('🎲 SAMPLING:', folderTitle, '-', mediaFiles.length, 'sampled from', allMediaFiles.length, 'available (max allowed:', maxFilesPerFolder, ', queue size target:', this.config.queue_size + ')');
+    this._log('🎲 SAMPLING:', folderTitle, '-', mediaFiles.length, 'sampled from', allMediaFiles.length, 'available (max allowed:', maxFilesPerFolder, ', slideshow window target:', this.config.slideshow_window + ')');
     
     // Process in batches with randomized delays to encourage interleaving
     const totalBatches = Math.ceil(mediaFiles.length / batchSize);
@@ -5519,7 +5534,7 @@ class SubfolderQueue {
 
   // Phase 1: Local folder-based sampling for initial queue population
   calculateLocalFolderSampling(folderSize, folderTitle) {
-    const targetQueueSize = this.config.queue_size || 1000;
+    const targetQueueSize = this.config.slideshow_window || 1000; // Use slideshow_window
     const estimatedFolderCount = Math.max(this.discoveredFolders.length, 10);
     
     // Base allocation per folder
@@ -5557,7 +5572,7 @@ class SubfolderQueue {
   // Phase 2: True per-file probability sampling using estimated_total_photos
   calculateGlobalProbabilitySampling(folderSize, folderTitle) {
     const totalPhotos = this.config.estimated_total_photos;
-    const targetQueueSize = this.config.queue_size || 1000;
+    const targetQueueSize = this.config.slideshow_window || 1000; // Use slideshow_window
     
     if (!totalPhotos || totalPhotos <= 0) {
       this._log('⚠️ No estimated_total_photos configured, falling back to folder-based sampling');
@@ -5583,7 +5598,7 @@ class SubfolderQueue {
   // Calculate per-file probability for hierarchical scanning with dynamic queue-based adjustment
   calculatePerFileProbability() {
     const totalPhotos = this.config.estimated_total_photos;
-    const targetQueueSize = this.config.queue_size || 1000;
+    const targetQueueSize = this.config.slideshow_window || 1000; // Use slideshow_window instead of queue_size
     const currentQueueSize = this.queue.length;
     
     if (!totalPhotos || totalPhotos <= 0) {
@@ -6121,7 +6136,7 @@ class SubfolderQueue {
   // Populate queue from discovered folders using weighted selection
   async populateQueueFromFolders(folders, customQueueSize = null) {
     try {
-      const targetQueueSize = customQueueSize || this.config.queue_size;
+      const targetQueueSize = customQueueSize || this.config.slideshow_window || 1000; // Use slideshow_window
       this._log('🎲 Populating queue from', folders.length, 'folders, target size:', targetQueueSize);
       
       if (folders.length === 0) {
@@ -7258,19 +7273,7 @@ class MediaCardEditor extends LitElement {
                 </div>
               </div>
               
-              <div class="config-row">
-                <label>Queue Size</label>
-                <div>
-                  <input
-                    type="number"
-                    min="10"
-                    max="100"
-                    .value=${this._config.subfolder_queue?.queue_size || 30}
-                    @input=${this._subfolderQueueSizeChanged}
-                  />
-                  <div class="help-text">Larger pool = better randomization, prevents repetition</div>
-                </div>
-              </div>
+              <!-- queue_size removed - now using slideshow_window setting -->
               
               <div class="config-row">
                 <label>Priority Folder Patterns</label>
@@ -8644,16 +8647,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
-  _subfolderQueueSizeChanged(ev) {
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        queue_size: parseInt(ev.target.value) || 30
-      }
-    };
-    this._fireConfigChanged();
-  }
+  // _subfolderQueueSizeChanged removed - now using slideshow_window setting
 
   _priorityPatternsChanged(ev) {
     const patterns = ev.target.value

@@ -187,8 +187,9 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
-| `subfolder_queue.queue_size` | number | `30` | Size of the active media queue for slideshow rotation |
 | `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations) |
+
+> **📦 Migration Note:** The `subfolder_queue.queue_size` setting has been deprecated in favor of the unified `slideshow_window` setting. Existing configurations will be automatically migrated on load. The `slideshow_window` setting now serves as the probability target for SubfolderQueue mode and as a hard limit for legacy mode.
 
 ### Metadata Display Configuration
 | Option | Type | Default | Description |
@@ -317,9 +318,9 @@ title: "Photo Collection (25,000+ photos)"
 media_type: image
 media_path: media-source://media_source/local/photos/
 folder_mode: random
+slideshow_window: 1000        # Probability target for SubfolderQueue mode
 subfolder_queue:
   enabled: true
-  queue_size: 50              # Keep 50 items in rotation
   estimated_total_photos: 25000  # Critical for consistent probabilities
 auto_refresh_seconds: 60
 ```
@@ -332,9 +333,9 @@ title: "Recent Photos with Camera Roll Priority"
 media_type: image
 media_path: media-source://media_source/local/photos/
 folder_mode: random
+slideshow_window: 1000        # Probability target for sampling
 subfolder_queue:
   enabled: true
-  queue_size: 30
   priority_folder_patterns:
     - path: "Camera Roll"      # Recent photos get 3x weight
       weight_multiplier: 3.0
@@ -436,10 +437,12 @@ media_type: all                      # Show both images and videos
 media_path: media-source://media_source/local/photos/
 folder_mode: random
 
-# 📂 Hierarchical Scanning - For Large Collections
+# � Slideshow Configuration
+slideshow_window: 1000               # Number of items for probability sampling
+
+# �📂 Hierarchical Scanning - For Large Collections
 subfolder_queue:
   enabled: true
-  queue_size: 40                     # Keep 40 media items in rotation
   estimated_total_photos: 15000      # 🎯 Critical for consistent probabilities
   priority_folder_patterns:
     - path: "Camera Roll"            # Recent photos get priority
@@ -480,8 +483,7 @@ hold_action:
 
 **Why This Configuration Works:**
 - ✅ **`estimated_total_photos: 15000`** - Ensures consistent probability calculations across all folders
-- ✅ **`queue_size: 40`** - Provides smooth slideshow experience with good variety
-- ✅ **`slideshow_window: 1500`** - Balances performance with content coverage
+- ✅ **`slideshow_window: 1000`** - Probability target for sampling (not a hard limit)
 - ✅ **Priority patterns** - Recent photos (Camera Roll) get 3x more visibility
 - ✅ **Smart metadata** - Professional info display without UI conflicts
 - ✅ **Video-aware pausing** - Slideshow respects manual video pauses
@@ -542,8 +544,7 @@ double_tap_action:
 | Parameter | Small Collections (<1K files) | Medium Collections (1K-10K files) | Large Collections (10K+ files) | Purpose |
 |-----------|----------------------------|-----------------------------------|-------------------------------|---------|
 | `estimated_total_photos` | Optional | **Recommended** | **Critical** | Ensures consistent probability calculations |
-| `queue_size` | 20-30 | 30-50 | 40-60 | Active slideshow rotation pool |
-| `slideshow_window` | 500-1000 | 1000-1500 | 1500-2000+ | Performance protection limit |
+| `slideshow_window` | 500-1000 | 1000-1500 | 1500-2000+ | Probability target for sampling |
 
 ### 🎯 **Why `estimated_total_photos` is Critical**
 
@@ -567,28 +568,26 @@ subfolder_queue:
 
 #### Small Collection (< 1,000 photos)
 ```yaml
+slideshow_window: 500           # Probability target
 subfolder_queue:
   enabled: true
-  queue_size: 25
-  estimated_total_photos: 500    # Conservative estimate
+  estimated_total_photos: 500   # Conservative estimate
 ```
 
 #### Medium Collection (1,000 - 10,000 photos)  
 ```yaml
+slideshow_window: 1000          # Probability target
 subfolder_queue:
   enabled: true
-  queue_size: 40
-  slideshow_window: 1200
-  estimated_total_photos: 5000   # Reasonable estimate
+  estimated_total_photos: 5000  # Reasonable estimate
 ```
 
 #### Large Collection (10,000+ photos)
 ```yaml
+slideshow_window: 1500          # Probability target
 subfolder_queue:
   enabled: true
-  queue_size: 50
-  slideshow_window: 2000
-  estimated_total_photos: 25000  # Critical for fairness
+  estimated_total_photos: 25000 # Critical for fairness
 ```
 
 ## 📅 **Filename Conventions for "Show Latest" Mode**
