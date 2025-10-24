@@ -4909,8 +4909,13 @@ class SubfolderQueue {
         // Ensure we don't proceed while background activity is paused
         await this._waitIfBackgroundPaused();
 
+        // Randomize subfolder processing order to improve early queue diversity
+        // This prevents alphabetical bias where folders A-F are scanned before G-Z
+        const shuffledSubfolders = [...subfolders].sort(() => Math.random() - 0.5);
+        this._log('🎲 Shuffled subfolder order for better randomization');
+
         const subfolderResults = await this.processLevelConcurrently(
-          subfolders, 
+          shuffledSubfolders, 
           2, // maxConcurrent 
           currentDepth + 1, 
           effectiveMaxDepth
