@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0 - Major release: Fixed pause button positioning, random mode availability in empty folders with subfolders, and pause state persistence
+ * Version: 3.0.0.36 - Fix Priority Patterns UI editing and pathChanged boolean
  */
 
 // Import Lit from CDN for standalone usage
@@ -816,7 +816,9 @@ class MediaCard extends LitElement {
     const oldConfig = this.config;
     const wasFolder = !!(oldConfig?.is_folder && oldConfig?.folder_mode);
     const isFolder = !!(config.is_folder && config.folder_mode);
-    const pathChanged = oldConfig?.media_path !== config.media_path;
+    const pathChanged = !!(oldConfig && oldConfig.media_path !== config.media_path);
+    
+    this._log('🔧 setConfig called - oldPath:', oldConfig?.media_path, 'newPath:', config.media_path, 'pathChanged:', pathChanged);
     
     // Preserve pause state when switching between modes on the same folder path
     const preservePauseState = !pathChanged && 
@@ -829,10 +831,19 @@ class MediaCard extends LitElement {
       this._log('🔧 Preserving pause state:', savedPauseState, 'for same path folder mode switch');
     }
     
-    // Reset subfolder queue if path changed
+    // Reset subfolder queue and history if path changed
     if (pathChanged && this._subfolderQueue) {
-      this._log('🔄 Media path changed - resetting subfolder queue');
+      this._log('🔄 Media path changed - resetting subfolder queue and history');
+      // Reset the shown items history when path changes
+      this._subfolderQueue.shownItems.clear();
+      this._subfolderQueue.history = [];
+      this._subfolderQueue.historyIndex = -1;
+      this._subfolderQueue.queue = [];
+      this._subfolderQueue.discoveredFolders = [];
       this._subfolderQueue = null;
+      
+      // Clear the last media path to force detection in _handleFolderMode
+      this._lastMediaPath = null;
     }
     
     // Create new config object with metadata defaults
@@ -992,6 +1003,25 @@ class MediaCard extends LitElement {
   }
 
   async _handleFolderMode() {
+    // Check for media path changes and reset queue if needed
+    const currentPath = this.config.media_path;
+    this._log('🔍 Path check - last:', this._lastMediaPath, 'current:', currentPath, 'queue exists:', !!this._subfolderQueue);
+    
+    if (this._lastMediaPath && this._lastMediaPath !== currentPath) {
+      this._log('🔄 Media path changed from', this._lastMediaPath, 'to', currentPath, '- resetting subfolder queue');
+      if (this._subfolderQueue) {
+        // Reset all queue state
+        this._subfolderQueue.shownItems.clear();
+        this._subfolderQueue.history = [];
+        this._subfolderQueue.historyIndex = -1;
+        this._subfolderQueue.queue = [];
+        this._subfolderQueue.discoveredFolders = [];
+        this._subfolderQueue = null;
+        this._log('✅ Queue reset complete');
+      }
+    }
+    this._lastMediaPath = currentPath;
+
     // Prevent multiple simultaneous initializations
     if (this._initializationInProgress) {
       this._log('📂 Folder initialization already in progress - skipping');
@@ -1062,6 +1092,24 @@ class MediaCard extends LitElement {
                     return; // Exit early - queue already available
                   }
                 } else {
+                  this._log('⚠️ Queue empty after initialization - checking if files are exhausted');
+                  
+                  // Check if all files are exhausted (exist but all shown)
+                  const totalFiles = this._subfolderQueue.discoveredFolders.reduce((count, folder) => 
+                    count + (folder.files ? folder.files.length : 0), 0);
+                  
+                  if (totalFiles > 0 && this._subfolderQueue.shownItems.size >= totalFiles) {
+                    this._log('🔄 All', totalFiles, 'files have been shown - resetting history to start over');
+                    this._subfolderQueue.shownItems.clear();
+                    this._subfolderQueue.history = [];
+                    this._subfolderQueue.historyIndex = -1;
+                    
+                    // Reinitialize to populate queue with fresh files
+                    this._log('🚀 Re-running initialization with reset history');
+                    this._initializeSubfolderQueue();
+                    return;
+                  }
+                  
                   this._log('⚠️ Queue empty after initialization - starting immediate queue monitor');
                   // Start monitoring for queue population (streaming scans are in progress)
                   this._startQueueMonitor();
@@ -4506,8 +4554,19 @@ class SubfolderQueue {
 
   // Get cached total media count to ensure consistent probability calculations
   getTotalMediaCount(currentDiscoveredCount) {
-    // 1. If user provided estimate, always use it (highest priority)
+    // 1. If user provided estimate, use it BUT with a special case during discovery
     if (this.config.estimated_total_photos) {
+      // During active discovery, if estimate >> discovered, use discovered count
+      // This prevents empty queues during initial scanning
+      if (this.discoveryInProgress && this.config.estimated_total_photos > currentDiscoveredCount * 20) {
+        // Estimate is 20x+ larger than discovered - still early in discovery
+        const tempCount = Math.max(currentDiscoveredCount * 3, 100); // Use 3x discovered or min 100
+        this._log('📊 Early discovery mode: estimate', this.config.estimated_total_photos, 
+                  '>> discovered', currentDiscoveredCount, '- using temporary count:', tempCount);
+        return tempCount;
+      }
+      
+      // Normal case: use the estimate
       if (this.cachedTotalCount !== this.config.estimated_total_photos) {
         this.cachedTotalCount = this.config.estimated_total_photos;
         this.cachedCountSource = 'user_estimate';
@@ -4780,7 +4839,7 @@ class SubfolderQueue {
         const existingIndex = this.discoveredFolders.findIndex(f => f.path === basePath);
         if (existingIndex === -1) {
           this.discoveredFolders.push(folderInfo);
-          this._log('📂 Added folder to discoveredFolders:', folderName, '(total:', this.discoveredFolders.length, ')');
+          this._log('📂 Added folder to discoveredFolders:', folderName, '(total:', this.discoveredFolders.length, 'files:', files.length, ')');
         } else {
           // Update existing entry
           this.discoveredFolders[existingIndex] = folderInfo;
@@ -6559,7 +6618,15 @@ class SubfolderQueue {
   refillQueue() {
     if (this.isScanning) {
       this._log('⏳ Scan in progress, skipping refill');
-      return;
+      
+      // Check if scan has been stuck for too long (over 3 minutes for large hierarchical scans)
+      // Only check if we have a discovery start time
+      if (this.discoveryStartTime && (Date.now() - this.discoveryStartTime) > 180000) {
+        this._log('⚠️ Scan appears stuck (>3 min), forcing reset of isScanning flag');
+        this.isScanning = false;
+      } else {
+        return;
+      }
     }
 
     this._log('🔄 Refilling queue from discovered folders, available:', this.discoveredFolders.length);
@@ -6568,12 +6635,21 @@ class SubfolderQueue {
       this._log('❌ No folders available for refill - rescanning');
       // Set scanning flag and run async rescan without blocking caller
       this.isScanning = true;
+      
+      // Add timeout to prevent stuck scanning flag
+      const scanTimeout = setTimeout(() => {
+        this._log('⚠️ Refill scan timeout - clearing isScanning flag');
+        this.isScanning = false;
+      }, 30000); // 30 second timeout
+      
       this.quickScan()
         .then(() => {
           this._log('✅ Refill rescan completed successfully');
+          clearTimeout(scanTimeout);
         })
         .catch((error) => {
           this._log('❌ Refill rescan failed:', error);
+          clearTimeout(scanTimeout);
         })
         .finally(() => {
           this.isScanning = false;
@@ -6590,18 +6666,48 @@ class SubfolderQueue {
       this._log('❌ No files found in any folder - rescanning');
       // Set scanning flag and run async rescan without blocking caller
       this.isScanning = true;
+      
+      // Add timeout to prevent stuck scanning flag
+      const scanTimeout = setTimeout(() => {
+        this._log('⚠️ Refill scan timeout - clearing isScanning flag');
+        this.isScanning = false;
+      }, 30000); // 30 second timeout
+      
       this.quickScan()
         .then(() => {
           this._log('✅ Refill rescan completed successfully');
+          clearTimeout(scanTimeout);
         })
         .catch((error) => {
           this._log('❌ Refill rescan failed:', error);
+          clearTimeout(scanTimeout);
         })
         .finally(() => {
           this.isScanning = false;
           this._log('🔓 Refill rescan flag cleared');
         });
       return;
+    }
+
+    // Check if all files are exhausted before attempting refill
+    const totalAvailableFiles = this.discoveredFolders.reduce((count, folder) => {
+      if (!folder.files) return count;
+      const availableInFolder = folder.files.filter(file => 
+        !this.shownItems.has(file.media_content_id) && 
+        !this.queue.some(qItem => qItem.media_content_id === file.media_content_id)
+      ).length;
+      return count + availableInFolder;
+    }, 0);
+
+    this._log('📊 Available unshown files:', totalAvailableFiles, 'of', totalFiles, 'total files, shown:', this.shownItems.size);
+
+    // If no files are available (all have been shown), reset history to start over
+    if (totalAvailableFiles === 0 && this.shownItems.size > 0) {
+      this._log('🔄 All files exhausted, resetting history to start over');
+      this.shownItems.clear();
+      this.history = [];
+      this.historyIndex = -1;
+      this._log('✅ History reset - can now show', totalFiles, 'files again');
     }
 
     // Re-populate queue from ALL discovered folders (this will add to existing queue)
@@ -7171,10 +7277,9 @@ class MediaCardEditor extends LitElement {
                 <div>
                   <textarea
                     rows="4"
-                    .value=${this._formatPriorityPatterns()}
-                    @input=${this._priorityPatternsChanged}
+                    @change=${this._priorityPatternsChanged}
                     placeholder="DCIM/Camera&#10;Photos/Camera Roll&#10;Photos/2024"
-                  ></textarea>
+                  >${this._formatPriorityPatterns()}</textarea>
                   <div class="help-text">Folder paths to prioritize (one per line). Paths containing these patterns get 3x weight.</div>
                 </div>
               </div>
@@ -8551,24 +8656,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _priorityPatternsChanged(ev) {
-    // Debounce the input to avoid constant config changes while typing
-    clearTimeout(this._patternInputTimeout);
-    this._patternInputTimeout = setTimeout(() => {
-      const patterns = ev.target.value
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(path => ({ path, weight_multiplier: 3.0 }));
+    const patterns = ev.target.value
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(path => ({ path, weight_multiplier: 3.0 }));
 
-      this._config = {
-        ...this._config,
-        subfolder_queue: {
-          ...this._config.subfolder_queue,
-          priority_folder_patterns: patterns
-        }
-      };
-      this._fireConfigChanged();
-    }, 1000); // Wait 1 second after user stops typing
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        priority_folder_patterns: patterns
+      }
+    };
+    
+    this._fireConfigChanged();
   }
 
   _formatPriorityPatterns() {
