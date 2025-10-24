@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.36 - Fix Priority Patterns UI editing and pathChanged boolean
+ * Version: 3.0.0.41 - Fix Priority Patterns UI editing and pathChanged boolean
  */
 
 // Import Lit from CDN for standalone usage
