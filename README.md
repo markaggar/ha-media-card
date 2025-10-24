@@ -3,63 +3,50 @@
 
 # HA Media Card 🎬
 
-A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
 ## 🚀 What's New in v3.0
 
 ### 📂 **Hierarchical Folder Scanning System**
-*Revolutionary approach to handling large media collections*
 
-- **Smart Queue Management**: Intelligently discovers and processes thousands of videos and images across hundreds of folders
+- **Smart Queue Management**: Intelligently and randomly discovers and selects thousands of videos and images across hundreds of folders
 - **Progressive Content Discovery**: Shows content immediately while continuing background scanning
 - **Balanced Folder Weighting**: Ensures fair representation from all folders regardless of size
 - **Priority Folder Patterns**: Configure specific folders (like "Camera Roll") to receive higher priority
 - **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery and avoid blocking on large folders
-- **Auto-Pause/Resume**: Scanning pauses when navigating away or pausing the slideshow and resumes seamlessly when returning/unpausing
 
 ### 🖼️ **Rich Metadata Display System**
-*Professional information overlay for media content*
 
 - **📁 Folder Information**: Shows source folder path with clean presentation
 - **📄 Filename Display**: Clean filename with auth signature removal
 - **📅 Smart Date Extraction**: Automatic date parsing from filenames (YYYY-MM-DD, YYYYMMDD, MM-DD-YYYY formats)
 - **Flexible Positioning**: 4 corner placement options (bottom-left, bottom-right, top-left, top-right)
 - **Individual Component Toggles**: Enable/disable folder, filename, or date display independently
-- **Smart Layout**: Pause button automatically moves when metadata is in top-right corner
 
-### ⏸️ **Video-Aware Slideshow Pausing**
-*Smart pause detection for video content*
+### ⏸️ **Slideshow and Scan Pausing**
 
-- **Smart Pause Detection**: Slideshow automatically pauses when a video is manually paused
-- **Seamless Integration**: Works with existing video controls and navigation
-- **User-Friendly**: Prevents videos from being skipped while paused
+- **Smart Pause Detection**: Slideshow automatically stops scanning when paused
+- **Video pause detection**: Slideshow pauses when a video is manually paused
+- **Background activity management**: Slideshow pauses and scans stop when not card is not visible
+- **Queue Reconnection**: Card reconnects to existing queue when card becomes visible again (to reduce re-scanning)
 
-### 🎯 **Smart Slideshow System (v2.0)**
-- **Three slideshow behaviors**: `static`, `cycle`, and `smart_slideshow` modes
-- **New Content Prioritization**: Automatically interrupts slideshow to show new arrivals
-- **Intelligent Timing**: Context-aware advancement that respects content type
-- **Performance Protection**: Configurable slideshow window (default: 1000 files)
-
-### 🎬 **Video Completion Intelligence (v2.0)** 
+### 🎬 **Video Completion Intelligence** 
 - **Auto-advance after completion**: Videos advance immediately when finished
 - **Smart wait detection**: Automatic handling of video duration vs refresh intervals
-- **Background playbook optimization**: Pauses processing when tab is inactive
 
-### ⚡ **Enterprise Performance**
-- **Background activity management**: Pauses updates when not visible
-- **Large folder optimization**: Handles 1000+ file folders efficiently with cached total count system
-- **Smart caching**: Reduced API calls with intelligent content detection
-- **Enhanced Synology support**: Improved video detection and authentication
-
-## ✨ Features
+## ✨ Features (pre v3.0)
 
 ### 🎬 **Media Display**
 - **Images**: JPG, PNG, GIF, WebP, SVG, BMP
 - **Videos**: MP4, WebM, OGG with full HTML5 controls
 - Responsive design that adapts to container size
 - Theme-aware styling (light/dark mode support)
+
+### 🎯 **Smart Slideshow System**
+- **Three slideshow behaviors**: `static`, `cycle`, and `smart_slideshow` modes
+- **New Content Prioritization**: Automatically interrupts slideshow to show new arrivals (latest and random (non sub-folder mode) only.
 
 ### 📁 **Advanced Folder Management**
 
@@ -71,7 +58,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 ### 🎮 **Manual Navigation System**
 
-- **Click Navigation Zones**: Left/right areas of media for previous/next file browsing
+- **Click Navigation Zones**: Left/right cente areas of media for previous/next file browsing
 - **Center Pause/Resume**: Click top right area to pause auto-refresh in random mode
 - **Keyboard Controls**: Arrow keys, space bar, Enter for navigation, P for pause/resume
 - **Visual Indicators**: Subtle navigation hints and current file position display
@@ -81,12 +68,10 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 ### 📁 **Built-in Media Browser**
 - **GUI file selection** - No more typing file paths!
-- **Folder Mode Selection** - Choose between single file, latest, or random display
+- **Folder Mode Selection** - Choose between single file, latest, random (single folder) or folder hierarchy (sub folder) display
 - **Smart Thumbnails** - Real image previews (60x60px) with fallback handling
 - **Enhanced Video Icons** - Styled video thumbnails with "VIDEO" labels
-- **Multi-source Support** - Works with Synology DSM, local files, and other media sources
-- Browse through your Home Assistant media folders
-- Navigate subfolders with intuitive back/forward navigation
+- **Multi-source Support** - Works with Synology DSM and Synology Photos, local files, and other media sources
 
 ### 🔍 **Image Zoom**
 - **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
