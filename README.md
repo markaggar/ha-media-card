@@ -3,125 +3,47 @@
 
 # HA Media Card 🎬
 
-A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0.
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
 ## 🚀 What's New in v3.0
 
-### 📂 **Hierarchical Folder Scanning System**
-*Revolutionary approach to handling large media collections*
+### 📂 **Hierarchical Folder Scanning**
+Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
 
-- **Smart Queue Management**: Intelligently discovers and processes thousands of videos and images across hundreds of folders
-- **Progressive Content Discovery**: Shows content immediately while continuing background scanning
-- **Balanced Folder Weighting**: Ensures fair representation from all folders regardless of size
-- **Priority Folder Patterns**: Configure specific folders (like "Camera Roll") to receive higher priority
-- **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery and avoid blocking on large folders
-- **Auto-Pause/Resume**: Scanning pauses when navigating away or pausing the slideshow and resumes seamlessly when returning/unpausing
+### 🖼️ **Rich Metadata Display**
+See what you're viewing with automatic folder path, filename, and date information. Fully customizable positioning and toggle individual elements on/off.
 
-### 🖼️ **Rich Metadata Display System**
-*Professional information overlay for media content*
+### ⏸️ **Smart Pause & Background Management**
+Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
 
-- **📁 Folder Information**: Shows source folder path with clean presentation
-- **📄 Filename Display**: Clean filename with auth signature removal
-- **📅 Smart Date Extraction**: Automatic date parsing from filenames (YYYY-MM-DD, YYYYMMDD, MM-DD-YYYY formats)
-- **Flexible Positioning**: 4 corner placement options (bottom-left, bottom-right, top-left, top-right)
-- **Individual Component Toggles**: Enable/disable folder, filename, or date display independently
-- **Smart Layout**: Pause button automatically moves when metadata is in top-right corner
+### 🎬 **Video Completion Detection**
+Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
 
-### ⏸️ **Video-Aware Slideshow Pausing**
-*Smart pause detection for video content*
+---
 
-- **Smart Pause Detection**: Slideshow automatically pauses when a video is manually paused
-- **Seamless Integration**: Works with existing video controls and navigation
-- **User-Friendly**: Prevents videos from being skipped while paused
+## ✨ Core Features
 
-### 🎯 **Smart Slideshow System (v2.0)**
-- **Three slideshow behaviors**: `static`, `cycle`, and `smart_slideshow` modes
-- **New Content Prioritization**: Automatically interrupts slideshow to show new arrivals
-- **Intelligent Timing**: Context-aware advancement that respects content type
-- **Performance Protection**: Configurable slideshow window (default: 1000 files)
+### 🎯 **Flexible Slideshow Modes**
+- **Show Latest**: Always display your most recent photo/video
+- **Show Random**: Randomized slideshow from a single folder or entire hierarchy
+- **Static**: Display a single file
 
-### 🎬 **Video Completion Intelligence (v2.0)** 
-- **Auto-advance after completion**: Videos advance immediately when finished
-- **Smart wait detection**: Automatic handling of video duration vs refresh intervals
-- **Background playbook optimization**: Pauses processing when tab is inactive
+### 🎮 **Interactive Navigation**
+Click left/right sides to browse, center-top to pause, or use keyboard arrows. Full manual control alongside automatic slideshow.
 
-### ⚡ **Enterprise Performance**
-- **Background activity management**: Pauses updates when not visible
-- **Large folder optimization**: Handles 1000+ file folders efficiently with cached total count system
-- **Smart caching**: Reduced API calls with intelligent content detection
-- **Enhanced Synology support**: Improved video detection and authentication
-
-## ✨ Features
-
-### 🎬 **Media Display**
-- **Images**: JPG, PNG, GIF, WebP, SVG, BMP
-- **Videos**: MP4, WebM, OGG with full HTML5 controls
-- Responsive design that adapts to container size
-- Theme-aware styling (light/dark mode support)
-
-### 📁 **Advanced Folder Management**
-
-- **Show Latest**: Automatically displays the most recent file from a folder based on filename timestamps
-- **Show Random**: Displays random files from a folder with configurable refresh intervals
-- **Smart Timestamp Detection**: Extracts dates/times from various filename formats
-- **Media Type Filtering**: Filter folder contents by image or video files only
-- **Automatic Refresh**: Updates content based on configured intervals
-
-### 🎮 **Manual Navigation System**
-
-- **Click Navigation Zones**: Left/right areas of media for previous/next file browsing
-- **Center Pause/Resume**: Click top right area to pause auto-refresh in random mode
-- **Keyboard Controls**: Arrow keys, space bar, Enter for navigation, P for pause/resume
-- **Visual Indicators**: Subtle navigation hints and current file position display
-- **Configurable Controls**: Enable/disable navigation features independently
-- **Smart Folder Awareness**: Navigation works seamlessly with folder modes
-- **Neutral Zone Pass-through**: When no actions are configured, clicks pass through the center to the image (for zoom)
-
-### 📁 **Built-in Media Browser**
-- **GUI file selection** - No more typing file paths!
-- **Folder Mode Selection** - Choose between single file, latest, or random display
-- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling
-- **Enhanced Video Icons** - Styled video thumbnails with "VIDEO" labels
-- **Multi-source Support** - Works with Synology DSM, local files, and other media sources
-- Browse through your Home Assistant media folders
-- Navigate subfolders with intuitive back/forward navigation
+### 📁 **Visual Media Browser**
+Point-and-click file and folder selection with real image thumbnails. No more typing paths!
 
 ### 🔍 **Image Zoom**
-- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
-- **Second Click/Tap**: Resets zoom back to normal
-- **Image-only**: Videos are unaffected
-- **Simple & Safe**: No pan/drag, minimal CSS transforms
+Click/tap any image to zoom in on that spot. Click again to reset.
 
-Enable in card options (GUI editor), or via YAML:
+### 🎬 **Complete Video Support**
+MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute options.
 
-```yaml
-type: custom:media-card
-title: "Photo Viewer"
-media_type: image
-media_path: media-source://media_source/local/photos/
-enable_image_zoom: true
-zoom_level: 2.0  # optional (default 2.0, supports 1.5–5.0)
-```
-
-### 🔄 **Auto-Refresh System**
-- **Automatic updates** - Monitor files for changes every N seconds
-- **Smart caching** - Uses Last-Modified headers for efficient updates
-- **Manual refresh button** - Force immediate reload when needed
-- **Media-source URL support** - Works with Home Assistant's authenticated media URLs
-
-### 🎮 **Video Controls**
-- **Autoplay** - Start playing automatically
-- **Loop** - Continuous playbook 
-- **Muted** - Start without sound
-- **Hide controls display** - Clean presentation mode
-
-### 👆 **Interactive Actions**
-- **Tap Action** - Single tap/click actions
-- **Hold Action** - Tap and hold (0.5+ seconds) actions  
-- **Double Tap Action** - Quick double tap/click actions
-- **Action Types**: more-info, toggle, perform-action, navigate, url, assist, none
+### 👆 **Custom Actions**
+Configure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
 
 ## 📥 Installation
 
@@ -187,9 +109,14 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
-| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations) |
+| `subfolder_queue.scan_depth` | number | `2` | How many folder levels to scan (1-5). Higher values = more subfolders discovered |
+| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations across folders) |
+| `subfolder_queue.equal_probability_mode` | boolean | `false` | Give each photo equal selection chance regardless of folder size |
+| `subfolder_queue.use_hierarchical_scan` | boolean | `true` | Use modern hierarchical scan (recommended). Set to `false` for legacy streaming mode |
+| `subfolder_queue.priority_folder_patterns` | array | `[]` | List of folder patterns to prioritize with higher selection weight |
+| `subfolder_queue.priority_folder_patterns[].path` | string | - | Folder path pattern to match (e.g., "/Camera Roll/", "/Favorites/") |
+| `subfolder_queue.priority_folder_patterns[].weight_multiplier` | number | `3.0` | Selection weight multiplier for matched folders (e.g., 3.0 = 3x more likely) |
 
-> **📦 Migration Note:** The `subfolder_queue.queue_size` setting has been deprecated in favor of the unified `slideshow_window` setting. Existing configurations will be automatically migrated on load. The `slideshow_window` setting now serves as the probability target for SubfolderQueue mode and as a hard limit for legacy mode.
 
 ### Metadata Display Configuration
 | Option | Type | Default | Description |
