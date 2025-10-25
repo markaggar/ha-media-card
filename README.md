@@ -9,104 +9,41 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 ## 🚀 What's New in v3.0
 
-### 📂 **Hierarchical Folder Scanning System**
+### 📂 **Hierarchical Folder Scanning**
+Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
 
-- **Smart Queue Management**: Intelligently and randomly discovers and selects thousands of videos and images across hundreds of folders
-- **Progressive Content Discovery**: Shows content immediately while continuing background scanning
-- **Balanced Folder Weighting**: Ensures fair representation from all folders regardless of size
-- **Priority Folder Patterns**: Configure specific folders (like "Camera Roll") to receive higher priority
-- **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery and avoid blocking on large folders
+### 🖼️ **Rich Metadata Display**
+See what you're viewing with automatic folder path, filename, and date information. Fully customizable positioning and toggle individual elements on/off.
 
-### 🖼️ **Rich Metadata Display System**
+### ⏸️ **Smart Pause & Background Management**
+Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
 
-- **📁 Folder Information**: Shows source folder path with clean presentation
-- **📄 Filename Display**: Clean filename with auth signature removal
-- **📅 Smart Date Extraction**: Automatic date parsing from filenames (YYYY-MM-DD, YYYYMMDD, MM-DD-YYYY formats)
-- **Flexible Positioning**: 4 corner placement options (bottom-left, bottom-right, top-left, top-right)
-- **Individual Component Toggles**: Enable/disable folder, filename, or date display independently
+### 🎬 **Video Completion Detection**
+Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
 
-### ⏸️ **Slideshow and Scan Pausing**
+---
 
-- **Smart Pause Detection**: Slideshow automatically stops scanning when paused
-- **Video pause detection**: Slideshow pauses when a video is manually paused
-- **Background activity management**: Slideshow pauses and scans stop when not card is not visible
-- **Queue Reconnection**: Card reconnects to existing queue when card becomes visible again (to reduce re-scanning)
+## ✨ Core Features
 
-### 🎬 **Video Completion Intelligence** 
-- **Auto-advance after completion**: Videos advance immediately when finished
-- **Smart wait detection**: Automatic handling of video duration vs refresh intervals
+### 🎯 **Flexible Slideshow Modes**
+- **Show Latest**: Always display your most recent photo/video
+- **Show Random**: Randomized slideshow from a single folder or entire hierarchy
+- **Static**: Display a single file
 
-## ✨ Features (pre v3.0)
+### 🎮 **Interactive Navigation**
+Click left/right sides to browse, center-top to pause, or use keyboard arrows. Full manual control alongside automatic slideshow.
 
-### 🎬 **Media Display**
-- **Images**: JPG, PNG, GIF, WebP, SVG, BMP
-- **Videos**: MP4, WebM, OGG with full HTML5 controls
-- Responsive design that adapts to container size
-- Theme-aware styling (light/dark mode support)
-
-### 🎯 **Smart Slideshow System**
-- **Three slideshow behaviors**: `static`, `cycle`, and `smart_slideshow` modes
-- **New Content Prioritization**: Automatically interrupts slideshow to show new arrivals (latest and random (non sub-folder mode) only.
-
-### 📁 **Advanced Folder Management**
-
-- **Show Latest**: Automatically displays the most recent file from a folder based on filename timestamps
-- **Show Random**: Displays random files from a folder with configurable refresh intervals
-- **Smart Timestamp Detection**: Extracts dates/times from various filename formats
-- **Media Type Filtering**: Filter folder contents by image or video files only
-- **Automatic Refresh**: Updates content based on configured intervals
-
-### 🎮 **Manual Navigation System**
-
-- **Click Navigation Zones**: Left/right cente areas of media for previous/next file browsing
-- **Center Pause/Resume**: Click top right area to pause auto-refresh in random mode
-- **Keyboard Controls**: Arrow keys, space bar, Enter for navigation, P for pause/resume
-- **Visual Indicators**: Subtle navigation hints and current file position display
-- **Configurable Controls**: Enable/disable navigation features independently
-- **Smart Folder Awareness**: Navigation works seamlessly with folder modes
-- **Neutral Zone Pass-through**: When no actions are configured, clicks pass through the center to the image (for zoom)
-
-### 📁 **Built-in Media Browser**
-- **GUI file selection** - No more typing file paths!
-- **Folder Mode Selection** - Choose between single file, latest, random (single folder) or folder hierarchy (sub folder) display
-- **Smart Thumbnails** - Real image previews (60x60px) with fallback handling
-- **Enhanced Video Icons** - Styled video thumbnails with "VIDEO" labels
-- **Multi-source Support** - Works with Synology DSM and Synology Photos, local files, and other media sources
+### 📁 **Visual Media Browser**
+Point-and-click file and folder selection with real image thumbnails. No more typing paths!
 
 ### 🔍 **Image Zoom**
-- **Click/Tap to Zoom**: Zooms into the clicked/tapped point on images
-- **Second Click/Tap**: Resets zoom back to normal
-- **Image-only**: Videos are unaffected
-- **Simple & Safe**: No pan/drag, minimal CSS transforms
+Click/tap any image to zoom in on that spot. Click again to reset.
 
-Enable in card options (GUI editor), or via YAML:
+### 🎬 **Complete Video Support**
+MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute options.
 
-```yaml
-type: custom:media-card
-title: "Photo Viewer"
-media_type: image
-media_path: media-source://media_source/local/photos/
-enable_image_zoom: true
-zoom_level: 2.0  # optional (default 2.0, supports 1.5–5.0)
-```
-
-### 🔄 **Auto-Refresh System**
-- **Automatic updates** - Monitor files for changes every N seconds
-- **Smart caching** - Uses Last-Modified headers for efficient updates
-- **Manual refresh button** - Force immediate reload when needed
-- **Media-source URL support** - Works with Home Assistant's authenticated media URLs
-
-### 🎮 **Video Controls**
-- **Autoplay** - Start playing automatically
-- **Loop** - Continuous playbook 
-- **Muted** - Start without sound
-- **Hide controls display** - Clean presentation mode
-
-### 👆 **Interactive Actions**
-- **Tap Action** - Single tap/click actions
-- **Hold Action** - Tap and hold (0.5+ seconds) actions  
-- **Double Tap Action** - Quick double tap/click actions
-- **Action Types**: more-info, toggle, perform-action, navigate, url, assist, none
+### 👆 **Custom Actions**
+Configure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
 
 ## 📥 Installation
 
