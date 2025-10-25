@@ -49,6 +49,7 @@ class MediaCard extends LitElement {
     this._errorState = null; // Track media loading errors with retry options
     this._retryAttempts = new Map(); // Track retry attempts per URL to prevent endless loops
     this._isLoadingMedia = false; // Prevent duplicate media loads during queue initialization
+    this._videoEndedRefreshInProgress = false; // Prevent auto-refresh from interfering with video-ended refresh
     
     // Slideshow behavior state tracking 
     this._slideshowPosition = 0; // Current position in slideshow sequence
@@ -653,7 +654,7 @@ class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 120px;
+      height: 200px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -694,7 +695,7 @@ class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 120px;
+      height: 200px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -2035,6 +2036,12 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // CRITICAL: Exit if video ended handler is already refreshing
+    if (this._videoEndedRefreshInProgress) {
+      this._log('🔄 Auto-refresh skipped - video ended refresh in progress');
+      return;
+    }
+    
     // Prevent rapid firing during startup - ensure at least 3 seconds since component created
     const timeSinceStartup = Date.now() - (this._componentStartTime || 0);
     if (timeSinceStartup < 3000) {
@@ -3051,10 +3058,17 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Trigger immediate navigation to next video in folder mode
     if (this.config.is_folder && this.config.folder_mode && this._folderContents && this._folderContents.length > 1) {
       this._log('🎬 Video ended - triggering immediate next video');
+      // Set flag to prevent auto-refresh from interfering
+      this._videoEndedRefreshInProgress = true;
       // Small delay to ensure video ended event is fully processed
       setTimeout(() => {
         this._handleFolderModeRefresh(true).catch(err => {
           console.error('Error advancing to next video after end:', err);
+        }).finally(() => {
+          // Clear flag after refresh completes (with extra delay for safety)
+          setTimeout(() => {
+            this._videoEndedRefreshInProgress = false;
+          }, 500);
         });
       }, 100);
     }
