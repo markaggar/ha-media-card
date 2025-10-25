@@ -31,3 +31,6 @@ npm-debug.log*
 # Temporary files
 *.tmp
 *.temp
+
+# Planning documents (local only)
+EXIF_INTEGRATION_PLAN.md

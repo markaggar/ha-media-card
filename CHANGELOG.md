@@ -5,22 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0.37] - 2025-10-24
+## [3.0.0] - 2025-10-24
+
+### Added - Major Features
+
+#### 📂 Hierarchical Folder Scanning System
+- **Smart Queue Management**: Intelligently discovers and selects media across hundreds of folders with thousands of files
+- **Progressive Content Discovery**: Shows content immediately while continuing background scanning
+- **Equal Probability Mode**: Fair representation ensuring each photo has equal selection chance regardless of folder size
+- **Priority Folder Patterns**: Configure specific folders (e.g., "/Camera Roll/") to receive higher selection weight (3x default)
+- **Concurrent Scanning**: Multiple folders processed simultaneously for faster discovery
+- **Randomized Scan Order**: Folders scanned in random order to prevent alphabetical bias in early queue population
+- **Background Pause Detection**: Scanning automatically pauses when card is not visible and resumes on return
+- **Queue Persistence**: Maintains queue state when card reconnects to avoid re-scanning
+
+#### 🖼️ Rich Metadata Display System
+- **Folder Information**: Shows source folder path with clean presentation
+- **Filename Display**: Clean filename with authentication signature removal
+- **Smart Date Extraction**: Automatic date parsing from filenames (YYYY-MM-DD, YYYYMMDD, MM-DD-YYYY, and more)
+- **Flexible Positioning**: 4 corner placement options (bottom-left, bottom-right, top-left, top-right)
+- **Individual Component Toggles**: Enable/disable folder, filename, or date display independently
+- **Theme Integration**: Automatically adapts to Home Assistant light/dark themes
+
+#### 🎬 Video Completion Intelligence
+- **Auto-advance After Completion**: Videos advance to next item immediately when finished playing
+- **Smart Wait Detection**: Handles edge cases where video duration doesn't match actual playback
+- **Seamless Integration**: Works with slideshow timing to prevent premature advances
+
+#### ⏸️ Smart Pause Management
+- **Video Pause Detection**: Slideshow automatically pauses when user manually pauses a video
+- **Manual Pause Control**: Click pause indicator or use keyboard shortcuts
+- **Background Activity Management**: Scans and slideshow pause when card not visible
+- **Resume on Return**: Automatically resumes when card becomes visible again
 
 ### Changed
 
-- **BREAKING (Minor)**: Deprecated `subfolder_queue.queue_size` setting in favor of unified `slideshow_window` setting
-- `slideshow_window` now serves dual purpose:
-  - Legacy mode: Hard limit (slices first N files)
-  - SubfolderQueue mode: Probability target for sampling
-- Automatic migration: Existing `queue_size` configs automatically migrate to `slideshow_window` on load
-- Default value: 1000 (suitable for both modes)
-- Removed queue_size field from UI editor
+- **BREAKING (Minor)**: Deprecated `subfolder_queue.queue_size` in favor of unified `slideshow_window` setting
+  - Automatic migration: Existing configs migrate on load
+  - `slideshow_window` serves dual purpose: hard limit (legacy) or probability target (SubfolderQueue)
+  - Default value: 1000 (suitable for both modes)
+- Removed `queue_size` field from UI editor
+- Improved early queue diversity by randomizing subfolder scan order
+- Enhanced logging and debug output for hierarchical scanning
 
 ### Fixed
 
-- Improved clarity: Eliminated confusion between queue_size and slideshow_window
-- Better documentation: All examples updated to use slideshow_window
+- **Queue Initialization**: Fixed `isScanning` flag stuck in true state causing slideshow to never resume
+- **Duplicate Media Loading**: Added `_isLoadingMedia` flag to prevent videos being immediately replaced during startup
+- **Priority Patterns UI**: Fixed textarea editing issue where content would reset on each render
+- **Path Change Detection**: Fixed `pathChanged` showing undefined on first load
+- **Scan Termination**: Fixed premature scan stopping due to bad timeout detection
+- **Equal Probability Allocation**: Fixed 0 slot allocation during early discovery phase
+- Improved documentation with migration notes and updated examples
 
 ## [1.3.2] - 2025-09-23
 
