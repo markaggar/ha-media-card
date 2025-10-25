@@ -109,9 +109,14 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
-| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations) |
+| `subfolder_queue.scan_depth` | number | `2` | How many folder levels to scan (1-5). Higher values = more subfolders discovered |
+| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations across folders) |
+| `subfolder_queue.equal_probability_mode` | boolean | `false` | Give each photo equal selection chance regardless of folder size |
+| `subfolder_queue.use_hierarchical_scan` | boolean | `true` | Use modern hierarchical scan (recommended). Set to `false` for legacy streaming mode |
+| `subfolder_queue.priority_folder_patterns` | array | `[]` | List of folder patterns to prioritize with higher selection weight |
+| `subfolder_queue.priority_folder_patterns[].path` | string | - | Folder path pattern to match (e.g., "/Camera Roll/", "/Favorites/") |
+| `subfolder_queue.priority_folder_patterns[].weight_multiplier` | number | `3.0` | Selection weight multiplier for matched folders (e.g., 3.0 = 3x more likely) |
 
-> **📦 Migration Note:** The `subfolder_queue.queue_size` setting has been deprecated in favor of the unified `slideshow_window` setting. Existing configurations will be automatically migrated on load. The `slideshow_window` setting now serves as the probability target for SubfolderQueue mode and as a hard limit for legacy mode.
 
 ### Metadata Display Configuration
 | Option | Type | Default | Description |
