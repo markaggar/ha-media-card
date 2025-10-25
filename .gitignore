@@ -32,5 +32,7 @@ npm-debug.log*
 *.tmp
 *.temp
 
-# Planning documents (local only)
+# Planning and development documents (local only)
 EXIF_INTEGRATION_PLAN.md
+docs/
+scripts/

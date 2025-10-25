@@ -1,4 +1,3 @@
 # Exclude development files from HACS releases
-docs/ export-ignore
 tests/ export-ignore
 .github/ export-ignore
