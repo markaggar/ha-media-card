@@ -18,6 +18,8 @@ A Home Assistant integration that efficiently scans, indexes, and serves media m
 │  - Smart caching with change detection          │
 │  - File system monitoring                       │
 │  - Service API for queries                      │
+│  - Interactive file actions (favorite/delete)   │
+│  - Smart collections & filters                  │
 └─────────────────────────────────────────────────┘
                       ↓ Services
 ┌─────────────────────────────────────────────────┐
@@ -25,6 +27,8 @@ A Home Assistant integration that efficiently scans, indexes, and serves media m
 │  - Lovelace card for normal dashboards          │
 │  - Queries index for media items                │
 │  - Slideshow display & controls                 │
+│  - Interactive actions (favorite/rate/delete)   │
+│  - Keyboard shortcuts                           │
 └─────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────┐
@@ -33,6 +37,7 @@ A Home Assistant integration that efficiently scans, indexes, and serves media m
 │  - Full screen slideshow (no sidebar/header)    │
 │  - Auto-launch on idle                          │
 │  - Screensaver mode                             │
+│  - Quick action overlays                        │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -52,6 +57,7 @@ custom_components/
     ├── exif_parser.py           # EXIF metadata extraction
     ├── watcher.py               # File system monitoring
     ├── cache_manager.py         # Intelligent caching
+    ├── file_actions.py          # File operations (favorite/delete/move/rate)
     └── services.yaml            # Service definitions
 
 www/
@@ -315,6 +321,721 @@ service: media_index.get_stats
 
 ---
 
+## 🎨 Interactive File Management
+
+### Overview
+
+Enable users to curate their collection directly from the slideshow - favorite, rate, delete, or move files without leaving the card. Actions persist to both the database and file metadata.
+
+### UI Controls
+
+#### Action Buttons (Card/Panel)
+
+```javascript
+// Navigation overlay with action buttons
+_renderActionButtons() {
+  return html`
+    <div class="action-buttons">
+      <button @click=${this._handleFavorite} class="action-btn favorite-btn">
+        <ha-icon icon="mdi:heart${this._isFavorited ? '' : '-outline'}"></ha-icon>
+        <span>Favorite</span>
+      </button>
+      
+      <button @click=${this._handleRate} class="action-btn rate-btn">
+        <ha-icon icon="mdi:star"></ha-icon>
+        <span>Rate (${this._currentRating || 0}⭐)</span>
+      </button>
+      
+      <button @click=${this._handleDelete} class="action-btn delete-btn">
+        <ha-icon icon="mdi:delete-outline"></ha-icon>
+        <span>Delete</span>
+      </button>
+      
+      <button @click=${this._handleMove} class="action-btn move-btn">
+        <ha-icon icon="mdi:folder-move"></ha-icon>
+        <span>Move to...</span>
+      </button>
+    </div>
+  `;
+}
+```
+
+#### Frontend Service Calls
+
+```javascript
+async _handleFavorite() {
+  const result = await this.hass.callService('media_index', 'favorite_file', {
+    media_path: this._currentMediaPath,
+    action: this._isFavorited ? 'unfavorite' : 'favorite'
+  });
+  
+  if (result.success) {
+    this._isFavorited = !this._isFavorited;
+    this._showToast('Added to favorites!');
+  }
+}
+
+async _handleDelete() {
+  // Confirm dialog
+  const confirmed = await this._showConfirmDialog(
+    'Delete this file?',
+    'This will move it to a trash folder. You can restore it later.'
+  );
+  
+  if (confirmed) {
+    await this.hass.callService('media_index', 'delete_file', {
+      media_path: this._currentMediaPath,
+      permanent: false  // Move to trash, not permanent delete
+    });
+    
+    this._showToast('Moved to trash');
+    this._loadNextMedia();  // Auto-advance to next item
+  }
+}
+
+async _handleRate() {
+  // Show rating dialog
+  const rating = await this._showRatingDialog();
+  
+  if (rating) {
+    await this.hass.callService('media_index', 'rate_file', {
+      media_path: this._currentMediaPath,
+      rating: rating  // 1-5 stars
+    });
+    
+    this._currentRating = rating;
+    this._showToast(`Rated ${rating} stars`);
+  }
+}
+
+async _handleMove() {
+  // Show folder picker
+  const targetFolder = await this._showFolderPicker();
+  
+  if (targetFolder) {
+    await this.hass.callService('media_index', 'move_file', {
+      media_path: this._currentMediaPath,
+      target_folder: targetFolder
+    });
+    
+    this._showToast(`Moved to ${targetFolder}`);
+    this._loadNextMedia();
+  }
+}
+```
+
+#### Keyboard Shortcuts
+
+```javascript
+_handleKeyPress(e) {
+  switch(e.key) {
+    case 'f':
+      this._handleFavorite();
+      break;
+    case 'd':
+      this._handleDelete();
+      break;
+    case '1': case '2': case '3': case '4': case '5':
+      this._handleRate(parseInt(e.key));
+      break;
+    case 'm':
+      this._handleMove();
+      break;
+  }
+}
+```
+
+### Backend Services
+
+#### Service Definitions
+
+```yaml
+# services.yaml
+media_index:
+  favorite_file:
+    name: "Favorite File"
+    description: "Mark a file as favorite or unfavorite"
+    fields:
+      media_path:
+        name: "Media Path"
+        description: "Full path to media file"
+        required: true
+        example: "/media/Photos/Family/photo.jpg"
+      action:
+        name: "Action"
+        description: "favorite or unfavorite"
+        required: true
+        selector:
+          select:
+            options:
+              - "favorite"
+              - "unfavorite"
+  
+  delete_file:
+    name: "Delete File"
+    description: "Delete or trash a media file"
+    fields:
+      media_path:
+        name: "Media Path"
+        required: true
+      permanent:
+        name: "Permanent Delete"
+        description: "If false, moves to trash folder"
+        required: false
+        default: false
+        selector:
+          boolean:
+  
+  rate_file:
+    name: "Rate File"
+    description: "Assign a star rating to a file"
+    fields:
+      media_path:
+        name: "Media Path"
+        required: true
+      rating:
+        name: "Rating"
+        description: "Star rating (1-5)"
+        required: true
+        selector:
+          number:
+            min: 1
+            max: 5
+            mode: slider
+  
+  move_file:
+    name: "Move File"
+    description: "Move file to a different folder"
+    fields:
+      media_path:
+        name: "Source Path"
+        required: true
+      target_folder:
+        name: "Target Folder"
+        required: true
+      create_folder:
+        name: "Create Folder"
+        description: "Create target folder if it doesn't exist"
+        default: false
+        selector:
+          boolean:
+  
+  batch_action:
+    name: "Batch Action"
+    description: "Perform action on multiple files"
+    fields:
+      media_paths:
+        name: "Media Paths"
+        description: "List of file paths"
+        required: false
+        selector:
+          object:
+      query:
+        name: "Query"
+        description: "Query to select files"
+        required: false
+        selector:
+          object:
+      action:
+        name: "Action"
+        required: true
+        selector:
+          select:
+            options:
+              - "favorite"
+              - "unfavorite"
+              - "delete"
+              - "move"
+      target_folder:
+        name: "Target Folder"
+        description: "For move action"
+        required: false
+  
+  restore_file:
+    name: "Restore File"
+    description: "Restore file from trash"
+    fields:
+      media_path:
+        name: "Original Path"
+        required: false
+      trash_id:
+        name: "Trash ID"
+        description: "Database ID of trashed file"
+        required: false
+        selector:
+          number:
+            min: 1
+```
+
+#### Backend Implementation
+
+```python
+# file_actions.py
+import os
+import shutil
+from datetime import datetime
+from pathlib import Path
+import json
+
+class FileActionService:
+    """Handle file system operations and metadata management."""
+    
+    def __init__(self, hass, config):
+        self.hass = hass
+        self.config = config
+        self.db = hass.data['media_index']['db']
+        
+        # Strategy: Where to store metadata
+        self.metadata_strategy = config.get('metadata_strategy', 'sidecar')
+        # Options: 'sidecar', 'database', 'xmp', 'exif'
+    
+    async def favorite_file(self, media_path: str, action: str):
+        """Mark file as favorite."""
+        
+        # Update database
+        await self.db.execute(
+            "UPDATE media_files SET is_favorite = ?, favorited_at = ? WHERE path = ?",
+            (action == 'favorite', datetime.now().timestamp(), media_path)
+        )
+        
+        # Also write to file metadata (multiple strategies)
+        if self.metadata_strategy == 'sidecar':
+            await self._write_sidecar_metadata(media_path, {
+                'favorite': action == 'favorite',
+                'favorited_at': datetime.now().isoformat()
+            })
+        
+        elif self.metadata_strategy == 'xmp':
+            await self._write_xmp_metadata(media_path, {
+                'Rating': 5 if action == 'favorite' else 0
+            })
+        
+        elif self.metadata_strategy == 'exif':
+            # Write to EXIF Rating field
+            await self._write_exif_rating(media_path, 
+                5 if action == 'favorite' else 0)
+        
+        # Fire event for other integrations
+        self.hass.bus.async_fire('media_index_file_favorited', {
+            'path': media_path,
+            'is_favorite': action == 'favorite'
+        })
+        
+        return {'success': True}
+    
+    async def delete_file(self, media_path: str, permanent: bool = False):
+        """Delete or move file to trash."""
+        
+        if not os.path.exists(media_path):
+            return {'success': False, 'error': 'File not found'}
+        
+        if permanent:
+            # Permanent delete - be very careful!
+            if self.config.get('allow_permanent_delete', False):
+                os.remove(media_path)
+                action = 'deleted'
+            else:
+                return {'success': False, 'error': 'Permanent delete disabled'}
+        else:
+            # Move to trash folder
+            trash_folder = self.config.get('trash_folder', '/media/.trash')
+            
+            # Create trash folder if needed
+            Path(trash_folder).mkdir(parents=True, exist_ok=True)
+            
+            # Preserve folder structure in trash
+            relative_path = os.path.relpath(
+                media_path, 
+                self.config['base_folder']
+            )
+            trash_path = os.path.join(trash_folder, relative_path)
+            
+            # Create parent dirs
+            Path(trash_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            # Move file
+            shutil.move(media_path, trash_path)
+            action = 'trashed'
+            
+            # Store deletion metadata for restore
+            await self.db.execute("""
+                INSERT INTO deleted_files 
+                (original_path, trash_path, deleted_at)
+                VALUES (?, ?, ?)
+            """, (media_path, trash_path, datetime.now().timestamp()))
+        
+        # Remove from active index
+        await self.db.execute(
+            "DELETE FROM media_files WHERE path = ?",
+            (media_path,)
+        )
+        
+        # Fire event
+        self.hass.bus.async_fire('media_index_file_deleted', {
+            'path': media_path,
+            'action': action
+        })
+        
+        return {'success': True, 'action': action}
+    
+    async def rate_file(self, media_path: str, rating: int):
+        """Assign star rating to file."""
+        
+        if not 1 <= rating <= 5:
+            return {'success': False, 'error': 'Rating must be 1-5'}
+        
+        # Update database
+        await self.db.execute(
+            "UPDATE media_files SET rating = ?, rated_at = ? WHERE path = ?",
+            (rating, datetime.now().timestamp(), media_path)
+        )
+        
+        # Write to file metadata
+        if self.metadata_strategy == 'sidecar':
+            await self._write_sidecar_metadata(media_path, {
+                'rating': rating,
+                'rated_at': datetime.now().isoformat()
+            })
+        
+        elif self.metadata_strategy in ['xmp', 'exif']:
+            # Standard XMP/EXIF Rating field (0-5)
+            await self._write_exif_rating(media_path, rating)
+        
+        return {'success': True, 'rating': rating}
+    
+    async def move_file(self, media_path: str, target_folder: str, 
+                       create_folder: bool = False):
+        """Move file to different folder."""
+        
+        if not os.path.exists(media_path):
+            return {'success': False, 'error': 'Source file not found'}
+        
+        # Create target folder if requested
+        if create_folder and not os.path.exists(target_folder):
+            Path(target_folder).mkdir(parents=True, exist_ok=True)
+        
+        if not os.path.exists(target_folder):
+            return {'success': False, 'error': 'Target folder not found'}
+        
+        # Get filename
+        filename = os.path.basename(media_path)
+        target_path = os.path.join(target_folder, filename)
+        
+        # Check for conflicts
+        if os.path.exists(target_path):
+            # Auto-rename with timestamp
+            name, ext = os.path.splitext(filename)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{name}_{timestamp}{ext}"
+            target_path = os.path.join(target_folder, filename)
+        
+        # Move file (and sidecar if exists)
+        shutil.move(media_path, target_path)
+        
+        sidecar_path = f"{media_path}.json"
+        if os.path.exists(sidecar_path):
+            target_sidecar = f"{target_path}.json"
+            shutil.move(sidecar_path, target_sidecar)
+        
+        # Update index
+        await self.db.execute("""
+            UPDATE media_files 
+            SET path = ?, folder = ?
+            WHERE path = ?
+        """, (target_path, os.path.basename(target_folder), media_path))
+        
+        return {
+            'success': True, 
+            'new_path': target_path
+        }
+    
+    async def batch_action(self, media_paths: list = None, query: dict = None,
+                          action: str = None, **kwargs):
+        """Perform action on multiple files."""
+        
+        # Get file list from paths or query
+        if media_paths:
+            files = media_paths
+        elif query:
+            files = await self._query_files(query)
+        else:
+            return {'success': False, 'error': 'Must provide media_paths or query'}
+        
+        results = {
+            'success': 0,
+            'failed': 0,
+            'errors': []
+        }
+        
+        for file_path in files:
+            try:
+                if action == 'favorite':
+                    await self.favorite_file(file_path, 'favorite')
+                elif action == 'unfavorite':
+                    await self.favorite_file(file_path, 'unfavorite')
+                elif action == 'delete':
+                    await self.delete_file(file_path, permanent=False)
+                elif action == 'move':
+                    await self.move_file(file_path, kwargs.get('target_folder'))
+                
+                results['success'] += 1
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append({
+                    'file': file_path,
+                    'error': str(e)
+                })
+        
+        return results
+    
+    async def restore_file(self, media_path: str = None, trash_id: int = None):
+        """Restore file from trash."""
+        
+        # Get trash record
+        if trash_id:
+            row = await self.db.fetchone(
+                "SELECT * FROM deleted_files WHERE id = ?",
+                (trash_id,)
+            )
+        elif media_path:
+            row = await self.db.fetchone(
+                "SELECT * FROM deleted_files WHERE original_path = ? AND restored_at IS NULL ORDER BY deleted_at DESC LIMIT 1",
+                (media_path,)
+            )
+        else:
+            return {'success': False, 'error': 'Must provide media_path or trash_id'}
+        
+        if not row:
+            return {'success': False, 'error': 'File not found in trash'}
+        
+        original_path = row['original_path']
+        trash_path = row['trash_path']
+        
+        if not os.path.exists(trash_path):
+            return {'success': False, 'error': 'Trash file not found'}
+        
+        # Ensure parent directory exists
+        Path(original_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Restore file
+        shutil.move(trash_path, original_path)
+        
+        # Restore sidecar if exists
+        trash_sidecar = f"{trash_path}.json"
+        if os.path.exists(trash_sidecar):
+            shutil.move(trash_sidecar, f"{original_path}.json")
+        
+        # Update trash record
+        await self.db.execute(
+            "UPDATE deleted_files SET restored_at = ? WHERE id = ?",
+            (datetime.now().timestamp(), row['id'])
+        )
+        
+        # Re-index file
+        await self.hass.data['media_index']['scanner'].index_file(original_path)
+        
+        return {'success': True, 'restored_path': original_path}
+    
+    async def _write_sidecar_metadata(self, media_path: str, metadata: dict):
+        """Write JSON sidecar file alongside media file."""
+        sidecar_path = f"{media_path}.json"
+        
+        # Load existing sidecar if exists
+        existing = {}
+        if os.path.exists(sidecar_path):
+            with open(sidecar_path, 'r') as f:
+                existing = json.load(f)
+        
+        # Merge metadata
+        existing.update(metadata)
+        
+        # Write sidecar
+        with open(sidecar_path, 'w') as f:
+            json.dump(existing, f, indent=2)
+    
+    async def _write_exif_rating(self, media_path: str, rating: int):
+        """Write rating to EXIF data."""
+        from PIL import Image
+        import piexif
+        
+        img = Image.open(media_path)
+        
+        # Load existing EXIF
+        exif_dict = piexif.load(img.info.get('exif', b''))
+        
+        # Set rating (0-5 scale in EXIF)
+        exif_dict['0th'][piexif.ImageIFD.Rating] = rating
+        
+        # Save with updated EXIF
+        exif_bytes = piexif.dump(exif_dict)
+        img.save(media_path, exif=exif_bytes)
+    
+    async def _query_files(self, query: dict):
+        """Query files based on filters."""
+        sql = "SELECT path FROM media_files WHERE 1=1"
+        params = []
+        
+        if query.get('folder'):
+            sql += " AND folder = ?"
+            params.append(query['folder'])
+        
+        if query.get('date_range'):
+            start, end = query['date_range'].split(' to ')
+            sql += " AND created_time BETWEEN ? AND ?"
+            params.extend([start, end])
+        
+        if query.get('rating'):
+            sql += " AND rating >= ?"
+            params.append(query['rating'])
+        
+        rows = await self.db.fetchall(sql, params)
+        return [row['path'] for row in rows]
+```
+
+### Database Schema Updates
+
+```sql
+-- Add action tracking columns
+ALTER TABLE media_files ADD COLUMN is_favorite BOOLEAN DEFAULT 0;
+ALTER TABLE media_files ADD COLUMN favorited_at INTEGER;
+ALTER TABLE media_files ADD COLUMN rating INTEGER;  -- 1-5 stars
+ALTER TABLE media_files ADD COLUMN rated_at INTEGER;
+ALTER TABLE media_files ADD COLUMN last_viewed INTEGER;  -- Unix timestamp
+ALTER TABLE media_files ADD COLUMN view_count INTEGER DEFAULT 0;
+ALTER TABLE media_files ADD COLUMN custom_tags TEXT;  -- JSON array
+
+-- Deleted files tracking (for restore)
+CREATE TABLE deleted_files (
+    id INTEGER PRIMARY KEY,
+    original_path TEXT NOT NULL,
+    trash_path TEXT NOT NULL,
+    deleted_at INTEGER NOT NULL,
+    restored_at INTEGER,
+    UNIQUE(original_path, deleted_at)
+);
+
+-- Create indexes for performance
+CREATE INDEX idx_favorite ON media_files(is_favorite);
+CREATE INDEX idx_rating ON media_files(rating);
+CREATE INDEX idx_last_viewed ON media_files(last_viewed);
+```
+
+### Smart Collections
+
+Auto-updating virtual folders based on user actions:
+
+```python
+# Smart collection queries
+COLLECTIONS = {
+    'favorites': {
+        'query': "SELECT * FROM media_files WHERE is_favorite = 1",
+        'icon': 'mdi:heart',
+        'order': 'favorited_at DESC'
+    },
+    'highly_rated': {
+        'query': "SELECT * FROM media_files WHERE rating >= 4",
+        'icon': 'mdi:star',
+        'order': 'rating DESC, rated_at DESC'
+    },
+    'recent': {
+        'query': "SELECT * FROM media_files WHERE last_viewed > ? ORDER BY last_viewed DESC",
+        'icon': 'mdi:clock-outline',
+        'params': lambda: [int((datetime.now() - timedelta(days=7)).timestamp())]
+    },
+    'unrated': {
+        'query': "SELECT * FROM media_files WHERE rating IS NULL",
+        'icon': 'mdi:star-outline',
+        'order': 'RANDOM()'
+    },
+    'trash': {
+        'query': "SELECT * FROM deleted_files WHERE restored_at IS NULL",
+        'icon': 'mdi:delete',
+        'order': 'deleted_at DESC'
+    }
+}
+```
+
+### Configuration
+
+```yaml
+# configuration.yaml
+media_index:
+  # File action settings
+  file_actions:
+    enabled: true
+    allow_delete: true
+    allow_permanent_delete: false  # Safety!
+    trash_folder: /media/.trash
+    trash_retention_days: 30  # Auto-cleanup old trash
+    
+    # Metadata storage strategy
+    metadata_strategy: sidecar  # or 'database', 'xmp', 'exif'
+    
+    # Confirmation requirements
+    require_confirmation:
+      delete: true
+      move: false
+      permanent_delete: true
+    
+    # Smart collections
+    enable_collections: true
+    collections:
+      - favorites
+      - highly_rated
+      - recent
+      - trash
+```
+
+### UI Styling
+
+```css
+/* Action buttons overlay */
+.action-buttons {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 100;
+}
+
+.media-container:hover .action-buttons {
+  opacity: 1;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+  background: rgba(0, 0, 0, 0.95);
+  border-color: var(--primary-color);
+  transform: translateY(-2px);
+}
+
+.favorite-btn.active ha-icon {
+  color: var(--error-color);
+}
+
+.rate-btn.rated ha-icon {
+  color: var(--warning-color);
+}
+```
+
+---
+
 ## 🚀 Full Screen Panel Component
 
 ### Custom Panel Registration
@@ -550,18 +1271,24 @@ media_slideshow:
 3. ✅ File system watcher for priority folders
 4. ✅ Service API for random item queries
 5. ✅ Basic EXIF extraction
+6. ✅ Interactive file actions (favorite/rate/delete)
 
 ### Medium Priority (v1.1)
 1. ⏳ Full screen panel component
 2. ⏳ Geocoding integration
 3. ⏳ Advanced filtering (date range, location)
 4. ⏳ Performance dashboard
+5. ⏳ Batch file operations
+6. ⏳ Smart collections (auto-updating queries)
+7. ⏳ Trash management & restore
 
 ### Low Priority (v2.0)
 1. 🔮 ML-based photo quality scoring
 2. 🔮 Face detection integration
 3. 🔮 Duplicate detection
 4. 🔮 Auto-categorization
+5. 🔮 XMP/EXIF metadata writing
+6. 🔮 Advanced tagging system
 
 ---
 
@@ -569,6 +1296,8 @@ media_slideshow:
 
 1. **Prototype the cache manager** - Prove incremental scanning works
 2. **Build service API** - Get random items from index
-3. **Create config flow** - UI for watched folders
-4. **Test with 25K+ collection** - Validate performance
-5. **Panel component** - Full screen slideshow mode
+3. **Implement file actions** - Favorite/rate/delete functionality
+4. **Create config flow** - UI for watched folders
+5. **Test with 25K+ collection** - Validate performance
+6. **Panel component** - Full screen slideshow mode
+7. **Smart collections** - Dynamic folders based on metadata
