@@ -37,6 +37,24 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 - ✅ Comprehensive documentation
 - ✅ Project structure for Home Assistant compatibility
 
+## Deployment
+**CRITICAL**: Always deploy changes after modifying ha-media-card.js
+
+### Production Deployment Command
+```powershell
+Copy-Item "ha-media-card.js" "\\10.0.0.26\config\www\cards\media-card.js" -Force
+```
+
+### Deployment Process
+1. Make changes to `ha-media-card.js`
+2. Deploy using the command above
+3. Hard refresh browser (Ctrl+F5) to clear cache
+4. Check Home Assistant logs for any errors
+
+### File Locations
+- **Development**: `c:\Users\marka\Media Item Card\ha-media-card.js`
+- **Production**: `\\10.0.0.26\config\www\cards\media-card.js`
+
 ## Next Steps
 Since Node.js is not available in this environment, the project is ready to use as-is with the source files. Users can either:
 1. Use the source files directly (src/ha-media-card.js, src/media-card-editor.js, src/index.js)
