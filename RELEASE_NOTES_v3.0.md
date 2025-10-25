@@ -39,35 +39,10 @@ Larger, easier-to-click navigation zones that work perfectly whether your photos
 
 **Why you'll love it:** No more hunting for tiny buttons when the image orientation changes.
 
-## 🔧 Configuration Improvements
-
-### Unified Settings
-- **`slideshow_window`** replaces the old `queue_size` setting (automatic migration)
-- Simplified configuration with sensible defaults
-- Better documentation and examples
-
 ### Performance Tuning
 - Optimized scanning for large collections (25,000+ photos tested)
 - Concurrent folder processing for faster initialization
 - Smart timeout protection prevents hanging on slow network shares
-
-## 📦 Installation
-
-### HACS (Recommended)
-```yaml
-# In your Lovelace dashboard:
-type: custom:ha-media-card
-media_path: /media/local/Photos
-folder_mode: random
-slideshow_window: 1000
-estimated_total_photos: 5000
-auto_refresh_seconds: 5
-```
-
-### Manual
-1. Download `ha-media-card.js`
-2. Copy to `/config/www/cards/`
-3. Add resource in Lovelace
 
 ## ⚙️ Key Configuration Options
 
