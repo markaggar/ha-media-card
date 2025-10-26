@@ -1,11 +1,16 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.61 - Fixed old queue reconnection after path change by checking path match
+ * Version: 3.0.0.75 - Fixed queue reconnection failure (clear _initializationInProgress on disconnect)
  */
 
 // Import Lit from CDN for standalone usage
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
+
+// Global map of subfolder queues keyed by media path
+if (!window.mediaCardSubfolderQueues) {
+  window.mediaCardSubfolderQueues = new Map();
+}
 
 class MediaCard extends LitElement {
   static properties = {
@@ -24,6 +29,10 @@ class MediaCard extends LitElement {
 
   constructor() {
     super();
+    
+    // Generate unique card ID for debugging
+    this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
+    
     this._mediaUrl = '';
     this._mediaType = 'image';
     this._lastModified = null;
@@ -108,6 +117,9 @@ class MediaCard extends LitElement {
   // Debug logging utility with throttling for frequent messages
   _log(...args) {
     if (this._debugMode || window.location.hostname === 'localhost') {
+      // Prefix all logs with card ID and path for debugging
+      const path = this.config?.media_path?.split('/').pop() || 'no-path';
+      const prefix = `[${this._cardId}:${path}]`;
       const message = args.join(' ');
       
       // REMOVED: No more message filtering - show all debug messages
@@ -135,7 +147,7 @@ class MediaCard extends LitElement {
         this._lastLogTime[message] = now;
       }
       
-      console.log(...args);
+      console.log(prefix, ...args);
     }
   }
 
@@ -325,14 +337,28 @@ class MediaCard extends LitElement {
   // Initialize subfolder queue if needed
   _initializeSubfolderQueue() {
     if (!this._subfolderQueue && this.config.subfolder_queue?.enabled) {
-      // Check if there's a paused queue from a previous card instance
-      if (window.mediaCardSubfolderQueue) {
-        this._log('� Reconnecting to existing SubfolderQueue');
-        this._subfolderQueue = window.mediaCardSubfolderQueue;
-        this._subfolderQueue.resumeWithNewCard(this);
-        window.mediaCardSubfolderQueue = null; // Clear global reference
+      const mediaPath = this.config.media_path;
+      
+      // Check if there's a paused queue for this specific path
+      if (window.mediaCardSubfolderQueues.has(mediaPath)) {
+        this._log('🔗 Reconnecting to existing SubfolderQueue for path:', mediaPath);
+        const existingQueue = window.mediaCardSubfolderQueues.get(mediaPath);
+        this._log('🔗 Queue has', existingQueue.queue.length, 'items,', existingQueue.discoveredFolders.length, 'folders');
+        const reconnected = existingQueue.resumeWithNewCard(this);
+        
+        if (reconnected) {
+          this._subfolderQueue = existingQueue;
+          window.mediaCardSubfolderQueues.delete(mediaPath); // Remove from map after reconnecting
+          this._log('✅ Queue reconnected and removed from map');
+        } else {
+          this._log('🚫 Reconnection failed - creating new queue');
+          window.mediaCardSubfolderQueues.delete(mediaPath); // Clear the failed queue
+          this._subfolderQueue = new SubfolderQueue(this);
+        }
       } else {
-        this._log('�🚀 Initializing new subfolder queue system');
+        this._log('🚀 No existing queue in map - initializing new subfolder queue system for path:', mediaPath);
+        this._log('🔍 Map currently has', window.mediaCardSubfolderQueues.size, 'queues for paths:', 
+                  Array.from(window.mediaCardSubfolderQueues.keys()).map(p => p.split('/').pop()).join(', '));
         this._subfolderQueue = new SubfolderQueue(this);
       }
     }
@@ -863,13 +889,9 @@ class MediaCard extends LitElement {
         this._subfolderQueue = null;
       }
       
-      // Clear the global queue reference to prevent reconnection
-      if (window.mediaCardSubfolderQueue) {
-        this._log('🗑️ Clearing global queue reference');
-        if (window.mediaCardSubfolderQueue.card) {
-          window.mediaCardSubfolderQueue.stopScanning(); // Stop it if it's still running
-        }
-        window.mediaCardSubfolderQueue = null;
+      // Clear any global queue references for this path
+      if (this.config?.media_path) {
+        window.mediaCardSubfolderQueues.delete(this.config.media_path);
       }
       
       // Clear the last media path to force detection in _handleFolderMode
@@ -1089,7 +1111,13 @@ class MediaCard extends LitElement {
     } else if (!this._lastMediaPath) {
       this._log('ℹ️ No previous path - first initialization');
     } else {
-      this._log('ℹ️ Path unchanged - keeping existing queue');
+      // Path unchanged - check if we have a valid queue
+      if (this._subfolderQueue && this._subfolderQueue.queue.length > 0) {
+        this._log('ℹ️ Path unchanged and queue has items - keeping existing queue');
+        return; // Queue exists and has items - nothing to do
+      } else {
+        this._log('🔄 Path unchanged but no queue - need to initialize/reconnect');
+      }
     }
     this._lastMediaPath = currentPath;
 
@@ -2000,8 +2028,9 @@ class MediaCard extends LitElement {
     const fileName = filePath.split('/').pop() || filePath;
     const extension = this._getFileExtension(fileName);
     const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
-    if (Math.random() < 0.01) { // Only log 1% of the time to avoid spam
-      this._log('🔥 _isMediaFile check:', filePath, 'fileName:', fileName, 'extension:', extension, 'isMedia:', isMedia);
+    // Reduced logging - only log filename
+    if (Math.random() < 0.01) {
+      this._log('📄', fileName);
     }
     return isMedia;
   }
@@ -3418,23 +3447,10 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Set up visibility detection for scanning pause
     this._setupVisibilityDetection();
     
-    // Check for existing queue to reconnect after navigation
-    if (window.mediaCardSubfolderQueue && !this._subfolderQueue) {
-      // Only reconnect if the queue's path matches the current card's path
-      const queuePath = window.mediaCardSubfolderQueue._initializedPath;
-      const cardPath = this.config?.media_path;
-      
-      if (queuePath === cardPath) {
-        this._log('🔗 Connected: Found existing queue with matching path - attempting reconnection');
-        this._initializeSubfolderQueue();
-      } else {
-        this._log('🚫 Connected: Found existing queue but path mismatch - queue:', queuePath, 'card:', cardPath, '- clearing old queue');
-        // Stop the old queue and clear the global reference
-        if (window.mediaCardSubfolderQueue.card) {
-          window.mediaCardSubfolderQueue.stopScanning();
-        }
-        window.mediaCardSubfolderQueue = null;
-      }
+    // CRITICAL: Reinitialize folder mode when reconnecting to allow queue reconnection
+    if (this.config && this.hass && this.config.is_folder && this.config.folder_mode) {
+      this._log('🔌 Component connected - reinitializing folder mode for queue reconnection');
+      setTimeout(() => this._handleFolderMode(), 50);
     }
     
     // Ensure auto-refresh is set up when component is connected/reconnected
@@ -3456,13 +3472,21 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Clean up visibility observers
     this._cleanupVisibilityObservers();
     
+    // CRITICAL: Clear initialization flag so reconnection can happen
+    this._initializationInProgress = false;
+    
     // PAUSE SubfolderQueue instead of destroying it - preserve valuable scan data
     if (this._subfolderQueue) {
-      this._log('⏸️ Pausing SubfolderQueue scanning (preserving queue data)');
+      const mediaPath = this.config.media_path;
+      this._log('⏸️ Pausing SubfolderQueue scanning (preserving queue data for path:', mediaPath + ')');
       this._subfolderQueue.pauseScanning();
       
-      // Store queue reference globally so new instances can reconnect
-      window.mediaCardSubfolderQueue = this._subfolderQueue;
+      // CRITICAL: Set cancellation flag to stop ALL async operations immediately
+      this._subfolderQueue._scanCancelled = true;
+      this._log('🛑 Set cancellation flag on queue to stop ongoing scans');
+      
+      // Store queue in path-keyed map so correct queue can be reconnected
+      window.mediaCardSubfolderQueues.set(mediaPath, this._subfolderQueue);
       this._subfolderQueue = null; // Clear local reference but don't destroy
     }
     
@@ -3554,12 +3578,25 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       }
     }, 1000); // Check every second
     
-    // Initialize visibility states - assume visible and active by default
-    this._isCardVisible = true; 
+    // Initialize visibility states - check actual visibility synchronously
     this._isPageVisible = !document.hidden;
-    this._backgroundPaused = false; // CRITICAL: Start as active, not paused
     
-    this._log('🟢 Visibility detection initialized - backgroundPaused:', this._backgroundPaused);
+    // Check if card is actually in viewport using getBoundingClientRect
+    const rect = this.getBoundingClientRect();
+    const isInViewport = (
+      rect.top < window.innerHeight &&
+      rect.bottom > 0 &&
+      rect.left < window.innerWidth &&
+      rect.right > 0
+    );
+    this._isCardVisible = isInViewport;
+    
+    // Set background pause state based on actual visibility
+    const shouldBeActive = this._isCardVisible && this._isPageVisible;
+    this._backgroundPaused = !shouldBeActive;
+    
+    this._log('🟢 Visibility detection initialized - cardVisible:', this._isCardVisible, 
+               'pageVisible:', this._isPageVisible, 'backgroundPaused:', this._backgroundPaused);
   }
 
   _cleanupVisibilityObservers() {
@@ -4478,6 +4515,7 @@ class SubfolderQueue {
     this.scanProgress = { current: 0, total: 0 };
     this.discoveryStartTime = null;
     this.discoveryInProgress = false;
+    this._scanCancelled = false; // Flag to cancel ongoing scans
     this._queueCreatedTime = Date.now(); // Track when this queue instance was created
     
     // Queue history - tracks every file ever added to the queue for debug purposes
@@ -4542,10 +4580,11 @@ class SubfolderQueue {
           this._log('🛑 Cleared scan timeout');
         }
         
-        // Store queue globally for reconnection
-        if (!window.mediaCardSubfolderQueue) {
-          window.mediaCardSubfolderQueue = this;
-          this._log('💾 Stored queue globally for reconnection');
+        // Store queue in path-keyed map for reconnection
+        const mediaPath = this.card.config.media_path;
+        if (!window.mediaCardSubfolderQueues.has(mediaPath)) {
+          window.mediaCardSubfolderQueues.set(mediaPath, this);
+          this._log('💾 Stored queue in map for path:', mediaPath);
         }
       }
       
@@ -4645,6 +4684,7 @@ class SubfolderQueue {
     
     this.isScanning = false;
     this.discoveryInProgress = false;
+    this._scanCancelled = true; // Cancel any ongoing scans
     
     // Clear any running timers/intervals
     if (this._scanTimeout) {
@@ -4660,9 +4700,21 @@ class SubfolderQueue {
   resumeWithNewCard(newCard) {
     this._log('▶️ SubfolderQueue: Resuming with new card instance');
     this._log('▶️ SubfolderQueue: Previous card:', !!this.card, 'New card:', !!newCard);
+    
     this.card = newCard;
+    
+    // CRITICAL: Only clear cancellation flag if card is actually visible
+    // Don't resume scanning if card is not visible (backgroundPaused)
+    if (!this.card._backgroundPaused) {
+      this._scanCancelled = false;
+      this._log('✅ Cleared cancellation flag - queue can resume scanning');
+    } else {
+      this._log('⏸️ Card is not visible - keeping queue paused (_scanCancelled stays true)');
+    }
+    
     this._log('▶️ SubfolderQueue: Reconnected - queue has', this.queue.length, 'items,', this.discoveredFolders.length, 'folders');
     this._log('▶️ SubfolderQueue: isScanning:', this.isScanning, 'discoveryInProgress:', this.discoveryInProgress);
+    return true; // Always succeeds since map ensures correct path
   }
 
   // Stop all scanning activity - called when card is destroyed
@@ -4836,9 +4888,16 @@ class SubfolderQueue {
       return false;
     }
 
+    // Check if queue is already populated (from reconnection)
+    if (this.queue.length > 0) {
+      this._log('✅ Queue already populated with', this.queue.length, 'items - skipping scan');
+      return true;
+    }
+
     this._log('🚀 Starting subfolder queue initialization');
     this.isScanning = true;
     this.discoveryInProgress = true;
+    this._scanCancelled = false; // Reset cancellation flag
     this.discoveryStartTime = Date.now();
     
     try {
@@ -4861,6 +4920,13 @@ class SubfolderQueue {
 
   // Quick initial scan of all available folders (legacy mode)
   async quickScan() {
+    // Check if scanning has been cancelled
+    if (this._scanCancelled) {
+      this._log('🚫 Quick scan cancelled');
+      this.isScanning = false;
+      return false;
+    }
+    
     this._log('⚡ Starting legacy quick scan for all folders');
     
     try {
@@ -4930,6 +4996,13 @@ class SubfolderQueue {
 
   // Legacy quickScan implementation (preserved for compatibility)
   async legacyQuickScan(basePath) {
+    // Check if scanning has been cancelled
+    if (this._scanCancelled) {
+      this._log('🚫 Legacy quick scan cancelled');
+      this.isScanning = false;
+      return false;
+    }
+    
     try {
       // Use a progressive approach - scan what we can and complete even if some folders timeout
       let subfolders = [];
@@ -4980,8 +5053,8 @@ class SubfolderQueue {
     await this._waitIfBackgroundPaused();
     
     // Check if scanning has been stopped/paused
-    if (!this.isScanning) {
-      this._log('🛑 Scanning stopped/paused - exiting hierarchical scan');
+    if (!this.isScanning || this._scanCancelled) {
+      this._log('🛑 Scanning stopped/paused/cancelled - exiting hierarchical scan');
       return { filesProcessed: 0, foldersProcessed: 0 };
     }
     
@@ -5009,8 +5082,8 @@ class SubfolderQueue {
       await this._waitIfBackgroundPaused();
       
       // Check if scanning has been stopped/paused
-      if (!this.isScanning) {
-        this._log('🛑 Scanning stopped/paused - exiting before API call');
+      if (!this.isScanning || this._scanCancelled) {
+        this._log('🛑 Scanning stopped/paused/cancelled - exiting before API call');
         return { filesProcessed: 0, foldersProcessed: 0 };
       }
       
@@ -5554,6 +5627,19 @@ class SubfolderQueue {
   // Discover subfolders with immediate early population
   // Stream files from a folder in real-time batches (NEW STREAMING APPROACH)
   async streamFolderFiles(folderPath, folderTitle) {
+    // Check if scanning has been cancelled
+    if (this._scanCancelled) {
+      this._log('🚫 Streaming scan cancelled for:', folderTitle);
+      return { files: [], fileCount: 0, title: folderTitle, path: folderPath, cancelled: true };
+    }
+    
+    // DEFENSIVE: Check if card reference is still valid
+    if (!this.card || !this.card.isConnected) {
+      this._log('🚫 Card disconnected or invalid - aborting scan for:', folderTitle);
+      this._scanCancelled = true; // Stop any further scans
+      return { files: [], fileCount: 0, title: folderTitle, path: folderPath, cancelled: true };
+    }
+    
     const BATCH_SIZE = 100; // Process files in batches of 100
     const TIMEOUT_MS = 300000; // 5 minutes safety timeout
     
@@ -5594,6 +5680,13 @@ class SubfolderQueue {
         // Process files in streaming batches using the batch scheduler
         this.processFolderChildrenInBatches(folderContents.children, BATCH_SIZE, (batch, batchIndex, isLastBatch) => {
           if (isComplete) return;
+          
+          // Check if scanning has been cancelled
+          if (this._scanCancelled) {
+            this._log('🚫 Batch processing cancelled for:', folderTitle, 'at batch', batchIndex + 1);
+            isComplete = true;
+            return;
+          }
           
           totalProcessed += batch.length;
           this._log('📦 Processing batch', batchIndex + 1, 'of', folderTitle + ':', batch.length, 'files (total processed:', totalProcessed + ')');
@@ -5882,6 +5975,12 @@ class SubfolderQueue {
 
   // NEW CONCURRENT STREAMING SCAN MANAGER
   async startConcurrentStreamingScans(folders) {
+    // Check if scanning has been cancelled
+    if (this._scanCancelled) {
+      this._log('🚫 Concurrent streaming scans cancelled before starting');
+      return [];
+    }
+    
     const MAX_CONCURRENT = 2; // Maximum concurrent folder scans - reduced to prevent I/O overload
     const scanQueue = [...folders]; // Copy of folders to scan
     const activescans = new Set(); // Track active scans
@@ -5957,6 +6056,12 @@ class SubfolderQueue {
 
   // NEW STREAMING INITIALIZATION - replaces early population approach
   async initializeWithStreamingScans(basePath) {
+    // Check if scanning has been cancelled
+    if (this._scanCancelled) {
+      this._log('🛑 Scanning cancelled - exiting initializeWithStreamingScans');
+      return false;
+    }
+    
     this._log('🚀 Initializing with streaming approach...');
     
     try {
@@ -6116,6 +6221,12 @@ class SubfolderQueue {
 
   // Emergency quick scan for folders that timeout - minimal sampling for basic info
   async emergencyQuickScan(folderPath, folderTitle, customTimeoutMs = null) {
+    // Check if scanning has been cancelled
+    if (this._scanCancelled) {
+      this._log('🚫 Emergency quick scan cancelled for:', folderTitle);
+      return { files: [], fileCount: 0, title: folderTitle, path: folderPath, cancelled: true };
+    }
+    
     try {
       this._log('🚨 Emergency quick scan starting for:', folderTitle);
       
