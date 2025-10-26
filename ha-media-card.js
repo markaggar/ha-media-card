@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.54 - Added URL change detection for dashboard navigation pause
+ * Version: 3.0.0.55 - Fixed pushState override error, added DOM attachment check
  */
 
 // Import Lit from CDN for standalone usage
@@ -3528,14 +3528,26 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Listen for navigation events
     window.addEventListener('popstate', this._handleUrlChange);
     
-    // Also listen for HA-specific navigation (if available)
-    if (window.history && window.history.pushState) {
-      const originalPushState = window.history.pushState;
-      window.history.pushState = (...args) => {
-        originalPushState.apply(window.history, args);
-        this._handleUrlChange();
-      };
-    }
+    // Check for URL changes periodically (HA may not use pushState)
+    this._urlCheckInterval = setInterval(() => {
+      const newUrl = window.location.pathname;
+      if (newUrl !== this._currentDashboardUrl) {
+        this._log('🧭 Dashboard navigation detected (polling) - was:', this._currentDashboardUrl, 'now:', newUrl);
+        this._currentDashboardUrl = newUrl;
+        
+        // Force visibility check when navigating to different dashboard
+        this._isCardVisible = false; // Assume not visible on navigation
+        this._handleVisibilityChange();
+      }
+      
+      // Also check if card is still attached to document
+      const isAttached = document.contains(this);
+      if (!isAttached && this._isCardVisible) {
+        this._log('📄 Card detached from document - marking as not visible');
+        this._isCardVisible = false;
+        this._handleVisibilityChange();
+      }
+    }, 1000); // Check every second
     
     // Initialize visibility states - assume visible and active by default
     this._isCardVisible = true; 
@@ -3561,6 +3573,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     if (this._handleUrlChange) {
       window.removeEventListener('popstate', this._handleUrlChange);
       this._handleUrlChange = null;
+    }
+    
+    if (this._urlCheckInterval) {
+      clearInterval(this._urlCheckInterval);
+      this._urlCheckInterval = null;
     }
   }
 
