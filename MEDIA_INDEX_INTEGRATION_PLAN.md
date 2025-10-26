@@ -4,6 +4,12 @@
 
 A Home Assistant integration that efficiently scans, indexes, and serves media metadata for the media card and other consumers. Designed for large collections (25,000+ files) with intelligent caching and incremental updates.
 
+**Repository Strategy:** This integration will be developed in a **separate GitHub repository** (`ha-media-index`) to allow independent versioning, releases, and HACS installation separate from the card itself.
+
+**Reconfiguration Support:** The integration must support full reconfiguration via the Home Assistant UI without requiring restart or manual file editing. Users can change watched folders, scan schedules, and all settings through the integrations page.
+
+**Deployment Strategy:** Automated PowerShell deployment script (`deploy-media-index.ps1`) enables rapid development iteration without manual intervention. Script handles file copying, HA restart, integration verification, and error log capture on failure. See **Deployment & Testing Strategy** section for full details.
+
 ---
 
 ## 🏗️ Architecture
@@ -45,12 +51,14 @@ A Home Assistant integration that efficiently scans, indexes, and serves media m
 
 ## 📦 File Structure
 
+**Repository:** `ha-media-index` (separate from `ha-media-card`)
+
 ```
 custom_components/
 └── media_index/
     ├── __init__.py              # Integration setup & services
     ├── manifest.json            # Dependencies & metadata
-    ├── config_flow.py           # UI configuration
+    ├── config_flow.py           # UI configuration & reconfiguration
     ├── const.py                 # Constants
     ├── scanner.py               # Media file scanning
     ├── indexer.py               # Database indexing
@@ -58,11 +66,31 @@ custom_components/
     ├── watcher.py               # File system monitoring
     ├── cache_manager.py         # Intelligent caching
     ├── file_actions.py          # File operations (favorite/delete/move/rate)
-    └── services.yaml            # Service definitions
+    ├── services.yaml            # Service definitions
+    ├── strings.json             # Translations
+    └── translations/
+        └── en.json              # English translations
 
+scripts/
+└── deploy-media-index.ps1       # Automated deployment script
+
+tests/
+├── test_scanner.py              # Unit tests for scanner
+├── test_cache_manager.py        # Cache validation tests
+├── test_file_actions.py         # File operations tests
+└── fixtures/                    # Test media files
+
+README.md                        # Installation & configuration
+hacs.json                        # HACS repository metadata
+```
+
+**Card Repository:** `ha-media-card` (existing)
+```
 www/
-├── ha-media-card.js             # Lovelace card (existing)
-└── media-slideshow-panel.js     # Full screen panel (new)
+└── ha-media-card.js             # Lovelace card (existing)
+
+scripts/
+└── deploy-media-card.ps1        # Card deployment script
 ```
 
 ---
@@ -124,7 +152,224 @@ CREATE TABLE scan_history (
     files_removed INTEGER DEFAULT 0,
     status TEXT  # 'running', 'completed', 'failed'
 );
+
+CREATE TABLE geocode_cache (
+    id INTEGER PRIMARY KEY,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    location_name TEXT,
+    location_city TEXT,
+    location_state TEXT,
+    location_country TEXT,
+    location_country_code TEXT,
+    cached_time INTEGER NOT NULL,  # Unix timestamp when cached
+    access_count INTEGER DEFAULT 1,
+    last_accessed INTEGER NOT NULL,  # Unix timestamp of last use
+    UNIQUE(latitude, longitude)  # Prevent duplicate lookups
+);
+
+CREATE INDEX idx_geocode_coords ON geocode_cache(latitude, longitude);
+CREATE INDEX idx_geocode_accessed ON geocode_cache(last_accessed);
 ```
+
+**Geocoding Cache Notes:**
+- GPS coordinates are rounded to 4 decimal places (~11 meters precision) before cache lookup
+- This groups nearby photos (e.g., same park, same street) to minimize API calls
+- Cache has no expiration - location names don't change frequently
+- `access_count` tracks cache effectiveness
+- `last_accessed` enables cleanup of rarely-used entries (optional housekeeping)
+
+#### Geocoding Strategy
+
+**Service Provider:** Nominatim (OpenStreetMap's free geocoding service)
+- Free, no API key required
+- Usage policy: Max 1 request/second, must include User-Agent
+- Reverse geocoding endpoint: `https://nominatim.openstreetmap.org/reverse`
+
+**Cache-First Approach:**
+```python
+# geocoder.py
+import aiohttp
+import asyncio
+from typing import Optional, Dict
+
+class GeocodeCache:
+    """Intelligent geocoding with aggressive caching."""
+    
+    NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+    COORD_PRECISION = 4  # Decimal places (4 = ~11m accuracy)
+    RATE_LIMIT_DELAY = 1.0  # Seconds between API calls
+    
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._last_request_time = 0
+        self._cache_hits = 0
+        self._cache_misses = 0
+    
+    def _round_coords(self, lat: float, lon: float) -> tuple[float, float]:
+        """Round coordinates to reduce cache misses for nearby photos."""
+        return (
+            round(lat, self.COORD_PRECISION),
+            round(lon, self.COORD_PRECISION)
+        )
+    
+    async def reverse_geocode(self, latitude: float, longitude: float) -> Optional[Dict]:
+        """Get location name from GPS coordinates (cache-first)."""
+        
+        # Round coordinates for cache lookup
+        lat, lon = self._round_coords(latitude, longitude)
+        
+        # 1. Check cache first
+        cached = await self._get_from_cache(lat, lon)
+        if cached:
+            self._cache_hits += 1
+            return cached
+        
+        self._cache_misses += 1
+        
+        # 2. Rate limiting (Nominatim: max 1 req/sec)
+        now = asyncio.get_event_loop().time()
+        elapsed = now - self._last_request_time
+        if elapsed < self.RATE_LIMIT_DELAY:
+            await asyncio.sleep(self.RATE_LIMIT_DELAY - elapsed)
+        
+        # 3. Call Nominatim API
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {
+                    'lat': lat,
+                    'lon': lon,
+                    'format': 'json',
+                    'zoom': 18,  # Street-level detail
+                    'addressdetails': 1
+                }
+                headers = {
+                    'User-Agent': 'HomeAssistant-MediaIndex/1.0'
+                }
+                
+                async with session.get(self.NOMINATIM_URL, params=params, headers=headers) as resp:
+                    self._last_request_time = asyncio.get_event_loop().time()
+                    
+                    if resp.status == 200:
+                        data = await resp.json()
+                        location = self._parse_nominatim_response(data)
+                        
+                        # 4. Cache the result
+                        await self._save_to_cache(lat, lon, location)
+                        
+                        return location
+                    else:
+                        _LOGGER.warning(f"Nominatim returned status {resp.status}")
+                        return None
+        
+        except Exception as e:
+            _LOGGER.error(f"Geocoding failed for ({lat}, {lon}): {e}")
+            return None
+    
+    def _parse_nominatim_response(self, data: dict) -> Dict:
+        """Extract relevant location info from Nominatim response."""
+        address = data.get('address', {})
+        
+        # Prefer neighborhood/suburb, fallback to city
+        location_name = (
+            address.get('suburb') or 
+            address.get('neighbourhood') or 
+            address.get('hamlet') or 
+            address.get('village') or
+            address.get('town') or
+            address.get('city')
+        )
+        
+        return {
+            'location_name': location_name,
+            'location_city': address.get('city') or address.get('town'),
+            'location_state': address.get('state'),
+            'location_country': address.get('country'),
+            'location_country_code': address.get('country_code', '').upper()
+        }
+    
+    async def _get_from_cache(self, lat: float, lon: float) -> Optional[Dict]:
+        """Check geocode cache for existing result."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                UPDATE geocode_cache 
+                SET access_count = access_count + 1,
+                    last_accessed = ?
+                WHERE latitude = ? AND longitude = ?
+                RETURNING location_name, location_city, location_state, 
+                         location_country, location_country_code
+                """,
+                (int(time.time()), lat, lon)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    await db.commit()
+                    return dict(row)
+        return None
+    
+    async def _save_to_cache(self, lat: float, lon: float, location: Dict):
+        """Save geocoding result to cache."""
+        now = int(time.time())
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO geocode_cache 
+                (latitude, longitude, location_name, location_city, location_state,
+                 location_country, location_country_code, cached_time, last_accessed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lat, lon,
+                    location.get('location_name'),
+                    location.get('location_city'),
+                    location.get('location_state'),
+                    location.get('location_country'),
+                    location.get('location_country_code'),
+                    now, now
+                )
+            )
+            await db.commit()
+    
+    def get_cache_stats(self) -> Dict:
+        """Return cache effectiveness statistics."""
+        total_requests = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'total_requests': total_requests,
+            'hit_rate_percent': round(hit_rate, 2)
+        }
+```
+
+**Integration with EXIF Extraction:**
+```python
+# exif_parser.py
+async def extract_and_geocode(self, file_path: str) -> Dict:
+    """Extract EXIF and optionally geocode GPS coordinates."""
+    
+    exif_data = await self._extract_exif(file_path)
+    
+    # If GPS data present and geocoding enabled
+    if exif_data.get('latitude') and self.config.geocode_enabled:
+        location = await self.geocoder.reverse_geocode(
+            exif_data['latitude'],
+            exif_data['longitude']
+        )
+        if location:
+            exif_data.update(location)
+    
+    return exif_data
+```
+
+**Performance Expectations:**
+- **Cache hit rate:** 60-80% for typical photo collections (recurring locations)
+- **API calls for 25K photos:** 5K-10K unique locations (vs. 25K without caching)
+- **Indexing time saved:** ~6-12 hours (at 1 req/sec) vs. ~7 hours with cache
+- **Coordinate rounding:** Groups photos within ~11 meters to same location name
 
 #### Scan Strategy
 
@@ -1250,6 +1495,13 @@ media_index:
   extract_exif: true
   geocode_locations: true # Convert GPS to place names
   
+  # Geocoding settings
+  geocoding:
+    enabled: true
+    coordinate_precision: 4  # Decimal places (4 = ~11m grouping)
+    rate_limit_delay: 1.0    # Seconds between API calls (Nominatim requirement)
+    cache_cleanup_days: 365  # Remove unused geocode cache entries after 1 year
+  
   # Cache management
   cache_max_age_days: 90  # Remove files not seen in 90 days
 
@@ -1292,12 +1544,592 @@ media_slideshow:
 
 ---
 
+## 🚀 Deployment & Testing Strategy
+
+### Automated Deployment Script
+
+The integration includes a PowerShell deployment script (`deploy-media-index.ps1`) that enables rapid development iteration without manual intervention.
+
+#### Features
+- **Automatic file copying** from dev workspace to HA `custom_components/`
+- **Smart change detection** using Robocopy to only deploy modified files
+- **Automatic HA restart** via REST API after deployment
+- **Integration verification** by checking entity availability
+- **Attribute validation** to ensure sensors have expected metadata
+- **Error log capture** on failure for immediate debugging
+- **Exit code signaling** for CI/CD integration (exit 2 on regression)
+
+#### Script Parameters
+
+```powershell
+.\scripts\deploy-media-index.ps1 `
+    -DestPath "\\10.0.0.26\config\custom_components\media_index" `
+    -VerifyEntity "sensor.media_index_total_files" `
+    -DumpErrorLogOnFail `
+    -FailOnNoRestart
+```
+
+**Parameters:**
+- `-DestPath`: Network path to HA `custom_components/media_index/` folder
+- `-VerifyEntity`: Sensor to check after restart (confirms integration loaded)
+- `-DumpErrorLogOnFail`: Fetch HA error log if verification fails
+- `-FailOnNoRestart`: Exit with error if restart didn't occur
+- `-ForceCopy`: Force copy even if files appear identical (Samba timestamp issues)
+- `-AlwaysRestart`: Restart HA even if no file changes detected
+
+#### Environment Variables
+
+```powershell
+# Set once in your PowerShell profile or dev environment
+$env:HA_BASE_URL = "http://10.0.0.26:8123"
+$env:HA_TOKEN = "eyJ0eXAiOiJKV1QiLCJhb..."  # Long-lived access token
+$env:HA_VERIFY_ENTITY = "sensor.media_index_total_files"
+$env:HA_RESTART_MAX_WAIT_SEC = "60"
+$env:HA_VERIFY_MAX_WAIT_SEC = "45"
+$env:WM_SAVE_ERROR_LOG_TO_TEMP = "1"  # Save error logs to %TEMP% for analysis
+```
+
+#### Deployment Workflow
+
+**Standard development cycle:**
+
+1. **Make changes** to integration code in `custom_components/media_index/`
+2. **Deploy automatically:**
+   ```powershell
+   .\scripts\deploy-media-index.ps1
+   ```
+3. **Script executes:**
+   - Copies changed files to HA server via network share
+   - Validates HA configuration before restart
+   - Requests HA Core restart via REST API
+   - Waits for HA to come back online (polls `/api/config`)
+   - Verifies `sensor.media_index_total_files` becomes available
+   - Validates sensor attributes (e.g., `scan_status`, `last_scan_time`)
+   - Captures error log if verification fails
+   - Returns exit code 0 (success) or 2 (regression detected)
+
+4. **Check results** - Script output shows:
+   ```
+   Deploying Media Index from: C:\dev\ha-media-index\custom_components\media_index
+   To: \\10.0.0.26\config\custom_components\media_index
+   Robocopy OK (code 1)
+   Checking HA API: http://10.0.0.26:8123/api/config
+   HA API reachable (HTTP 200).
+   Running HA config check: http://10.0.0.26:8123/api/config/core/check_config
+   Config check PASSED.
+   Requesting HA Core restart via REST: http://10.0.0.26:8123/api/services/homeassistant/restart
+   HA restart requested (HTTP 200).
+   Waiting up to 60 s for HA to come back online...
+   HA back online after 24s (HTTP 200).
+   Verifying entity availability: sensor.media_index_total_files (timeout 45s)
+   Entity sensor.media_index_total_files is available with state: 24653
+   Attribute verification passed for sensor.media_index_total_files 
+       (scan_status=idle, last_scan_time=2025-10-24T10:15:30)
+   ```
+
+**On failure, script automatically:**
+- Fetches and displays last 120 lines of HA error log
+- Filters for `media_index` specific errors
+- Saves full log to `%TEMP%\ha-error-log-YYYYMMDD-HHmmss.log`
+- Exits with code 2 to signal regression
+
+#### Integration Verification
+
+The deployment script validates the integration loaded correctly by checking:
+
+1. **Entity availability:** `sensor.media_index_total_files` state is not `unknown` or `unavailable`
+2. **Attribute presence:** Expected attributes exist:
+   - `scan_status`: Current scan state (`idle`, `scanning`, `watching`)
+   - `last_scan_time`: ISO timestamp of last scan completion
+   - `total_folders`: Number of folders indexed
+   - `watched_folders`: List of folders with active file system watchers
+   - `cache_size_mb`: Size of SQLite cache database
+   - `geocode_cache_entries`: Number of cached location lookups
+   - `geocode_cache_hit_rate`: Percentage of GPS lookups served from cache
+   - `files_with_location`: Count of files with GPS coordinates
+
+3. **Log analysis:** No Python exceptions containing `media_index` in recent logs
+
+**Example verification output:**
+```
+Entity sensor.media_index_total_files is available with state: 24653
+Attribute verification passed (scan_status=idle, last_scan_time=2025-10-24T10:15:30, 
+    total_folders=487, cache_size_mb=156.3, geocode_cache_entries=3842, 
+    geocode_cache_hit_rate=73.2%, files_with_location=18653)
+```
+
+### Testing Without Manual Intervention
+
+#### Unit Tests
+```powershell
+# Run pytest in integration directory
+cd custom_components/media_index
+pytest tests/ -v --cov=. --cov-report=html
+```
+
+#### Integration Tests
+```powershell
+# Deploy and verify in one command
+.\scripts\deploy-media-index.ps1 -VerifyEntity "sensor.media_index_total_files" -DumpErrorLogOnFail
+if ($LASTEXITCODE -eq 0) { 
+    Write-Host "✅ Integration deployed and verified successfully" -ForegroundColor Green 
+} else { 
+    Write-Host "❌ Integration verification failed - check error log" -ForegroundColor Red 
+}
+```
+
+#### CI/CD Integration
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to HA Test Instance
+on: [push]
+jobs:
+  deploy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Deploy and verify
+        env:
+          HA_BASE_URL: ${{ secrets.HA_BASE_URL }}
+          HA_TOKEN: ${{ secrets.HA_TOKEN }}
+        run: |
+          .\scripts\deploy-media-index.ps1 `
+            -DestPath "\\10.0.0.26\config\custom_components\media_index" `
+            -VerifyEntity "sensor.media_index_total_files" `
+            -DumpErrorLogOnFail `
+            -FailOnNoRestart
+      - name: Check exit code
+        if: failure()
+        run: exit 2
+```
+
+### Reconfiguration Support
+
+The integration must support full reconfiguration without requiring HA restart or manual YAML editing.
+
+#### Config Flow Implementation
+
+**Initial Setup (ConfigFlow):**
+```python
+# config_flow.py
+class MediaIndexConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Media Index."""
+    
+    VERSION = 1
+    
+    async def async_step_user(self, user_input=None):
+        """Handle the initial step."""
+        errors = {}
+        
+        if user_input is not None:
+            # Validate base folder exists
+            base_folder = user_input[CONF_BASE_FOLDER]
+            if not await self.hass.async_add_executor_job(os.path.isdir, base_folder):
+                errors["base"] = "folder_not_found"
+            else:
+                # Create entry
+                return self.async_create_entry(
+                    title=f"Media Index ({base_folder})",
+                    data=user_input
+                )
+        
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema({
+                vol.Required(CONF_BASE_FOLDER, default="/media"): str,
+                vol.Optional(CONF_WATCHED_FOLDERS, default=[]): cv.ensure_list,
+                vol.Optional(CONF_SCAN_ON_STARTUP, default=True): bool,
+                vol.Optional(CONF_EXTRACT_EXIF, default=True): bool,
+            }),
+            errors=errors
+        )
+```
+
+**Reconfiguration (OptionsFlow):**
+```python
+class MediaIndexOptionsFlow(config_entries.OptionsFlow):
+    """Handle options flow for Media Index."""
+    
+    def __init__(self, config_entry: config_entries.ConfigEntry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+    
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
+        if user_input is not None:
+            # Update config entry
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                options=user_input
+            )
+            # Trigger reload of integration
+            await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+            return self.async_create_entry(title="", data=user_input)
+        
+        current_watched = self.config_entry.options.get(
+            CONF_WATCHED_FOLDERS, 
+            self.config_entry.data.get(CONF_WATCHED_FOLDERS, [])
+        )
+        
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_WATCHED_FOLDERS, 
+                    default=current_watched
+                ): cv.ensure_list,
+                vol.Optional(
+                    CONF_SCAN_SCHEDULE, 
+                    default=self.config_entry.options.get(CONF_SCAN_SCHEDULE, "hourly")
+                ): vol.In(["startup_only", "hourly", "daily", "weekly"]),
+                vol.Optional(
+                    CONF_EXTRACT_EXIF,
+                    default=self.config_entry.options.get(CONF_EXTRACT_EXIF, True)
+                ): bool,
+                vol.Optional(
+                    CONF_MAX_STARTUP_TIME,
+                    default=self.config_entry.options.get(CONF_MAX_STARTUP_TIME, 30)
+                ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
+            })
+        )
+```
+
+**Integration Reload on Config Change:**
+```python
+# __init__.py
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Media Index from a config entry."""
+    
+    # Register options update listener
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    
+    # Initialize integration...
+    
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+```
+
+#### Reconfigurable Settings
+
+**Available via UI (no restart required):**
+- ✅ Watched folders (add/remove file system watchers dynamically)
+- ✅ Scan schedule (startup_only, hourly, daily, weekly)
+- ✅ EXIF extraction enabled/disabled
+- ✅ Geocoding enabled/disabled
+- ✅ Geocoding coordinate precision (2-6 decimal places)
+- ✅ Max startup scan time
+- ✅ Concurrent scan workers
+- ✅ Batch size for processing
+- ✅ Cache max age
+- ✅ Geocode cache cleanup age
+
+**Requires restart:**
+- ⚠️ Base folder path (structural change, requires reindex)
+
+**Implementation Note:** When watched folders change, the integration dynamically adds/removes `watchdog` file system observers without restarting HA. When scan schedule changes, the integration cancels existing scheduled tasks and creates new ones with updated intervals. When geocoding is disabled, existing cached location names are preserved but no new API calls are made.
+
+### Deployment Locations
+
+#### Development Environment
+```
+C:\Users\marka\ha-media-index\
+├── custom_components\media_index\  # Source code
+├── scripts\deploy-media-index.ps1  # Deployment script
+└── tests\                          # Unit tests
+```
+
+#### Home Assistant Production
+```
+\\10.0.0.26\config\
+├── custom_components\
+│   └── media_index\                # Deployed integration files
+└── .storage\
+    └── media_index.db              # SQLite cache (auto-created)
+```
+
+#### Card Deployment (Separate)
+```
+\\10.0.0.26\config\www\cards\
+└── media-card.js                   # Card UI (from ha-media-card repo)
+```
+
+---
+
+## 📘 Integration Design Best Practices
+
+> **Source:** Lessons learned from Water Monitor integration post-mortem (January 2025). These patterns prevent common pitfalls in Home Assistant custom integration development.
+
+### Configuration Flow Principles
+
+**❌ AVOID: Non-Serializable Schema Types**
+```python
+# This FAILS with voluptuous_serialize error (500 Internal Server Error)
+vol.Optional(CONF_WATCHED_FOLDERS, default=[]): cv.ensure_list
+```
+
+**✅ CORRECT: Use Basic Types, Parse in Handler**
+```python
+# Schema uses str type (serializable)
+vol.Optional(CONF_WATCHED_FOLDERS, default=""): str
+
+# Handler parses comma-separated string into list
+watched = [f.strip() for f in user_input.get(CONF_WATCHED_FOLDERS, "").split(",") if f.strip()]
+```
+
+**Why:**
+- `cv.ensure_list` returns a function object, not a data type
+- `voluptuous_serialize` cannot serialize function objects for frontend display
+- Results in config flow failing to load with HTTP 500 error
+- Always use primitive types (`str`, `int`, `bool`, `float`) in schemas
+- Perform complex parsing/validation in the flow handler after user input
+
+### Dependency Management
+
+**❌ AVOID: Pinning Versions of Core HA Packages**
+```json
+{
+  "requirements": [
+    "Pillow==10.0.0",    // ❌ Conflicts with HA core (has 11.3.0)
+    "aiosqlite==0.19.0", // ❌ Too strict
+    "watchdog==3.0.0"    // ❌ Prevents updates
+  ]
+}
+```
+
+**✅ CORRECT: Use Flexible Versioning, Remove Conflicts**
+```json
+{
+  "requirements": [
+    "aiosqlite>=0.19.0",  // ✅ Allows newer compatible versions
+    "watchdog>=3.0.0"     // ✅ Future-proof
+    // Pillow removed - already in HA core
+  ]
+}
+```
+
+**Why:**
+- Home Assistant Core includes many common packages (Pillow, requests, etc.)
+- Pinned versions (`==`) cause conflicts when HA updates its dependencies
+- Error: `"Requirements for X not found: ['Pillow==10.0.0']"`
+- Use `>=` for minimum version requirements
+- Remove dependencies that conflict with HA core (rely on HA's version)
+- Check HA Core's `requirements_all.txt` before adding dependencies
+
+### Device and Entity Registry
+
+**✅ CRITICAL: Shared Device Identifiers**
+```python
+# All entities MUST use same device identifier
+device_info = DeviceInfo(
+    identifiers={(DOMAIN, entry.entry_id)},  # Same for ALL entities
+    name="Media Index Scanner",
+    manufacturer="Custom Integration",        # Shown in UI
+    model="Media Indexer v1.0",              # Shown in UI
+)
+```
+
+**Why:**
+- Different `identifiers` across platforms split entities into separate devices
+- Use `entry.entry_id` (not `entry.unique_id`) for the identifier
+- Set `manufacturer` and `model` to what you want shown in device list
+- Respect `name_by_user` when updating device names via registry
+
+**✅ CRITICAL: Stable Unique IDs**
+```python
+# NEVER change unique_id format after initial release
+@property
+def unique_id(self) -> str:
+    return f"{self._entry.entry_id}_total_files"  # Stable forever
+```
+
+**Why:**
+- Changing `unique_id` format causes orphaned entities (old ID not cleaned up)
+- Users lose historical data and automations
+- Define format in Phase 1 and commit to it permanently
+
+### Configuration Storage
+
+**✅ CORRECT: Separate Runtime Config from Initial Setup**
+```python
+# __init__.py - Merge data and options
+config = {**entry.data, **entry.options}
+
+# config_flow.py - Store minimal setup data
+async def async_step_user(self, user_input=None):
+    return self.async_create_entry(
+        title=f"Media Index ({base_folder})",
+        data={
+            CONF_BASE_FOLDER: user_input[CONF_BASE_FOLDER],  # Immutable
+        }
+    )
+
+# config_flow.py - Store runtime settings in options
+class MediaIndexOptionsFlow(config_entries.OptionsFlow):
+    async def async_step_init(self, user_input=None):
+        return self.async_create_entry(
+            title="",
+            data={
+                CONF_WATCHED_FOLDERS: user_input[CONF_WATCHED_FOLDERS],  # Mutable
+                CONF_SCAN_SCHEDULE: user_input[CONF_SCAN_SCHEDULE],       # Mutable
+            }
+        )
+```
+
+**Why:**
+- `entry.data` - Immutable setup values (base folder, name)
+- `entry.options` - Reconfigurable runtime settings
+- Always merge: `config = {**entry.data, **entry.options}`
+- Define defaults in `const.py` to avoid missing key errors
+
+### Options Flow Reconfiguration
+
+**✅ CRITICAL: Add Update Listener**
+```python
+# __init__.py
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Register listener to reload on config changes
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    return True
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload integration when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+```
+
+**Why:**
+- Without update listener, option changes don't take effect until HA restart
+- `async_reload_entry()` reloads integration when user saves options
+- Gate optional features with enable flags (avoid failing on missing deps)
+
+### Common Pitfalls
+
+1. **❌ Using `cv.ensure_list` in voluptuous schema**
+   - Symptom: Config flow 500 error, `"Unable to convert schema: <function ensure_list>"`
+   - Solution: Use `str` type, parse in handler
+
+2. **❌ Pinning versions of core HA packages**
+   - Symptom: `"Requirements for X not found: ['Pillow==10.0.0']"`
+   - Solution: Use `>=` versions, remove conflicts
+
+3. **❌ Changing `unique_id` format**
+   - Symptom: Orphaned entities, lost historical data
+   - Solution: Define stable format in Phase 1
+
+4. **❌ Different `DeviceInfo` across platforms**
+   - Symptom: Entities split into multiple devices in UI
+   - Solution: Use same `identifiers` for all entities
+
+5. **❌ Not handling missing optional config**
+   - Symptom: `KeyError` on fresh installations
+   - Solution: Define defaults in `const.py`, use `.get(key, default)`
+
+6. **❌ Forgetting to add update listener**
+   - Symptom: Options changes don't apply until restart
+   - Solution: Call `entry.add_update_listener()` in `async_setup_entry`
+
+### References
+
+- **Water Monitor Post-Mortem:** `c:\Users\marka\Documents\AI\Water-Monitor\docs\post_mortem_and_ai_guide_home_assistant_integration.md`
+- **Home Assistant Config Flow:** https://developers.home-assistant.io/docs/config_entries_config_flow_handler
+- **Device Registry:** https://developers.home-assistant.io/docs/device_registry_index
+- **Entity Unique IDs:** https://developers.home-assistant.io/docs/entity_registry_index#unique-id-requirements
+
+---
+
 ## 🎬 Next Steps
 
-1. **Prototype the cache manager** - Prove incremental scanning works
-2. **Build service API** - Get random items from index
-3. **Implement file actions** - Favorite/rate/delete functionality
-4. **Create config flow** - UI for watched folders
-5. **Test with 25K+ collection** - Validate performance
-6. **Panel component** - Full screen slideshow mode
-7. **Smart collections** - Dynamic folders based on metadata
+### Phase 0: Repository Setup (Day 1)
+1. **Create `ha-media-index` repository** on GitHub
+2. **Initialize project structure:**
+   - `custom_components/media_index/` - Integration code
+   - `scripts/deploy-media-index.ps1` - Deployment automation
+   - `tests/` - Unit and integration tests
+   - `README.md` - Installation and configuration guide
+   - `hacs.json` - HACS repository metadata
+   - `.github/workflows/` - CI/CD pipelines
+3. **Set up development environment:**
+   - Clone repository to `c:\Users\marka\ha-media-index\`
+   - Configure environment variables (HA_BASE_URL, HA_TOKEN)
+   - Test deployment script against HA instance
+4. **Create deployment script** based on Water Monitor pattern (see attached `deploy-water-monitor.ps1`)
+
+### Phase 1: Core Integration (Days 2-4)
+1. **Implement `manifest.json`** - Dependencies, domain, version
+2. **Build `config_flow.py`** - Initial setup + reconfiguration (OptionsFlow)
+3. **Create `const.py`** - Constants for config keys, defaults
+4. **Implement `__init__.py`:**
+   - Integration setup/teardown
+   - Config entry reload on options change
+   - Service registration
+5. **Create basic sensor** - `sensor.media_index_total_files`
+6. **Deploy and verify** - Ensure integration loads via automated script
+
+### Phase 2: Smart Caching (Days 5-7)
+1. **Implement `cache_manager.py`** - SQLite database schema
+2. **Build `scanner.py`** - Incremental scanning logic
+3. **Create `indexer.py`** - Database write operations
+4. **Add scan service** - `media_index.scan_folder`
+5. **Test with small dataset** (100 files) - Verify caching works
+6. **Deploy and verify** - Check scan_status sensor attribute
+
+### Phase 3: File System Monitoring (Days 8-9)
+1. **Implement `watcher.py`** - watchdog integration
+2. **Add watched_folders reconfiguration** - Dynamic watcher add/remove
+3. **Test real-time updates** - Touch/delete files, verify sensor updates
+4. **Deploy and verify** - Check watched_folders sensor attribute
+
+### Phase 4: Service API (Days 10-11)
+1. **Implement `media_index.get_random_items`** service
+2. **Add filtering options** - folder, file_type, date_range
+3. **Optimize queries** - Index tuning for performance
+4. **Test with 25K+ collection** - Validate query speed (<100ms)
+5. **Deploy and verify** - Call service from Developer Tools
+
+### Phase 5: EXIF & Metadata (Days 12-14)
+1. **Implement `exif_parser.py`** - Pillow/piexif integration
+2. **Add metadata to cache** - GPS, camera, date_taken
+3. **Create metadata sensors** - Latest photo location, camera stats
+4. **Deploy and verify** - Check metadata attributes populated
+
+### Phase 6: Interactive File Actions (Days 15-17)
+1. **Implement `file_actions.py`** - Favorite/rate/delete/move operations
+2. **Add action services:**
+   - `media_index.favorite_file`
+   - `media_index.rate_file`
+   - `media_index.delete_file`
+   - `media_index.move_file`
+3. **Add favorites tracking** - SQLite table for starred items
+4. **Test file operations** - Ensure files moved/deleted on disk
+5. **Deploy and verify** - Call action services from card
+
+### Phase 7: Documentation & Release (Days 18-20)
+1. **Write comprehensive README** - Installation, configuration, services
+2. **Create HACS metadata** - `hacs.json` for custom repository
+3. **Add translations** - `strings.json` and `translations/en.json`
+4. **CI/CD setup** - Automated testing and deployment
+5. **Version tagging** - v1.0.0 release
+6. **HACS submission** - Add to HACS default repository list
+
+### Integration Testing Checklist
+- [ ] Deployment script copies all files correctly
+- [ ] HA restarts successfully after deployment
+- [ ] Integration loads without errors
+- [ ] `sensor.media_index_total_files` becomes available
+- [ ] Sensor attributes populated (scan_status, last_scan_time, etc.)
+- [ ] Reconfiguration via UI works without restart
+- [ ] Watched folders dynamically add/remove watchers
+- [ ] Services callable from Developer Tools
+- [ ] File actions execute correctly
+- [ ] Error log capture works on failures
+- [ ] Exit code 0 on success, 2 on regression
+
+### Success Metrics
+- ✅ Initial scan of 25K files completes in <2 minutes
+- ✅ Incremental scans complete in <10 seconds
+- ✅ Real-time file changes detected within 5 seconds
+- ✅ Service queries return in <100ms
+- ✅ Integration loads in <5 seconds on HA restart
+- ✅ Zero manual intervention required for deployment
+- ✅ All tests pass in CI/CD pipeline
+

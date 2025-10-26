@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.41 - Fix Priority Patterns UI editing and pathChanged boolean
+ * Version: 3.0.0.54 - Added URL change detection for dashboard navigation pause
  */
 
 // Import Lit from CDN for standalone usage
@@ -48,6 +48,7 @@ class MediaCard extends LitElement {
     this._lastScanTime = 0; // Track when we last scanned folder contents to prevent rapid re-scanning
     this._errorState = null; // Track media loading errors with retry options
     this._retryAttempts = new Map(); // Track retry attempts per URL to prevent endless loops
+    this._configuredMediaPath = null; // Track the configured media path to detect changes across setConfig calls
     this._isLoadingMedia = false; // Prevent duplicate media loads during queue initialization
     this._videoEndedRefreshInProgress = false; // Prevent auto-refresh from interfering with video-ended refresh
     
@@ -145,6 +146,17 @@ class MediaCard extends LitElement {
 
   _getFileExtension(fileName) {
     return fileName?.split('.').pop()?.toLowerCase();
+  }
+
+  // Get effective auto-refresh interval (treat 0 or undefined as 10 for random modes)
+  _getEffectiveAutoRefreshSeconds() {
+    const configured = this.config?.auto_refresh_seconds;
+    // For random/subfolder modes, default to 10 seconds if not set or 0
+    if (this.config?.is_folder && (this.config?.folder_mode === 'random' || this.config?.subfolder_queue?.enabled)) {
+      return configured || 10;
+    }
+    // For other modes, use configured value or 0
+    return configured || 0;
   }
 
   // Folder mode utility helpers
@@ -369,7 +381,8 @@ class MediaCard extends LitElement {
           
           // Set _lastRefreshTime to allow immediate next refresh
           // (subtract interval so next auto-refresh can happen right away)
-          const configuredInterval = (this.config?.auto_refresh_seconds || 30) * 1000;
+          // Treat 0 as 10 seconds for random mode to ensure card works correctly
+          const configuredInterval = this._getEffectiveAutoRefreshSeconds() * 1000;
           this._lastRefreshTime = Date.now() - configuredInterval;
           this._log('🕒 Set _lastRefreshTime to allow immediate next refresh in', configuredInterval, 'ms');
           
@@ -818,9 +831,15 @@ class MediaCard extends LitElement {
     const oldConfig = this.config;
     const wasFolder = !!(oldConfig?.is_folder && oldConfig?.folder_mode);
     const isFolder = !!(config.is_folder && config.folder_mode);
-    const pathChanged = !!(oldConfig && oldConfig.media_path !== config.media_path);
     
-    this._log('🔧 setConfig called - oldPath:', oldConfig?.media_path, 'newPath:', config.media_path, 'pathChanged:', pathChanged);
+    // Use the tracked path instead of oldConfig.media_path to properly detect changes
+    // across multiple setConfig calls (e.g., when saving from editor)
+    const pathChanged = !!(this._configuredMediaPath && this._configuredMediaPath !== config.media_path);
+    
+    this._log('🔧 setConfig called');
+    this._log('   Previously configured path:', this._configuredMediaPath);
+    this._log('   New path:', config.media_path);
+    this._log('   pathChanged:', pathChanged);
     
     // Preserve pause state when switching between modes on the same folder path
     const preservePauseState = !pathChanged && 
@@ -828,24 +847,45 @@ class MediaCard extends LitElement {
                                oldConfig?.folder_mode !== config.folder_mode;
     const savedPauseState = preservePauseState ? this._isPaused : false;
     
-    this._log('🔧 setConfig called - was folder:', wasFolder, 'is folder:', isFolder, 'path changed:', pathChanged);
+    this._log('🔧 setConfig - was folder:', wasFolder, 'is folder:', isFolder, 'path changed:', pathChanged);
     if (preservePauseState) {
       this._log('🔧 Preserving pause state:', savedPauseState, 'for same path folder mode switch');
     }
     
     // Reset subfolder queue and history if path changed
-    if (pathChanged && this._subfolderQueue) {
-      this._log('🔄 Media path changed - resetting subfolder queue and history');
-      // Reset the shown items history when path changes
-      this._subfolderQueue.shownItems.clear();
-      this._subfolderQueue.history = [];
-      this._subfolderQueue.historyIndex = -1;
-      this._subfolderQueue.queue = [];
-      this._subfolderQueue.discoveredFolders = [];
-      this._subfolderQueue = null;
+    if (pathChanged) {
+      this._log('🔄 Media path changed - resetting ALL queue state and history');
+      
+      // Stop and destroy the old queue FIRST to prevent it from re-storing itself globally
+      if (this._subfolderQueue) {
+        this._log('� Stopping old subfolder queue...');
+        this._subfolderQueue.stopScanning(); // This sets card = null, preventing further activity
+        this._subfolderQueue = null;
+      }
+      
+      // Clear the global queue reference to prevent reconnection
+      if (window.mediaCardSubfolderQueue) {
+        this._log('🗑️ Clearing global queue reference');
+        if (window.mediaCardSubfolderQueue.card) {
+          window.mediaCardSubfolderQueue.stopScanning(); // Stop it if it's still running
+        }
+        window.mediaCardSubfolderQueue = null;
+      }
       
       // Clear the last media path to force detection in _handleFolderMode
       this._lastMediaPath = null;
+      
+      // Also clear slideshow and new content queues
+      this._newContentQueue = [];
+      this._slideshowFiles = [];
+      this._lastKnownNewest = null;
+      this._lastKnownFolderSize = null;
+      
+      // Clear folder contents to force re-scan
+      this._folderContents = null;
+      this._currentMediaIndex = 0;
+      
+      this._log('✅ All queues and state cleared for path change');
     }
     
     // Create new config object with metadata defaults
@@ -860,7 +900,7 @@ class MediaCard extends LitElement {
       },
       subfolder_queue: {
         enabled: config.subfolder_queue?.enabled || false, // Default: disabled for now
-        scan_depth: config.subfolder_queue?.scan_depth || 2, // Default: 2 levels deep
+        scan_depth: config.subfolder_queue?.scan_depth !== undefined ? config.subfolder_queue.scan_depth : null, // Default: null (unlimited)
         priority_folder_patterns: config.subfolder_queue?.priority_folder_patterns || [],
         equal_probability_mode: config.subfolder_queue?.equal_probability_mode || false, // True equal probability per media item
         estimated_total_photos: config.subfolder_queue?.estimated_total_photos || null, // User estimate for better probability calculation
@@ -945,6 +985,9 @@ class MediaCard extends LitElement {
         this._log('🔧 Restored pause state after folder mode switch');
       }, 100);
     }
+    
+    // Store the configured media path for future change detection
+    this._configuredMediaPath = config.media_path;
   }
 
   _setupAutoRefresh() {
@@ -1017,11 +1060,16 @@ class MediaCard extends LitElement {
   async _handleFolderMode() {
     // Check for media path changes and reset queue if needed
     const currentPath = this.config.media_path;
-    this._log('🔍 Path check - last:', this._lastMediaPath, 'current:', currentPath, 'queue exists:', !!this._subfolderQueue);
+    this._log('🔍 _handleFolderMode called');
+    this._log('   _lastMediaPath:', this._lastMediaPath);
+    this._log('   currentPath:', currentPath);
+    this._log('   _subfolderQueue exists:', !!this._subfolderQueue);
+    this._log('   queue size:', this._subfolderQueue?.queue?.length || 0);
     
     if (this._lastMediaPath && this._lastMediaPath !== currentPath) {
-      this._log('🔄 Media path changed from', this._lastMediaPath, 'to', currentPath, '- resetting subfolder queue');
+      this._log('🔄 DETECTED path change from', this._lastMediaPath, 'to', currentPath, '- resetting all queues');
       if (this._subfolderQueue) {
+        this._log('🗑️ Clearing subfolder queue...');
         // Reset all queue state
         this._subfolderQueue.shownItems.clear();
         this._subfolderQueue.history = [];
@@ -1029,8 +1077,19 @@ class MediaCard extends LitElement {
         this._subfolderQueue.queue = [];
         this._subfolderQueue.discoveredFolders = [];
         this._subfolderQueue = null;
-        this._log('✅ Queue reset complete');
+        this._log('✅ Subfolder queue cleared');
       }
+      
+      // Also clear slideshow and new content queues
+      this._newContentQueue = [];
+      this._slideshowFiles = [];
+      this._lastKnownNewest = null;
+      this._lastKnownFolderSize = null;
+      this._log('✅ All queues and state reset complete');
+    } else if (!this._lastMediaPath) {
+      this._log('ℹ️ No previous path - first initialization');
+    } else {
+      this._log('ℹ️ Path unchanged - keeping existing queue');
     }
     this._lastMediaPath = currentPath;
 
@@ -1214,7 +1273,8 @@ class MediaCard extends LitElement {
     }
 
     const now = Date.now();
-    const configuredInterval = (this.config.auto_refresh_seconds || 30) * 1000;
+    // Treat 0 as 10 seconds for random mode to ensure card works correctly
+    const configuredInterval = this._getEffectiveAutoRefreshSeconds() * 1000;
     
     // Fix timestamp calculation - ensure _lastRefreshTime is reasonable
     if (this._lastRefreshTime > now || this._lastRefreshTime < (now - 86400000)) {
@@ -3276,8 +3336,9 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     this.requestUpdate();
     
     // In folder mode with auto-refresh enabled, automatically advance to next image after a brief delay
-    if (this.config?.is_folder && this.config?.auto_refresh_seconds > 0 && !this._isPaused) {
-      const autoAdvanceDelay = Math.min(5000, (this.config.auto_refresh_seconds * 1000) / 2); // Max 5 seconds or half the refresh interval
+    const effectiveRefreshSeconds = this._getEffectiveAutoRefreshSeconds();
+    if (this.config?.is_folder && effectiveRefreshSeconds > 0 && !this._isPaused) {
+      const autoAdvanceDelay = Math.min(5000, (effectiveRefreshSeconds * 1000) / 2); // Max 5 seconds or half the refresh interval
       
       this._log(`⏭️ Auto-advancing to next image in ${autoAdvanceDelay}ms due to media error`);
       
@@ -3450,6 +3511,32 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     document.addEventListener('visibilitychange', this._handlePageVisibility);
     
+    // Set up URL change detection for dashboard navigation
+    this._currentDashboardUrl = window.location.pathname;
+    this._handleUrlChange = () => {
+      const newUrl = window.location.pathname;
+      if (newUrl !== this._currentDashboardUrl) {
+        this._log('🧭 Dashboard navigation detected - was:', this._currentDashboardUrl, 'now:', newUrl);
+        this._currentDashboardUrl = newUrl;
+        
+        // Force visibility check when navigating to different dashboard
+        this._isCardVisible = false; // Assume not visible on navigation
+        this._handleVisibilityChange();
+      }
+    };
+    
+    // Listen for navigation events
+    window.addEventListener('popstate', this._handleUrlChange);
+    
+    // Also listen for HA-specific navigation (if available)
+    if (window.history && window.history.pushState) {
+      const originalPushState = window.history.pushState;
+      window.history.pushState = (...args) => {
+        originalPushState.apply(window.history, args);
+        this._handleUrlChange();
+      };
+    }
+    
     // Initialize visibility states - assume visible and active by default
     this._isCardVisible = true; 
     this._isPageVisible = !document.hidden;
@@ -3470,6 +3557,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       document.removeEventListener('visibilitychange', this._handlePageVisibility);
       this._handlePageVisibility = null;
     }
+    
+    if (this._handleUrlChange) {
+      window.removeEventListener('popstate', this._handleUrlChange);
+      this._handleUrlChange = null;
+    }
   }
 
   _handleVisibilityChange() {
@@ -3484,6 +3576,12 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     } else if (!shouldBeActive && !this._backgroundPaused) {
       this._log('⏸️ Pausing - card is not visible');
       this._backgroundPaused = true;
+      
+      // Also pause the subfolder queue immediately
+      if (this._subfolderQueue) {
+        this._log('⏸️ Pausing subfolder queue due to visibility change');
+        this._subfolderQueue.pauseScanning();
+      }
     }
     
     // The SubfolderQueue will check this._backgroundPaused in its _waitIfBackgroundPaused method
@@ -3623,7 +3721,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     ) && 
     this.config && 
     this.hass && 
-    this.config.auto_refresh_seconds > 0 && 
+    this._getEffectiveAutoRefreshSeconds() > 0 && 
     !this._isPaused;
     
     if (shouldSetupAutoRefresh) {
@@ -4108,7 +4206,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Resume auto-refresh if it was paused for navigation and should be running
     // But don't resume if manually paused
     if (this._pausedForNavigation && 
-        this.config?.auto_refresh_seconds > 0 && 
+        this._getEffectiveAutoRefreshSeconds() > 0 && 
         !this._refreshInterval && 
         !this._isPaused &&
         this.hass) {
@@ -4458,6 +4556,50 @@ class SubfolderQueue {
     console.log('📂 SubfolderQueue:', ...args);
   }
 
+  // Check if the card's media path has changed and clear queue if needed
+  _checkPathChange() {
+    if (!this.card || !this.card.config) {
+      this._log('❌ _checkPathChange: No card or config');
+      return;
+    }
+    
+    const currentPath = this.card.config.media_path;
+    this._log('🔍 _checkPathChange called - currentPath:', currentPath, '_initializedPath:', this._initializedPath);
+    
+    if (!this._initializedPath) {
+      this._initializedPath = currentPath;
+      this._log('📍 Initialized path tracking:', currentPath);
+      return;
+    }
+    
+    if (this._initializedPath !== currentPath) {
+      this._log('🔄 PATH CHANGE DETECTED in queue! From', this._initializedPath, 'to', currentPath, '- clearing queue');
+      
+      // Clear all queue data
+      this.shownItems.clear();
+      this.history = [];
+      this.historyIndex = -1;
+      this.queue = [];
+      this.discoveredFolders = [];
+      this.folderWeights.clear();
+      this.isScanning = false;
+      this.scanProgress = { current: 0, total: 0 };
+      this.discoveryStartTime = null;
+      this.discoveryInProgress = false;
+      this.queueHistory = [];
+      this.queueShuffleCounter = 0;
+      this.cachedTotalCount = null;
+      this.cachedCountSource = null;
+      this.lastDiscoveredCount = 0;
+      this.totalCountLocked = false;
+      
+      this._initializedPath = currentPath;
+      this._log('✅ Queue cleared due to path change - new path:', currentPath);
+    } else {
+      this._log('ℹ️ Path unchanged:', currentPath);
+    }
+  }
+
   // Pause all scanning activity - called when card is destroyed but preserve queue data
   pauseScanning() {
     this._log('⏸️ SubfolderQueue: Pausing scanning activity (preserving queue data)');
@@ -4641,6 +4783,9 @@ class SubfolderQueue {
 
   // Start the queue system
   async initialize() {
+    // Check for path changes first
+    this._checkPathChange();
+    
     if (!this.config.enabled || this.card.config.folder_mode !== 'random') {
       this._log('❌ Queue disabled or not in random mode');
       return false;
@@ -4801,13 +4946,13 @@ class SubfolderQueue {
       return { filesProcessed: 0, foldersProcessed: 0 };
     }
     
-    // Use configured scan depth if maxDepth not explicitly provided
-    const effectiveMaxDepth = maxDepth !== null ? maxDepth : (this.config.scan_depth || 2);
+    // Use configured scan depth if maxDepth not explicitly provided (null/0 = unlimited)
+    const effectiveMaxDepth = maxDepth !== null ? maxDepth : this.config.scan_depth;
     
-    this._log('🏗️ Hierarchical scan starting at:', basePath, 'depth:', currentDepth, 'max:', effectiveMaxDepth);
+    this._log('🏗️ Hierarchical scan starting at:', basePath, 'depth:', currentDepth, 'max:', effectiveMaxDepth === null || effectiveMaxDepth === 0 ? 'unlimited' : effectiveMaxDepth);
     
-    // Depth limiting with configuration support
-    if (currentDepth >= effectiveMaxDepth) {
+    // Depth limiting with configuration support (null or 0 = unlimited)
+    if (effectiveMaxDepth !== null && effectiveMaxDepth > 0 && currentDepth >= effectiveMaxDepth) {
       this._log('📁 Max depth reached:', currentDepth, '(configured limit:', effectiveMaxDepth, ')');
       return { filesProcessed: 0, foldersProcessed: 0 };
     }
@@ -4918,7 +5063,10 @@ class SubfolderQueue {
 
       // Process subfolders recursively with proper depth control and async coordination
       let subfoldersProcessed = 0;
-      if (subfolders.length > 0 && currentDepth < effectiveMaxDepth - 1) {
+      const shouldRecurse = subfolders.length > 0 && 
+        (effectiveMaxDepth === null || effectiveMaxDepth === 0 || currentDepth < effectiveMaxDepth - 1);
+      
+      if (shouldRecurse) {
         this._log('🔄 Recursing into', subfolders.length, 'subfolders at depth:', currentDepth + 1);
         // Ensure we don't proceed while background activity is paused
         await this._waitIfBackgroundPaused();
@@ -5067,10 +5215,10 @@ class SubfolderQueue {
 
   // Discover all subfolders under the base path (recursive with reliability)
   async discoverSubfolders(basePath, currentDepth = 0, forceMaxDepth = null) {
-    const maxDepth = forceMaxDepth || this.config.scan_depth || 2;
-    this._log('🔍 Starting recursive subfolder discovery from:', basePath, 'depth:', currentDepth, 'max:', maxDepth);
+    const maxDepth = forceMaxDepth !== null ? forceMaxDepth : this.config.scan_depth;
+    this._log('🔍 Starting recursive subfolder discovery from:', basePath, 'depth:', currentDepth, 'max:', maxDepth === null || maxDepth === 0 ? 'unlimited' : maxDepth);
     
-    if (currentDepth >= maxDepth) {
+    if (maxDepth !== null && maxDepth > 0 && currentDepth >= maxDepth) {
       this._log('📁 Max depth reached:', currentDepth);
       return [];
     }
@@ -6650,6 +6798,9 @@ class SubfolderQueue {
 
   // Refill queue with new random selections
   refillQueue() {
+    // Check for path changes first
+    this._checkPathChange();
+    
     if (this.isScanning) {
       this._log('⏳ Scan in progress, skipping refill');
       
@@ -7283,12 +7434,13 @@ class MediaCardEditor extends LitElement {
                 <div>
                   <input
                     type="number"
-                    min="1"
-                    max="5"
-                    .value=${this._config.subfolder_queue?.scan_depth || 2}
+                    min="0"
+                    max="10"
+                    .value=${this._config.subfolder_queue?.scan_depth ?? ''}
+                    placeholder="unlimited"
                     @input=${this._subfolderScanDepthChanged}
                   />
-                  <div class="help-text">How many folder levels to scan (1-5). Higher = more subfolders, slower scan.</div>
+                  <div class="help-text">How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth).</div>
                 </div>
               </div>
               
@@ -8354,7 +8506,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _mediaPathChanged(ev) {
-    this._config = { ...this._config, media_path: ev.target.value };
+    const oldPath = this._config?.media_path;
+    const newPath = ev.target.value;
+    this._log('📝 Editor: Media path changed from', oldPath, 'to', newPath);
+    
+    this._config = { ...this._config, media_path: newPath };
     this._fireConfigChanged();
   }
 
@@ -8656,11 +8812,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _subfolderScanDepthChanged(ev) {
+    const value = ev.target.value;
+    const depth = value === '' ? null : Math.max(0, Math.min(10, parseInt(value) || 0));
+    
     this._config = {
       ...this._config,
       subfolder_queue: {
         ...this._config.subfolder_queue,
-        scan_depth: Math.max(1, Math.min(5, parseInt(ev.target.value) || 2))
+        scan_depth: depth === 0 ? null : depth // Treat 0 as null (unlimited)
       }
     };
     this._fireConfigChanged();

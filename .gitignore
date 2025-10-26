@@ -36,3 +36,8 @@ npm-debug.log*
 EXIF_INTEGRATION_PLAN.md
 docs/
 scripts/
+
+# Credentials (DO NOT COMMIT)
+.ha-credentials
+*.credentials
+*_credentials.ps1

@@ -143,6 +143,13 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | `video_muted` | boolean | `false` | Start video muted |
 | `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
 
+### Debug Options
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `debug_mode` | boolean | `false` | Enable general card debug logging to browser console |
+| `debug_queue_mode` | boolean | `false` | Enable SubfolderQueue debug UI overlay |
+| `suppress_subfolder_logging` | boolean | `false` | Suppress SubfolderQueue console log messages (keeps other debug_mode logs) |
+
 ### Interactive Actions
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
