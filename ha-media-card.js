@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.57 - Fixed false positive DOM detachment by removing DOM attachment check
+ * Version: 3.0.0.58 - Fixed old queue continuing to scan after path change
  */
 
 // Import Lit from CDN for standalone usage
@@ -4584,6 +4584,16 @@ class SubfolderQueue {
     if (this._initializedPath !== currentPath) {
       this._log('🔄 PATH CHANGE DETECTED in queue! From', this._initializedPath, 'to', currentPath, '- clearing queue');
       
+      // Stop any running scanning activity first
+      this.isScanning = false;
+      this.discoveryInProgress = false;
+      
+      // Clear any running timers/intervals (same as pauseScanning)
+      if (this._scanTimeout) {
+        clearTimeout(this._scanTimeout);
+        this._scanTimeout = null;
+      }
+      
       // Clear all queue data
       this.shownItems.clear();
       this.history = [];
@@ -4591,10 +4601,8 @@ class SubfolderQueue {
       this.queue = [];
       this.discoveredFolders = [];
       this.folderWeights.clear();
-      this.isScanning = false;
       this.scanProgress = { current: 0, total: 0 };
       this.discoveryStartTime = null;
-      this.discoveryInProgress = false;
       this.queueHistory = [];
       this.queueShuffleCounter = 0;
       this.cachedTotalCount = null;
@@ -4603,7 +4611,7 @@ class SubfolderQueue {
       this.totalCountLocked = false;
       
       this._initializedPath = currentPath;
-      this._log('✅ Queue cleared due to path change - new path:', currentPath);
+      this._log('✅ Queue cleared and scanning stopped due to path change - new path:', currentPath);
     } else {
       this._log('ℹ️ Path unchanged:', currentPath);
     }
