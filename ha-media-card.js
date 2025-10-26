@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.56 - Fixed false positive DOM detachment during updates
+ * Version: 3.0.0.57 - Fixed false positive DOM detachment by removing DOM attachment check
  */
 
 // Import Lit from CDN for standalone usage
@@ -3538,26 +3538,6 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         // Force visibility check when navigating to different dashboard
         this._isCardVisible = false; // Assume not visible on navigation
         this._handleVisibilityChange();
-      }
-      
-      // Check if card is still attached to document (but be careful of temporary detachments during updates)
-      const isAttached = document.contains(this);
-      if (!isAttached && this._isCardVisible) {
-        // Only mark as not visible if we've been detached for more than 2 seconds
-        // This prevents false positives during DOM updates
-        if (!this._detachTime) {
-          this._detachTime = Date.now();
-          this._log('📄 Card temporarily detached from document (may be reattaching)');
-        } else if (Date.now() - this._detachTime > 2000) {
-          this._log('📄 Card detached from document for >2s - marking as not visible');
-          this._isCardVisible = false;
-          this._detachTime = null;
-          this._handleVisibilityChange();
-        }
-      } else if (isAttached && this._detachTime) {
-        // Card reattached quickly, clear the detach timer
-        this._log('📄 Card reattached to document quickly - staying visible');
-        this._detachTime = null;
       }
     }, 1000); // Check every second
     
