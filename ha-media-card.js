@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.58 - Fixed old queue continuing to scan after path change
+ * Version: 3.0.0.61 - Fixed old queue reconnection after path change by checking path match
  */
 
 // Import Lit from CDN for standalone usage
@@ -3420,8 +3420,21 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     // Check for existing queue to reconnect after navigation
     if (window.mediaCardSubfolderQueue && !this._subfolderQueue) {
-      this._log('🔗 Connected: Found existing queue - attempting reconnection');
-      this._initializeSubfolderQueue();
+      // Only reconnect if the queue's path matches the current card's path
+      const queuePath = window.mediaCardSubfolderQueue._initializedPath;
+      const cardPath = this.config?.media_path;
+      
+      if (queuePath === cardPath) {
+        this._log('🔗 Connected: Found existing queue with matching path - attempting reconnection');
+        this._initializeSubfolderQueue();
+      } else {
+        this._log('🚫 Connected: Found existing queue but path mismatch - queue:', queuePath, 'card:', cardPath, '- clearing old queue');
+        // Stop the old queue and clear the global reference
+        if (window.mediaCardSubfolderQueue.card) {
+          window.mediaCardSubfolderQueue.stopScanning();
+        }
+        window.mediaCardSubfolderQueue = null;
+      }
     }
     
     // Ensure auto-refresh is set up when component is connected/reconnected
@@ -4612,6 +4625,15 @@ class SubfolderQueue {
       
       this._initializedPath = currentPath;
       this._log('✅ Queue cleared and scanning stopped due to path change - new path:', currentPath);
+      
+      // Stop any existing scanning before restarting
+      this.pauseScanning();
+      
+      // Restart queue scanning with new path
+      this._log('🔄 Restarting queue scanning with new path');
+      this.initialize().catch(error => {
+        this._log('❌ Failed to restart queue after path change:', error);
+      });
     } else {
       this._log('ℹ️ Path unchanged:', currentPath);
     }
