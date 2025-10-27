@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.78 - Reduced filename logging from 1% to 0.1% sample rate
+ * Version: 3.1.0 - Progressive geocoding with media_index integration
  */
 
 // Import Lit from CDN for standalone usage
@@ -77,6 +77,10 @@ class MediaCard extends LitElement {
     this._zoomOriginX = 50; // Percent
     this._zoomOriginY = 50; // Percent
     this._zoomLevel = 2.0;  // Default zoom level
+    
+    // Media index integration state
+    this._mediaIndexQueue = null; // Queue of items from media_index integration
+    this._mediaIndexPosition = 0; // Current position in media_index queue
   }
 
 
@@ -326,9 +330,25 @@ class MediaCard extends LitElement {
       parts.push(`📄 ${metadata.filename}`);
     }
     
-    if (this.config.metadata.show_date && metadata.date) {
+    // Show EXIF date_taken if available (from media_index)
+    if (this.config.metadata.show_date && metadata.date_taken) {
+      const dateStr = new Date(metadata.date_taken).toLocaleDateString();
+      parts.push(`📅 ${dateStr}`);
+    }
+    // Fallback to filesystem date if no EXIF date
+    else if (this.config.metadata.show_date && metadata.date) {
       const dateStr = metadata.date.toLocaleDateString();
       parts.push(`📅 ${dateStr}`);
+    }
+    
+    // Show geocoded location if available (from media_index)
+    if (this.config.metadata.show_location) {
+      if (metadata.location_city && metadata.location_country) {
+        parts.push(`📍 ${metadata.location_city}, ${metadata.location_country}`);
+      } else if (metadata.has_coordinates && !metadata.is_geocoded) {
+        // Item has GPS coordinates but hasn't been geocoded yet
+        parts.push(`📍 Loading location...`);
+      }
     }
     
     return parts.join(' • ');
@@ -917,8 +937,15 @@ class MediaCard extends LitElement {
         show_folder: config.metadata?.show_folder !== false, // Default: true
         show_filename: config.metadata?.show_filename !== false, // Default: true  
         show_date: config.metadata?.show_date !== false, // Default: true
+        show_location: config.metadata?.show_location !== false, // Default: true (shows GPS location from EXIF)
         position: config.metadata?.position || 'bottom-left', // Default: bottom-left
         ...config.metadata
+      },
+      media_index: {
+        enabled: config.media_index?.enabled || false, // Default: disabled (use filesystem scanning)
+        entity_id: config.media_index?.entity_id || null, // Entity ID of media_index sensor
+        prefetch_offset: config.media_index?.prefetch_offset || 3, // Prefetch geocoding for N+3 card
+        ...config.media_index
       },
       subfolder_queue: {
         enabled: config.subfolder_queue?.enabled || false, // Default: disabled for now
@@ -1293,6 +1320,139 @@ class MediaCard extends LitElement {
     }
   }
 
+  /**
+   * Query media_index integration for random media items with EXIF metadata
+   * @param {number} count - Number of items to request
+   * @returns {Promise<Array>} Array of media items with metadata
+   */
+  async _queryMediaIndex(count = 10) {
+    if (!this.config.media_index?.enabled || !this.config.media_index?.entity_id) {
+      this._log('⚠️ Media index not configured');
+      return null;
+    }
+
+    try {
+      this._log('🔍 Querying media_index for', count, 'random items...');
+      
+      // Call media_index.get_random_items service with return_response
+      const response = await this.hass.callService(
+        'media_index',
+        'get_random_items',
+        {
+          count: count,
+          file_type: this._mediaType === 'all' ? undefined : this._mediaType
+        },
+        { return_response: true }
+      );
+
+      if (response && response.items && Array.isArray(response.items)) {
+        this._log('✅ Received', response.items.length, 'items from media_index');
+        
+        // Transform items to include resolved URLs
+        const items = await Promise.all(response.items.map(async (item) => {
+          const resolvedUrl = await this._resolveMediaPath(item.file_path);
+          return {
+            ...item,
+            url: resolvedUrl,
+            path: item.file_path,
+            filename: item.file_path.split('/').pop(),
+            folder: item.file_path.substring(0, item.file_path.lastIndexOf('/')),
+            // EXIF metadata
+            date_taken: item.date_taken,
+            location_city: item.location_city,
+            location_country: item.location_country,
+            location_name: item.location_name,
+            // Geocoding status for prefetch logic
+            has_coordinates: item.has_coordinates || false,
+            is_geocoded: item.is_geocoded || false,
+            latitude: item.latitude,
+            longitude: item.longitude
+          };
+        }));
+        
+        return items;
+      } else {
+        this._log('⚠️ Invalid response from media_index:', response);
+        return null;
+      }
+    } catch (error) {
+      console.error('Error querying media_index:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Prefetch geocoding for upcoming items in the queue
+   * Triggers geocoding for items N positions ahead to ensure location data is ready when displayed
+   */
+  async _prefetchGeocoding() {
+    if (!this.config.media_index?.enabled || !this._mediaIndexQueue) {
+      return; // Integration not enabled or queue not loaded
+    }
+
+    const offset = this.config.media_index?.prefetch_offset || 3;
+    const prefetchIndex = (this._mediaIndexPosition + offset) % this._mediaIndexQueue.length;
+    const item = this._mediaIndexQueue[prefetchIndex];
+
+    // Only prefetch if item has coordinates but isn't geocoded yet
+    if (!item || !item.has_coordinates || item.is_geocoded) {
+      return; // Nothing to prefetch
+    }
+
+    // Check if we're already geocoding this item (prevent duplicate requests)
+    if (item._geocoding_in_progress) {
+      return;
+    }
+
+    try {
+      this._log(`🗺️ Prefetching geocoding for item at index ${prefetchIndex} (lat: ${item.latitude}, lon: ${item.longitude})`);
+      
+      // Mark as in-progress to prevent duplicate requests
+      item._geocoding_in_progress = true;
+
+      // Call geocode_file service with latitude/longitude
+      const response = await this.hass.callService(
+        'media_index',
+        'geocode_file',
+        {
+          latitude: item.latitude,
+          longitude: item.longitude
+        },
+        { return_response: true }
+      );
+
+      if (response && response.location_city && response.location_country) {
+        // Update item with geocoded location
+        item.location_city = response.location_city;
+        item.location_country = response.location_country;
+        item.location_name = response.location_name;
+        item.is_geocoded = true;
+        
+        this._log(`✅ Geocoded to: ${response.location_city}, ${response.location_country}`);
+        
+        // If this is the currently displayed item, update the display
+        const currentIndex = (this._mediaIndexPosition - 1 + this._mediaIndexQueue.length) % this._mediaIndexQueue.length;
+        if (prefetchIndex === currentIndex) {
+          this._currentMetadata = {
+            ...this._currentMetadata,
+            location_city: response.location_city,
+            location_country: response.location_country,
+            location_name: response.location_name,
+            is_geocoded: true
+          };
+          this.requestUpdate(); // Force re-render to show location
+        }
+      } else {
+        this._log('⚠️ Geocoding returned no location data');
+      }
+    } catch (error) {
+      console.error('Error prefetching geocoding:', error);
+    } finally {
+      // Clear in-progress flag
+      delete item._geocoding_in_progress;
+    }
+  }
+
   async _handleFolderModeRefresh(forceImmediate = false) {
     // Exit immediately if paused
     if (this._isPaused) {
@@ -1331,6 +1491,69 @@ class MediaCard extends LitElement {
     }
     
     try {
+      // If media_index integration is enabled, use it instead of filesystem scanning
+      if (this.config.media_index?.enabled && this._isRandomMode()) {
+        this._log('🔍 Using media_index integration for media selection');
+        
+        // Initialize queue if not already loaded
+        if (!this._mediaIndexQueue || this._mediaIndexQueue.length === 0) {
+          const items = await this._queryMediaIndex(this.config.slideshow_window || 100);
+          if (items && items.length > 0) {
+            this._mediaIndexQueue = items;
+            this._mediaIndexPosition = 0;
+            this._log('✅ Loaded', items.length, 'items from media_index');
+          } else {
+            this._log('⚠️ Media index query returned no items');
+            // Fall through to filesystem scanning
+            this._mediaIndexQueue = null;
+          }
+        }
+        
+        // Use media from queue
+        if (this._mediaIndexQueue && this._mediaIndexQueue.length > 0) {
+          const item = this._mediaIndexQueue[this._mediaIndexPosition];
+          
+          // Load media from item
+          this._setMediaUrl(item.url);
+          this._detectMediaType(item.path);
+          
+          // Store metadata for display
+          this._currentMetadata = {
+            folder: item.folder,
+            filename: item.filename,
+            date_taken: item.date_taken,
+            location_name: item.location_name,
+            location_city: item.location_city,
+            location_country: item.location_country,
+            has_coordinates: item.has_coordinates,
+            is_geocoded: item.is_geocoded
+          };
+          
+          // Advance position (wrap around if at end)
+          this._mediaIndexPosition = (this._mediaIndexPosition + 1) % this._mediaIndexQueue.length;
+          
+          // Prefetch geocoding for upcoming items
+          this._prefetchGeocoding().catch(err => {
+            this._log('⚠️ Prefetch geocoding failed:', err);
+          });
+          
+          // Refresh queue when getting low
+          if (this._mediaIndexPosition >= this._mediaIndexQueue.length - 10) {
+            this._log('🔄 Queue running low, refreshing media_index items...');
+            this._queryMediaIndex(this.config.slideshow_window || 100).then(items => {
+              if (items && items.length > 0) {
+                this._mediaIndexQueue = items;
+                this._mediaIndexPosition = 0;
+              }
+            });
+          }
+          
+          this._lastRefreshTime = Date.now();
+          this._forceMediaReload();
+          return;
+        }
+      }
+      
       // If subfolder queue is active, use it instead of scanning folder contents
       if (this._subfolderQueue && this._subfolderQueue.config.enabled && this._isRandomMode()) {
         if (this._debugMode) {
@@ -7591,6 +7814,18 @@ class MediaCardEditor extends LitElement {
           </div>
           
           <div class="config-row">
+            <label>Show Location</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_location !== false}
+                @change=${this._metadataShowLocationChanged}
+              />
+              <div class="help-text">Display geocoded location from EXIF data (requires media_index integration)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Metadata Position</label>
             <div>
               <select @change=${this._metadataPositionChanged} .value=${this._config.metadata?.position || 'bottom-left'}>
@@ -7605,6 +7840,51 @@ class MediaCardEditor extends LitElement {
         </div>
 
         ${this._config.is_folder && this._config.folder_mode === 'random' ? html`
+          <div class="section">
+            <div class="section-title">🔌 Media Index Integration</div>
+            
+            <div class="config-row">
+              <label>Enable Media Index</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.media_index?.enabled || false}
+                  @change=${this._mediaIndexEnabledChanged}
+                />
+                <div class="help-text">Use media_index integration for EXIF metadata and smart random selection</div>
+              </div>
+            </div>
+            
+            ${this._config.media_index?.enabled ? html`
+              <div class="config-row">
+                <label>Media Index Entity</label>
+                <div>
+                  <input
+                    type="text"
+                    .value=${this._config.media_index?.entity_id || ''}
+                    placeholder="sensor.media_index_total_files"
+                    @input=${this._mediaIndexEntityChanged}
+                  />
+                  <div class="help-text">Entity ID of your media_index sensor (e.g., sensor.media_index_total_files)</div>
+                </div>
+              </div>
+              
+              <div class="config-row">
+                <label>Geocoding Prefetch Offset</label>
+                <div>
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    .value=${this._config.media_index?.prefetch_offset ?? 3}
+                    @input=${this._mediaIndexPrefetchChanged}
+                  />
+                  <div class="help-text">Geocode N items ahead (0 = disable prefetch, 3 = default)</div>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+
           <div class="section">
             <div class="section-title">🚀 Subfolder Queue (Random Mode)</div>
             
@@ -8980,12 +9260,57 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _metadataShowLocationChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_location: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataPositionChanged(ev) {
     this._config = {
       ...this._config,
       metadata: {
         ...this._config.metadata,
         position: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  // Media Index configuration event handlers
+  _mediaIndexEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      media_index: {
+        ...this._config.media_index,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _mediaIndexEntityChanged(ev) {
+    this._config = {
+      ...this._config,
+      media_index: {
+        ...this._config.media_index,
+        entity_id: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _mediaIndexPrefetchChanged(ev) {
+    this._config = {
+      ...this._config,
+      media_index: {
+        ...this._config.media_index,
+        prefetch_offset: parseInt(ev.target.value, 10)
       }
     };
     this._fireConfigChanged();
