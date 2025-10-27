@@ -1354,19 +1354,21 @@ class MediaCard extends LitElement {
         
         // Transform items to include resolved URLs
         const items = await Promise.all(response.items.map(async (item) => {
-          const resolvedUrl = await this._resolveMediaPath(item.file_path);
+          // Backend returns 'path', not 'file_path'
+          const filePath = item.path;
+          const resolvedUrl = await this._resolveMediaPath(filePath);
           return {
             ...item,
             url: resolvedUrl,
-            path: item.file_path,
-            filename: item.file_path.split('/').pop(),
-            folder: item.file_path.substring(0, item.file_path.lastIndexOf('/')),
-            // EXIF metadata
+            path: filePath,
+            filename: item.filename || filePath.split('/').pop(),
+            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            // EXIF metadata (already present in backend response)
             date_taken: item.date_taken,
             location_city: item.location_city,
             location_country: item.location_country,
             location_name: item.location_name,
-            // Geocoding status for prefetch logic
+            // Geocoding status for prefetch logic (already present)
             has_coordinates: item.has_coordinates || false,
             is_geocoded: item.is_geocoded || false,
             latitude: item.latitude,
