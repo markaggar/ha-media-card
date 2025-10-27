@@ -1335,7 +1335,7 @@ class MediaCard extends LitElement {
       this._log('🔍 Querying media_index for', count, 'random items...');
       
       // Call media_index.get_random_items service with return_response via WebSocket
-      const response = await this.hass.callWS({
+      const wsResponse = await this.hass.callWS({
         type: 'call_service',
         domain: 'media_index',
         service: 'get_random_items',
@@ -1345,6 +1345,9 @@ class MediaCard extends LitElement {
         },
         return_response: true
       });
+
+      // WebSocket response is wrapped: { context: {...}, response: { items: [...] } }
+      const response = wsResponse?.response || wsResponse;
 
       if (response && response.items && Array.isArray(response.items)) {
         this._log('✅ Received', response.items.length, 'items from media_index');
@@ -1412,7 +1415,7 @@ class MediaCard extends LitElement {
       item._geocoding_in_progress = true;
 
       // Call geocode_file service with latitude/longitude via WebSocket
-      const response = await this.hass.callWS({
+      const wsResponse = await this.hass.callWS({
         type: 'call_service',
         domain: 'media_index',
         service: 'geocode_file',
@@ -1422,6 +1425,9 @@ class MediaCard extends LitElement {
         },
         return_response: true
       });
+
+      // WebSocket response is wrapped: { context: {...}, response: { location_city: "...", ... } }
+      const response = wsResponse?.response || wsResponse;
 
       if (response && response.location_city && response.location_country) {
         // Update item with geocoded location
