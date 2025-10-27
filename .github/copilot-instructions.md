@@ -42,6 +42,11 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 
 ### Media Card Deployment
 
+#### Development Server Deployment Command
+```powershell
+Copy-Item "ha-media-card.js" "\\10.0.0.62\config\www\cards\media-card.js" -Force
+```
+
 #### Production Deployment Command
 ```powershell
 Copy-Item "ha-media-card.js" "\\10.0.0.26\config\www\cards\media-card.js" -Force
@@ -49,13 +54,16 @@ Copy-Item "ha-media-card.js" "\\10.0.0.26\config\www\cards\media-card.js" -Force
 
 #### Deployment Process
 1. Make changes to `ha-media-card.js`
-2. Deploy using the command above
+2. Deploy to **HADev (10.0.0.62)** using the development command
 3. Hard refresh browser (Ctrl+F5) to clear cache
-4. Check Home Assistant logs for any errors
+4. Test changes on HADev
+5. When stable, deploy to Production (10.0.0.26)
+6. Check Home Assistant logs for any errors
 
 #### File Locations
 - **Development**: `c:\Users\marka\Media Item Card\ha-media-card.js`
-- **Production**: `\\10.0.0.26\config\www\cards\media-card.js`
+- **HADev Server**: `\\10.0.0.62\config\www\cards\media-card.js`
+- **Production Server**: `\\10.0.0.26\config\www\cards\media-card.js`
 
 ### Media Index Integration Deployment
 

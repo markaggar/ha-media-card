@@ -34,8 +34,9 @@ npm-debug.log*
 
 # Planning and development documents (local only)
 EXIF_INTEGRATION_PLAN.md
-docs/
+docs/planning/
 scripts/
+run-oneoff.ps1
 
 # Credentials (DO NOT COMMIT)
 .ha-credentials
