@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.78 - Reduced filename logging from 1% to 0.1% sample rate
+ * Version: 3.0.1 - Fix folder path refresh and unnecessary background scanning issues
  */
 
 // Import Lit from CDN for standalone usage
