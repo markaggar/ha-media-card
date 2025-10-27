@@ -17,6 +17,42 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 - Support both image and video playback
 - Base implementation on picture-entity-card and gallery-card patterns
 
+## Git Workflow
+**CRITICAL**: ALL development work must be done on feature branches
+
+### Branch Protection Rules
+- **NEVER push directly to `master` branch**
+- Master branch is for stable releases only
+- All new features/fixes must use feature branches
+
+### Development Workflow
+1. **Create feature branch** for any new work:
+   ```powershell
+   git checkout -b feature/integration-support
+   # or
+   git checkout -b fix/bug-description
+   ```
+
+2. **Make changes and commit** to feature branch:
+   ```powershell
+   git add .
+   git commit -m "feat: add integration support for metadata display"
+   git push -u origin feature/integration-support
+   ```
+
+3. **Create Pull Request** on GitHub when ready
+4. **Merge to master** only after review and testing
+5. **Tag releases** on master branch for version control
+
+### Current Development Branch
+- `feature/integration-support` - For integration with media-index backend
+
+### Branch Naming Convention
+- `feature/description` - New features
+- `fix/description` - Bug fixes
+- `docs/description` - Documentation updates
+- `chore/description` - Maintenance tasks
+
 ## Checklist Progress
 - [x] Verify copilot-instructions.md file created
 - [x] Clarify Project Requirements - Creating HA custom card for image/video display
