@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.0.0.75 - Fixed queue reconnection failure (clear _initializationInProgress on disconnect)
+ * Version: 3.0.0.78 - Reduced filename logging from 1% to 0.1% sample rate
  */
 
 // Import Lit from CDN for standalone usage
@@ -2028,8 +2028,8 @@ class MediaCard extends LitElement {
     const fileName = filePath.split('/').pop() || filePath;
     const extension = this._getFileExtension(fileName);
     const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
-    // Reduced logging - only log filename
-    if (Math.random() < 0.01) {
+    // Reduced logging - only log 0.1% of files (1 in 1000)
+    if (Math.random() < 0.001) {
       this._log('📄', fileName);
     }
     return isMedia;
@@ -3468,6 +3468,13 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     super.disconnectedCallback();
     
     this._log('🔌 Component disconnected - cleaning up resources');
+    
+    // CRITICAL: Stop auto-refresh interval to prevent zombie card from continuing to scan
+    if (this._refreshInterval) {
+      this._log('🛑 Clearing auto-refresh interval:', this._refreshInterval);
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
     
     // Clean up visibility observers
     this._cleanupVisibilityObservers();
@@ -5732,10 +5739,22 @@ class SubfolderQueue {
 
   // Process folder children in batches with sampling and staggered timing for interleaving
   processFolderChildrenInBatches(children, batchSize, onBatch, folderTitle) {
+    // CRITICAL: Check cancellation BEFORE processing children to avoid logging files
+    if (this._scanCancelled) {
+      this._log('🚫 Batch processing cancelled before filtering children for:', folderTitle);
+      return;
+    }
+    
     const allMediaFiles = [];
     
     // Filter media files first - check both media class and file extension
     for (const child of children) {
+      // Check cancellation during iteration to abort immediately
+      if (this._scanCancelled) {
+        this._log('🚫 Cancellation detected during child filtering for:', folderTitle);
+        return;
+      }
+      
       if (child.media_class === 'image' || child.media_class === 'video') {
         if (child.media_content_type && 
             (child.media_content_type.startsWith('image/') || 
@@ -5750,15 +5769,33 @@ class SubfolderQueue {
     
     this._log('📄 Found', allMediaFiles.length, 'media files out of', children.length, 'total children in', folderTitle);
     
+    // Check cancellation after filtering but before sampling
+    if (this._scanCancelled) {
+      this._log('🚫 Cancellation detected after filtering, before sampling for:', folderTitle);
+      return;
+    }
+    
     // SAMPLING LOGIC - Don't take all files, sample based on folder size
     const maxFilesPerFolder = this.calculateMaxFilesForFolder(allMediaFiles.length, folderTitle);
     const mediaFiles = this.selectRandomFiles(allMediaFiles, maxFilesPerFolder);
     
     this._log('🎲 SAMPLING:', folderTitle, '-', mediaFiles.length, 'sampled from', allMediaFiles.length, 'available (max allowed:', maxFilesPerFolder, ', slideshow window target:', this.config.slideshow_window + ')');
     
+    // Check cancellation before scheduling batches
+    if (this._scanCancelled) {
+      this._log('🚫 Cancellation detected before scheduling batches for:', folderTitle);
+      return;
+    }
+    
     // Process in batches with randomized delays to encourage interleaving
     const totalBatches = Math.ceil(mediaFiles.length / batchSize);
     for (let i = 0; i < mediaFiles.length; i += batchSize) {
+      // Check cancellation before scheduling each batch
+      if (this._scanCancelled) {
+        this._log('🚫 Cancellation detected in batch loop for:', folderTitle);
+        return;
+      }
+      
       const batch = mediaFiles.slice(i, i + batchSize);
       const batchIndex = Math.floor(i / batchSize);
       const isLastBatch = (i + batchSize) >= mediaFiles.length;
@@ -5769,6 +5806,11 @@ class SubfolderQueue {
       const totalDelay = baseDelay + randomOffset;
       
       setTimeout(() => {
+        // Double-check cancellation inside timeout callback
+        if (this._scanCancelled) {
+          this._log('🚫 Batch', batchIndex + 1, 'skipped due to cancellation for:', folderTitle);
+          return;
+        }
         onBatch(batch, batchIndex, isLastBatch);
       }, totalDelay);
     }
