@@ -332,8 +332,13 @@ class MediaCard extends LitElement {
     
     // Show EXIF date_taken if available (from media_index)
     if (this.config.metadata.show_date && metadata.date_taken) {
-      const dateStr = new Date(metadata.date_taken).toLocaleDateString();
-      parts.push(`📅 ${dateStr}`);
+      // date_taken from backend is a string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
+      // Replace colons in date part with dashes for proper parsing
+      const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        parts.push(`📅 ${date.toLocaleDateString()}`);
+      }
     }
     // Fallback to filesystem date if no EXIF date
     else if (this.config.metadata.show_date && metadata.date) {
@@ -1334,6 +1339,22 @@ class MediaCard extends LitElement {
     try {
       this._log('🔍 Querying media_index for', count, 'random items...');
       
+      // Extract folder path from media_path config (remove /media/ prefix and media-source:// wrapper)
+      let folderFilter = null;
+      if (this.config.media_path) {
+        let path = this.config.media_path;
+        // Remove media-source://media_source prefix if present
+        if (path.startsWith('media-source://media_source/')) {
+          path = path.replace('media-source://media_source/', '');
+        }
+        // Remove /media/ prefix if present
+        if (path.startsWith('/media/')) {
+          path = path.substring('/media/'.length);
+        }
+        folderFilter = path;
+        this._log('🔍 Filtering by folder:', folderFilter);
+      }
+      
       // Call media_index.get_random_items service with return_response via WebSocket
       const wsResponse = await this.hass.callWS({
         type: 'call_service',
@@ -1341,6 +1362,7 @@ class MediaCard extends LitElement {
         service: 'get_random_items',
         service_data: {
           count: count,
+          folder: folderFilter,
           file_type: this._mediaType === 'all' ? undefined : this._mediaType
         },
         return_response: true
