@@ -9,6 +9,12 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 - `package.json` - Dependencies and build scripts
 - `rollup.config.js` - Build configuration
 - `README.md` - Comprehensive documentation
+- `docs/` - Documentation files
+- `docs/planning/` - **Planning documents for features and integrations**
+  - `MEDIA_INDEX_INTEGRATION_PLAN.md` - Backend integration strategy
+  - `GEOCODING_CACHE_STRATEGY.md` - Geocoding implementation
+  - `EXIF_INTEGRATION_PLAN.md` - EXIF data handling
+  - `FULLSCREEN_MODE_PLAN.md` - Fullscreen display mode
 
 ## Development Guidelines
 - Follow Home Assistant custom card conventions
