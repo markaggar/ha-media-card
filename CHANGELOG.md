@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 20250-10-26
+
+### Bug fixes
+
+- **Default changes**: Scan depth is unlimited by default to prevent subfolder queue from failing when there are no images in first few levels.
+- **Changing Path destroys queue**: Editing the card and changing the media path destroys the existing queue so you will not so irrelevant images.
+- **Background scanning**: Many checks to stop background scanning from continuing when card is not visible, particularly on the old media path.
+- **New logging**: Added option to suppress subfolder queue messages for easier debugging (yaml config only - see README.md).
+
 ## [3.0.0] - 2025-10-24
 
 ### Added - Major Features
