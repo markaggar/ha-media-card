@@ -2539,9 +2539,15 @@ class MediaCard extends LitElement {
   async _resolveMediaPath(mediaPath) {
     if (!mediaPath || !this.hass) return '';
     
-    // If it's already a resolved URL, return as-is
-    if (mediaPath.startsWith('/') || mediaPath.startsWith('http')) {
+    // If it's already a fully resolved authenticated URL, return as-is
+    if (mediaPath.startsWith('http')) {
       return mediaPath;
+    }
+    
+    // Convert local media paths to media-source format
+    if (mediaPath.startsWith('/media/')) {
+      // Convert /media/... to media-source://media_source/media/...
+      mediaPath = 'media-source://media_source' + mediaPath;
     }
     
     // Use Home Assistant's media source resolution for media-source URLs
