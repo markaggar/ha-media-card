@@ -4930,6 +4930,15 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       // Update local metadata immediately for UI feedback
       if (this._currentMetadata) {
         this._currentMetadata.is_favorited = newFavoriteState;
+        
+        // Also update in _folderContents so it persists when navigating
+        if (this._folderContents && this._currentMediaIndex >= 0) {
+          const currentItem = this._folderContents[this._currentMediaIndex];
+          if (currentItem && currentItem._metadata) {
+            currentItem._metadata.is_favorited = newFavoriteState;
+          }
+        }
+        
         this.requestUpdate();
       }
 
