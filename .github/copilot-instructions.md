@@ -136,9 +136,9 @@ C:\Users\marka\ha-media-index\scripts\deploy-media-index.ps1
 # Change to ha-media-index repository
 cd C:\Users\marka\ha-media-index
 
-# Deploy with verification
+# Deploy with verification (HADev .62)
 .\scripts\deploy-media-index.ps1 `
-    -VerifyEntity "sensor.media_index_total_files" `
+    -VerifyEntity "sensor.media_index_media_photo_photolibrary_total_files" `
     -DumpErrorLogOnFail
 ```
 
@@ -147,7 +147,7 @@ cd C:\Users\marka\ha-media-index
 cd C:\Users\marka\ha-media-index
 
 .\scripts\deploy-media-index.ps1 `
-    -VerifyEntity "sensor.media_index_total_files" `
+    -VerifyEntity "sensor.media_index_media_photo_photolibrary_total_files" `
     -DumpErrorLogOnFail `
     -AlwaysRestart
 ```
@@ -164,22 +164,24 @@ cd C:\Users\marka\ha-media-index
 
 #### Environment Setup
 ```powershell
-# Set once in PowerShell profile
+# Set once in PowerShell profile for HADev (.62)
 $env:HA_BASE_URL = "http://10.0.0.62:8123"
 $env:HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhMzU4N2QwZDkwMTI0MWY5YmMzMTJlZGQzMTBhZTY0YiIsImlhdCI6MTc2MTM3MTYzNiwiZXhwIjoyMDc2NzMxNjM2fQ.KN_dJi3PxMHCZh4M_MODinGVqyJ4RCjFcd6XE5zHnok"
-$env:HA_VERIFY_ENTITY = "sensor.media_index_total_files"
+$env:HA_VERIFY_ENTITY = "sensor.media_index_media_photo_photolibrary_total_files"
 $env:WM_SAVE_ERROR_LOG_TO_TEMP = "1"
 ```
 
+**Important**: The environment variable `$env:HA_BASE_URL` must be set to HADev (.62) not Production (.55) for media_index development!
+
 #### File Locations
 - **Development**: `c:\Users\marka\ha-media-index\custom_components\media_index\`
-- **Production**: `\\10.0.0.62\config\custom_components\media_index\`
+- **HADev Server**: `\\10.0.0.62\config\custom_components\media_index\`
 - **Cache Database**: `\\10.0.0.62\config\.storage\media_index.db` (auto-created)
 
 #### Testing Without Manual Intervention
 ```powershell
 # Deploy and verify in one command
-.\scripts\deploy-media-index.ps1 -VerifyEntity "sensor.media_index_total_files" -DumpErrorLogOnFail
+.\scripts\deploy-media-index.ps1 -VerifyEntity "sensor.media_index_media_photo_photolibrary_total_files" -DumpErrorLogOnFail
 
 # Check exit code
 if ($LASTEXITCODE -eq 0) { 

@@ -87,6 +87,7 @@ class MediaCard extends LitElement {
     this._urlCreatedTime = 0; // Track when current URL was created
     this._debugMode = true; // Enable debug logging for thumbnail development
     this._initializationInProgress = false; // Prevent multiple initializations
+    this._initializationState = null; // Track initialization state: null, 'pending', 'complete'
     this._scanInProgress = false; // Prevent multiple scans
     this._hasInitializedHass = false; // Track if we've done initial hass setup to prevent update loops
     this._componentStartTime = Date.now(); // Track when component was created for startup protection
@@ -378,19 +379,31 @@ class MediaCard extends LitElement {
       }
       
       if (date && !isNaN(date.getTime())) {
-        parts.push(`📅 ${date.toLocaleDateString()}`);
+        // Use Home Assistant's locale for date formatting
+        const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
+        parts.push(`📅 ${date.toLocaleDateString(locale)}`);
       }
     }
     // Fallback to filesystem date if no EXIF date
     else if (this.config.metadata.show_date && metadata.date) {
-      const dateStr = metadata.date.toLocaleDateString();
+      const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
+      const dateStr = metadata.date.toLocaleDateString(locale);
       parts.push(`📅 ${dateStr}`);
     }
     
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
       if (metadata.location_city && metadata.location_country) {
-        parts.push(`📍 ${metadata.location_city}, ${metadata.location_country}`);
+        // Get server's country from Home Assistant config
+        const serverCountry = this.hass?.config?.country || null;
+        
+        // Only show country if different from server's country
+        let locationText = metadata.location_city;
+        if (metadata.location_country !== serverCountry) {
+          locationText += `, ${metadata.location_country}`;
+        }
+        
+        parts.push(`📍 ${locationText}`);
       } else if (metadata.has_coordinates && !metadata.is_geocoded) {
         // Item has GPS coordinates but hasn't been geocoded yet
         parts.push(`📍 Loading location...`);
@@ -1160,6 +1173,26 @@ class MediaCard extends LitElement {
     this._log('   currentPath:', currentPath);
     this._log('   _subfolderQueue exists:', !!this._subfolderQueue);
     this._log('   queue size:', this._subfolderQueue?.queue?.length || 0);
+    this._log('   _initializationState:', this._initializationState);
+    
+    // Skip if already initialized and has content
+    if (this._initializationState === 'complete' && this._folderContents?.length > 0) {
+      this._log('✅ Already initialized with content - skipping');
+      return;
+    }
+    
+    // Skip if initialization in progress (prevent race conditions)
+    if (this._initializationState === 'pending') {
+      this._log('⏳ Initialization already in progress - skipping duplicate call');
+      return;
+    }
+    
+    // If media_index integration has already populated the queue, don't scan filesystem
+    if (this.config.media_index?.enabled && this._folderContents && this._folderContents.length > 0) {
+      this._log('✅ Media_index queue already populated with', this._folderContents.length, 'items - skipping filesystem scan');
+      this._initializationState = 'complete'; // Mark as complete
+      return;
+    }
     
     if (this._lastMediaPath && this._lastMediaPath !== currentPath) {
       this._log('🔄 DETECTED path change from', this._lastMediaPath, 'to', currentPath, '- resetting all queues');
@@ -1180,6 +1213,7 @@ class MediaCard extends LitElement {
       this._slideshowFiles = [];
       this._lastKnownNewest = null;
       this._lastKnownFolderSize = null;
+      this._initializationState = null; // Reset state to allow re-initialization
       this._log('✅ All queues and state reset complete');
     } else if (!this._lastMediaPath) {
       this._log('ℹ️ No previous path - first initialization');
@@ -1187,6 +1221,7 @@ class MediaCard extends LitElement {
       // Path unchanged - check if we have a valid queue
       if (this._subfolderQueue && this._subfolderQueue.queue.length > 0) {
         this._log('ℹ️ Path unchanged and queue has items - keeping existing queue');
+        this._initializationState = 'complete'; // Mark as complete
         return; // Queue exists and has items - nothing to do
       } else {
         this._log('🔄 Path unchanged but no queue - need to initialize/reconnect');
@@ -1194,7 +1229,10 @@ class MediaCard extends LitElement {
     }
     this._lastMediaPath = currentPath;
 
-    // Prevent multiple simultaneous initializations
+    // Mark initialization as pending
+    this._initializationState = 'pending';
+
+    // Prevent multiple simultaneous initializations (legacy flag for compatibility)
     if (this._initializationInProgress) {
       this._log('📂 Folder initialization already in progress - skipping');
       return;
@@ -1204,6 +1242,85 @@ class MediaCard extends LitElement {
     
     try {
       this._log('Handling folder mode:', this.config.folder_mode, 'for path:', this.config.media_path);
+      
+      // 🎯 PRIORITY: Try media_index integration FIRST (before filesystem scanning)
+      if (this.config.media_index?.enabled && this._isRandomMode()) {
+        this._log('🔍 Trying media_index integration for initial load (skipping filesystem fallback)');
+        const items = await this._queryMediaIndex(this.config.slideshow_window || 100);
+        
+        if (items && items.length > 0) {
+          this._log('✅ Media_index returned', items.length, 'items - using them directly');
+          
+          // Transform media_index items to match existing queue structure
+          this._folderContents = items.map(item => ({
+            media_content_id: item.path, // Use database path for content ID
+            title: item.filename,
+            can_play: true,
+            can_expand: false,
+            // Store EXIF metadata directly on the item for easy access
+            _metadata: {
+              folder: item.folder,
+              filename: item.filename,
+              date_taken: item.date_taken,
+              location_name: item.location_name,
+              location_city: item.location_city,
+              location_country: item.location_country,
+              has_coordinates: item.has_coordinates,
+              is_geocoded: item.is_geocoded,
+              latitude: item.latitude,
+              longitude: item.longitude
+            }
+          }));
+          
+          // Load first item immediately
+          if (this._folderContents.length > 0) {
+            const item = this._folderContents[0];
+            this._currentMediaIndex = 0;
+            
+            // Detect media type from path
+            this._mediaType = MediaUtils.detectFileType(item.media_content_id);
+            this._log('🎬 Detected media type:', this._mediaType, 'from path:', item.media_content_id);
+            
+            // Set metadata
+            if (item._metadata) {
+              this._currentMetadata = { ...item._metadata };
+            }
+            
+            // Resolve path to get authenticated media-source URL
+            const mediaUrl = await this._resolveMediaPath(item.media_content_id);
+            // Skip metadata extraction since we already have it from media_index
+            // Skip type detection since we already set it above
+            await this._setMediaUrl(mediaUrl, item.media_content_id, true, true);
+            
+            // Note: Don't increment _currentMediaIndex here - it starts at 0 for first image
+            // Auto-refresh will increment it when loading subsequent images
+            
+            // CRITICAL: Set _lastRefreshTime AFTER setting media URL so auto-refresh knows when media was last displayed
+            // This ensures the first image gets its full display time before the interval starts counting
+            this._lastRefreshTime = Date.now();
+            
+            this._log('✅ Loaded first item from media_index:', item.title);
+            
+            // Mark initialization as complete
+            this._initializationState = 'complete';
+            this._log('✅ Media_index initialization complete - skipping filesystem scan');
+            
+            // CRITICAL: Clear any existing timers to prevent double-firing
+            if (this._refreshInterval) {
+              this._log('🧹 Clearing existing timer before setting up new one, ID:', this._refreshInterval);
+              clearInterval(this._refreshInterval);
+              this._refreshInterval = null;
+            }
+            
+            // Flag to indicate we need to set up timer after first image loads
+            this._pendingFirstRefreshSetup = true;
+            
+            return;
+          }
+        } else {
+          this._log('⚠️ Media_index query returned no items - falling back to filesystem scan');
+        }
+      }
       
       // Initialize subfolder queue if enabled and in random mode
       if (this.config.subfolder_queue?.enabled && this._isRandomMode()) {
@@ -1343,8 +1460,19 @@ class MediaCard extends LitElement {
           this.requestUpdate();
         }
       }
+      
+      // Mark initialization as complete
+      this._initializationState = 'complete';
+      this._log('✅ Folder mode initialization complete');
+      
+      // Set up auto-refresh immediately after initialization completes
+      if (this._getEffectiveAutoRefreshSeconds() > 0 && !this._isPaused) {
+        this._log('🔄 Setting up auto-refresh after folder initialization');
+        this._setupAutoRefresh();
+      }
     } catch (error) {
       console.error('Error handling folder mode:', error);
+      this._initializationState = null; // Allow retry on failure
     } finally {
       this._initializationInProgress = false;
     }
@@ -1613,7 +1741,12 @@ class MediaCard extends LitElement {
         
         // Use media from existing queue system
         if (this._folderContents && this._folderContents.length > 0) {
-          const item = this._folderContents[this._currentMediaIndex];
+          // Calculate NEXT index but don't assign it yet (would trigger counter update)
+          // Will increment _currentMediaIndex in _onMediaLoaded after image is visible
+          const nextIndex = (this._currentMediaIndex + 1) % this._folderContents.length;
+          this._pendingIndexUpdate = nextIndex; // Store for _onMediaLoaded to apply
+          
+          const item = this._folderContents[nextIndex];
           
           this._log('🎯 Loading item from queue:', {
             media_content_id: item.media_content_id,
@@ -1622,8 +1755,8 @@ class MediaCard extends LitElement {
           });
           
           // Detect media type FIRST from the original path (has correct extension)
-          this._detectMediaType(item.media_content_id);
-          this._log('🎬 Detected media type:', this._mediaType, 'from path:', item.media_content_id);
+          const detectedType = MediaUtils.detectFileType(item.media_content_id);
+          this._log('🎬 Detected media type:', detectedType, 'from path:', item.media_content_id);
           
           // Pre-set metadata from _metadata (from media_index backend)
           if (item._metadata) {
@@ -1638,17 +1771,19 @@ class MediaCard extends LitElement {
           // Resolve the media path to get authenticated URL
           const resolvedUrl = await this._resolveMediaPath(item.media_content_id);
           
-          // Set the URL, skip metadata extraction since we already have it from backend
-          this._setMediaUrl(resolvedUrl, item.media_content_id, true);
+          // Set type and URL atomically to prevent race condition
+          this._mediaType = detectedType;
+          this._setMediaUrl(resolvedUrl, item.media_content_id, true, true);
+          this._forceMediaReload();
           
-          // Advance position (wrap around if at end)
-          this._currentMediaIndex = (this._currentMediaIndex + 1) % this._folderContents.length;
+          // Note: Counter display will update in _onMediaLoaded after image is actually visible
+          // to keep counter synchronized with displayed image
           
           // Prefetch geocoding for upcoming items (check _metadata exists)
-          const nextIndex = (this._currentMediaIndex + (this.config.media_index?.prefetch_offset || 3)) % this._folderContents.length;
-          const nextItem = this._folderContents[nextIndex];
-          if (nextItem?._metadata?.has_coordinates && !nextItem._metadata.is_geocoded) {
-            this._prefetchGeocoding(nextIndex).catch(err => {
+          const prefetchIndex = (this._currentMediaIndex + 1 + (this.config.media_index?.prefetch_offset || 3)) % this._folderContents.length;
+          const prefetchItem = this._folderContents[prefetchIndex];
+          if (prefetchItem?._metadata?.has_coordinates && !prefetchItem._metadata.is_geocoded) {
+            this._prefetchGeocoding(prefetchIndex).catch(err => {
               this._log('⚠️ Prefetch geocoding failed:', err);
             });
           }
@@ -1682,7 +1817,6 @@ class MediaCard extends LitElement {
           }
           
           this._lastRefreshTime = Date.now();
-          this._forceMediaReload();
           return;
         }
       }
@@ -2367,7 +2501,13 @@ class MediaCard extends LitElement {
   }
 
   _getCurrentMediaType() {
-    // Get the current file from folder contents if available
+    // Use the already-set _mediaType property instead of re-detecting
+    // This avoids issues where URL modification or auth params interfere with detection
+    if (this._mediaType) {
+      return this._mediaType;
+    }
+    
+    // Fallback: Get the current file from folder contents if available
     if (this._folderContents && this._currentMediaIndex >= 0 && this._currentMediaIndex < this._folderContents.length) {
       const currentFile = this._folderContents[this._currentMediaIndex];
       if (currentFile && currentFile.media_content_id) {
@@ -2375,7 +2515,7 @@ class MediaCard extends LitElement {
       }
     }
     
-    // Fallback to detecting from URL (for single file mode or edge cases)
+    // Last resort: detecting from URL (for single file mode or edge cases)
     return this._detectFileType(this._mediaUrl) || 'image';
   }
 
@@ -2663,13 +2803,24 @@ class MediaCard extends LitElement {
     return mediaPath;
   }
 
-  _setMediaUrl(newUrl, mediaPath = null, skipMetadataExtraction = false) {
+  _setMediaUrl(newUrl, mediaPath = null, skipMetadataExtraction = false, skipTypeDetection = false) {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
       // Clear retry attempts for the new URL since it's fresh
       if (this._retryAttempts.has(newUrl)) {
         this._retryAttempts.delete(newUrl);
+      }
+      
+      // Detect media type from the path (unless already set and skipTypeDetection is true)
+      // Use mediaPath if provided (has original extension), otherwise use URL
+      if (!skipTypeDetection) {
+        const pathForDetection = mediaPath || newUrl;
+        const detectedType = this._detectFileType(pathForDetection);
+        if (detectedType) {
+          this._mediaType = detectedType;
+          this.setAttribute('data-media-type', this._mediaType);
+        }
       }
       
       // Extract metadata from the media path (unless using media_index with pre-populated metadata)
@@ -3077,23 +3228,26 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
     
     // Handle folder mode that hasn't been initialized yet
-    if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass && !this._initializationInProgress) {
-      this._log('🔧 No media URL but have folder config - triggering initialization');
-      // Trigger folder mode initialization asynchronously
-      setTimeout(() => this._handleFolderMode(), 10);
+    // Only show placeholder - initialization is handled by updated() lifecycle
+    if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass) {
+      const statusMessage = this._initializationState === 'pending' 
+        ? 'Initializing...' 
+        : this._initializationState === 'complete'
+          ? 'No media found'
+          : 'Loading folder...';
       
       return html`
         <div class="placeholder">
           <div style="font-size: 64px; margin-bottom: 24px; opacity: 0.3;">📁</div>
-          <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">Loading Folder...</div>
+          <div style="font-size: 1.2em; font-weight: 500; margin-bottom: 8px;">${statusMessage}</div>
           <div style="font-size: 0.9em; opacity: 0.8; line-height: 1.4;">
-            Scanning for media files in folder
+            ${this._initializationState === 'complete' ? 'No media files found in folder' : 'Scanning for media files...'}
           </div>
         </div>
       `;
     }
 
-    // Show loading state during initialization
+    // Show loading state during initialization (no longer needed as separate block)
     if (!this._mediaUrl && this.config?.is_folder && this.config?.folder_mode && this.hass && this._initializationInProgress) {
       return html`
         <div class="placeholder">
@@ -3520,6 +3674,35 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       this._log('Media loaded successfully:', this._mediaUrl);
       this._mediaLoadedLogged = true;
     }
+    
+    // Apply pending index update AFTER image is visible (keeps counter synced with displayed image)
+    if (this._pendingIndexUpdate !== undefined) {
+      this._currentMediaIndex = this._pendingIndexUpdate;
+      this._pendingIndexUpdate = undefined;
+      this._log('✅ Counter updated to', this._currentMediaIndex + 1, 'after image visible');
+    }
+    
+    // CRITICAL: Set up first auto-refresh timer AFTER image has actually loaded and is visible
+    // This ensures the timer starts counting from when the user can actually SEE the image
+    if (this._pendingFirstRefreshSetup && this._getEffectiveAutoRefreshSeconds() > 0 && !this._isPaused) {
+      this._pendingFirstRefreshSetup = false; // Clear flag
+      const refreshSeconds = this._getEffectiveAutoRefreshSeconds();
+      const scheduleTime = Date.now();
+      this._log(`⏰ [${new Date().toLocaleTimeString()}] First image NOW VISIBLE - will auto-refresh in ${refreshSeconds}s`);
+      
+      // Use setTimeout for the FIRST refresh, then setupAutoRefresh for recurring
+      setTimeout(() => {
+        const actualDelay = Date.now() - scheduleTime;
+        if (!this._isPaused) {
+          this._log(`🔄 [${new Date().toLocaleTimeString()}] First auto-refresh timer fired after ${actualDelay}ms - loading next image and starting recurring timer`);
+          this._checkForMediaUpdates().then(() => {
+            // Now set up recurring timer for subsequent refreshes
+            this._setupAutoRefresh();
+          });
+        }
+      }, refreshSeconds * 1000);
+    }
+    
     // Reset image zoom when a new image loads
     if (this._mediaType === 'image') {
       const container = this.renderRoot?.querySelector('.zoomable-container');
@@ -3790,15 +3973,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       setTimeout(() => this._handleFolderMode(), 50);
     }
     
-    // Ensure auto-refresh is set up when component is connected/reconnected
-    if (this.config && this.hass && !this._isPaused) {
-      this._log('🔌 Component connected - setting up auto-refresh');
-      this._setupAutoRefresh();
-      // Also try to resume if it was paused for navigation
-      this._resumeAutoRefreshIfNeeded();
-    } else if (this._isPaused) {
-      this._log('🔌 Component connected but paused - skipping auto-refresh setup');
-    }
+    // Note: Auto-refresh will be set up by updated() lifecycle after initialization completes
+    this._log('🔌 Component connected - auto-refresh will be set up after initialization');
   }
 
   disconnectedCallback() {
@@ -4117,10 +4293,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       }
     }
     
-    // ONLY set up auto-refresh on INITIAL hass/config changes
+    // ONLY set up auto-refresh on INITIAL hass/config changes AND after initialization completes
     // NOT on subsequent hass or _folderContents changes
     const shouldSetupAutoRefresh = (
-      (isInitialHassSetup || isConfigChange)
+      (isInitialHassSetup || isConfigChange) &&
+      this._initializationState === 'complete' // Only after initialization is done
     ) && 
     this.config && 
     this.hass && 
@@ -4129,10 +4306,12 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     if (shouldSetupAutoRefresh) {
       // Always clear and recreate to prevent multiple timers
-      this._log('🔄 Property change detected - recreating auto-refresh timer');
+      this._log('🔄 Initialization complete - setting up auto-refresh timer');
       this._setupAutoRefresh();
     } else if (this._isPaused) {
       this._log('🔄 Auto-refresh setup skipped - currently paused');
+    } else if (this._initializationState !== 'complete') {
+      this._log('🔄 Auto-refresh setup skipped - initialization not yet complete');
     } else if (isConfigChange) {
       // Only log when config changes, not for frequent hass updates
       this._log('🔄 Auto-refresh setup skipped - conditions not met:', {
@@ -4341,7 +4520,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   // Navigation zone event handlers
   _handlePrevClick(e) {
     e.stopPropagation();
-    this._log('🖱️ Previous button clicked');
+    this._log('🖱️ Previous button clicked - about to call _navigatePrevious()');
     // Reset zoom before navigating
     try {
       const img = this.renderRoot?.querySelector('.zoomable-container img');
@@ -4491,6 +4670,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   async _navigatePrevious() {
+    this._log('◀️ _navigatePrevious() called');
+    
     // If subfolder queue is enabled, use history for backward navigation
     if (this._subfolderQueue && this._subfolderQueue.config.enabled) {
       this._log('◀️ Navigate Previous: Using subfolder queue history');
@@ -4510,12 +4691,15 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
     
     // Fallback to standard folder navigation
-    if (!this._folderContents || this._folderContents.length <= 1) return;
+    if (!this._folderContents || this._folderContents.length <= 1) {
+      this._log('◀️ Navigate Previous: No folder contents or only 1 item, returning');
+      return;
+    }
     
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex > 0 ? currentIndex - 1 : this._folderContents.length - 1;
     
-    this._log(`🔄 Navigate Previous (folder): ${currentIndex} -> ${newIndex}`);
+    this._log(`🔄 Navigate Previous (folder): ${currentIndex} -> ${newIndex} - about to call _handleAutoAdvanceMode()`);
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
@@ -4578,11 +4762,13 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
     const mode = this.config.auto_advance_mode || 'reset';
     
+    this._log(`🎮 auto_advance_mode: "${mode}" - handling manual navigation`);
+    
     switch (mode) {
       case 'pause':
         // Pause auto-refresh by clearing the interval
         if (this._refreshInterval) {
-          this._log('🔄 Pausing auto-refresh due to manual navigation');
+          this._log('🔄 Pausing auto-refresh due to manual navigation (clearing interval', this._refreshInterval, ')');
           clearInterval(this._refreshInterval);
           this._refreshInterval = null;
           // Mark that we paused due to navigation (for potential resume)
@@ -4592,15 +4778,17 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         
       case 'continue':
         // Do nothing - let auto-refresh continue normally
-        this._log('🔄 Continuing auto-refresh during manual navigation');
+        this._log('🔄 Continuing auto-refresh during manual navigation (interval', this._refreshInterval, 'remains active)');
         break;
         
       case 'reset':
         // Reset the auto-refresh timer
-        this._log('🔄 Resetting auto-refresh timer due to manual navigation');
+        const oldInterval = this._refreshInterval;
+        this._log(`🔄 Resetting auto-refresh timer due to manual navigation (clearing interval ${oldInterval}, will create new one)`);
         this._lastRefreshTime = Date.now();
-        // Restart the timer
+        // Restart the timer (this will clear old interval and create new one)
         this._setupAutoRefresh();
+        this._log(`✅ Auto-refresh timer reset complete - old interval: ${oldInterval}, new interval: ${this._refreshInterval}`);
         break;
     }
   }
