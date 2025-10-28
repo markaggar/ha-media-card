@@ -332,11 +332,20 @@ class MediaCard extends LitElement {
     
     // Show EXIF date_taken if available (from media_index)
     if (this.config.metadata.show_date && metadata.date_taken) {
-      // date_taken from backend is a string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
-      // Replace colons in date part with dashes for proper parsing
-      const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-      const date = new Date(dateStr);
-      if (!isNaN(date.getTime())) {
+      let date;
+      
+      // Backend returns date_taken as Unix timestamp (number)
+      if (typeof metadata.date_taken === 'number') {
+        date = new Date(metadata.date_taken * 1000); // Convert Unix timestamp to milliseconds
+      } 
+      // Or as string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
+      else if (typeof metadata.date_taken === 'string') {
+        // Replace colons in date part with dashes for proper parsing
+        const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+        date = new Date(dateStr);
+      }
+      
+      if (date && !isNaN(date.getTime())) {
         parts.push(`📅 ${date.toLocaleDateString()}`);
       }
     }
@@ -1339,18 +1348,18 @@ class MediaCard extends LitElement {
     try {
       this._log('🔍 Querying media_index for', count, 'random items...');
       
-      // Extract folder path from media_path config (remove /media/ prefix and media-source:// wrapper)
+      // Extract folder path from media_path config
+      // Database stores full paths like: /media/Photo/PhotoLibrary/2023/06
+      // Config might be: media-source://media_source/media/Photo/PhotoLibrary
+      // We need to extract: /media/Photo/PhotoLibrary
       let folderFilter = null;
       if (this.config.media_path) {
         let path = this.config.media_path;
         // Remove media-source://media_source prefix if present
-        if (path.startsWith('media-source://media_source/')) {
-          path = path.replace('media-source://media_source/', '');
+        if (path.startsWith('media-source://media_source')) {
+          path = path.replace('media-source://media_source', '');
         }
-        // Remove /media/ prefix if present
-        if (path.startsWith('/media/')) {
-          path = path.substring('/media/'.length);
-        }
+        // Now path should be like: /media/Photo/PhotoLibrary
         folderFilter = path;
         this._log('🔍 Filtering by folder:', folderFilter);
       }
@@ -1524,7 +1533,8 @@ class MediaCard extends LitElement {
     
     try {
       // If media_index integration is enabled, use it instead of filesystem scanning
-      if (this.config.media_index?.enabled && this._isRandomMode()) {
+      // Media index works with ANY folder_mode (random, latest, etc.)
+      if (this.config.media_index?.enabled) {
         this._log('🔍 Using media_index integration for media selection');
         
         // Initialize queue if not already loaded
