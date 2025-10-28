@@ -735,6 +735,211 @@ class MediaCard extends LitElement {
       right: 8px;
     }
 
+    /* Action Buttons (Favorite/Delete) */
+    .action-buttons {
+      position: absolute;
+      display: flex;
+      gap: 8px;
+      z-index: 50;
+      pointer-events: auto;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    /* Show action buttons on hover over the corner area */
+    .media-container:hover .action-buttons {
+      opacity: 1;
+    }
+
+    /* Positioning options */
+    .action-buttons-top-right {
+      top: 8px;
+      right: 8px;
+    }
+
+    .action-buttons-top-left {
+      top: 8px;
+      left: 8px;
+    }
+
+    .action-buttons-bottom-right {
+      bottom: 8px;
+      right: 8px;
+    }
+
+    .action-buttons-bottom-left {
+      bottom: 8px;
+      left: 8px;
+    }
+
+    .action-btn {
+      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.8);
+      border: 1px solid rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.2);
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: var(--primary-text-color);
+      backdrop-filter: blur(10px);
+    }
+
+    .action-btn:hover {
+      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.95);
+      transform: scale(1.15);
+      border-color: rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.4);
+    }
+
+    .action-btn ha-icon {
+      --mdc-icon-size: 24px;
+    }
+
+    .favorite-btn.favorited {
+      color: var(--error-color, #ff5252);
+    }
+
+    .favorite-btn.favorited:hover {
+      color: var(--error-color, #ff5252);
+      background: rgba(255, 82, 82, 0.1);
+    }
+
+    .delete-btn:hover {
+      color: var(--error-color, #ff5252);
+      background: rgba(255, 82, 82, 0.1);
+    }
+
+    /* Delete Confirmation Dialog */
+    .delete-confirmation-dialog {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1000;
+    }
+
+    .dialog-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+    }
+
+    .dialog-content {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--card-background-color);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      min-width: 300px;
+      max-width: 500px;
+      animation: dialogSlideIn 0.3s ease;
+    }
+
+    @keyframes dialogSlideIn {
+      from {
+        opacity: 0;
+        transform: translate(-50%, -45%);
+      }
+      to {
+        opacity: 1;
+        transform: translate(-50%, -50%);
+      }
+    }
+
+    .dialog-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--divider-color);
+    }
+
+    .dialog-header ha-icon {
+      color: var(--error-color, #ff5252);
+      --mdc-icon-size: 28px;
+    }
+
+    .dialog-header h3 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--primary-text-color);
+    }
+
+    .dialog-content.error .dialog-header ha-icon {
+      color: var(--warning-color, #ff9800);
+    }
+
+    .dialog-body {
+      padding: 20px 24px;
+    }
+
+    .dialog-body p {
+      margin: 0 0 12px;
+      color: var(--primary-text-color);
+      line-height: 1.5;
+    }
+
+    .dialog-body p.filename {
+      font-weight: 500;
+      font-family: monospace;
+      background: var(--secondary-background-color);
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin: 12px 0;
+    }
+
+    .dialog-body p.note {
+      font-size: 0.9em;
+      color: var(--secondary-text-color);
+      margin-bottom: 0;
+    }
+
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      padding: 16px 24px 20px;
+      border-top: 1px solid var(--divider-color);
+    }
+
+    .dialog-actions button {
+      padding: 8px 20px;
+      border-radius: 4px;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .dialog-actions .cancel-btn {
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+    }
+
+    .dialog-actions .cancel-btn:hover {
+      background: var(--divider-color);
+    }
+
+    .dialog-actions .delete-btn {
+      background: var(--error-color, #ff5252);
+      color: white;
+    }
+
+    .dialog-actions .delete-btn:hover {
+      background: var(--error-color-dark, #d32f2f);
+    }
+
     /* Navigation Zones */
     .navigation-zones {
       position: absolute;
@@ -2807,6 +3012,9 @@ class MediaCard extends LitElement {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
+      // Store the original media path for service calls
+      this._currentMediaPath = mediaPath;
+      
       // Clear retry attempts for the new URL since it's fresh
       if (this._retryAttempts.has(newUrl)) {
         this._retryAttempts.delete(newUrl);
@@ -2900,6 +3108,7 @@ class MediaCard extends LitElement {
           ${this._renderNavigationIndicators()}
           ${this.config.show_refresh_button ? this._renderRefreshButton() : ''}
           ${this._renderPauseIndicator()}
+          ${this._renderActionButtons()}
           ${this._renderMetadataOverlay()}
         </div>
       </div>
@@ -3143,6 +3352,47 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     return html`
       <div class="metadata-overlay ${positionClass}">
         ${metadataText}
+      </div>
+    `;
+  }
+
+  _renderActionButtons() {
+    // Only show action buttons when media_index is enabled and we have a current file
+    if (!this.config.media_index?.enabled || !this._currentMediaPath) {
+      return html``;
+    }
+
+    // Check individual button enable flags (default: true)
+    const config = this.config.action_buttons || {};
+    const enableFavorite = config.enable_favorite !== false;
+    const enableDelete = config.enable_delete !== false;
+    
+    // Don't render anything if both are disabled
+    if (!enableFavorite && !enableDelete) {
+      return html``;
+    }
+
+    const isFavorite = this._currentMetadata?.is_favorited || false;
+    const position = config.position || 'top-right';
+
+    return html`
+      <div class="action-buttons action-buttons-${position}">
+        ${enableFavorite ? html`
+          <button
+            class="action-btn favorite-btn ${isFavorite ? 'favorited' : ''}"
+            @click=${this._handleFavoriteClick}
+            title="${isFavorite ? 'Unfavorite' : 'Favorite'}">
+            <ha-icon icon="${isFavorite ? 'mdi:heart' : 'mdi:heart-outline'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableDelete ? html`
+          <button
+            class="action-btn delete-btn"
+            @click=${this._handleDeleteClick}
+            title="Delete">
+            <ha-icon icon="mdi:delete-outline"></ha-icon>
+          </button>
+        ` : ''}
       </div>
     `;
   }
@@ -4555,6 +4805,162 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
     // Force re-render to update pause indicator
     this.requestUpdate();
+  }
+
+  async _handleFavoriteClick(e) {
+    e.stopPropagation();
+    this._log('💗 Favorite button clicked');
+
+    if (!this._currentMediaPath || !this.hass) {
+      return;
+    }
+
+    const isFavorite = this._currentMetadata?.is_favorited || false;
+    const newFavoriteState = !isFavorite;
+
+    try {
+      // Call media_index.mark_favorite service with return_response
+      const response = await this.hass.callWS({
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'mark_favorite',
+        service_data: {
+          file_path: this._currentMediaPath,
+          is_favorite: newFavoriteState
+        },
+        return_response: true
+      });
+
+      // Update local metadata immediately for UI feedback
+      if (this._currentMetadata) {
+        this._currentMetadata.is_favorited = newFavoriteState;
+        this.requestUpdate();
+      }
+
+      this._log(`✅ File ${newFavoriteState ? 'favorited' : 'unfavorited'}:`, response);
+    } catch (error) {
+      this._log('❌ Error toggling favorite:', error);
+      console.error('Error toggling favorite:', error);
+    }
+  }
+
+  async _handleDeleteClick(e) {
+    e.stopPropagation();
+    this._log('🗑️ Delete button clicked');
+
+    if (!this._currentMediaPath || !this.hass) {
+      return;
+    }
+
+    // Show confirmation dialog if enabled (default: true)
+    const showConfirmation = this.config.action_buttons?.show_delete_confirmation !== false;
+    
+    if (showConfirmation) {
+      // Show custom confirmation dialog
+      this._showDeleteConfirmation();
+      return;
+    }
+
+    // If confirmation disabled, delete immediately
+    await this._performDelete();
+  }
+
+  _showDeleteConfirmation() {
+    const filename = this._currentMetadata?.filename || this._currentMediaPath.split('/').pop();
+    
+    // Create custom confirmation dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'delete-confirmation-dialog';
+    dialog.innerHTML = `
+      <div class="dialog-overlay"></div>
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <ha-icon icon="mdi:delete-alert"></ha-icon>
+          <h3>Delete Media File</h3>
+        </div>
+        <div class="dialog-body">
+          <p>Are you sure you want to delete this file?</p>
+          <p class="filename">${filename}</p>
+          <p class="note">It will be moved to the _Junk folder.</p>
+        </div>
+        <div class="dialog-actions">
+          <button class="cancel-btn">Cancel</button>
+          <button class="delete-btn">Delete</button>
+        </div>
+      </div>
+    `;
+    
+    this.renderRoot.appendChild(dialog);
+    
+    // Add event listeners
+    const cancelBtn = dialog.querySelector('.cancel-btn');
+    const deleteBtn = dialog.querySelector('.delete-btn');
+    const overlay = dialog.querySelector('.dialog-overlay');
+    
+    const closeDialog = () => {
+      dialog.remove();
+    };
+    
+    cancelBtn.addEventListener('click', closeDialog);
+    overlay.addEventListener('click', closeDialog);
+    deleteBtn.addEventListener('click', async () => {
+      closeDialog();
+      await this._performDelete();
+    });
+    
+    // Focus delete button for keyboard accessibility
+    setTimeout(() => deleteBtn.focus(), 100);
+  }
+
+  async _performDelete() {
+    try {
+      // Call media_index.delete_media service with return_response
+      const response = await this.hass.callWS({
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'delete_media',
+        service_data: {
+          file_path: this._currentMediaPath
+        },
+        return_response: true
+      });
+
+      this._log(`✅ File deleted:`, response);
+
+      // Automatically advance to next image
+      if (this._folderContents && this._folderContents.length > 1) {
+        await this._navigateNext();
+      }
+    } catch (error) {
+      this._log('❌ Error deleting file:', error);
+      console.error('Error deleting file:', error);
+      
+      // Show error in custom dialog
+      const errorDialog = document.createElement('div');
+      errorDialog.className = 'delete-confirmation-dialog';
+      errorDialog.innerHTML = `
+        <div class="dialog-overlay"></div>
+        <div class="dialog-content error">
+          <div class="dialog-header">
+            <ha-icon icon="mdi:alert-circle"></ha-icon>
+            <h3>Delete Failed</h3>
+          </div>
+          <div class="dialog-body">
+            <p>${error.message || error}</p>
+          </div>
+          <div class="dialog-actions">
+            <button class="cancel-btn">Close</button>
+          </div>
+        </div>
+      `;
+      
+      this.renderRoot.appendChild(errorDialog);
+      
+      const closeBtn = errorDialog.querySelector('.cancel-btn');
+      const overlay = errorDialog.querySelector('.dialog-overlay');
+      closeBtn.addEventListener('click', () => errorDialog.remove());
+      overlay.addEventListener('click', () => errorDialog.remove());
+    }
   }
 
   _handleCenterClick(e) {
