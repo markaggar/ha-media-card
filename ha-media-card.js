@@ -394,12 +394,75 @@ class MediaCard extends LitElement {
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
       if (metadata.location_city && metadata.location_country) {
-        // Get server's country from Home Assistant config
-        const serverCountry = this.hass?.config?.country || null;
+        // Get server's country from Home Assistant config (ISO code like "US")
+        const serverCountryCode = this.hass?.config?.country || null;
         
-        // Only show country if different from server's country
+        // Map common country codes to full names for comparison
+        const countryMap = {
+          'US': 'United States',
+          'CA': 'Canada',
+          'GB': 'United Kingdom',
+          'AU': 'Australia',
+          'NZ': 'New Zealand',
+          'DE': 'Germany',
+          'FR': 'France',
+          'IT': 'Italy',
+          'ES': 'Spain',
+          'JP': 'Japan',
+          'CN': 'China',
+          'IN': 'India',
+          'BR': 'Brazil',
+          'MX': 'Mexico',
+          'NL': 'Netherlands',
+          'SE': 'Sweden',
+          'NO': 'Norway',
+          'DK': 'Denmark',
+          'FI': 'Finland',
+          'PL': 'Poland',
+          'CZ': 'Czech Republic',
+          'AT': 'Austria',
+          'CH': 'Switzerland',
+          'BE': 'Belgium',
+          'IE': 'Ireland',
+          'PT': 'Portugal',
+          'GR': 'Greece',
+          'RU': 'Russia',
+          'ZA': 'South Africa',
+          'AR': 'Argentina',
+          'CL': 'Chile',
+          'CO': 'Colombia',
+          'KR': 'South Korea',
+          'TH': 'Thailand',
+          'SG': 'Singapore',
+          'MY': 'Malaysia',
+          'ID': 'Indonesia',
+          'PH': 'Philippines',
+          'VN': 'Vietnam',
+          'IL': 'Israel',
+          'SA': 'Saudi Arabia',
+          'AE': 'United Arab Emirates',
+          'EG': 'Egypt',
+          'TR': 'Turkey'
+        };
+        
+        const serverCountryName = serverCountryCode ? countryMap[serverCountryCode] : null;
+        
+        // Build location text with city
         let locationText = metadata.location_city;
-        if (metadata.location_country !== serverCountry) {
+        
+        // Add state if available and different from city
+        if (metadata.location_state && metadata.location_state !== metadata.location_city) {
+          locationText += `, ${metadata.location_state}`;
+        }
+        
+        // Only show country if we have a server country AND it doesn't match
+        // Compare both ISO code (e.g., "US") and full name (e.g., "United States")
+        const countryMatches = serverCountryCode && (
+          metadata.location_country === serverCountryCode ||
+          metadata.location_country === serverCountryName
+        );
+        
+        if (!countryMatches) {
           locationText += `, ${metadata.location_country}`;
         }
         
@@ -8594,7 +8657,60 @@ class MediaCardEditor extends LitElement {
           </div>
 
           <div class="section">
-            <div class="section-title">🚀 Subfolder Queue (Random Mode)</div>
+            <div class="section-title">� Action Buttons</div>
+            
+            <div class="config-row">
+              <label>Enable Favorite Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_favorite !== false}
+                  @change=${this._actionButtonsEnableFavoriteChanged}
+                />
+                <div class="help-text">Show heart icon to favorite images (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Enable Delete Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_delete !== false}
+                  @change=${this._actionButtonsEnableDeleteChanged}
+                />
+                <div class="help-text">Show trash icon to delete images (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Button Position</label>
+              <div>
+                <select @change=${this._actionButtonsPositionChanged}>
+                  <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
+                  <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
+                  <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
+                  <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+                </select>
+                <div class="help-text">Corner position for action buttons</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Show Delete Confirmation</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.show_delete_confirmation !== false}
+                  @change=${this._actionButtonsShowConfirmationChanged}
+                />
+                <div class="help-text">Show confirmation dialog before deleting files</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">�🚀 Subfolder Queue (Random Mode)</div>
             
             <div class="config-row">
               <label>Enable Subfolder Queue</label>
@@ -10019,6 +10135,51 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       media_index: {
         ...this._config.media_index,
         prefetch_offset: parseInt(ev.target.value, 10)
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  // Action Buttons configuration event handlers
+  _actionButtonsEnableFavoriteChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_favorite: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableDeleteChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_delete: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        position: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsShowConfirmationChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        show_delete_confirmation: ev.target.checked
       }
     };
     this._fireConfigChanged();
