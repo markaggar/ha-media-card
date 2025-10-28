@@ -97,6 +97,7 @@ class MediaCard extends LitElement {
     this._configuredMediaPath = null; // Track the configured media path to detect changes across setConfig calls
     this._isLoadingMedia = false; // Prevent duplicate media loads during queue initialization
     this._videoEndedRefreshInProgress = false; // Prevent auto-refresh from interfering with video-ended refresh
+    this._excludedFiles = new Set(); // Track files moved to _Junk/_Edit to prevent reappearance
     
     // Slideshow behavior state tracking 
     this._slideshowPosition = 0; // Current position in slideshow sequence
@@ -1835,8 +1836,21 @@ class MediaCard extends LitElement {
       if (response && response.items && Array.isArray(response.items)) {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
+        // Filter out excluded files (moved to _Junk/_Edit) BEFORE processing
+        const filteredItems = response.items.filter(item => {
+          const isExcluded = this._excludedFiles.has(item.path);
+          if (isExcluded) {
+            this._log(`⏭️ Filtering out excluded file: ${item.path}`);
+          }
+          return !isExcluded;
+        });
+        
+        if (filteredItems.length < response.items.length) {
+          this._log(`📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
+        }
+        
         // Transform items to include resolved URLs
-        const items = await Promise.all(response.items.map(async (item) => {
+        const items = await Promise.all(filteredItems.map(async (item) => {
           // Backend returns 'path', not 'file_path'
           const filePath = item.path;
           const resolvedUrl = await this._resolveMediaPath(filePath);
@@ -5032,6 +5046,10 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
       this._log(`✅ File deleted:`, response);
 
+      // Add to exclusion list to prevent reappearance in queries
+      this._excludedFiles.add(this._currentMediaPath);
+      this._log(`📝 Added to exclusion list: ${this._currentMediaPath} (total excluded: ${this._excludedFiles.size})`);
+
       // Automatically advance to next image
       if (this._folderContents && this._folderContents.length > 1) {
         await this._navigateNext();
@@ -5136,6 +5154,10 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       });
 
       this._log(`✅ File marked for editing:`, response);
+
+      // Add to exclusion list to prevent reappearance in queries
+      this._excludedFiles.add(this._currentMediaPath);
+      this._log(`📝 Added to exclusion list: ${this._currentMediaPath} (total excluded: ${this._excludedFiles.size})`);
 
       // Automatically advance to next image
       if (this._folderContents && this._folderContents.length > 1) {
