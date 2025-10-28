@@ -4662,17 +4662,30 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     this._log(`📂 Loading media item:`, item.title);
     
     try {
+      // Detect media type from original path (before URL resolution adds auth tokens)
+      this._mediaType = this._detectFileType(item.media_content_id || item.title) || 'image';
+      this.setAttribute('data-media-type', this._mediaType);
+      
+      // Use metadata from item if available (media_index integration)
+      // Otherwise extract from path
+      let metadata;
+      if (item._metadata) {
+        this._log('Using backend metadata from item._metadata');
+        metadata = { ...item._metadata };
+      } else {
+        this._log('Extracting metadata from path');
+        metadata = this._extractMetadataFromPath(item.media_content_id || item.title, null);
+      }
+      
+      // Pre-set metadata before URL resolution
+      this._currentMetadata = metadata;
+      
+      // Resolve media path to get authenticated URL
       const mediaUrl = await this._resolveMediaPath(item.media_content_id);
       
-      // Extract metadata from the item and its path
-      const metadata = this._extractMetadataFromPath(mediaUrl, null);
-      
-      // Update current media
+      // Update current media URL and index
       this._mediaUrl = mediaUrl;
-      this._mediaType = this._detectFileType(item.title) || 'image'; // Default to image if unknown
-      this.setAttribute('data-media-type', this._mediaType);
       this._currentMediaIndex = index >= 0 ? index : (this._folderContents ? this._folderContents.findIndex(f => f.media_content_id === item.media_content_id) : -1);
-      this._currentMetadata = metadata;
       
       this._log('✅ Media URL set, triggering re-render:', this._mediaUrl);
       
