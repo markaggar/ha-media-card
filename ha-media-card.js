@@ -393,80 +393,90 @@ class MediaCard extends LitElement {
     
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
-      if (metadata.location_city && metadata.location_country) {
+      if (metadata.location_city || metadata.location_country) {
         // Get server's country from Home Assistant config (ISO code like "US")
         const serverCountryCode = this.hass?.config?.country || null;
         
         // Map common country codes to full names for comparison
+        // Also includes common variations (e.g., "United States of America")
         const countryMap = {
-          'US': 'United States',
-          'CA': 'Canada',
-          'GB': 'United Kingdom',
-          'AU': 'Australia',
-          'NZ': 'New Zealand',
-          'DE': 'Germany',
-          'FR': 'France',
-          'IT': 'Italy',
-          'ES': 'Spain',
-          'JP': 'Japan',
-          'CN': 'China',
-          'IN': 'India',
-          'BR': 'Brazil',
-          'MX': 'Mexico',
-          'NL': 'Netherlands',
-          'SE': 'Sweden',
-          'NO': 'Norway',
-          'DK': 'Denmark',
-          'FI': 'Finland',
-          'PL': 'Poland',
-          'CZ': 'Czech Republic',
-          'AT': 'Austria',
-          'CH': 'Switzerland',
-          'BE': 'Belgium',
-          'IE': 'Ireland',
-          'PT': 'Portugal',
-          'GR': 'Greece',
-          'RU': 'Russia',
-          'ZA': 'South Africa',
-          'AR': 'Argentina',
-          'CL': 'Chile',
-          'CO': 'Colombia',
-          'KR': 'South Korea',
-          'TH': 'Thailand',
-          'SG': 'Singapore',
-          'MY': 'Malaysia',
-          'ID': 'Indonesia',
-          'PH': 'Philippines',
-          'VN': 'Vietnam',
-          'IL': 'Israel',
-          'SA': 'Saudi Arabia',
-          'AE': 'United Arab Emirates',
-          'EG': 'Egypt',
-          'TR': 'Turkey'
+          'US': ['United States', 'United States of America', 'USA'],
+          'CA': ['Canada'],
+          'GB': ['United Kingdom', 'Great Britain', 'UK'],
+          'AU': ['Australia'],
+          'NZ': ['New Zealand'],
+          'DE': ['Germany', 'Deutschland'],
+          'FR': ['France'],
+          'IT': ['Italy', 'Italia'],
+          'ES': ['Spain', 'España'],
+          'JP': ['Japan'],
+          'CN': ['China'],
+          'IN': ['India'],
+          'BR': ['Brazil', 'Brasil'],
+          'MX': ['Mexico', 'México'],
+          'NL': ['Netherlands', 'The Netherlands', 'Holland'],
+          'SE': ['Sweden', 'Sverige'],
+          'NO': ['Norway', 'Norge'],
+          'DK': ['Denmark', 'Danmark'],
+          'FI': ['Finland', 'Suomi'],
+          'PL': ['Poland', 'Polska'],
+          'CZ': ['Czech Republic', 'Czechia'],
+          'AT': ['Austria', 'Österreich'],
+          'CH': ['Switzerland', 'Schweiz', 'Suisse'],
+          'BE': ['Belgium', 'België', 'Belgique'],
+          'IE': ['Ireland', 'Éire'],
+          'PT': ['Portugal'],
+          'GR': ['Greece', 'Hellas'],
+          'RU': ['Russia', 'Russian Federation'],
+          'ZA': ['South Africa'],
+          'AR': ['Argentina'],
+          'CL': ['Chile'],
+          'CO': ['Colombia'],
+          'KR': ['South Korea', 'Korea'],
+          'TH': ['Thailand'],
+          'SG': ['Singapore'],
+          'MY': ['Malaysia'],
+          'ID': ['Indonesia'],
+          'PH': ['Philippines'],
+          'VN': ['Vietnam', 'Viet Nam'],
+          'IL': ['Israel'],
+          'SA': ['Saudi Arabia'],
+          'AE': ['United Arab Emirates', 'UAE'],
+          'EG': ['Egypt'],
+          'TR': ['Turkey', 'Türkiye']
         };
         
-        const serverCountryName = serverCountryCode ? countryMap[serverCountryCode] : null;
+        const serverCountryNames = serverCountryCode ? countryMap[serverCountryCode] : null;
         
-        // Build location text with city
-        let locationText = metadata.location_city;
+        // Build location text
+        let locationText = '';
         
-        // Add state if available and different from city
-        if (metadata.location_state && metadata.location_state !== metadata.location_city) {
-          locationText += `, ${metadata.location_state}`;
+        // Add city if available
+        if (metadata.location_city) {
+          locationText = metadata.location_city;
+          
+          // Add state if available and different from city
+          if (metadata.location_state && metadata.location_state !== metadata.location_city) {
+            locationText += `, ${metadata.location_state}`;
+          }
         }
         
         // Only show country if we have a server country AND it doesn't match
-        // Compare both ISO code (e.g., "US") and full name (e.g., "United States")
-        const countryMatches = serverCountryCode && (
-          metadata.location_country === serverCountryCode ||
-          metadata.location_country === serverCountryName
-        );
-        
-        if (!countryMatches) {
-          locationText += `, ${metadata.location_country}`;
+        // Compare ISO code and all country name variations
+        if (metadata.location_country) {
+          const countryMatches = serverCountryCode && (
+            metadata.location_country === serverCountryCode ||
+            (serverCountryNames && serverCountryNames.includes(metadata.location_country))
+          );
+          
+          if (!countryMatches) {
+            locationText += locationText ? `, ${metadata.location_country}` : metadata.location_country;
+          }
         }
         
-        parts.push(`📍 ${locationText}`);
+        if (locationText) {
+          parts.push(`📍 ${locationText}`);
+        }
       } else if (metadata.has_coordinates && !metadata.is_geocoded) {
         // Item has GPS coordinates but hasn't been geocoded yet
         parts.push(`📍 Loading location...`);
@@ -869,6 +879,11 @@ class MediaCard extends LitElement {
       background: rgba(255, 82, 82, 0.1);
     }
 
+    .edit-btn:hover {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.1);
+    }
+
     .delete-btn:hover {
       color: var(--error-color, #ff5252);
       background: rgba(255, 82, 82, 0.1);
@@ -1001,6 +1016,15 @@ class MediaCard extends LitElement {
 
     .dialog-actions .delete-btn:hover {
       background: var(--error-color-dark, #d32f2f);
+    }
+
+    .dialog-actions .edit-btn {
+      background: var(--warning-color, #ff9800);
+      color: white;
+    }
+
+    .dialog-actions .edit-btn:hover {
+      background: var(--warning-color-dark, #f57c00);
     }
 
     /* Navigation Zones */
@@ -3429,9 +3453,10 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     const config = this.config.action_buttons || {};
     const enableFavorite = config.enable_favorite !== false;
     const enableDelete = config.enable_delete !== false;
+    const enableEdit = config.enable_edit !== false;
     
-    // Don't render anything if both are disabled
-    if (!enableFavorite && !enableDelete) {
+    // Don't render anything if all are disabled
+    if (!enableFavorite && !enableDelete && !enableEdit) {
       return html``;
     }
 
@@ -3446,6 +3471,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
             @click=${this._handleFavoriteClick}
             title="${isFavorite ? 'Unfavorite' : 'Favorite'}">
             <ha-icon icon="${isFavorite ? 'mdi:heart' : 'mdi:heart-outline'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableEdit ? html`
+          <button
+            class="action-btn edit-btn"
+            @click=${this._handleEditClick}
+            title="Mark for Editing">
+            <ha-icon icon="mdi:pencil-outline"></ha-icon>
           </button>
         ` : ''}
         ${enableDelete ? html`
@@ -5007,6 +5040,111 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           <div class="dialog-header">
             <ha-icon icon="mdi:alert-circle"></ha-icon>
             <h3>Delete Failed</h3>
+          </div>
+          <div class="dialog-body">
+            <p>${error.message || error}</p>
+          </div>
+          <div class="dialog-actions">
+            <button class="cancel-btn">Close</button>
+          </div>
+        </div>
+      `;
+      
+      this.renderRoot.appendChild(errorDialog);
+      
+      const closeBtn = errorDialog.querySelector('.cancel-btn');
+      const overlay = errorDialog.querySelector('.dialog-overlay');
+      closeBtn.addEventListener('click', () => errorDialog.remove());
+      overlay.addEventListener('click', () => errorDialog.remove());
+    }
+  }
+
+  async _handleEditClick(e) {
+    e.stopPropagation();
+    this._log('✏️ Edit button clicked');
+
+    if (!this._currentMediaPath || !this.hass) {
+      return;
+    }
+
+    const filename = this._currentMetadata?.filename || this._currentMediaPath.split('/').pop();
+    
+    // Create custom confirmation dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'delete-confirmation-dialog';
+    dialog.innerHTML = `
+      <div class="dialog-overlay"></div>
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <ha-icon icon="mdi:pencil-circle"></ha-icon>
+          <h3>Mark for Editing</h3>
+        </div>
+        <div class="dialog-body">
+          <p>Mark this file for editing?</p>
+          <p class="filename">${filename}</p>
+          <p class="note">It will be moved to the _Edit folder for manual correction.</p>
+        </div>
+        <div class="dialog-actions">
+          <button class="cancel-btn">Cancel</button>
+          <button class="edit-btn">Mark for Edit</button>
+        </div>
+      </div>
+    `;
+    
+    this.renderRoot.appendChild(dialog);
+    
+    // Add event listeners
+    const cancelBtn = dialog.querySelector('.cancel-btn');
+    const editBtn = dialog.querySelector('.edit-btn');
+    const overlay = dialog.querySelector('.dialog-overlay');
+    
+    const closeDialog = () => {
+      dialog.remove();
+    };
+    
+    cancelBtn.addEventListener('click', closeDialog);
+    overlay.addEventListener('click', closeDialog);
+    editBtn.addEventListener('click', async () => {
+      closeDialog();
+      await this._performMarkForEdit();
+    });
+    
+    // Focus edit button for keyboard accessibility
+    setTimeout(() => editBtn.focus(), 100);
+  }
+
+  async _performMarkForEdit() {
+    try {
+      // Call media_index.mark_for_edit service with return_response
+      const response = await this.hass.callWS({
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'mark_for_edit',
+        service_data: {
+          file_path: this._currentMediaPath
+        },
+        return_response: true
+      });
+
+      this._log(`✅ File marked for editing:`, response);
+
+      // Automatically advance to next image
+      if (this._folderContents && this._folderContents.length > 1) {
+        await this._navigateNext();
+      }
+    } catch (error) {
+      this._log('❌ Error marking file for edit:', error);
+      console.error('Error marking file for edit:', error);
+      
+      // Show error in custom dialog
+      const errorDialog = document.createElement('div');
+      errorDialog.className = 'delete-confirmation-dialog';
+      errorDialog.innerHTML = `
+        <div class="dialog-overlay"></div>
+        <div class="dialog-content error">
+          <div class="dialog-header">
+            <ha-icon icon="mdi:alert-circle"></ha-icon>
+            <h3>Mark for Edit Failed</h3>
           </div>
           <div class="dialog-body">
             <p>${error.message || error}</p>
@@ -8684,6 +8822,18 @@ class MediaCardEditor extends LitElement {
             </div>
             
             <div class="config-row">
+              <label>Enable Edit Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_edit !== false}
+                  @change=${this._actionButtonsEnableEditChanged}
+                />
+                <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
               <label>Button Position</label>
               <div>
                 <select @change=${this._actionButtonsPositionChanged}>
@@ -10158,6 +10308,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       action_buttons: {
         ...this._config.action_buttons,
         enable_delete: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableEditChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_edit: ev.target.checked
       }
     };
     this._fireConfigChanged();
