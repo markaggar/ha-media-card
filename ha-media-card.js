@@ -12,6 +12,42 @@ if (!window.mediaCardSubfolderQueues) {
   window.mediaCardSubfolderQueues = new Map();
 }
 
+// Shared utility functions for media detection
+const MediaUtils = {
+  /**
+   * Detect file type (image/video) from file path
+   * Handles URLs with query params and special suffixes
+   */
+  detectFileType(filePath) {
+    if (!filePath) return null;
+    
+    // Handle URLs with query parameters
+    let cleanPath = filePath;
+    if (filePath.includes('?')) {
+      cleanPath = filePath.split('?')[0];
+    }
+    
+    const fileName = cleanPath.split('/').pop() || cleanPath;
+    
+    // Handle special suffixes (e.g., Synology _shared)
+    let cleanFileName = fileName;
+    if (fileName.endsWith('_shared')) {
+      cleanFileName = fileName.replace('_shared', '');
+    }
+    
+    // Extract extension
+    const extension = cleanFileName.split('.').pop()?.toLowerCase();
+    
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'avi'].includes(extension)) {
+      return 'video';
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+      return 'image';
+    }
+    
+    return null;
+  }
+};
+
 class MediaCard extends LitElement {
   static properties = {
     hass: { attribute: false },
@@ -77,10 +113,6 @@ class MediaCard extends LitElement {
     this._zoomOriginX = 50; // Percent
     this._zoomOriginY = 50; // Percent
     this._zoomLevel = 2.0;  // Default zoom level
-    
-    // Media index integration state
-    this._mediaIndexQueue = null; // Queue of items from media_index integration
-    this._mediaIndexPosition = 0; // Current position in media_index queue
   }
 
 
@@ -1421,31 +1453,40 @@ class MediaCard extends LitElement {
   /**
    * Prefetch geocoding for upcoming items in the queue
    * Triggers geocoding for items N positions ahead to ensure location data is ready when displayed
+   * 
+   * @param {number} targetIndex - Optional specific index to geocode, defaults to prefetch offset from current position
    */
-  async _prefetchGeocoding() {
-    if (!this.config.media_index?.enabled || !this._mediaIndexQueue) {
+  async _prefetchGeocoding(targetIndex = null) {
+    if (!this.config.media_index?.enabled || !this._folderContents) {
       return; // Integration not enabled or queue not loaded
     }
 
-    const offset = this.config.media_index?.prefetch_offset || 3;
-    const prefetchIndex = (this._mediaIndexPosition + offset) % this._mediaIndexQueue.length;
-    const item = this._mediaIndexQueue[prefetchIndex];
+    // Calculate which item to prefetch
+    let prefetchIndex;
+    if (targetIndex !== null) {
+      prefetchIndex = targetIndex;
+    } else {
+      const offset = this.config.media_index?.prefetch_offset || 3;
+      prefetchIndex = (this._currentMediaIndex + offset) % this._folderContents.length;
+    }
+    
+    const item = this._folderContents[prefetchIndex];
 
-    // Only prefetch if item has coordinates but isn't geocoded yet
-    if (!item || !item.has_coordinates || item.is_geocoded) {
+    // Only prefetch if item has metadata and coordinates but isn't geocoded yet
+    if (!item?._metadata?.has_coordinates || item._metadata.is_geocoded) {
       return; // Nothing to prefetch
     }
 
     // Check if we're already geocoding this item (prevent duplicate requests)
-    if (item._geocoding_in_progress) {
+    if (item._metadata._geocoding_in_progress) {
       return;
     }
 
     try {
-      this._log(`🗺️ Prefetching geocoding for item at index ${prefetchIndex} (lat: ${item.latitude}, lon: ${item.longitude})`);
+      this._log(`🗺️ Prefetching geocoding for item at index ${prefetchIndex} (lat: ${item._metadata.latitude}, lon: ${item._metadata.longitude})`);
       
       // Mark as in-progress to prevent duplicate requests
-      item._geocoding_in_progress = true;
+      item._metadata._geocoding_in_progress = true;
 
       // Call geocode_file service with latitude/longitude via WebSocket
       const wsResponse = await this.hass.callWS({
@@ -1453,8 +1494,8 @@ class MediaCard extends LitElement {
         domain: 'media_index',
         service: 'geocode_file',
         service_data: {
-          latitude: item.latitude,
-          longitude: item.longitude
+          latitude: item._metadata.latitude,
+          longitude: item._metadata.longitude
         },
         return_response: true
       });
@@ -1463,16 +1504,16 @@ class MediaCard extends LitElement {
       const response = wsResponse?.response || wsResponse;
 
       if (response && response.location_city && response.location_country) {
-        // Update item with geocoded location
-        item.location_city = response.location_city;
-        item.location_country = response.location_country;
-        item.location_name = response.location_name;
-        item.is_geocoded = true;
+        // Update item metadata with geocoded location
+        item._metadata.location_city = response.location_city;
+        item._metadata.location_country = response.location_country;
+        item._metadata.location_name = response.location_name;
+        item._metadata.is_geocoded = true;
         
         this._log(`✅ Geocoded to: ${response.location_city}, ${response.location_country}`);
         
         // If this is the currently displayed item, update the display
-        const currentIndex = (this._mediaIndexPosition - 1 + this._mediaIndexQueue.length) % this._mediaIndexQueue.length;
+        const currentIndex = (this._currentMediaIndex - 1 + this._folderContents.length) % this._folderContents.length;
         if (prefetchIndex === currentIndex) {
           this._currentMetadata = {
             ...this._currentMetadata,
@@ -1532,60 +1573,110 @@ class MediaCard extends LitElement {
     }
     
     try {
-      // If media_index integration is enabled, use it instead of filesystem scanning
+      // If media_index integration is enabled, use it to populate the queue
       // Media index works with ANY folder_mode (random, latest, etc.)
       if (this.config.media_index?.enabled) {
         this._log('🔍 Using media_index integration for media selection');
         
         // Initialize queue if not already loaded
-        if (!this._mediaIndexQueue || this._mediaIndexQueue.length === 0) {
+        if (!this._folderContents || this._folderContents.length === 0) {
           const items = await this._queryMediaIndex(this.config.slideshow_window || 100);
           if (items && items.length > 0) {
-            this._mediaIndexQueue = items;
-            this._mediaIndexPosition = 0;
-            this._log('✅ Loaded', items.length, 'items from media_index');
+            // Transform media_index items to match existing queue structure
+            this._folderContents = items.map(item => ({
+              media_content_id: item.path, // Use database path for content ID
+              title: item.filename,
+              can_play: true,
+              can_expand: false,
+              // Store EXIF metadata directly on the item for easy access
+              _metadata: {
+                folder: item.folder,
+                filename: item.filename,
+                date_taken: item.date_taken,
+                location_name: item.location_name,
+                location_city: item.location_city,
+                location_country: item.location_country,
+                has_coordinates: item.has_coordinates,
+                is_geocoded: item.is_geocoded,
+                latitude: item.latitude,
+                longitude: item.longitude
+              }
+            }));
+            this._currentMediaIndex = 0;
+            this._log('✅ Loaded', items.length, 'items from media_index into queue');
           } else {
             this._log('⚠️ Media index query returned no items');
             // Fall through to filesystem scanning
-            this._mediaIndexQueue = null;
+            this._folderContents = null;
           }
         }
         
-        // Use media from queue
-        if (this._mediaIndexQueue && this._mediaIndexQueue.length > 0) {
-          const item = this._mediaIndexQueue[this._mediaIndexPosition];
+        // Use media from existing queue system
+        if (this._folderContents && this._folderContents.length > 0) {
+          const item = this._folderContents[this._currentMediaIndex];
           
-          // Load media from item
-          this._setMediaUrl(item.url);
-          this._detectMediaType(item.path);
-          
-          // Store metadata for display
-          this._currentMetadata = {
-            folder: item.folder,
-            filename: item.filename,
-            date_taken: item.date_taken,
-            location_name: item.location_name,
-            location_city: item.location_city,
-            location_country: item.location_country,
-            has_coordinates: item.has_coordinates,
-            is_geocoded: item.is_geocoded
-          };
-          
-          // Advance position (wrap around if at end)
-          this._mediaIndexPosition = (this._mediaIndexPosition + 1) % this._mediaIndexQueue.length;
-          
-          // Prefetch geocoding for upcoming items
-          this._prefetchGeocoding().catch(err => {
-            this._log('⚠️ Prefetch geocoding failed:', err);
+          this._log('🎯 Loading item from queue:', {
+            media_content_id: item.media_content_id,
+            title: item.title,
+            has_metadata: !!item._metadata
           });
           
+          // Detect media type FIRST from the original path (has correct extension)
+          this._detectMediaType(item.media_content_id);
+          this._log('🎬 Detected media type:', this._mediaType, 'from path:', item.media_content_id);
+          
+          // Pre-set metadata from _metadata (from media_index backend)
+          if (item._metadata) {
+            this._currentMetadata = { ...item._metadata };
+          } else {
+            this._currentMetadata = {
+              folder: item.title?.split('/').slice(-2, -1)[0] || '',
+              filename: item.title
+            };
+          }
+          
+          // Resolve the media path to get authenticated URL
+          const resolvedUrl = await this._resolveMediaPath(item.media_content_id);
+          
+          // Set the URL, skip metadata extraction since we already have it from backend
+          this._setMediaUrl(resolvedUrl, item.media_content_id, true);
+          
+          // Advance position (wrap around if at end)
+          this._currentMediaIndex = (this._currentMediaIndex + 1) % this._folderContents.length;
+          
+          // Prefetch geocoding for upcoming items (check _metadata exists)
+          const nextIndex = (this._currentMediaIndex + (this.config.media_index?.prefetch_offset || 3)) % this._folderContents.length;
+          const nextItem = this._folderContents[nextIndex];
+          if (nextItem?._metadata?.has_coordinates && !nextItem._metadata.is_geocoded) {
+            this._prefetchGeocoding(nextIndex).catch(err => {
+              this._log('⚠️ Prefetch geocoding failed:', err);
+            });
+          }
+          
           // Refresh queue when getting low
-          if (this._mediaIndexPosition >= this._mediaIndexQueue.length - 10) {
+          if (this._currentMediaIndex >= this._folderContents.length - 10) {
             this._log('🔄 Queue running low, refreshing media_index items...');
             this._queryMediaIndex(this.config.slideshow_window || 100).then(items => {
               if (items && items.length > 0) {
-                this._mediaIndexQueue = items;
-                this._mediaIndexPosition = 0;
+                this._folderContents = items.map(item => ({
+                  media_content_id: item.path,
+                  title: item.filename,
+                  can_play: true,
+                  can_expand: false,
+                  _metadata: {
+                    folder: item.folder,
+                    filename: item.filename,
+                    date_taken: item.date_taken,
+                    location_name: item.location_name,
+                    location_city: item.location_city,
+                    location_country: item.location_country,
+                    has_coordinates: item.has_coordinates,
+                    is_geocoded: item.is_geocoded,
+                    latitude: item.latitude,
+                    longitude: item.longitude
+                  }
+                }));
+                this._currentMediaIndex = 0;
               }
             });
           }
@@ -2301,32 +2392,7 @@ class MediaCard extends LitElement {
   }
 
   _detectFileType(filePath) {
-    if (!filePath) return null;
-    
-    // Handle URLs with query parameters by extracting the path portion
-    let cleanPath = filePath;
-    if (filePath.includes('?')) {
-      // For URLs like "/path/file.mp4?token=123", extract just "/path/file.mp4"
-      cleanPath = filePath.split('?')[0];
-    }
-    
-    const fileName = cleanPath.split('/').pop() || cleanPath;
-    
-    // Handle Synology _shared suffix (e.g., "file.mp4_shared" -> "file.mp4")
-    let cleanFileName = fileName;
-    if (fileName.endsWith('_shared')) {
-      cleanFileName = fileName.replace('_shared', '');
-    }
-    
-    const extension = this._getFileExtension(cleanFileName);
-    
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
-      return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
-      return 'image';
-    }
-    
-    return null;
+    return MediaUtils.detectFileType(filePath);
   }
 
   async _shouldWaitForVideoCompletion() {
@@ -2597,7 +2663,7 @@ class MediaCard extends LitElement {
     return mediaPath;
   }
 
-  _setMediaUrl(newUrl, mediaPath = null) {
+  _setMediaUrl(newUrl, mediaPath = null, skipMetadataExtraction = false) {
     if (newUrl !== this._mediaUrl) {
       this._mediaUrl = newUrl;
       this._urlCreatedTime = Date.now();
@@ -2606,8 +2672,8 @@ class MediaCard extends LitElement {
         this._retryAttempts.delete(newUrl);
       }
       
-      // Extract metadata from the media path, clean it first
-      if (mediaPath || newUrl) {
+      // Extract metadata from the media path (unless using media_index with pre-populated metadata)
+      if (!skipMetadataExtraction && (mediaPath || newUrl)) {
         const pathToAnalyze = this._cleanPath(mediaPath || newUrl);
         const newMetadata = this._extractMetadataFromPath(pathToAnalyze, this._folderContents);
         
@@ -2615,7 +2681,7 @@ class MediaCard extends LitElement {
         if (JSON.stringify(newMetadata) !== JSON.stringify(this._currentMetadata)) {
           this._currentMetadata = newMetadata;
         }
-      } else {
+      } else if (!skipMetadataExtraction) {
         this._currentMetadata = null;
       }
       
@@ -7396,19 +7462,6 @@ class MediaCardEditor extends LitElement {
     return ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
   }
 
-  _detectFileType(filePath) {
-    const fileName = filePath.split('/').pop() || filePath;
-    const extension = fileName.split('.').pop()?.toLowerCase();
-    
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
-      return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
-      return 'image';
-    }
-    
-    return null;
-  }
-
   static styles = css`
     .card-config {
       display: grid;
@@ -9448,16 +9501,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _detectFileType(filePath) {
-    const fileName = filePath.split('/').pop() || filePath;
-    const extension = fileName.split('.').pop()?.toLowerCase();
-    
-    if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
-      return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
-      return 'image';
-    }
-    
-    return null;
+    return MediaUtils.detectFileType(filePath);
   }
 }
 
