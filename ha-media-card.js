@@ -100,6 +100,8 @@ class MediaCard extends LitElement {
     this._excludedFiles = new Set(); // Track files moved to _Junk/_Edit to prevent reappearance
     this._navigationHistory = []; // Track navigation path for proper back button behavior
     this._historyIndex = -1; // Current position in navigation history
+    this._consecutive404Count = 0; // Track consecutive 404 errors to detect stale queue
+    this._last404Time = 0; // Timestamp of last 404 error
     
     // Slideshow behavior state tracking 
     this._slideshowPosition = 0; // Current position in slideshow sequence
@@ -4297,6 +4299,53 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Check if this is a 404 error (file not found - likely deleted/moved)
     const is404 = this._mediaUrl && errorMessage.includes('not found');
     const currentPath = this._currentMediaPath;
+    const now = Date.now();
+    
+    // 🚨 CIRCUIT BREAKER: Detect if we're stuck in 404 loop with deleted files
+    if (is404 || errorMessage.includes('Media file not found')) {
+      // Check if this is a rapid succession 404 (within 10 seconds of last)
+      if (now - this._last404Time < 10000) {
+        this._consecutive404Count++;
+        this._log(`⚠️ Consecutive 404 error #${this._consecutive404Count} for: ${currentPath}`);
+      } else {
+        // Reset counter if it's been more than 10 seconds
+        this._consecutive404Count = 1;
+        this._log(`⚠️ First 404 in new time window for: ${currentPath}`);
+      }
+      this._last404Time = now;
+      
+      // CIRCUIT BREAKER TRIGGERED - Force complete queue refresh
+      if (this._consecutive404Count >= 3) {
+        this._log(`🚨 CIRCUIT BREAKER TRIGGERED: ${this._consecutive404Count} consecutive 404s - forcing fresh queue from backend`);
+        this._consecutive404Count = 0; // Reset
+        this._excludedFiles.clear(); // Clear all exclusions
+        
+        // Force immediate queue refresh from backend
+        this._queryMediaIndex(this.config.slideshow_window || 100).then(items => {
+          if (items && items.length > 0) {
+            this._log(`✅ Circuit breaker: Loaded ${items.length} fresh items from backend`);
+            this._folderContents = items.map(item => ({
+              path: item.path || item.file_path || item.entity_id, // Try path first, then file_path
+              type: item.media_content_type?.startsWith('video') || (item.path || item.file_path)?.match(/\.(mp4|mov|avi|mkv|webm|m4v)$/i) ? 'video' : 'image',
+              metadata: item.metadata || {},
+              entity_id: item.entity_id,
+              _metadata: item // Store full backend item for metadata access
+            }));
+            this._currentMediaIndex = 0;
+            this._errorState = null; // Clear error
+            this._loadMediaAtIndex(0); // Immediately load first item
+          } else {
+            this._log('❌ Circuit breaker: Backend returned no items - keeping current queue');
+          }
+        }).catch(err => {
+          this._log('❌ Circuit breaker: Failed to refresh queue:', err);
+        });
+        return; // Don't show error UI, we're forcing refresh
+      }
+    } else {
+      // Non-404 error, reset circuit breaker
+      this._consecutive404Count = 0;
+    }
     
     if (is404 && currentPath && this._folderContents) {
       this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
