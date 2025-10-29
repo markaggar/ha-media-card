@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.1.0 - Progressive geocoding with media_index integration
+ * Version: 3.1.0.54 - Fixed edit confirmation thumbnail 401 error
  */
 
 // Import Lit from CDN for standalone usage
@@ -98,6 +98,8 @@ class MediaCard extends LitElement {
     this._isLoadingMedia = false; // Prevent duplicate media loads during queue initialization
     this._videoEndedRefreshInProgress = false; // Prevent auto-refresh from interfering with video-ended refresh
     this._excludedFiles = new Set(); // Track files moved to _Junk/_Edit to prevent reappearance
+    this._navigationHistory = []; // Track navigation path for proper back button behavior
+    this._historyIndex = -1; // Current position in navigation history
     
     // Slideshow behavior state tracking 
     this._slideshowPosition = 0; // Current position in slideshow sequence
@@ -962,6 +964,24 @@ class MediaCard extends LitElement {
       padding: 20px 24px;
     }
 
+    .dialog-thumbnail {
+      width: 100%;
+      max-height: 200px;
+      margin: 0 0 16px;
+      border-radius: 4px;
+      overflow: hidden;
+      background: var(--secondary-background-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .dialog-thumbnail img {
+      max-width: 100%;
+      max-height: 200px;
+      object-fit: contain;
+    }
+
     .dialog-body p {
       margin: 0 0 12px;
       color: var(--primary-text-color);
@@ -1349,6 +1369,10 @@ class MediaCard extends LitElement {
       if (this._recentlyShown) {
         this._recentlyShown.clear();
       }
+      // Reset navigation history when folder changes
+      this._navigationHistory = [];
+      this._historyIndex = -1;
+      this._log('📚 Cleared navigation history due to folder change');
       this._hasInitializedHass = false; // Allow reinitialization with new config
     }
     
@@ -1557,11 +1581,13 @@ class MediaCard extends LitElement {
               date_taken: item.date_taken,
               location_name: item.location_name,
               location_city: item.location_city,
+              location_state: item.location_state,
               location_country: item.location_country,
               has_coordinates: item.has_coordinates,
               is_geocoded: item.is_geocoded,
               latitude: item.latitude,
-              longitude: item.longitude
+              longitude: item.longitude,
+              is_favorited: item.is_favorited
             }
           }));
           
@@ -1863,15 +1889,23 @@ class MediaCard extends LitElement {
             // EXIF metadata (already present in backend response)
             date_taken: item.date_taken,
             location_city: item.location_city,
+            location_state: item.location_state,
             location_country: item.location_country,
             location_name: item.location_name,
             // Geocoding status for prefetch logic (already present)
             has_coordinates: item.has_coordinates || false,
             is_geocoded: item.is_geocoded || false,
             latitude: item.latitude,
-            longitude: item.longitude
+            longitude: item.longitude,
+            // Favorite status
+            is_favorited: item.is_favorited || false
           };
         }));
+        
+        console.warn(`📊 QUERY RESULT: Received ${items.length} items from database`);
+        items.slice(0, 3).forEach((item, idx) => {
+          console.warn(`📊 Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
+        });
         
         return items;
       } else {
@@ -2016,6 +2050,11 @@ class MediaCard extends LitElement {
         if (!this._folderContents || this._folderContents.length === 0) {
           const items = await this._queryMediaIndex(this.config.slideshow_window || 100);
           if (items && items.length > 0) {
+            // Clear exclusion list when loading fresh queue from backend
+            // Backend already filtered out deleted files, so we can start fresh
+            this._excludedFiles.clear();
+            this._log(`📝 Cleared exclusion list on initial queue load`);
+            
             // Transform media_index items to match existing queue structure
             this._folderContents = items.map(item => ({
               media_content_id: item.path, // Use database path for content ID
@@ -2029,7 +2068,10 @@ class MediaCard extends LitElement {
                 date_taken: item.date_taken,
                 location_name: item.location_name,
                 location_city: item.location_city,
+                location_state: item.location_state,
                 location_country: item.location_country,
+                rating: item.rating,
+                is_favorited: item.is_favorited,
                 has_coordinates: item.has_coordinates,
                 is_geocoded: item.is_geocoded,
                 latitude: item.latitude,
@@ -2064,15 +2106,25 @@ class MediaCard extends LitElement {
           const detectedType = MediaUtils.detectFileType(item.media_content_id);
           this._log('🎬 Detected media type:', detectedType, 'from path:', item.media_content_id);
           
+          // CRITICAL: Set _currentMediaPath FIRST, BEFORE any async operations
+          // This ensures it stays in sync with _currentMetadata even if slideshow advances
+          this._currentMediaPath = item.media_content_id;
+          
           // Pre-set metadata from _metadata (from media_index backend)
           if (item._metadata) {
             this._currentMetadata = { ...item._metadata };
+            console.warn(`📋 LOADED METADATA for "${item.media_content_id}":`, {
+              is_favorited: this._currentMetadata.is_favorited,
+              full_metadata: this._currentMetadata
+            });
           } else {
             this._currentMetadata = {
               folder: item.title?.split('/').slice(-2, -1)[0] || '',
               filename: item.title
             };
           }
+          
+          console.warn(`🔗 SYNC CHECK: _currentMediaPath="${this._currentMediaPath}" matches metadata.filename="${this._currentMetadata.filename}"`);
           
           // Resolve the media path to get authenticated URL
           const resolvedUrl = await this._resolveMediaPath(item.media_content_id);
@@ -2099,6 +2151,11 @@ class MediaCard extends LitElement {
             this._log('🔄 Queue running low, refreshing media_index items...');
             this._queryMediaIndex(this.config.slideshow_window || 100).then(items => {
               if (items && items.length > 0) {
+                // Clear exclusion list when refreshing queue from backend
+                // Backend already filtered out deleted files, so we can start fresh
+                this._excludedFiles.clear();
+                this._log(`📝 Cleared exclusion list on queue refresh`);
+                
                 this._folderContents = items.map(item => ({
                   media_content_id: item.path,
                   title: item.filename,
@@ -2110,7 +2167,10 @@ class MediaCard extends LitElement {
                     date_taken: item.date_taken,
                     location_name: item.location_name,
                     location_city: item.location_city,
+                    location_state: item.location_state,
                     location_country: item.location_country,
+                    rating: item.rating,
+                    is_favorited: item.is_favorited,
                     has_coordinates: item.has_coordinates,
                     is_geocoded: item.is_geocoded,
                     latitude: item.latitude,
@@ -4234,6 +4294,29 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _showMediaError(errorMessage) {
+    // Check if this is a 404 error (file not found - likely deleted/moved)
+    const is404 = this._mediaUrl && errorMessage.includes('not found');
+    const currentPath = this._currentMediaPath;
+    
+    if (is404 && currentPath && this._folderContents) {
+      this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
+      
+      // Add to exclusion list
+      this._excludedFiles.add(currentPath);
+      this._log(`📝 Added to exclusion list: ${currentPath} (total excluded: ${this._excludedFiles.size})`);
+      
+      // Remove from _folderContents
+      if (this._currentMediaIndex >= 0 && this._currentMediaIndex < this._folderContents.length) {
+        this._folderContents.splice(this._currentMediaIndex, 1);
+        this._log(`🗑️ Removed from _folderContents at index ${this._currentMediaIndex} (${this._folderContents.length} remaining)`);
+        
+        // Adjust current index if needed
+        if (this._currentMediaIndex >= this._folderContents.length) {
+          this._currentMediaIndex = 0;
+        }
+      }
+    }
+    
     // Store error state
     this._errorState = {
       message: errorMessage,
@@ -4247,7 +4330,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // In folder mode with auto-refresh enabled, automatically advance to next image after a brief delay
     const effectiveRefreshSeconds = this._getEffectiveAutoRefreshSeconds();
     if (this.config?.is_folder && effectiveRefreshSeconds > 0 && !this._isPaused) {
-      const autoAdvanceDelay = Math.min(5000, (effectiveRefreshSeconds * 1000) / 2); // Max 5 seconds or half the refresh interval
+      const autoAdvanceDelay = is404 ? 500 : Math.min(5000, (effectiveRefreshSeconds * 1000) / 2); // Faster advance for 404s
       
       this._log(`⏭️ Auto-advancing to next image in ${autoAdvanceDelay}ms due to media error`);
       
@@ -4925,8 +5008,13 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       return;
     }
 
+    // CRITICAL: Capture current state NOW before async operations
+    const targetPath = this._currentMediaPath;
+    const targetIndex = this._currentMediaIndex;
     const isFavorite = this._currentMetadata?.is_favorited || false;
     const newFavoriteState = !isFavorite;
+    console.warn(`💗 FAVORITE CAPTURE: path="${targetPath}", index=${targetIndex}, current_is_favorited=${isFavorite}, new_state=${newFavoriteState}`);
+    console.warn(`💗 CURRENT METADATA:`, this._currentMetadata);
 
     try {
       // Call media_index.mark_favorite service with return_response
@@ -4935,23 +5023,26 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         domain: 'media_index',
         service: 'mark_favorite',
         service_data: {
-          file_path: this._currentMediaPath,
+          file_path: targetPath,
           is_favorite: newFavoriteState
         },
         return_response: true
       });
 
-      // Update local metadata immediately for UI feedback
-      if (this._currentMetadata) {
-        this._currentMetadata.is_favorited = newFavoriteState;
-        
-        // Also update in _folderContents so it persists when navigating
-        if (this._folderContents && this._currentMediaIndex >= 0) {
-          const currentItem = this._folderContents[this._currentMediaIndex];
-          if (currentItem && currentItem._metadata) {
-            currentItem._metadata.is_favorited = newFavoriteState;
-          }
+      this._log(`✅ Favorite toggled for ${targetPath}: ${newFavoriteState}`, response);
+
+      // Update metadata in _folderContents so it persists when navigating
+      if (this._folderContents && targetIndex >= 0 && targetIndex < this._folderContents.length) {
+        const item = this._folderContents[targetIndex];
+        if (item && item._metadata) {
+          item._metadata.is_favorited = newFavoriteState;
+          this._log(`📝 Updated is_favorited in _folderContents[${targetIndex}] to ${newFavoriteState}`);
         }
+      }
+
+      // Also update current metadata if we're still viewing the same item
+      if (this._currentMediaPath === targetPath && this._currentMetadata) {
+        this._currentMetadata.is_favorited = newFavoriteState;
         
         this.requestUpdate();
       }
@@ -4971,23 +5062,38 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       return;
     }
 
+    // CRITICAL: Capture the current file path NOW, before showing dialog
+    // The slideshow continues running, so by the time user clicks OK, _currentMediaPath has changed!
+    const targetPath = this._currentMediaPath;
+    const targetIndex = this._currentMediaIndex;
+    console.warn(`🔍 DELETE CAPTURE: targetPath="${targetPath}", targetIndex=${targetIndex}, currentPath="${this._currentMediaPath}"`);
+    console.warn(`🔍 DELETE METADATA:`, this._currentMetadata);
+
     // Show confirmation dialog if enabled (default: true)
     const showConfirmation = this.config.action_buttons?.show_delete_confirmation !== false;
     
     if (showConfirmation) {
       // Show custom confirmation dialog
-      this._showDeleteConfirmation();
+      this._showDeleteConfirmation(targetPath, targetIndex);
       return;
     }
 
     // If confirmation disabled, delete immediately
-    await this._performDelete();
+    await this._performDelete(targetPath, targetIndex);
   }
 
-  _showDeleteConfirmation() {
-    const filename = this._currentMetadata?.filename || this._currentMediaPath.split('/').pop();
+  async _showDeleteConfirmation(targetPath, targetIndex) {
+    // Extract filename from the CAPTURED path, not current metadata
+    const filename = targetPath.split('/').pop();
     
-    // Create custom confirmation dialog
+    // Pause slideshow while dialog is open
+    const wasPlaying = !this._isPaused;
+    if (wasPlaying) {
+      this._setPauseState(true);
+    }
+    
+    // Create custom confirmation dialog with thumbnail
+    const thumbnailUrl = await this._resolveMediaPath(targetPath);
     const dialog = document.createElement('div');
     dialog.className = 'delete-confirmation-dialog';
     dialog.innerHTML = `
@@ -4998,6 +5104,9 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           <h3>Delete Media File</h3>
         </div>
         <div class="dialog-body">
+          <div class="dialog-thumbnail">
+            <img src="${thumbnailUrl}" alt="${filename}">
+          </div>
           <p>Are you sure you want to delete this file?</p>
           <p class="filename">${filename}</p>
           <p class="note">It will be moved to the _Junk folder.</p>
@@ -5018,40 +5127,75 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     const closeDialog = () => {
       dialog.remove();
+      // Resume playback if it was playing before
+      if (wasPlaying) {
+        this._setPauseState(false);
+      }
     };
     
     cancelBtn.addEventListener('click', closeDialog);
     overlay.addEventListener('click', closeDialog);
     deleteBtn.addEventListener('click', async () => {
       closeDialog();
-      await this._performDelete();
+      await this._performDelete(targetPath, targetIndex);
     });
     
     // Focus delete button for keyboard accessibility
     setTimeout(() => deleteBtn.focus(), 100);
   }
 
-  async _performDelete() {
+  async _performDelete(targetPath, targetIndex) {
     try {
+      console.warn(`🔥 PERFORMING DELETE: path="${targetPath}", index=${targetIndex}`);
+      console.warn(`🔥 SERVICE CALL DATA:`, { file_path: targetPath });
+      
       // Call media_index.delete_media service with return_response
       const response = await this.hass.callWS({
         type: 'call_service',
         domain: 'media_index',
         service: 'delete_media',
         service_data: {
-          file_path: this._currentMediaPath
+          file_path: targetPath
         },
         return_response: true
       });
 
-      this._log(`✅ File deleted:`, response);
+      console.warn(`🔥 DELETE RESPONSE:`, response);
+      this._log(`✅ File deleted: ${targetPath}`, response);
 
       // Add to exclusion list to prevent reappearance in queries
-      this._excludedFiles.add(this._currentMediaPath);
-      this._log(`📝 Added to exclusion list: ${this._currentMediaPath} (total excluded: ${this._excludedFiles.size})`);
+      this._excludedFiles.add(targetPath);
+      this._log(`📝 Added to exclusion list: ${targetPath} (total excluded: ${this._excludedFiles.size})`);
+
+      // Remove from navigation history
+      const historyPathIndex = this._navigationHistory.indexOf(targetPath);
+      if (historyPathIndex >= 0) {
+        this._navigationHistory.splice(historyPathIndex, 1);
+        // Adjust history index if we removed an earlier item
+        if (historyPathIndex <= this._historyIndex) {
+          this._historyIndex--;
+        }
+        this._log(`📚 Removed from navigation history at index ${historyPathIndex} (${this._navigationHistory.length} remaining, current: ${this._historyIndex})`);
+      }
+
+      // Remove from _folderContents to prevent showing when navigating back
+      if (this._folderContents && targetIndex >= 0) {
+        this._folderContents.splice(targetIndex, 1);
+        this._log(`🗑️ Removed item from _folderContents at index ${targetIndex} (${this._folderContents.length} remaining)`);
+        
+        // Adjust current index if we deleted an earlier item
+        if (targetIndex < this._currentMediaIndex) {
+          this._currentMediaIndex--;
+        } else if (targetIndex === this._currentMediaIndex) {
+          // Deleted the current item - adjust if needed
+          if (this._currentMediaIndex >= this._folderContents.length) {
+            this._currentMediaIndex = 0;
+          }
+        }
+      }
 
       // Automatically advance to next image
-      if (this._folderContents && this._folderContents.length > 1) {
+      if (this._folderContents && this._folderContents.length > 0) {
         await this._navigateNext();
       }
     } catch (error) {
@@ -5094,9 +5238,22 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       return;
     }
 
-    const filename = this._currentMetadata?.filename || this._currentMediaPath.split('/').pop();
+    // CRITICAL: Capture the current file path NOW, before showing dialog
+    const targetPath = this._currentMediaPath;
+    const targetIndex = this._currentMediaIndex;
+    // Extract filename from the CAPTURED path, not current metadata
+    const filename = targetPath.split('/').pop();
     
-    // Create custom confirmation dialog
+    // Resolve authenticated thumbnail URL
+    const thumbnailUrl = await this._resolveMediaPath(targetPath);
+    
+    // Pause slideshow while dialog is open
+    const wasPlaying = !this._isPaused;
+    if (wasPlaying) {
+      this._setPauseState(true);
+    }
+    
+    // Create custom confirmation dialog with thumbnail
     const dialog = document.createElement('div');
     dialog.className = 'delete-confirmation-dialog';
     dialog.innerHTML = `
@@ -5107,6 +5264,9 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           <h3>Mark for Editing</h3>
         </div>
         <div class="dialog-body">
+          <div class="dialog-thumbnail">
+            <img src="${thumbnailUrl}" alt="${filename}">
+          </div>
           <p>Mark this file for editing?</p>
           <p class="filename">${filename}</p>
           <p class="note">It will be moved to the _Edit folder for manual correction.</p>
@@ -5127,20 +5287,24 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     const closeDialog = () => {
       dialog.remove();
+      // Resume playback if it was playing before
+      if (wasPlaying) {
+        this._setPauseState(false);
+      }
     };
     
     cancelBtn.addEventListener('click', closeDialog);
     overlay.addEventListener('click', closeDialog);
     editBtn.addEventListener('click', async () => {
       closeDialog();
-      await this._performMarkForEdit();
+      await this._performMarkForEdit(targetPath, targetIndex);
     });
     
     // Focus edit button for keyboard accessibility
     setTimeout(() => editBtn.focus(), 100);
   }
 
-  async _performMarkForEdit() {
+  async _performMarkForEdit(targetPath, targetIndex) {
     try {
       // Call media_index.mark_for_edit service with return_response
       const response = await this.hass.callWS({
@@ -5148,19 +5312,46 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         domain: 'media_index',
         service: 'mark_for_edit',
         service_data: {
-          file_path: this._currentMediaPath
+          file_path: targetPath
         },
         return_response: true
       });
 
-      this._log(`✅ File marked for editing:`, response);
+      this._log(`✅ File marked for editing: ${targetPath}`, response);
 
       // Add to exclusion list to prevent reappearance in queries
-      this._excludedFiles.add(this._currentMediaPath);
-      this._log(`📝 Added to exclusion list: ${this._currentMediaPath} (total excluded: ${this._excludedFiles.size})`);
+      this._excludedFiles.add(targetPath);
+      this._log(`📝 Added to exclusion list: ${targetPath} (total excluded: ${this._excludedFiles.size})`);
+
+      // Remove from navigation history
+      const historyPathIndex = this._navigationHistory.indexOf(targetPath);
+      if (historyPathIndex >= 0) {
+        this._navigationHistory.splice(historyPathIndex, 1);
+        // Adjust history index if we removed an earlier item
+        if (historyPathIndex <= this._historyIndex) {
+          this._historyIndex--;
+        }
+        this._log(`📚 Removed from navigation history at index ${historyPathIndex} (${this._navigationHistory.length} remaining, current: ${this._historyIndex})`);
+      }
+
+      // Remove from _folderContents to prevent showing when navigating back
+      if (this._folderContents && targetIndex >= 0) {
+        this._folderContents.splice(targetIndex, 1);
+        this._log(`✏️ Removed item from _folderContents at index ${targetIndex} (${this._folderContents.length} remaining)`);
+        
+        // Adjust current index if we edited an earlier item
+        if (targetIndex < this._currentMediaIndex) {
+          this._currentMediaIndex--;
+        } else if (targetIndex === this._currentMediaIndex) {
+          // Edited the current item - adjust if needed
+          if (this._currentMediaIndex >= this._folderContents.length) {
+            this._currentMediaIndex = 0;
+          }
+        }
+      }
 
       // Automatically advance to next image
-      if (this._folderContents && this._folderContents.length > 1) {
+      if (this._folderContents && this._folderContents.length > 0) {
         await this._navigateNext();
       }
     } catch (error) {
@@ -5328,7 +5519,29 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       }
     }
     
-    // Fallback to standard folder navigation
+    // Use navigation history for backward navigation in folder mode
+    if (this._navigationHistory.length > 0 && this._historyIndex > 0) {
+      this._historyIndex--;
+      const previousPath = this._navigationHistory[this._historyIndex];
+      this._log(`◀️ Navigate Previous (history): index ${this._historyIndex + 1} -> ${this._historyIndex}, path: ${previousPath}`);
+      
+      // Find item in folder contents
+      const item = this._folderContents?.find(f => f.media_content_id === previousPath);
+      if (item) {
+        // Handle auto-advance mode
+        this._handleAutoAdvanceMode();
+        
+        // Load without adding to history (we're navigating through existing history)
+        await this._loadMediaFromItem(item, this._folderContents.indexOf(item));
+        return;
+      } else {
+        this._log('⚠️ History path not found in folder contents, clearing history');
+        this._navigationHistory = [];
+        this._historyIndex = -1;
+      }
+    }
+    
+    // Fallback to standard folder navigation if no history available
     if (!this._folderContents || this._folderContents.length <= 1) {
       this._log('◀️ Navigate Previous: No folder contents or only 1 item, returning');
       return;
@@ -5373,6 +5586,12 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     // Handle auto-advance mode
     this._handleAutoAdvanceMode();
+    
+    // If we're in the middle of history (user went back then forward), clear future history
+    if (this._historyIndex < this._navigationHistory.length - 1) {
+      this._navigationHistory = this._navigationHistory.slice(0, this._historyIndex + 1);
+      this._log(`📚 Cleared future history, now have ${this._navigationHistory.length} items`);
+    }
     
     await this._loadMediaAtIndex(newIndex);
   }
@@ -5492,6 +5711,24 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       this._mediaType = this._detectFileType(item.media_content_id || item.title) || 'image';
       this.setAttribute('data-media-type', this._mediaType);
       
+      // CRITICAL: Set _currentMediaPath FIRST to keep it in sync with metadata
+      this._currentMediaPath = item.media_content_id;
+      
+      // Add to navigation history if this is forward navigation (not from history traversal)
+      // Only add if we're not in subfolder queue mode and not traversing existing history
+      if (!this._subfolderQueue?.config.enabled && 
+          (this._historyIndex === -1 || this._historyIndex === this._navigationHistory.length - 1)) {
+        // Trim future history if we're in the middle
+        if (this._historyIndex < this._navigationHistory.length - 1) {
+          this._navigationHistory = this._navigationHistory.slice(0, this._historyIndex + 1);
+        }
+        
+        // Add current path to history
+        this._navigationHistory.push(this._currentMediaPath);
+        this._historyIndex = this._navigationHistory.length - 1;
+        this._log(`📚 Added to navigation history (${this._historyIndex + 1}/${this._navigationHistory.length}): ${this._currentMediaPath}`);
+      }
+      
       // Use metadata from item if available (media_index integration)
       // Otherwise extract from path
       let metadata;
@@ -5505,6 +5742,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       
       // Pre-set metadata before URL resolution
       this._currentMetadata = metadata;
+      
+      console.warn(`🔗 NAV SYNC CHECK: path="${this._currentMediaPath}" matches filename="${this._currentMetadata.filename}"`);
       
       // Resolve media path to get authenticated URL
       const mediaUrl = await this._resolveMediaPath(item.media_content_id);
