@@ -2163,6 +2163,9 @@ class MediaCard extends LitElement {
                 this._excludedFiles.clear();
                 this._log(`📝 Cleared exclusion list on queue refresh`);
                 
+                // CRITICAL: Save current item path before replacing _folderContents
+                const currentPath = this._currentMediaPath;
+                
                 this._folderContents = items.map(item => ({
                   media_content_id: item.path,
                   title: item.filename,
@@ -2184,7 +2187,20 @@ class MediaCard extends LitElement {
                     longitude: item.longitude
                   }
                 }));
-                this._currentMediaIndex = 0;
+                
+                // Find current item in new queue to maintain position
+                const newIndex = this._folderContents.findIndex(item => item.media_content_id === currentPath);
+                if (newIndex >= 0) {
+                  this._currentMediaIndex = newIndex;
+                  this._log(`🔄 Queue refreshed - maintained position at index ${newIndex}`);
+                } else {
+                  this._currentMediaIndex = 0;
+                  this._log(`🔄 Queue refreshed - current item not found, reset to 0`);
+                }
+                
+                // CRITICAL: Keep navigation history intact - don't clear it
+                // The history contains paths that should still work with the new queue
+                this._log(`📚 Navigation history preserved (${this._navigationHistory.length} items)`);
               }
             });
           }
