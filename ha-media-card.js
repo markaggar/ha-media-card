@@ -1846,6 +1846,8 @@ class MediaCard extends LitElement {
       }
       
       // Call media_index.get_random_items service with return_response via WebSocket
+      // CRITICAL: Don't filter by file_type in random mode - _mediaType reflects CURRENT item type,
+      // not the desired mix. Random mode should return both images and videos.
       const wsResponse = await this.hass.callWS({
         type: 'call_service',
         domain: 'media_index',
@@ -1853,7 +1855,8 @@ class MediaCard extends LitElement {
         service_data: {
           count: count,
           folder: folderFilter,
-          file_type: this._mediaType === 'all' ? undefined : this._mediaType
+          // Don't filter by file_type - let random mode return mixed media
+          file_type: undefined
         },
         return_response: true
       });

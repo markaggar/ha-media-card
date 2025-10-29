@@ -193,25 +193,6 @@ if ($LASTEXITCODE -eq 0) {
 
 See `MEDIA_INDEX_INTEGRATION_PLAN.md` for complete deployment documentation.
 
-## One-off Command Runner (run-oneoff.ps1)
-
-To reduce interactive approvals when I need to run a single helper command (log fetches, quick API queries, or short diagnostics), I will use a single, reusable PowerShell runner script that I will overwrite for each one-off operation.
-
-- Script location:
-```powershell
-C:\Users\marka\Media Item Card\run-oneoff.ps1
-```
-
-How it works:
-- The assistant will overwrite `run-oneoff.ps1` with the exact one-off commands to execute and then run that script.
-- This centralizes one-off actions so you only need to review and approve the script once (or as you prefer).
-- Do NOT put secrets in the script. Use environment variables (for example, `$env:HA_TOKEN`) instead.
-
-Basic safety checklist:
-- I will never run arbitrary long-running processes in this script. It's for quick checks and diagnostics only.
-- The script will print clear markers (`run-oneoff: starting` / `run-oneoff: complete`) so logs are easy to audit.
-- You can inspect the script before first use and then let me reuse it for future one-off commands.
-
 ---
 
 ## Repository Structure
