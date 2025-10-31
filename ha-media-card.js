@@ -1887,10 +1887,19 @@ class MediaCard extends LitElement {
         this._log('🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
       }
       
+      // Log the actual WebSocket call for debugging
+      console.warn('📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      
       const wsResponse = await this.hass.callWS(wsCall);
+      
+      // Log the raw response
+      console.warn('📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
 
-      // WebSocket response is wrapped: { context: {...}, response: { items: [...] } }
-      const response = wsResponse?.response || wsResponse;
+      // WebSocket response can be wrapped in different ways:
+      // - { response: { items: [...] } }  (standard WebSocket format)
+      // - { service_response: { items: [...] } }  (REST API format, also seen in WebSocket with target)
+      // Try both formats for maximum compatibility
+      const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
 
       if (response && response.items && Array.isArray(response.items)) {
         this._log('✅ Received', response.items.length, 'items from media_index');
