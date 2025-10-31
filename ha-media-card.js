@@ -1880,11 +1880,11 @@ class MediaCard extends LitElement {
       };
       
       // If user specified a media_index entity, add target to route to correct instance
-      if (this.config.media_index_entity) {
+      if (this.config.media_index?.entity_id) {
         wsCall.target = {
-          entity_id: this.config.media_index_entity
+          entity_id: this.config.media_index.entity_id
         };
-        this._log('🎯 Targeting specific media_index entity:', this.config.media_index_entity);
+        this._log('🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
       }
       
       const wsResponse = await this.hass.callWS(wsCall);
@@ -5165,8 +5165,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       };
       
       // Add target if media_index_entity is configured (multi-instance support)
-      if (this.config.media_index_entity) {
-        wsCall.target = { entity_id: this.config.media_index_entity };
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
       }
       
       const response = await this.hass.callWS(wsCall);
@@ -5303,8 +5303,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       };
       
       // Add target if media_index_entity is configured (multi-instance support)
-      if (this.config.media_index_entity) {
-        wsCall.target = { entity_id: this.config.media_index_entity };
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
       }
       
       const response = await this.hass.callWS(wsCall);
@@ -5456,7 +5456,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   async _performMarkForEdit(targetPath, targetIndex) {
     try {
       // Call media_index.mark_for_edit service with return_response
-      const response = await this.hass.callWS({
+      const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_for_edit',
@@ -5464,7 +5464,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           file_path: targetPath
         },
         return_response: true
-      });
+      };
+      
+      // Add target if media_index entity is configured (multi-instance support)
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
 
       this._log(`✅ File marked for editing: ${targetPath}`, response);
 
