@@ -7,7 +7,8 @@
 // Import Lit from CDN for standalone usage
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
 
-// Global map of subfolder queues keyed by media path
+// Global map of subfolder queues and navigation history keyed by media path
+// Structure: { queue: SubfolderQueue, navigationHistory: [], historyIndex: -1 }
 if (!window.mediaCardSubfolderQueues) {
   window.mediaCardSubfolderQueues = new Map();
 }
@@ -499,12 +500,17 @@ class MediaCard extends LitElement {
       // Check if there's a paused queue for this specific path
       if (window.mediaCardSubfolderQueues.has(mediaPath)) {
         this._log('🔗 Reconnecting to existing SubfolderQueue for path:', mediaPath);
-        const existingQueue = window.mediaCardSubfolderQueues.get(mediaPath);
+        const storedData = window.mediaCardSubfolderQueues.get(mediaPath);
+        const existingQueue = storedData.queue;
         this._log('🔗 Queue has', existingQueue.queue.length, 'items,', existingQueue.discoveredFolders.length, 'folders');
         const reconnected = existingQueue.resumeWithNewCard(this);
         
         if (reconnected) {
           this._subfolderQueue = existingQueue;
+          // Restore navigation history
+          this._navigationHistory = storedData.navigationHistory || [];
+          this._historyIndex = storedData.historyIndex !== undefined ? storedData.historyIndex : -1;
+          this._log('📚 Restored navigation history:', this._navigationHistory.length, 'items, index:', this._historyIndex);
           window.mediaCardSubfolderQueues.delete(mediaPath); // Remove from map after reconnecting
           this._log('✅ Queue reconnected and removed from map');
         } else {
@@ -1371,10 +1377,18 @@ class MediaCard extends LitElement {
       if (this._recentlyShown) {
         this._recentlyShown.clear();
       }
-      // Reset navigation history when folder changes
-      this._navigationHistory = [];
-      this._historyIndex = -1;
-      this._log('📚 Cleared navigation history due to folder change');
+      
+      // Only reset navigation history if path actually changed OR there's no stored history to restore
+      // Check if there's stored history for this path that we should preserve
+      const hasStoredHistory = window.mediaCardSubfolderQueues.has(config.media_path);
+      if (pathChanged || !hasStoredHistory) {
+        this._navigationHistory = [];
+        this._historyIndex = -1;
+        this._log('📚 Cleared navigation history due to', pathChanged ? 'path change' : 'new initialization');
+      } else {
+        this._log('📚 Preserving navigation history for reconnection (will be restored in connectedCallback)');
+      }
+      
       this._hasInitializedHass = false; // Allow reinitialization with new config
     }
     
@@ -2109,37 +2123,9 @@ class MediaCard extends LitElement {
             has_metadata: !!item._metadata
           });
           
-          // Detect media type FIRST from the original path (has correct extension)
-          const detectedType = MediaUtils.detectFileType(item.media_content_id);
-          this._log('🎬 Detected media type:', detectedType, 'from path:', item.media_content_id);
-          
-          // CRITICAL: Set _currentMediaPath FIRST, BEFORE any async operations
-          // This ensures it stays in sync with _currentMetadata even if slideshow advances
-          this._currentMediaPath = item.media_content_id;
-          
-          // Pre-set metadata from _metadata (from media_index backend)
-          if (item._metadata) {
-            this._currentMetadata = { ...item._metadata };
-            console.warn(`📋 LOADED METADATA for "${item.media_content_id}":`, {
-              is_favorited: this._currentMetadata.is_favorited,
-              full_metadata: this._currentMetadata
-            });
-          } else {
-            this._currentMetadata = {
-              folder: item.title?.split('/').slice(-2, -1)[0] || '',
-              filename: item.title
-            };
-          }
-          
-          console.warn(`🔗 SYNC CHECK: _currentMediaPath="${this._currentMediaPath}" matches metadata.filename="${this._currentMetadata.filename}"`);
-          
-          // Resolve the media path to get authenticated URL
-          const resolvedUrl = await this._resolveMediaPath(item.media_content_id);
-          
-          // Set type and URL atomically to prevent race condition
-          this._mediaType = detectedType;
-          this._setMediaUrl(resolvedUrl, item.media_content_id, true, true);
-          this._forceMediaReload();
+          // Use _loadMediaFromItem to properly handle navigation history
+          // This ensures history is built during auto-advance, not just manual clicks
+          await this._loadMediaFromItem(item, nextIndex);
           
           // Note: Counter display will update in _onMediaLoaded after image is actually visible
           // to keep counter synchronized with displayed image
@@ -2265,14 +2251,11 @@ class MediaCard extends LitElement {
       }
 
       if (shouldUpdate && selectedFile) {
-        const resolvedUrl = await this._resolveMediaPath(selectedFile.media_content_id);
-        if (resolvedUrl) {
-          this._log('UPDATING media URL and setting refresh time');
-          this._setMediaUrl(resolvedUrl);
-          this._detectMediaType(selectedFile.media_content_id);
-          this._lastRefreshTime = now;
-          this._forceMediaReload();
-        }
+        // Use _loadMediaFromItem to properly handle navigation history
+        // This ensures history is built during auto-advance in all modes
+        const fileIndex = this._folderContents.findIndex(f => f.media_content_id === selectedFile.media_content_id);
+        await this._loadMediaFromItem(selectedFile, fileIndex >= 0 ? fileIndex : -1);
+        this._lastRefreshTime = now;
       } else {
         this._log('No update needed, but updating refresh time to prevent rapid retries');
         this._lastRefreshTime = now; // Update time even if no change to prevent rapid retries
@@ -4480,6 +4463,19 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Set up visibility detection for scanning pause
     this._setupVisibilityDetection();
     
+    // Restore navigation history if available (for non-queue mode)
+    const mediaPath = this.config?.media_path;
+    if (mediaPath && window.mediaCardSubfolderQueues.has(mediaPath)) {
+      const storedData = window.mediaCardSubfolderQueues.get(mediaPath);
+      if (!storedData.queue && storedData.navigationHistory) {
+        // Restore history for non-queue mode
+        this._navigationHistory = storedData.navigationHistory;
+        this._historyIndex = storedData.historyIndex !== undefined ? storedData.historyIndex : -1;
+        this._log('📚 Restored navigation history (non-queue):', this._navigationHistory.length, 'items, index:', this._historyIndex);
+        window.mediaCardSubfolderQueues.delete(mediaPath);
+      }
+    }
+    
     // CRITICAL: Reinitialize folder mode when reconnecting to allow queue reconnection
     if (this.config && this.hass && this.config.is_folder && this.config.folder_mode) {
       this._log('🔌 Component connected - reinitializing folder mode for queue reconnection');
@@ -4508,18 +4504,27 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // CRITICAL: Clear initialization flag so reconnection can happen
     this._initializationInProgress = false;
     
-    // PAUSE SubfolderQueue instead of destroying it - preserve valuable scan data
-    if (this._subfolderQueue) {
-      const mediaPath = this.config.media_path;
-      this._log('⏸️ Pausing SubfolderQueue scanning (preserving queue data for path:', mediaPath + ')');
-      this._subfolderQueue.pauseScanning();
+    // Store navigation history and queue for reconnection
+    // Use _configuredMediaPath which persists even if config is cleared
+    const mediaPath = this._configuredMediaPath || this.config?.media_path;
+    if (mediaPath && (this._subfolderQueue || this._navigationHistory.length > 0)) {
+      // PAUSE SubfolderQueue instead of destroying it - preserve valuable scan data
+      if (this._subfolderQueue) {
+        this._log('⏸️ Pausing SubfolderQueue scanning (preserving queue data for path:', mediaPath + ')');
+        this._subfolderQueue.pauseScanning();
+        
+        // CRITICAL: Set cancellation flag to stop ALL async operations immediately
+        this._subfolderQueue._scanCancelled = true;
+        this._log('🛑 Set cancellation flag on queue to stop ongoing scans');
+      }
       
-      // CRITICAL: Set cancellation flag to stop ALL async operations immediately
-      this._subfolderQueue._scanCancelled = true;
-      this._log('🛑 Set cancellation flag on queue to stop ongoing scans');
-      
-      // Store queue in path-keyed map so correct queue can be reconnected
-      window.mediaCardSubfolderQueues.set(mediaPath, this._subfolderQueue);
+      // Store queue AND navigation history in path-keyed map for reconnection
+      window.mediaCardSubfolderQueues.set(mediaPath, {
+        queue: this._subfolderQueue,
+        navigationHistory: this._navigationHistory,
+        historyIndex: this._historyIndex
+      });
+      this._log('📚 Preserved navigation history:', this._navigationHistory.length, 'items, index:', this._historyIndex);
       this._subfolderQueue = null; // Clear local reference but don't destroy
     }
     
@@ -5581,7 +5586,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       const previousItem = this._subfolderQueue.getPreviousItem();
       if (previousItem) {
         this._log('✅ Got previous item from history:', previousItem.title);
-        await this._loadMediaFromItem(previousItem);
+        // Skip history update - we're navigating through existing queue history
+        await this._loadMediaFromItem(previousItem, -1, true);
         return;
       } else {
         this._log('⚠️ No previous item in history, staying at current');
@@ -5602,7 +5608,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         this._handleAutoAdvanceMode();
         
         // Load without adding to history (we're navigating through existing history)
-        await this._loadMediaFromItem(item, this._folderContents.indexOf(item));
+        await this._loadMediaFromItem(item, this._folderContents.indexOf(item), true);
         return;
       } else {
         this._log('⚠️ History path not found in folder contents, clearing history');
@@ -5771,7 +5777,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     await this._loadMediaFromItem(item, index);
   }
 
-  async _loadMediaFromItem(item, index = -1) {
+  async _loadMediaFromItem(item, index = -1, skipHistoryUpdate = false) {
     if (!item) return;
     
     this._log(`📂 Loading media item:`, item.title);
@@ -5785,9 +5791,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       this._currentMediaPath = item.media_content_id;
       
       // Add to navigation history if this is forward navigation (not from history traversal)
-      // Only add if we're not in subfolder queue mode and not traversing existing history
-      if (!this._subfolderQueue?.config.enabled && 
-          (this._historyIndex === -1 || this._historyIndex === this._navigationHistory.length - 1)) {
+      // Track history for both subfolder queue and non-queue modes
+      if (!skipHistoryUpdate && (this._historyIndex === -1 || this._historyIndex === this._navigationHistory.length - 1)) {
         // Trim future history if we're in the middle
         if (this._historyIndex < this._navigationHistory.length - 1) {
           this._navigationHistory = this._navigationHistory.slice(0, this._historyIndex + 1);
@@ -5797,6 +5802,8 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         this._navigationHistory.push(this._currentMediaPath);
         this._historyIndex = this._navigationHistory.length - 1;
         this._log(`📚 Added to navigation history (${this._historyIndex + 1}/${this._navigationHistory.length}): ${this._currentMediaPath}`);
+      } else if (skipHistoryUpdate) {
+        this._log(`📚 Skipped adding to history (navigating through existing history at index ${this._historyIndex})`);
       }
       
       // Use metadata from item if available (media_index integration)
