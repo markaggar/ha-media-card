@@ -312,19 +312,34 @@ class MediaCard extends LitElement {
     
     metadata.filename = filename;
     
-    // Extract folder name (parent directory)
+    // Extract folder path (parent directory/directories)
     if (pathParts.length > 1) {
-      let folder = pathParts[pathParts.length - 2];
-      
-      // Decode URL encoding for folder name too
-      try {
-        folder = decodeURIComponent(folder);
-      } catch (e) {
-        // If decoding fails, use the original folder name
-        this._log('⚠️ Failed to decode folder name:', folder, e);
+      // Find where the actual media path starts (skip /media/media/ prefix)
+      let folderStart = 0;
+      for (let i = 0; i < pathParts.length - 1; i++) {
+        if (pathParts[i] === 'media' && i + 1 < pathParts.length && pathParts[i + 1] !== '') {
+          folderStart = i + 1;
+          break;
+        }
       }
       
-      metadata.folder = folder;
+      // Extract folder parts (everything between media prefix and filename)
+      if (folderStart < pathParts.length - 1) {
+        const folderParts = pathParts.slice(folderStart, -1);
+        
+        // Decode URL encoding for each folder part
+        const decodedParts = folderParts.map(part => {
+          try {
+            return decodeURIComponent(part);
+          } catch (e) {
+            this._log('⚠️ Failed to decode folder part:', part, e);
+            return part;
+          }
+        });
+        
+        // Store as relative path (e.g., "Photo/OneDrive/Mark-Pictures/Camera")
+        metadata.folder = decodedParts.join('/');
+      }
     }
     
     // Try to extract date from cleaned filename (multiple formats)
@@ -407,13 +422,57 @@ class MediaCard extends LitElement {
     return null;
   }
 
+  _formatFolderForDisplay(fullFolderPath, showRoot) {
+    if (!fullFolderPath) return '';
+    
+    // Extract the scan path prefix from config.media_path
+    // e.g., "media-source://media_source/media/Photo/OneDrive" -> "/media/Photo/OneDrive"
+    let scanPrefix = '';
+    if (this.config?.media_path) {
+      const match = this.config.media_path.match(/media-source:\/\/media_source(\/.+)/);
+      if (match) {
+        scanPrefix = match[1];
+      }
+    }
+    
+    // Remove the scan prefix from the folder path
+    // e.g., "/media/Photo/OneDrive/Mark-Pictures/Camera" -> "Mark-Pictures/Camera"
+    let relativePath = fullFolderPath;
+    if (scanPrefix && fullFolderPath.startsWith(scanPrefix)) {
+      relativePath = fullFolderPath.substring(scanPrefix.length);
+    }
+    
+    // Clean up path (remove leading/trailing slashes)
+    relativePath = relativePath.replace(/^\/+/, '').replace(/\/+$/, '');
+    
+    // Split into parts
+    const parts = relativePath.split('/').filter(p => p.length > 0);
+    
+    if (parts.length === 0) return '';
+    if (parts.length === 1) return parts[0]; // Only one folder level
+    
+    if (showRoot) {
+      // Format: "first...last"
+      const first = parts[0];
+      const last = parts[parts.length - 1];
+      return `${first}...${last}`;
+    } else {
+      // Just show last folder
+      return parts[parts.length - 1];
+    }
+  }
+
   _formatMetadataDisplay(metadata) {
     if (!metadata || !this.config.metadata) return '';
     
     const parts = [];
     
     if (this.config.metadata.show_folder && metadata.folder) {
-      parts.push(`📁 ${metadata.folder}`);
+      const folderDisplay = this._formatFolderForDisplay(
+        metadata.folder,
+        this.config.metadata.show_root_folder
+      );
+      parts.push(`📁 ${folderDisplay}`);
     }
     
     if (this.config.metadata.show_filename && metadata.filename) {
@@ -1369,6 +1428,7 @@ class MediaCard extends LitElement {
         show_filename: config.metadata?.show_filename !== false, // Default: true  
         show_date: config.metadata?.show_date !== false, // Default: true
         show_location: config.metadata?.show_location !== false, // Default: true (shows GPS location from EXIF)
+        show_root_folder: config.metadata?.show_root_folder || false, // Default: false (only show last folder)
         position: config.metadata?.position || 'bottom-left', // Default: bottom-left
         ...config.metadata
       },
@@ -9197,6 +9257,18 @@ class MediaCardEditor extends LitElement {
           </div>
           
           <div class="config-row">
+            <label>Show Root Folder</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_root_folder || false}
+                @change=${this._metadataShowRootFolderChanged}
+              />
+              <div class="help-text">Show first and last folder (e.g., "OneDrive...Camera" instead of just "Camera")</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Show File Name</label>
             <div>
               <input
@@ -10705,6 +10777,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       metadata: {
         ...this._config.metadata,
         show_folder: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _metadataShowRootFolderChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_root_folder: ev.target.checked
       }
     };
     this._fireConfigChanged();
