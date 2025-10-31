@@ -4145,11 +4145,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _onMediaError(e) {
-    console.error('Media failed to load:', this._mediaUrl, e);
     const target = e.target;
     const error = target?.error;
     
     let errorMessage = 'Media file not found';
+    let is404 = false;
     
     // Handle case where target is null (element destroyed/replaced)
     if (!target) {
@@ -4167,9 +4167,18 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           errorMessage = 'Media format not supported';
           break;
         case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          errorMessage = 'Media source not supported';
+          // This is typically a 404 (file not found)
+          errorMessage = 'Media file not found';
+          is404 = true;
           break;
       }
+    }
+    
+    // Only log errors that aren't 404s - 404s are expected when database is out of sync
+    if (!is404) {
+      console.error('Media failed to load:', this._mediaUrl, e);
+    } else {
+      this._log('📭 Media file not found (404) - likely deleted/moved:', this._mediaUrl);
     }
     
     // Add specific handling for Synology DSM authentication errors
@@ -4200,17 +4209,17 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         .then(refreshed => {
           if (!refreshed) {
             // If refresh failed, show error state
-            this._showMediaError(errorMessage);
+            this._showMediaError(errorMessage, is404);
           }
         })
         .catch(err => {
           console.error('URL refresh attempt failed:', err);
-          this._showMediaError(errorMessage);
+          this._showMediaError(errorMessage, is404);
         });
     } else {
       // Already tried to retry this URL, show error immediately
       this._log(`❌ Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
-      this._showMediaError(errorMessage);
+      this._showMediaError(errorMessage, is404);
     }
   }
 
@@ -4299,9 +4308,11 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     }
   }
 
-  _showMediaError(errorMessage) {
-    // Check if this is a 404 error (file not found - likely deleted/moved)
-    const is404 = this._mediaUrl && errorMessage.includes('not found');
+  _showMediaError(errorMessage, is404 = false) {
+    // If not explicitly provided, check if this is a 404 error (file not found - likely deleted/moved)
+    if (!is404) {
+      is404 = this._mediaUrl && errorMessage.includes('not found');
+    }
     const currentPath = this._currentMediaPath;
     const now = Date.now();
     
@@ -4370,7 +4381,44 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       }
     }
     
-    // Store error state
+    // For 404s, skip silently without showing error UI - just auto-advance
+    if (is404) {
+      this._log('🔇 Skipping 404 error UI - will auto-advance silently');
+      
+      // In folder mode with auto-refresh enabled, automatically advance to next image immediately
+      const effectiveRefreshSeconds = this._getEffectiveAutoRefreshSeconds();
+      if (this.config?.is_folder && effectiveRefreshSeconds > 0 && !this._isPaused) {
+        const autoAdvanceDelay = 100; // Very brief delay for 404s to avoid flickering
+        
+        this._log(`⏭️ Auto-advancing to next image in ${autoAdvanceDelay}ms (silent 404 skip)`);
+        
+        // Clear any existing auto-advance timeout
+        if (this._errorAutoAdvanceTimeout) {
+          clearTimeout(this._errorAutoAdvanceTimeout);
+        }
+        
+        this._errorAutoAdvanceTimeout = setTimeout(async () => {
+          if (!this._isPaused) {
+            this._log('⏭️ Auto-advancing to next image after 404 (silent)');
+            
+            // Force next image without interfering with normal refresh timing
+            try {
+              // Save current refresh time to restore it after advancing
+              const savedRefreshTime = this._lastRefreshTime;
+              await this._handleFolderModeRefresh(true);
+              // Restore the refresh time so normal auto-refresh timing isn't affected
+              this._lastRefreshTime = savedRefreshTime;
+              this._log('🕒 Restored refresh timing after silent 404 skip');
+            } catch (error) {
+              this._log('❌ Auto-advance after 404 failed:', error);
+            }
+          }
+        }, autoAdvanceDelay);
+      }
+      return; // Skip error UI rendering for 404s
+    }
+    
+    // For non-404 errors, store error state and show UI
     this._errorState = {
       message: errorMessage,
       timestamp: Date.now(),
@@ -4383,7 +4431,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // In folder mode with auto-refresh enabled, automatically advance to next image after a brief delay
     const effectiveRefreshSeconds = this._getEffectiveAutoRefreshSeconds();
     if (this.config?.is_folder && effectiveRefreshSeconds > 0 && !this._isPaused) {
-      const autoAdvanceDelay = is404 ? 500 : Math.min(5000, (effectiveRefreshSeconds * 1000) / 2); // Faster advance for 404s
+      const autoAdvanceDelay = Math.min(5000, (effectiveRefreshSeconds * 1000) / 2);
       
       this._log(`⏭️ Auto-advancing to next image in ${autoAdvanceDelay}ms due to media error`);
       
