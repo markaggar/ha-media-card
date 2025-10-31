@@ -1864,7 +1864,9 @@ class MediaCard extends LitElement {
       // _mediaType changes to reflect what's currently displayed, but config.media_type is the
       // user's configured preference ('all', 'image', or 'video')
       const configuredMediaType = this.config.media_type || 'all';
-      const wsResponse = await this.hass.callWS({
+      
+      // Build WebSocket call with optional target for multi-instance support
+      const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_random_items',
@@ -1875,7 +1877,17 @@ class MediaCard extends LitElement {
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType
         },
         return_response: true
-      });
+      };
+      
+      // If user specified a media_index entity, add target to route to correct instance
+      if (this.config.media_index_entity) {
+        wsCall.target = {
+          entity_id: this.config.media_index_entity
+        };
+        this._log('🎯 Targeting specific media_index entity:', this.config.media_index_entity);
+      }
+      
+      const wsResponse = await this.hass.callWS(wsCall);
 
       // WebSocket response is wrapped: { context: {...}, response: { items: [...] } }
       const response = wsResponse?.response || wsResponse;
@@ -5141,7 +5153,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
     try {
       // Call media_index.mark_favorite service with return_response
-      const response = await this.hass.callWS({
+      const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_favorite',
@@ -5150,7 +5162,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           is_favorite: newFavoriteState
         },
         return_response: true
-      });
+      };
+      
+      // Add target if media_index_entity is configured (multi-instance support)
+      if (this.config.media_index_entity) {
+        wsCall.target = { entity_id: this.config.media_index_entity };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
 
       this._log(`✅ Favorite toggled for ${targetPath}: ${newFavoriteState}`, response);
 
@@ -5273,7 +5292,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
       console.warn(`🔥 SERVICE CALL DATA:`, { file_path: targetPath });
       
       // Call media_index.delete_media service with return_response
-      const response = await this.hass.callWS({
+      const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'delete_media',
@@ -5281,7 +5300,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
           file_path: targetPath
         },
         return_response: true
-      });
+      };
+      
+      // Add target if media_index_entity is configured (multi-instance support)
+      if (this.config.media_index_entity) {
+        wsCall.target = { entity_id: this.config.media_index_entity };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
 
       console.warn(`🔥 DELETE RESPONSE:`, response);
       this._log(`✅ File deleted: ${targetPath}`, response);
