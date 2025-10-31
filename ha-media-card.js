@@ -131,6 +131,13 @@ class MediaCard extends LitElement {
     
     this._log('💎 hass setter called - hasHass:', !!hass, 'hadOldHass:', !!oldHass, 'hasConfig:', !!this.config);
     
+    // Check if we're in preview mode - skip initialization
+    if (this._isInPreviewMode()) {
+      this._log('📋 Hass setter detected preview mode - skipping initialization');
+      this.requestUpdate();
+      return;
+    }
+    
     // Trigger folder initialization when both hass and config are available
     if (hass && this.config && !oldHass) {
       this._log('💎 First time hass available - checking for folder initialization');
@@ -155,6 +162,50 @@ class MediaCard extends LitElement {
 
   get hass() {
     return this._hass;
+  }
+
+  // Check if card is in preview/edit mode
+  _isInPreviewMode() {
+    // Return cached result if already checked
+    if (this._previewModeChecked !== undefined) {
+      return this._previewModeChecked;
+    }
+    
+    // CRITICAL: If not yet connected to DOM, we can't check parent elements
+    // Return false (not in preview) to allow hass setter to proceed
+    // connectedCallback will do the real check after DOM connection
+    if (!this.parentElement) {
+      this._log('📋 Preview check skipped - not yet connected to DOM');
+      return false; // Don't cache this - it's inconclusive
+    }
+    
+    // Check if card is within an edit dialog
+    let parent = this.parentElement;
+    let depth = 0;
+    const maxDepth = 20; // Prevent infinite loop
+    
+    while (parent && depth < maxDepth) {
+      const tagName = parent.tagName?.toUpperCase();
+      const className = parent.className || '';
+      const id = parent.id || '';
+      
+      // Check for various edit dialog indicators
+      if (tagName === 'HUI-DIALOG-EDIT-CARD' ||
+          tagName === 'HUI-CARD-PREVIEW' ||
+          className.includes('mdc-dialog') ||
+          className.includes('edit-card') ||
+          id.includes('dialog')) {
+        this._log('📋 Detected preview mode via ancestor:', tagName || className);
+        this._previewModeChecked = true;
+        return true;
+      }
+      
+      parent = parent.parentElement;
+      depth++;
+    }
+    
+    this._previewModeChecked = false;
+    return false;
   }
 
   // Debug logging utility with throttling for frequent messages
@@ -4521,6 +4572,16 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
   connectedCallback() {
     super.connectedCallback();
+    
+    // CRITICAL: Check preview mode FIRST before any initialization
+    // This needs to be checked here because parentElement is now available
+    this._previewModeChecked = undefined; // Reset cache
+    const isPreview = this._isInPreviewMode();
+    
+    if (isPreview) {
+      this._log('📋 Card is in preview mode - skipping ALL initialization');
+      return; // Skip all initialization for preview cards
+    }
     
     // Set initial data attributes when element is connected to DOM
     this.setAttribute('data-media-type', this._mediaType || 'image');
