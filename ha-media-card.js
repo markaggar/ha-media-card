@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.1.0.54 - Fixed edit confirmation thumbnail 401 error
+ * Version: 3.1.0.63 - Fix media_index history restoration on reconnect
  */
 
 // Import Lit from CDN for standalone usage
@@ -1652,8 +1652,16 @@ class MediaCard extends LitElement {
     this._log('   _initializationState:', this._initializationState);
     
     // Skip if already initialized and has content
+    // BUT ensure auto-refresh is running (may have been cleared on disconnect)
     if (this._initializationState === 'complete' && this._folderContents?.length > 0) {
       this._log('✅ Already initialized with content - skipping');
+      
+      // CRITICAL FIX: Setup auto-refresh if not already running
+      if (!this._refreshInterval) {
+        this._log('🔄 Setting up auto-refresh (was cleared on disconnect)');
+        this._setupAutoRefresh();
+      }
+      
       return;
     }
     
@@ -1663,10 +1671,42 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // 🔗 CRITICAL: Try to reconnect to existing media_index queue BEFORE querying backend
+    if (this.config.media_index?.enabled && window.mediaCardSubfolderQueues.has(currentPath)) {
+      const storedData = window.mediaCardSubfolderQueues.get(currentPath);
+      if (storedData.mediaIndexQueue && storedData.mediaIndexQueue.entity_id === this.config.media_index.entity_id) {
+        this._log('🔗 Reconnecting to existing media_index queue:', storedData.mediaIndexQueue.items.length, 'items');
+        this._folderContents = storedData.mediaIndexQueue.items;
+        this._currentMediaIndex = storedData.mediaIndexQueue.currentIndex;
+        this._navigationHistory = storedData.navigationHistory || [];
+        this._historyIndex = storedData.historyIndex !== undefined ? storedData.historyIndex : -1;
+        this._log('📚 Restored navigation history:', this._navigationHistory.length, 'items, index:', this._historyIndex);
+        window.mediaCardSubfolderQueues.delete(currentPath);
+        this._initializationState = 'complete';
+        this._initializationInProgress = false;
+        this._lastMediaPath = currentPath;
+        
+        // CRITICAL: Setup auto-refresh after reconnection
+        this._log('🔄 Setting up auto-refresh after media_index reconnection');
+        this._setupAutoRefresh();
+        
+        this._log('✅ media_index queue reconnected successfully');
+        return;
+      }
+    }
+    
     // If media_index integration has already populated the queue, don't scan filesystem
+    // BUT ensure auto-refresh is set up (may have been cleared on disconnect)
     if (this.config.media_index?.enabled && this._folderContents && this._folderContents.length > 0) {
       this._log('✅ Media_index queue already populated with', this._folderContents.length, 'items - skipping filesystem scan');
       this._initializationState = 'complete'; // Mark as complete
+      
+      // CRITICAL FIX: Setup auto-refresh if not already running
+      if (!this._refreshInterval) {
+        this._log('🔄 Setting up auto-refresh for existing queue (was cleared on disconnect)');
+        this._setupAutoRefresh();
+      }
+      
       return;
     }
     
@@ -1791,8 +1831,9 @@ class MediaCard extends LitElement {
               this._refreshInterval = null;
             }
             
-            // Flag to indicate we need to set up timer after first image loads
-            this._pendingFirstRefreshSetup = true;
+            // CRITICAL FIX: Setup auto-refresh after media_index initial load
+            this._log('🔄 Setting up auto-refresh after media_index initial load');
+            this._setupAutoRefresh();
             
             return;
           }
@@ -2202,6 +2243,12 @@ class MediaCard extends LitElement {
     // Exit immediately if paused
     if (this._isPaused) {
       this._log('🔄 Folder mode refresh skipped - currently paused');
+      return;
+    }
+    
+    // CRITICAL FIX: Exit if card is not visible (prevent background execution)
+    if (this._backgroundPaused) {
+      this._log('🔄 Folder mode refresh skipped - card not visible (background paused)');
       return;
     }
 
@@ -4223,6 +4270,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
 
   _onVideoPause() {
     this._log('Video paused by user');
+    
+    // CRITICAL: Ignore pause events when card is disconnected
+    // Browser fires pause AFTER disconnectedCallback when navigating away
+    if (!this.isConnected) {
+      this._log('⏸️ Ignoring video pause - card is disconnected');
+      return;
+    }
+    
     // Only pause slideshow if video was manually paused (not ended)
     const videoElement = this.renderRoot?.querySelector('video');
     if (videoElement && !videoElement.ended && !this._isPaused) {
@@ -4701,8 +4756,9 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     const mediaPath = this.config?.media_path;
     if (mediaPath && window.mediaCardSubfolderQueues.has(mediaPath)) {
       const storedData = window.mediaCardSubfolderQueues.get(mediaPath);
-      if (!storedData.queue && storedData.navigationHistory) {
-        // Restore history for non-queue mode
+      // CRITICAL: Don't restore here if mediaIndexQueue exists - let _handleFolderMode do it
+      if (!storedData.queue && !storedData.mediaIndexQueue && storedData.navigationHistory) {
+        // Restore history for non-queue, non-media_index mode
         this._navigationHistory = storedData.navigationHistory;
         this._historyIndex = storedData.historyIndex !== undefined ? storedData.historyIndex : -1;
         this._log('📚 Restored navigation history (non-queue):', this._navigationHistory.length, 'items, index:', this._historyIndex);
@@ -4724,6 +4780,7 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     super.disconnectedCallback();
     
     this._log('🔌 Component disconnected - cleaning up resources');
+    this._log('🔌 Pause state at disconnect - isPaused:', this._isPaused, 'pausedByVideo:', this._pausedByVideo, 'backgroundPaused:', this._backgroundPaused);
     
     // CRITICAL: Stop auto-refresh interval to prevent zombie card from continuing to scan
     if (this._refreshInterval) {
@@ -4735,13 +4792,27 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     // Clean up visibility observers
     this._cleanupVisibilityObservers();
     
+    // CRITICAL: Clear pause flags from video-induced pauses during visibility changes
+    // When the card reconnects, we want it to resume playing, not stay paused
+    if (this._pausedByVideo) {
+      this._log('🎬 Clearing video pause flags on disconnect (will resume on reconnect)');
+      this._pausedByVideo = false;
+      this._isPaused = false;
+      this.removeAttribute('data-is-paused');
+    }
+    
     // CRITICAL: Clear initialization flag so reconnection can happen
     this._initializationInProgress = false;
     
     // Store navigation history and queue for reconnection
     // Use _configuredMediaPath which persists even if config is cleared
     const mediaPath = this._configuredMediaPath || this.config?.media_path;
-    if (mediaPath && (this._subfolderQueue || this._navigationHistory.length > 0)) {
+    if (mediaPath && (this._subfolderQueue || this._folderContents || this._navigationHistory.length > 0)) {
+      const stateToStore = {
+        navigationHistory: this._navigationHistory,
+        historyIndex: this._historyIndex
+      };
+      
       // PAUSE SubfolderQueue instead of destroying it - preserve valuable scan data
       if (this._subfolderQueue) {
         this._log('⏸️ Pausing SubfolderQueue scanning (preserving queue data for path:', mediaPath + ')');
@@ -4750,16 +4821,22 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         // CRITICAL: Set cancellation flag to stop ALL async operations immediately
         this._subfolderQueue._scanCancelled = true;
         this._log('🛑 Set cancellation flag on queue to stop ongoing scans');
+        
+        stateToStore.queue = this._subfolderQueue;
+        this._subfolderQueue = null; // Clear local reference but don't destroy
+      } else if (this.config?.media_index?.enabled && this._folderContents) {
+        // media_index mode - store queue data for reconnection
+        this._log('💾 Storing media_index queue state (', this._folderContents.length, 'items, index:', this._currentMediaIndex + ')');
+        stateToStore.mediaIndexQueue = {
+          items: this._folderContents,
+          currentIndex: this._currentMediaIndex,
+          entity_id: this.config.media_index.entity_id
+        };
       }
       
-      // Store queue AND navigation history in path-keyed map for reconnection
-      window.mediaCardSubfolderQueues.set(mediaPath, {
-        queue: this._subfolderQueue,
-        navigationHistory: this._navigationHistory,
-        historyIndex: this._historyIndex
-      });
-      this._log('📚 Preserved navigation history:', this._navigationHistory.length, 'items, index:', this._historyIndex);
-      this._subfolderQueue = null; // Clear local reference but don't destroy
+      // Store state in path-keyed map for reconnection
+      window.mediaCardSubfolderQueues.set(mediaPath, stateToStore);
+      this._log('📚 Preserved state - history:', this._navigationHistory.length, 'items, index:', this._historyIndex);
     }
     
     // Clean up the refresh interval when component is removed
@@ -4899,11 +4976,30 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     const shouldBeActive = this._isCardVisible && this._isPageVisible;
     
     // Add debug info about visibility state
-    this._log('👁️ Visibility check - cardVisible:', this._isCardVisible, 'pageVisible:', this._isPageVisible, 'shouldBeActive:', shouldBeActive, 'currentlyPaused:', this._backgroundPaused);
+    this._log('👁️ Visibility check - cardVisible:', this._isCardVisible, 'pageVisible:', this._isPageVisible, 'shouldBeActive:', shouldBeActive, 'currentlyPaused:', this._backgroundPaused, 'slideshowPaused:', this._isPaused);
     
     if (shouldBeActive && this._backgroundPaused) {
       this._log('🔄 Resuming - card is now visible');
       this._backgroundPaused = false;
+      
+      // CRITICAL FIX: If slideshow was paused by video pause while card was disconnected,
+      // we need to resume both the video AND the slideshow
+      if (this._isPaused && this._pausedByVideo) {
+        this._log('🎬 Resuming slideshow (was paused by video during disconnect)');
+        this._setPauseState(false);
+        this._pausedByVideo = false;
+      }
+      
+      // Resume video playback if it was paused due to visibility
+      if (this._mediaType === 'video' && this.config.video_autoplay) {
+        const videoElement = this.renderRoot?.querySelector('video');
+        if (videoElement && videoElement.paused && !videoElement.ended) {
+          this._log('🎬 Resuming video playback after becoming visible');
+          videoElement.play().catch(err => {
+            this._log('⚠️ Could not resume video:', err);
+          });
+        }
+      }
     } else if (!shouldBeActive && !this._backgroundPaused) {
       this._log('⏸️ Pausing - card is not visible');
       this._backgroundPaused = true;
@@ -6055,6 +6151,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         
         // Add current path to history
         this._navigationHistory.push(this._currentMediaPath);
+        
+        // CRITICAL FIX: Limit history to 100 items to prevent memory issues
+        const MAX_HISTORY_SIZE = 100;
+        if (this._navigationHistory.length > MAX_HISTORY_SIZE) {
+          const removed = this._navigationHistory.shift(); // Remove oldest item
+          this._log(`🗑️ Trimmed navigation history (removed oldest): ${removed}`);
+        }
+        
         this._historyIndex = this._navigationHistory.length - 1;
         this._log(`📚 Added to navigation history (${this._historyIndex + 1}/${this._navigationHistory.length}): ${this._currentMediaPath}`);
       } else if (skipHistoryUpdate) {
