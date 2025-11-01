@@ -39,7 +39,7 @@ const MediaUtils = {
     // Extract extension
     const extension = cleanFileName.split('.').pop()?.toLowerCase();
     
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'avi'].includes(extension)) {
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       return 'video';
     } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
       return 'image';
@@ -479,19 +479,45 @@ class MediaCard extends LitElement {
       parts.push(`📄 ${metadata.filename}`);
     }
     
-    // Show EXIF date_taken if available (from media_index)
-    if (this.config.metadata.show_date && metadata.date_taken) {
-      let date;
+    // Show date with fallback priority: date_taken (EXIF) -> created_time (file metadata) -> date (filesystem)
+    if (this.config.metadata.show_date) {
+      let date = null;
+      let dateSource = null;
       
-      // Backend returns date_taken as Unix timestamp (number)
-      if (typeof metadata.date_taken === 'number') {
-        date = new Date(metadata.date_taken * 1000); // Convert Unix timestamp to milliseconds
-      } 
-      // Or as string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
-      else if (typeof metadata.date_taken === 'string') {
-        // Replace colons in date part with dashes for proper parsing
-        const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-        date = new Date(dateStr);
+      // Priority 1: EXIF date_taken if available (from media_index)
+      if (metadata.date_taken) {
+        dateSource = 'date_taken';
+        
+        // Backend returns date_taken as Unix timestamp (number)
+        if (typeof metadata.date_taken === 'number') {
+          date = new Date(metadata.date_taken * 1000); // Convert Unix timestamp to milliseconds
+        } 
+        // Or as string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
+        else if (typeof metadata.date_taken === 'string') {
+          // Replace colons in date part with dashes for proper parsing
+          const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+          date = new Date(dateStr);
+        }
+      }
+      
+      // Priority 2: File created_time if no EXIF date (from media_index file metadata)
+      if (!date && metadata.created_time) {
+        dateSource = 'created_time';
+        
+        // created_time is ISO string like "2019-09-24T18:51:12"
+        if (typeof metadata.created_time === 'string') {
+          date = new Date(metadata.created_time);
+        }
+        // Or Unix timestamp
+        else if (typeof metadata.created_time === 'number') {
+          date = new Date(metadata.created_time * 1000);
+        }
+      }
+      
+      // Priority 3: Filesystem date as last fallback
+      if (!date && metadata.date) {
+        dateSource = 'filesystem';
+        date = metadata.date;
       }
       
       if (date && !isNaN(date.getTime())) {
@@ -499,12 +525,6 @@ class MediaCard extends LitElement {
         const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
         parts.push(`📅 ${date.toLocaleDateString(locale)}`);
       }
-    }
-    // Fallback to filesystem date if no EXIF date
-    else if (this.config.metadata.show_date && metadata.date) {
-      const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
-      const dateStr = metadata.date.toLocaleDateString(locale);
-      parts.push(`📅 ${dateStr}`);
     }
     
     // Show geocoded location if available (from media_index)
@@ -567,14 +587,26 @@ class MediaCard extends LitElement {
         // Build location text
         let locationText = '';
         
-        // Add city if available
-        if (metadata.location_city) {
-          locationText = metadata.location_city;
+        // Add location name (specific place) if available
+        if (metadata.location_name && metadata.location_name.trim()) {
+          locationText = metadata.location_name;
+        }
+        
+        // Add city if available (skip if empty string)
+        if (metadata.location_city && metadata.location_city.trim()) {
+          if (locationText && locationText !== metadata.location_city) {
+            locationText += `, ${metadata.location_city}`;
+          } else if (!locationText) {
+            locationText = metadata.location_city;
+          }
           
           // Add state if available and different from city
           if (metadata.location_state && metadata.location_state !== metadata.location_city) {
             locationText += `, ${metadata.location_state}`;
           }
+        } else if (metadata.location_state && metadata.location_state.trim()) {
+          // No city, but we have state - add it
+          locationText += locationText ? `, ${metadata.location_state}` : metadata.location_state;
         }
         
         // Only show country if we have a server country AND it doesn't match
@@ -1706,6 +1738,7 @@ class MediaCard extends LitElement {
               folder: item.folder,
               filename: item.filename,
               date_taken: item.date_taken,
+              created_time: item.created_time,
               location_name: item.location_name,
               location_city: item.location_city,
               location_state: item.location_state,
@@ -2015,13 +2048,21 @@ class MediaCard extends LitElement {
       if (response && response.items && Array.isArray(response.items)) {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
-        // Filter out excluded files (moved to _Junk/_Edit) BEFORE processing
+        // Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
         const filteredItems = response.items.filter(item => {
           const isExcluded = this._excludedFiles.has(item.path);
           if (isExcluded) {
             this._log(`⏭️ Filtering out excluded file: ${item.path}`);
+            return false;
           }
-          return !isExcluded;
+          
+          // Filter out unsupported media formats using existing _isMediaFile check
+          if (!this._isMediaFile(item.path || '')) {
+            this._log(`⏭️ Filtering out unsupported format: ${item.path}`);
+            return false;
+          }
+          
+          return true;
         });
         
         if (filteredItems.length < response.items.length) {
@@ -2041,6 +2082,7 @@ class MediaCard extends LitElement {
             folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
             // EXIF metadata (already present in backend response)
             date_taken: item.date_taken,
+            created_time: item.created_time, // File creation time as fallback for date display
             location_city: item.location_city,
             location_state: item.location_state,
             location_country: item.location_country,
@@ -2219,6 +2261,7 @@ class MediaCard extends LitElement {
                 folder: item.folder,
                 filename: item.filename,
                 date_taken: item.date_taken,
+                created_time: item.created_time,
                 location_name: item.location_name,
                 location_city: item.location_city,
                 location_state: item.location_state,
@@ -2293,6 +2336,7 @@ class MediaCard extends LitElement {
                     folder: item.folder,
                     filename: item.filename,
                     date_taken: item.date_taken,
+                    created_time: item.created_time,
                     location_name: item.location_name,
                     location_city: item.location_city,
                     location_state: item.location_state,
@@ -10064,7 +10108,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           this._log('🎯 Extensions - title:', titleExt, 'content:', contentExt, 'using:', ext);
         }
         
-        const isVideo = ['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(ext);
+        const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext);
         const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
         
         if (processedCount <= 5) {
@@ -10285,7 +10329,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     // Auto-detect media type from extension
     const extension = mediaContentId.split('.').pop()?.toLowerCase();
-    if (['mp4', 'webm', 'ogg', 'avi', 'mov', 'm4v'].includes(extension)) {
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       this._config.media_type = 'video';
     } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
       this._config.media_type = 'image';
