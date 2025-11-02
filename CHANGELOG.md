@@ -73,7 +73,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Background scanning**: Many checks to stop background scanning from continuing when card is not visible, particularly on the old media path.
 - **New logging**: Added option to suppress subfolder queue messages for easier debugging (yaml config only - see README.md).
 
-
 ## [3.0.0] - 2025-10-24
 
 ### Added - Major Features
