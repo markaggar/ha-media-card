@@ -49,7 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed - Performance & Reliability
 
 #### 🐛 Authentication & File Access
-- **Thumbnail 401 Errors**: Fixed edit confirmation thumbnail authentication issues
 - **File Type Detection**: Improved media type recognition and handling
 - **Metadata Synchronization**: Backend metadata used to prevent duplicate rendering
 
@@ -59,26 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Favorite Status Persistence**: Maintains favorite status when navigating between images
 - **Metadata Counter Sync**: Counters stay synchronized with displayed images
 
-#### ⚙️ Configuration & Compatibility
-- **Multi-Instance Entity Targeting**: Proper config path handling for media_index entities
-- **Circuit Breaker Mapping**: Fixed item mapping and 404 loop detection
-- **Date Type Handling**: Improved date_taken field processing from backend
-
-### Documentation
-- **Complete v4.0 Documentation**: Updated README with Media Index integration features and configuration
-- **Configuration Examples**: Added Media Index setup examples and option tables
-- **Feature Separation**: Clear distinction between standalone and Media Index-enhanced features
-- **Migration Guide**: Backwards compatibility information for existing users
-
-### Breaking Changes
-- **Version Requirement**: Media Index integration features require separate [Media Index integration](https://github.com/markaggar/ha-media-index) installation
-- **Configuration Schema**: New `media_index` configuration object for enhanced features
-
 ### Migration Notes
-- All v3.0 features continue to work without Media Index
+- All previous features continue to work without Media Index
 - No existing configuration changes required for current users
 - Media Index integration is optional but provides significant performance and feature enhancements
 - Install Media Index via HACS for enhanced experience
+
+## [3.0.1] - 20250-10-26
+
+### Bug fixes
+
+- **Default changes**: Scan depth is unlimited by default to prevent subfolder queue from failing when there are no images in first few levels.
+- **Changing Path destroys queue**: Editing the card and changing the media path destroys the existing queue so you will not so irrelevant images.
+- **Background scanning**: Many checks to stop background scanning from continuing when card is not visible, particularly on the old media path.
+- **New logging**: Added option to suppress subfolder queue messages for easier debugging (yaml config only - see README.md).
+
 
 ## [3.0.0] - 2025-10-24
 
