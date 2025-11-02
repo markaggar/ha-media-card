@@ -10,24 +10,9 @@ dist/
 # Development and test files
 
 # Development documentation (keep locally but don't track)
-docs/CLEANUP_ANALYSIS.md
-docs/DEPLOYMENT.md
-docs/HIERARCHICAL_SCAN_DESIGN.md
-docs/HYBRID_MODE_IMPLEMENTATION.md
-docs/IMPLEMENTATION_CONTROL_CHECKLIST.md
-docs/LARGE_FOLDER_HANDLING.md
-docs/OPTIMIZATION_REPORT.md
-docs/RANDOM_MODE_OPTIMIZATION.md
-docs/REBUILD_PLAN.md
-docs/SIMPLIFIED_SUBFOLDER_APPROACH.md
-docs/SUBFOLDER_IMPLEMENTATION_PLAN.md
-docs/SUBFOLDER_SUPPORT_ANALYSIS.md
-docs/SUBFOLDER_V1_MINIMAL.md
-docs/TWO_PHASE_SUBFOLDER_STRATEGY.md
-docs/planning/
+dev-docs/
 
 # Development artifacts (keep locally but don't track)
-IMPLEMENTATION_SUMMARY.md
 archive/
 scripts/
 tests/
