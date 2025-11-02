@@ -8,6 +8,15 @@ dist/
 *.map
 
 # Development and test files
+
+# Development documentation (keep locally but don't track)
+dev-docs/
+
+# Development artifacts (keep locally but don't track)
+archive/
+scripts/
+tests/
+run-oneoff.ps1
 tests/
 test-*.html
 debug-*.html

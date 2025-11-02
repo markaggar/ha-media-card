@@ -9,6 +9,12 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 - `package.json` - Dependencies and build scripts
 - `rollup.config.js` - Build configuration
 - `README.md` - Comprehensive documentation
+- `docs/` - Documentation files
+- `docs/planning/` - **Planning documents for features and integrations**
+  - `MEDIA_INDEX_INTEGRATION_PLAN.md` - Backend integration strategy
+  - `GEOCODING_CACHE_STRATEGY.md` - Geocoding implementation
+  - `EXIF_INTEGRATION_PLAN.md` - EXIF data handling
+  - `FULLSCREEN_MODE_PLAN.md` - Fullscreen display mode
 
 ## Development Guidelines
 - Follow Home Assistant custom card conventions
@@ -16,6 +22,42 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 - Implement GUI editor for media file selection
 - Support both image and video playback
 - Base implementation on picture-entity-card and gallery-card patterns
+
+## Git Workflow
+**CRITICAL**: ALL development work must be done on feature branches
+
+### Branch Protection Rules
+- **NEVER push directly to `master` branch**
+- Master branch is for stable releases only
+- All new features/fixes must use feature branches
+
+### Development Workflow
+1. **Create feature branch** for any new work:
+   ```powershell
+   git checkout -b feature/integration-support
+   # or
+   git checkout -b fix/bug-description
+   ```
+
+2. **Make changes and commit** to feature branch:
+   ```powershell
+   git add .
+   git commit -m "feat: add integration support for metadata display"
+   git push -u origin feature/integration-support
+   ```
+
+3. **Create Pull Request** on GitHub when ready
+4. **Merge to master** only after review and testing
+5. **Tag releases** on master branch for version control
+
+### Current Development Branch
+- `feature/integration-support` - For integration with media-index backend
+
+### Branch Naming Convention
+- `feature/description` - New features
+- `fix/description` - Bug fixes
+- `docs/description` - Documentation updates
+- `chore/description` - Maintenance tasks
 
 ## Checklist Progress
 - [x] Verify copilot-instructions.md file created
@@ -94,9 +136,9 @@ C:\Users\marka\ha-media-index\scripts\deploy-media-index.ps1
 # Change to ha-media-index repository
 cd C:\Users\marka\ha-media-index
 
-# Deploy with verification
+# Deploy with verification (HADev .62)
 .\scripts\deploy-media-index.ps1 `
-    -VerifyEntity "sensor.media_index_total_files" `
+    -VerifyEntity "sensor.media_index_media_photo_photolibrary_total_files" `
     -DumpErrorLogOnFail
 ```
 
@@ -105,7 +147,7 @@ cd C:\Users\marka\ha-media-index
 cd C:\Users\marka\ha-media-index
 
 .\scripts\deploy-media-index.ps1 `
-    -VerifyEntity "sensor.media_index_total_files" `
+    -VerifyEntity "sensor.media_index_media_photo_photolibrary_total_files" `
     -DumpErrorLogOnFail `
     -AlwaysRestart
 ```
@@ -122,22 +164,24 @@ cd C:\Users\marka\ha-media-index
 
 #### Environment Setup
 ```powershell
-# Set once in PowerShell profile
+# Set once in PowerShell profile for HADev (.62)
 $env:HA_BASE_URL = "http://10.0.0.62:8123"
 $env:HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhMzU4N2QwZDkwMTI0MWY5YmMzMTJlZGQzMTBhZTY0YiIsImlhdCI6MTc2MTM3MTYzNiwiZXhwIjoyMDc2NzMxNjM2fQ.KN_dJi3PxMHCZh4M_MODinGVqyJ4RCjFcd6XE5zHnok"
-$env:HA_VERIFY_ENTITY = "sensor.media_index_total_files"
+$env:HA_VERIFY_ENTITY = "sensor.media_index_media_photo_photolibrary_total_files"
 $env:WM_SAVE_ERROR_LOG_TO_TEMP = "1"
 ```
 
+**Important**: The environment variable `$env:HA_BASE_URL` must be set to HADev (.62) not Production (.55) for media_index development!
+
 #### File Locations
 - **Development**: `c:\Users\marka\ha-media-index\custom_components\media_index\`
-- **Production**: `\\10.0.0.62\config\custom_components\media_index\`
+- **HADev Server**: `\\10.0.0.62\config\custom_components\media_index\`
 - **Cache Database**: `\\10.0.0.62\config\.storage\media_index.db` (auto-created)
 
 #### Testing Without Manual Intervention
 ```powershell
 # Deploy and verify in one command
-.\scripts\deploy-media-index.ps1 -VerifyEntity "sensor.media_index_total_files" -DumpErrorLogOnFail
+.\scripts\deploy-media-index.ps1 -VerifyEntity "sensor.media_index_media_photo_photolibrary_total_files" -DumpErrorLogOnFail
 
 # Check exit code
 if ($LASTEXITCODE -eq 0) { 
@@ -148,25 +192,6 @@ if ($LASTEXITCODE -eq 0) {
 ```
 
 See `MEDIA_INDEX_INTEGRATION_PLAN.md` for complete deployment documentation.
-
-## One-off Command Runner (run-oneoff.ps1)
-
-To reduce interactive approvals when I need to run a single helper command (log fetches, quick API queries, or short diagnostics), I will use a single, reusable PowerShell runner script that I will overwrite for each one-off operation.
-
-- Script location:
-```powershell
-C:\Users\marka\Media Item Card\run-oneoff.ps1
-```
-
-How it works:
-- The assistant will overwrite `run-oneoff.ps1` with the exact one-off commands to execute and then run that script.
-- This centralizes one-off actions so you only need to review and approve the script once (or as you prefer).
-- Do NOT put secrets in the script. Use environment variables (for example, `$env:HA_TOKEN`) instead.
-
-Basic safety checklist:
-- I will never run arbitrary long-running processes in this script. It's for quick checks and diagnostics only.
-- The script will print clear markers (`run-oneoff: starting` / `run-oneoff: complete`) so logs are easy to audit.
-- You can inspect the script before first use and then let me reuse it for future one-off commands.
 
 ---
 

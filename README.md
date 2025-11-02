@@ -7,7 +7,37 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
-## 🚀 What's New in v3.0
+## 🚀 What's New in v4.0 - Media Index Integration
+
+### ⚡ **Lightning-Fast Performance** 
+*(Requires Media Index)*
+No more waiting for folder scans! The [Media Index integration](https://github.com/markaggar/ha-media-index) pre-indexes your entire media collection for instant slideshow startup.
+
+### 📍 **Rich Metadata Display**
+*(Requires Media Index)*
+- **GPS Locations**: Automatic geocoding shows where photos were taken ("Paris, France" vs coordinates)
+- **Real Photo Dates**: EXIF creation dates from camera metadata, not file timestamps
+- **Star Ratings**: Display favorite ratings extracted from photo metadata
+
+### ⭐ **Interactive Media Controls** 
+*(Requires Media Index)*
+- **Favorite Button**: Star/unstar photos with visual feedback
+- **Edit Workflow**: Mark photos for editing (moves to _Edit folder), then restore the files to their original locations when done editing with the Media Index restore service.
+- **Safe Delete**: Move unwanted files to junk folder with confirmation
+
+### 🎲 **True Database Randomization**
+*(Requires Media Index)*
+SQL-powered random selection eliminates filesystem bias for genuinely random slideshows across your entire collection.
+
+### 📂 **About Media Index Integration**
+The [Media Index](https://github.com/markaggar/ha-media-index) is a separate Home Assistant integration that:
+- Scans and indexes your media files with metadata extraction
+- Provides real-time file monitoring and geocoding services  
+- Supports multiple media libraries with independent configuration
+
+> **💡 Backwards Compatible**: All previous features continue to work without Media Index! The integration adds powerful enhancements but isn't required.
+
+## 🔄 **Core Features** 
 
 ### 📂 **Hierarchical Folder Scanning**
 Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
@@ -20,10 +50,6 @@ Slideshow automatically pauses when you pause a video, navigate away, or switch 
 
 ### 🎬 **Video Completion Detection**
 Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
-
----
-
-## ✨ Core Features
 
 ### 🎯 **Flexible Slideshow Modes**
 - **Show Latest**: Always display your most recent photo/video
@@ -96,6 +122,18 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | `aspect_mode` | string | `default` | `default`, `smart-scale`, `viewport-fit`, or `viewport-fill` |
 | `auto_refresh_seconds` | number | `0` | Auto-refresh interval (0 = disabled) |
 | `show_refresh_button` | boolean | `false` | Show manual refresh button |
+
+### Media Index Configuration
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `media_index` | object | `none` | Enable Media Index integration for enhanced features |
+| `media_index.entity_id` | string | **Required** | Media Index sensor entity (e.g., `sensor.media_index_photos_total_files`) |
+| `media_index.show_favorite_button` | boolean | `true` | Show favorite/star button on images |
+| `media_index.show_edit_button` | boolean | `true` | Show edit workflow button |
+| `media_index.show_delete_button` | boolean | `true` | Show safe delete button |
+| `media_index.show_location` | boolean | `true` | Display geocoded location names |
+| `media_index.show_date_taken` | boolean | `true` | Show EXIF creation date vs file date |
 
 ### Folder Mode Configuration
 | Option | Type | Default | Description |
@@ -193,6 +231,29 @@ auto_refresh_seconds: 300
 ```
 
 ## �📝 Configuration Examples
+
+### ⚡ **Media Index Configuration (v4.0)**
+
+#### Enhanced Random Slideshow with Media Index
+
+```yaml
+type: custom:media-card
+title: "Photo Slideshow with Locations"
+media_type: image
+folder_mode: random
+auto_refresh_seconds: 10
+media_index:
+  entity_id: sensor.media_index_photos_total_files
+  show_favorite_button: true
+  show_edit_button: true
+  show_delete_button: true
+  show_location: true
+  show_date_taken: true
+show_metadata: true
+metadata_position: bottom-right
+```
+
+> **💡 Note**: Requires [Media Index integration](https://github.com/markaggar/ha-media-index) to be installed and configured first.
 
 ### � **Folder Mode Examples**
 
