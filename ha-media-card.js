@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 3.1.0.63 - Fix media_index history restoration on reconnect
+ * Version: 4.0.0 - Media Index integration with enhanced metadata and interactive controls
  */
 
 // Import Lit from CDN for standalone usage
