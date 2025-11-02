@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2025-11-01
+
+### Added - Major Features
+
+#### ⚡ Media Index Integration
+- **Lightning-Fast Performance**: Pre-indexed database eliminates folder scanning delays for instant slideshow startup
+- **Multi-Instance Support**: Target specific Media Index entities for different media collections
+- **True Database Randomization**: SQL-powered random selection eliminates filesystem bias
+- **Enhanced Metadata Display**: Rich metadata from Media Index database including GPS locations and EXIF dates
+- **Interactive Media Controls**: Favorite, edit, and delete buttons with real-time database synchronization
+
+#### 📍 Rich Metadata & Location Features
+- **GPS Location Geocoding**: Automatic reverse geocoding displays "Paris, France" instead of coordinates
+- **EXIF Date Display**: Real photo creation dates from camera metadata vs file timestamps  
+- **Star Ratings Display**: Shows favorite ratings extracted from photo metadata
+- **Configurable Metadata**: Toggle location, date, and rating display independently
+
+#### ⭐ Interactive User Controls
+- **Favorite Button**: Star/unstar photos with visual feedback and database persistence
+- **Edit Workflow**: Mark photos for editing, then restore when editing complete
+- **Safe Delete**: Move unwanted files to junk folder with confirmation dialog
+- **Real-Time Updates**: All actions sync instantly with Media Index database
+
+#### 🎲 Advanced Randomization
+- **SQL Random Selection**: Database-powered randomization for true random distribution
+- **Collection-Wide Scope**: Random selection across entire indexed media collection
+- **Exclusion Tracking**: Prevents showing recently deleted or edited files
+
+### Enhanced - Existing Features
+
+#### 🔄 Lifecycle Management
+- **Navigation History Persistence**: Maintains slideshow position across view changes and reconnections
+- **State Synchronization**: Proper reconnection handling with queue and history restoration
+- **Background Pause Management**: Smart pause/resume when switching between views or tabs
+
+#### 🎮 User Experience Improvements  
+- **Silent Error Handling**: Auto-skip deleted files without error popups (404 suppression)
+- **Preview Protection**: Prevents card initialization during editing mode
+- **Flexible API Support**: Compatible with both WebSocket and REST API response formats
+- **Circuit Breaker Protection**: Prevents infinite loops on file access issues
+
+### Fixed - Performance & Reliability
+
+#### 🐛 Authentication & File Access
+- **Thumbnail 401 Errors**: Fixed edit confirmation thumbnail authentication issues
+- **File Type Detection**: Improved media type recognition and handling
+- **Metadata Synchronization**: Backend metadata used to prevent duplicate rendering
+
+#### 🔄 Navigation & State Management  
+- **Queue Refresh Preservation**: Navigation history maintained during random mode queue refreshes
+- **Media Type Preferences**: Honors configured media type settings in random mode
+- **Favorite Status Persistence**: Maintains favorite status when navigating between images
+- **Metadata Counter Sync**: Counters stay synchronized with displayed images
+
+#### ⚙️ Configuration & Compatibility
+- **Multi-Instance Entity Targeting**: Proper config path handling for media_index entities
+- **Circuit Breaker Mapping**: Fixed item mapping and 404 loop detection
+- **Date Type Handling**: Improved date_taken field processing from backend
+
+### Documentation
+- **Complete v4.0 Documentation**: Updated README with Media Index integration features and configuration
+- **Configuration Examples**: Added Media Index setup examples and option tables
+- **Feature Separation**: Clear distinction between standalone and Media Index-enhanced features
+- **Migration Guide**: Backwards compatibility information for existing users
+
+### Breaking Changes
+- **Version Requirement**: Media Index integration features require separate [Media Index integration](https://github.com/markaggar/ha-media-index) installation
+- **Configuration Schema**: New `media_index` configuration object for enhanced features
+
+### Migration Notes
+- All v3.0 features continue to work without Media Index
+- No existing configuration changes required for current users
+- Media Index integration is optional but provides significant performance and feature enhancements
+- Install Media Index via HACS for enhanced experience
+
 ## [3.0.0] - 2025-10-24
 
 ### Added - Major Features
