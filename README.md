@@ -22,7 +22,7 @@ No more waiting for folder scans! The [Media Index integration](https://github.c
 ### ⭐ **Interactive Media Controls** 
 *(Requires Media Index)*
 - **Favorite Button**: Star/unstar photos with visual feedback
-- **Edit Workflow**: Mark photos for editing, then restore when done
+- **Edit Workflow**: Mark photos for editing (moves to _Edit folder), then restore the files to their original locations when done editing with the Media Index restore service.
 - **Safe Delete**: Move unwanted files to junk folder with confirmation
 
 ### 🎲 **True Database Randomization**
@@ -35,9 +35,9 @@ The [Media Index](https://github.com/markaggar/ha-media-index) is a separate Hom
 - Provides real-time file monitoring and geocoding services  
 - Supports multiple media libraries with independent configuration
 
-> **💡 Backwards Compatible**: All v3.0 features continue to work without Media Index! The integration adds powerful enhancements but isn't required.
+> **💡 Backwards Compatible**: All previous features continue to work without Media Index! The integration adds powerful enhancements but isn't required.
 
-## 🔄 **v3.0 Features** *(Work Standalone)*
+## 🔄 **Core Features** 
 
 ### 📂 **Hierarchical Folder Scanning**
 Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
@@ -50,10 +50,6 @@ Slideshow automatically pauses when you pause a video, navigate away, or switch 
 
 ### 🎬 **Video Completion Detection**
 Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
-
----
-
-## ✨ Core Features
 
 ### 🎯 **Flexible Slideshow Modes**
 - **Show Latest**: Always display your most recent photo/video
