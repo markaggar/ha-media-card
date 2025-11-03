@@ -961,6 +961,32 @@ class MediaCard extends LitElement {
       right: 8px;
     }
 
+    /* Kiosk mode exit hint */
+    .kiosk-exit-hint {
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.75em;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      opacity: 0.4;
+      transition: opacity 0.3s ease;
+      white-space: nowrap;
+    }
+
+    .media-container:hover .kiosk-exit-hint {
+      opacity: 0.8;
+    }
+
     /* Action Buttons (Favorite/Delete) */
     .action-buttons {
       position: absolute;
@@ -3500,6 +3526,7 @@ class MediaCard extends LitElement {
           ${this._renderPauseIndicator()}
           ${this._renderActionButtons()}
           ${this._renderMetadataOverlay()}
+          ${this._renderKioskIndicator()}
         </div>
       </div>
     `;
@@ -3722,6 +3749,24 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     return html`
       <div class="pause-indicator">⏸️</div>
+    `;
+  }
+
+  _renderKioskIndicator() {
+    // Show kiosk exit hint if kiosk mode is configured and indicator is enabled
+    if (!this._isKioskModeConfigured() || 
+        this.config.kiosk_mode_show_indicator === false) {
+      return html``;
+    }
+
+    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
+    const actionText = exitAction === 'hold' ? 'Hold' : 
+                      exitAction === 'double_tap' ? 'Double-tap' : 'Tap';
+    
+    return html`
+      <div class="kiosk-exit-hint">
+        ${actionText} to exit full-screen
+      </div>
     `;
   }
 
@@ -5181,6 +5226,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handleTap(e) {
+    // Check for kiosk mode exit first
+    if (this._shouldHandleKioskExit('tap')) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._handleKioskExit();
+      return;
+    }
+    
     if (!this.config.tap_action) return;
     
     // Prevent default if we have a tap action
@@ -5198,6 +5251,20 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handleDoubleTap(e) {
+    // Check for kiosk mode exit first
+    if (this._shouldHandleKioskExit('double_tap')) {
+      // Clear single tap timer if double tap occurs
+      if (this._doubleTapTimer) {
+        clearTimeout(this._doubleTapTimer);
+        this._doubleTapTimer = null;
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+      this._handleKioskExit();
+      return;
+    }
+    
     if (!this.config.double_tap_action) return;
     
     // Clear single tap timer if double tap occurs
@@ -5213,6 +5280,18 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handlePointerDown(e) {
+    // Check for kiosk mode exit (hold action)
+    if (this._shouldHandleKioskExit('hold')) {
+      // Start hold timer (500ms like standard HA cards)
+      this._holdTimer = setTimeout(() => {
+        this._handleKioskExit();
+        this._holdTriggered = true;
+      }, 500);
+      
+      this._holdTriggered = false;
+      return;
+    }
+    
     if (!this.config.hold_action) return;
     
     // Start hold timer (500ms like standard HA cards)
@@ -5243,6 +5322,84 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     if (this.config.hold_action) {
       e.preventDefault();
     }
+  }
+
+  // Kiosk mode methods
+  _isKioskModeConfigured() {
+    return !!(this.config.kiosk_mode_entity && this.config.kiosk_mode_entity.trim());
+  }
+
+  _shouldHandleKioskExit(actionType) {
+    if (!this._isKioskModeConfigured()) return false;
+    
+    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
+    if (exitAction !== actionType) return false;
+    
+    // Only handle kiosk exit if no other action is configured for this interaction
+    // This prevents conflicts with existing tap/hold/double-tap actions
+    if (actionType === 'tap' && this.config.tap_action) return false;
+    if (actionType === 'hold' && this.config.hold_action) return false;
+    if (actionType === 'double_tap' && this.config.double_tap_action) return false;
+    
+    return true;
+  }
+
+  async _handleKioskExit() {
+    if (!this._isKioskModeConfigured()) return false;
+    
+    const entity = this.config.kiosk_mode_entity.trim();
+    
+    try {
+      // Toggle the boolean to exit kiosk mode
+      await this.hass.callService('input_boolean', 'toggle', {
+        entity_id: entity
+      });
+      
+      // Show toast notification
+      this._showToast('Exiting full-screen mode...');
+      
+      this._log('🖼️ Kiosk mode exit triggered, toggled:', entity);
+      return true;
+    } catch (error) {
+      console.warn('Failed to toggle kiosk mode entity:', entity, error);
+      return false;
+    }
+  }
+
+  _showToast(message) {
+    // Create a simple toast notification
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 10000;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    `;
+    
+    document.body.appendChild(toast);
+    
+    // Animate in
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+    });
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => {
+        document.body.removeChild(toast);
+      }, 300);
+    }, 3000);
   }
 
   // Debug mode control methods
@@ -9712,6 +9869,50 @@ class MediaCardEditor extends LitElement {
             </div>
           </div>
         </div>
+
+        <div class="section">
+          <div class="section-title">🖼️ Kiosk Mode</div>
+          
+          <div class="config-row">
+            <label>Kiosk Control Entity</label>
+            <div>
+              <input
+                type="text"
+                .value=${this._config.kiosk_mode_entity || ''}
+                @input=${this._kioskModeEntityChanged}
+                placeholder="input_boolean.kiosk_mode"
+              />
+              <div class="help-text">
+                Entity to toggle when exiting kiosk mode (requires kiosk-mode integration)<br>
+                <strong>Setup:</strong> Create input_boolean.kiosk_mode and configure kiosk-mode integration to watch it
+              </div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Kiosk Exit Action</label>
+            <div>
+              <select @change=${this._kioskModeExitActionChanged} .value=${this._config.kiosk_mode_exit_action || 'tap'}>
+                <option value="tap">Single Tap</option>
+                <option value="hold">Hold (0.5s)</option>
+                <option value="double_tap">Double Tap</option>
+              </select>
+              <div class="help-text">How to trigger kiosk mode exit (only works if no other action is configured for same gesture)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Show Exit Hint</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.kiosk_mode_show_indicator !== false}
+                @change=${this._kioskModeShowIndicatorChanged}
+              />
+              <div class="help-text">Show subtle exit hint in corner (when kiosk entity is configured)</div>
+            </div>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -10915,6 +11116,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     } else {
       this._config = { ...this._config, double_tap_action: { action } };
     }
+    this._fireConfigChanged();
+  }
+
+  // Kiosk mode configuration event handlers
+  _kioskModeEntityChanged(ev) {
+    const entity = ev.target.value.trim();
+    if (entity === '') {
+      const { kiosk_mode_entity, ...configWithoutKioskEntity } = this._config;
+      this._config = configWithoutKioskEntity;
+    } else {
+      this._config = { ...this._config, kiosk_mode_entity: entity };
+    }
+    this._fireConfigChanged();
+  }
+
+  _kioskModeExitActionChanged(ev) {
+    this._config = {
+      ...this._config,
+      kiosk_mode_exit_action: ev.target.value
+    };
+    this._fireConfigChanged();
+  }
+
+  _kioskModeShowIndicatorChanged(ev) {
+    this._config = {
+      ...this._config,
+      kiosk_mode_show_indicator: ev.target.checked
+    };
     this._fireConfigChanged();
   }
 
