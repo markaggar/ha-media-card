@@ -787,7 +787,18 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      margin: 0 auto;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    
+    :host([data-aspect-mode="viewport-fit"]) .media-container {
+      position: relative;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     :host([data-aspect-mode="viewport-fill"]) img {
@@ -819,6 +830,10 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
@@ -9643,13 +9658,11 @@ class MediaCardEditor extends LitElement {
               <div class="config-row">
                 <label>Media Index Entity</label>
                 <div>
-                  <input
-                    type="text"
-                    .value=${this._config.media_index?.entity_id || ''}
-                    placeholder="sensor.media_index_total_files"
-                    @input=${this._mediaIndexEntityChanged}
-                  />
-                  <div class="help-text">Entity ID of your media_index sensor (e.g., sensor.media_index_total_files)</div>
+                  <select @change=${this._mediaIndexEntityChanged} .value=${this._config.media_index?.entity_id || ''}>
+                    <option value="">Select Media Index Entity...</option>
+                    ${this._renderMediaIndexEntityOptions()}
+                  </select>
+                  <div class="help-text">Select your media_index sensor entity</div>
                 </div>
               </div>
               
@@ -9876,12 +9889,10 @@ class MediaCardEditor extends LitElement {
           <div class="config-row">
             <label>Kiosk Control Entity</label>
             <div>
-              <input
-                type="text"
-                .value=${this._config.kiosk_mode_entity || ''}
-                @input=${this._kioskModeEntityChanged}
-                placeholder="input_boolean.kiosk_mode"
-              />
+              <select @change=${this._kioskModeEntityChanged} .value=${this._config.kiosk_mode_entity || ''}>
+                <option value="">Select Input Boolean...</option>
+                ${this._renderInputBooleanEntityOptions()}
+              </select>
               <div class="help-text">
                 Entity to toggle when exiting kiosk mode (requires kiosk-mode integration)<br>
                 <strong>Setup:</strong> Create input_boolean.kiosk_mode and configure kiosk-mode integration to watch it
@@ -11119,9 +11130,29 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _renderInputBooleanEntityOptions() {
+    if (!this.hass || !this.hass.states) {
+      return html``;
+    }
+
+    // Filter entities that start with 'input_boolean.'
+    const inputBooleanEntities = Object.keys(this.hass.states)
+      .filter(entityId => entityId.startsWith('input_boolean.'))
+      .sort();
+
+    return inputBooleanEntities.map(entityId => {
+      const state = this.hass.states[entityId];
+      const friendlyName = state.attributes.friendly_name || entityId;
+      
+      return html`
+        <option value="${entityId}">${friendlyName}</option>
+      `;
+    });
+  }
+
   // Kiosk mode configuration event handlers
   _kioskModeEntityChanged(ev) {
-    const entity = ev.target.value.trim();
+    const entity = ev.target.value;
     if (entity === '') {
       const { kiosk_mode_entity, ...configWithoutKioskEntity } = this._config;
       this._config = configWithoutKioskEntity;
@@ -11224,6 +11255,26 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     };
     this._fireConfigChanged();
+  }
+
+  _renderMediaIndexEntityOptions() {
+    if (!this.hass || !this.hass.states) {
+      return html``;
+    }
+
+    // Filter entities that start with 'sensor.media_index'
+    const mediaIndexEntities = Object.keys(this.hass.states)
+      .filter(entityId => entityId.startsWith('sensor.media_index'))
+      .sort();
+
+    return mediaIndexEntities.map(entityId => {
+      const state = this.hass.states[entityId];
+      const friendlyName = state.attributes.friendly_name || entityId;
+      
+      return html`
+        <option value="${entityId}">${friendlyName}</option>
+      `;
+    });
   }
 
   _mediaIndexEntityChanged(ev) {
