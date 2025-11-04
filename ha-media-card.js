@@ -1699,6 +1699,22 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // Special handling for SubfolderQueue mode: if we're already complete but have no _folderContents,
+    // it might be SubfolderQueue mode that needs reconnection
+    if (this._initializationState === 'complete' && this.config.subfolder_queue?.enabled && this._isRandomMode()) {
+      this._log('🔄 Complete state but SubfolderQueue mode - checking for queue reconnection');
+      
+      // Try to reconnect to existing queue if available
+      if (window.mediaCardSubfolderQueues.has(currentPath)) {
+        this._log('� SubfolderQueue reconnection needed - reinitializing');
+        this._initializationState = null; // Reset to allow reconnection
+      } else {
+        // No stored queue but already complete - likely disconnected and queue was cleaned up
+        this._log('⚠️ Complete state but no stored queue - need fresh initialization');
+        this._initializationState = null; // Reset to allow fresh initialization
+      }
+    }
+    
     // Skip if initialization in progress (prevent race conditions)
     if (this._initializationState === 'pending') {
       this._log('⏳ Initialization already in progress - skipping duplicate call');
@@ -1726,6 +1742,34 @@ class MediaCard extends LitElement {
         
         this._log('✅ media_index queue reconnected successfully');
         return;
+      }
+    }
+    
+    // 🔗 CRITICAL: Try to reconnect to existing SubfolderQueue BEFORE creating new one
+    if (this.config.subfolder_queue?.enabled && this._isRandomMode() && window.mediaCardSubfolderQueues.has(currentPath)) {
+      const storedData = window.mediaCardSubfolderQueues.get(currentPath);
+      // Check if it's a SubfolderQueue (not media_index) by looking for the queue property
+      if (storedData.queue && !storedData.mediaIndexQueue) {
+        this._log('🔗 Reconnecting to existing SubfolderQueue:', storedData.queue.queue.length, 'items');
+        
+        // Initialize the queue object first
+        this._initializeSubfolderQueue(); // This will handle the reconnection
+        
+        if (this._subfolderQueue && this._subfolderQueue.queue.length > 0) {
+          this._log('✅ SubfolderQueue reconnected with', this._subfolderQueue.queue.length, 'items');
+          this._initializationState = 'complete';
+          this._initializationInProgress = false;
+          this._lastMediaPath = currentPath;
+          
+          // CRITICAL: Setup auto-refresh after reconnection
+          this._log('🔄 Setting up auto-refresh after SubfolderQueue reconnection');
+          this._setupAutoRefresh();
+          
+          this._log('✅ SubfolderQueue reconnection completed successfully');
+          return;
+        } else {
+          this._log('⚠️ SubfolderQueue reconnection failed - will create new queue');
+        }
       }
     }
     
@@ -1907,6 +1951,17 @@ class MediaCard extends LitElement {
                   // Check if media is already loaded (queue monitor may have loaded it)
                   if (this._mediaUrl) {
                     this._log('🚫 Main initialization skipped - media already loaded by queue monitor');
+                    
+                    // CRITICAL: Still need to mark initialization as complete and setup auto-refresh
+                    this._initializationState = 'complete';
+                    this._log('✅ SubfolderQueue initialization marked complete (via queue monitor)');
+                    
+                    // CRITICAL: Set up auto-refresh even when loaded by queue monitor
+                    if (this._getEffectiveAutoRefreshSeconds() > 0 && !this._isPaused) {
+                      this._log('🔄 Setting up auto-refresh after queue monitor loaded media');
+                      this._setupAutoRefresh();
+                    }
+                    
                     return;
                   }
                   
@@ -1929,8 +1984,18 @@ class MediaCard extends LitElement {
                     this._folderContents = [randomResult.file, {}]; // At least 2 items to enable navigation
                     this._log('🎮 Set minimal folder contents for navigation controls');
                     
+                    // CRITICAL: Mark initialization as complete so auto-refresh can start
+                    this._initializationState = 'complete';
+                    this._log('✅ SubfolderQueue initialization marked complete');
+                    
                     // Clear initialization flag
                     this._initializingMedia = false;
+                    
+                    // CRITICAL: Set up auto-refresh after SubfolderQueue initialization
+                    if (this._getEffectiveAutoRefreshSeconds() > 0 && !this._isPaused) {
+                      this._log('🔄 Setting up auto-refresh after SubfolderQueue initialization');
+                      this._setupAutoRefresh();
+                    }
                     
                     return; // Exit early - queue already available
                   }
@@ -2106,13 +2171,17 @@ class MediaCard extends LitElement {
         this._log('🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
       }
       
-      // Log the actual WebSocket call for debugging
-      console.warn('📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      // Log the actual WebSocket call for debugging (only in debug mode)
+      if (this.config?.debug_queue_mode) {
+        console.warn('📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      }
       
       const wsResponse = await this.hass.callWS(wsCall);
       
-      // Log the raw response
-      console.warn('📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+      // Log the raw response (only in debug mode)
+      if (this.config?.debug_queue_mode) {
+        console.warn('📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+      }
 
       // WebSocket response can be wrapped in different ways:
       // - { response: { items: [...] } }  (standard WebSocket format)
@@ -3027,6 +3096,20 @@ class MediaCard extends LitElement {
         return { file: queueItem, index: -1 }; // Use -1 to indicate this is a queue item
       } else {
         this._log('❌ Queue getNextItem returned null/undefined - queue size:', this._subfolderQueue.queue?.length || 0, 'isScanning:', this._subfolderQueue.isScanning);
+        
+        // If queue is empty but not scanning, trigger a refill like manual navigation does
+        if (!this._subfolderQueue.isScanning && this._subfolderQueue.queue?.length === 0) {
+          this._log('🔄 Auto-refresh triggering queue refill');
+          this._subfolderQueue.refillQueue();
+          
+          // Try to get item again after refill
+          const refillItem = this._subfolderQueue.getNextItem();
+          if (refillItem) {
+            this._log('✅ Got item after queue refill:', refillItem.title);
+            return { file: refillItem, index: -1 };
+          }
+        }
+        
         this._log('⚠️ Queue empty or failed, falling back to normal random selection');
       }
     }
@@ -6133,9 +6216,37 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         await this._loadMediaFromItem(item, this._folderContents.indexOf(item), true);
         return;
       } else {
-        this._log('⚠️ History path not found in folder contents, clearing history');
-        this._navigationHistory = [];
-        this._historyIndex = -1;
+        this._log('📚 History item not in current queue, but preserving history for navigation');
+        this._log(`🔍 Will try to load history item directly: ${previousPath}`);
+        
+        // Try to load the history item directly even if not in current queue
+        // This handles cases where queue was refreshed with new random items
+        try {
+          // Create a temporary item object from the path for navigation
+          const pathParts = previousPath.split('/');
+          const filename = pathParts[pathParts.length - 1];
+          const tempItem = {
+            media_content_id: previousPath,
+            title: filename,
+            media_content_type: previousPath.toLowerCase().match(/\.(mp4|mov|avi|mkv)$/i) ? 'video' : 'image',
+            // Mark as history item so we know it's not from current queue
+            _fromHistory: true
+          };
+          
+          // Handle auto-advance mode
+          this._handleAutoAdvanceMode();
+          
+          // Load the history item directly
+          await this._loadMediaFromItem(tempItem, -1, true);
+          this._log('✅ Successfully loaded history item that was not in current queue');
+          return;
+        } catch (error) {
+          this._log('❌ Failed to load history item:', error.message);
+          // Only clear history if we actually can't load the item
+          this._log('⚠️ Clearing navigation history due to load failure');
+          this._navigationHistory = [];
+          this._historyIndex = -1;
+        }
       }
     }
     
@@ -6170,12 +6281,24 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         await this._loadMediaFromItem(nextItem);
         return;
       } else {
-        this._log('⚠️ Queue navigation failed, falling back to folder navigation');
+        this._log('❌ SubfolderQueue getNextItem failed');
+        this._log('   Queue size:', this._subfolderQueue.queue?.length || 0);
+        this._log('   History size:', this._subfolderQueue.history?.length || 0);
+        this._log('   History index:', this._subfolderQueue.historyIndex);
+        this._log('   Discovered folders:', this._subfolderQueue.discoveredFolders?.length || 0);
+        
+        // In SubfolderQueue mode, don't fall back to broken folder navigation
+        // The queue should handle refilling automatically
+        this._log('⚠️ Staying in SubfolderQueue mode - queue should refill automatically');
+        return;
       }
     }
     
-    // Fallback to standard folder navigation
-    if (!this._folderContents || this._folderContents.length <= 1) return;
+    // Standard folder navigation (only for non-SubfolderQueue modes)
+    if (!this._folderContents || this._folderContents.length <= 1) {
+      this._log('⚠️ Navigate Next: No folder contents available');
+      return;
+    }
     
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
@@ -8536,17 +8659,20 @@ class SubfolderQueue {
         }
       }
 
-      // Choose allocation method based on configuration
-      const queueSize = Math.max(targetQueueSize || 15, folders.length * 10);
+      // Determine queue operation mode
+      const isAppending = customQueueSize && this.queue.length > 0;
+      const itemsToAdd = customQueueSize || Math.max(targetQueueSize || 15, folders.length * 10);
       
-      // For expansion, don't clear the queue, just add to it
-      if (!customQueueSize) {
+      if (isAppending) {
+        this._log('➕ Appending', itemsToAdd, 'items to existing queue of', this.queue.length, 'items');
+      } else {
+        this._log('🔄 Full queue population with', itemsToAdd, 'items, clearing existing queue');
         this.queue = [];
       }
       
       const allocations = this.config.equal_probability_mode 
-        ? this.calculateEqualProbabilityAllocations(folders, queueSize)
-        : this.calculateBalancedFolderAllocations(folders, queueSize);
+        ? this.calculateEqualProbabilityAllocations(folders, itemsToAdd)
+        : this.calculateBalancedFolderAllocations(folders, itemsToAdd);
       
       // Now populate queue with allocated slots
       for (const allocation of allocations) {
@@ -8974,7 +9100,9 @@ class SubfolderQueue {
   // Check if queue needs refilling (since items stay in queue, check available unshown items)
   needsRefill() {
     const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
-    return unshownCount < 15; // Refill when < 15 unshown items left for more proactive refilling
+    const historyItems = this.card?.history?.length || 0;
+    const minBuffer = Math.max(historyItems + 5, 15); // Keep history + buffer, minimum 15
+    return unshownCount < minBuffer; // Refill when running low relative to history size
   }
 
   // Clear shown items tracking (reset exclusions)
@@ -9111,10 +9239,24 @@ class SubfolderQueue {
       this._log('✅ Exclusions reset - can now show', totalFiles, 'files again. History preserved:', this.history.length, 'items');
     }
 
-    // Re-populate queue from ALL discovered folders (this will add to existing queue)
+    // Calculate minimum queue size based on history
+    const historyItems = this.card?.history?.length || 0;
+    const minQueueSize = Math.max(historyItems + 15, 25); // Keep history + buffer, minimum 25
     const currentQueueSize = this.queue.length;
-    this.populateQueueFromFolders(this.discoveredFolders);
-    this._log('🔄 Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
+    
+    // Only refill if queue is getting low
+    if (currentQueueSize < minQueueSize) {
+      this._log('🔄 Queue needs refill:', currentQueueSize, 'items, target minimum:', minQueueSize, 'history items:', historyItems);
+      
+      // Calculate how many items to add (don't overfill)
+      const targetSize = Math.min(minQueueSize * 2, this.config.slideshow_window || 1000);
+      const customQueueSize = Math.max(targetSize - currentQueueSize, 10);
+      
+      this.populateQueueFromFolders(this.discoveredFolders, customQueueSize);
+      this._log('✅ Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
+    } else {
+      this._log('✅ Queue has sufficient items:', currentQueueSize, '(minimum needed:', minQueueSize, ')');
+    }
   }
 }
 
