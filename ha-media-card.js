@@ -787,14 +787,10 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
+      display: block;
     }
     
     :host([data-aspect-mode="viewport-fit"]) .media-container {
-      position: relative;
       height: 100vh;
       display: flex;
       align-items: center;
@@ -830,10 +826,7 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
+      display: block;
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
@@ -979,21 +972,21 @@ class MediaCard extends LitElement {
     /* Kiosk mode exit hint */
     .kiosk-exit-hint {
       position: absolute;
-      top: 8px;
+      bottom: 8px;
       left: 50%;
       transform: translateX(-50%);
       background: rgba(0, 0, 0, 0.7);
       color: white;
-      padding: 4px 12px;
-      border-radius: 12px;
-      font-size: 0.75em;
+      padding: 6px 16px;
+      border-radius: 16px;
+      font-size: 0.8em;
       font-weight: 500;
       pointer-events: none;
       z-index: 10;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
-      opacity: 0.4;
+      opacity: 0.3;
       transition: opacity 0.3s ease;
       white-space: nowrap;
     }
@@ -3768,9 +3761,15 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _renderKioskIndicator() {
-    // Show kiosk exit hint if kiosk mode is configured and indicator is enabled
+    // Show kiosk exit hint if kiosk mode is configured, indicator is enabled, and kiosk mode is active
     if (!this._isKioskModeConfigured() || 
         this.config.kiosk_mode_show_indicator === false) {
+      return html``;
+    }
+
+    // Only show hint when kiosk mode boolean is actually 'on'
+    const entity = this.config.kiosk_mode_entity.trim();
+    if (!this.hass?.states?.[entity] || this.hass.states[entity].state !== 'on') {
       return html``;
     }
 
