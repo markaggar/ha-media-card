@@ -1,7 +1,7 @@
 /**
  * Home Assistant Media Card
  * A custom card for displaying images and videos with GUI media browser
- * Version: 4.0.0 - Media Index integration with enhanced metadata and interactive controls
+ * Version: 4.1.0 - Kiosk mode integration, viewport centering, and improved entity pickers
  */
 
 // Import Lit from CDN for standalone usage
@@ -787,7 +787,14 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      margin: 0 auto;
+      display: block;
+    }
+    
+    :host([data-aspect-mode="viewport-fit"]) .media-container {
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     :host([data-aspect-mode="viewport-fill"]) img {
@@ -819,6 +826,7 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
+      display: block;
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
@@ -959,6 +967,32 @@ class MediaCard extends LitElement {
     .metadata-overlay.metadata-top-right {
       top: 8px;
       right: 8px;
+    }
+
+    /* Kiosk mode exit hint */
+    .kiosk-exit-hint {
+      position: absolute;
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 6px 16px;
+      border-radius: 16px;
+      font-size: 0.8em;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      opacity: 0.3;
+      transition: opacity 0.3s ease;
+      white-space: nowrap;
+    }
+
+    .media-container:hover .kiosk-exit-hint {
+      opacity: 0.8;
     }
 
     /* Action Buttons (Favorite/Delete) */
@@ -1665,6 +1699,22 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // Special handling for SubfolderQueue mode: if we're already complete but have no _folderContents,
+    // it might be SubfolderQueue mode that needs reconnection
+    if (this._initializationState === 'complete' && this.config.subfolder_queue?.enabled && this._isRandomMode()) {
+      this._log('🔄 Complete state but SubfolderQueue mode - checking for queue reconnection');
+      
+      // Try to reconnect to existing queue if available
+      if (window.mediaCardSubfolderQueues.has(currentPath)) {
+        this._log('� SubfolderQueue reconnection needed - reinitializing');
+        this._initializationState = null; // Reset to allow reconnection
+      } else {
+        // No stored queue but already complete - likely disconnected and queue was cleaned up
+        this._log('⚠️ Complete state but no stored queue - need fresh initialization');
+        this._initializationState = null; // Reset to allow fresh initialization
+      }
+    }
+    
     // Skip if initialization in progress (prevent race conditions)
     if (this._initializationState === 'pending') {
       this._log('⏳ Initialization already in progress - skipping duplicate call');
@@ -1692,6 +1742,34 @@ class MediaCard extends LitElement {
         
         this._log('✅ media_index queue reconnected successfully');
         return;
+      }
+    }
+    
+    // 🔗 CRITICAL: Try to reconnect to existing SubfolderQueue BEFORE creating new one
+    if (this.config.subfolder_queue?.enabled && this._isRandomMode() && window.mediaCardSubfolderQueues.has(currentPath)) {
+      const storedData = window.mediaCardSubfolderQueues.get(currentPath);
+      // Check if it's a SubfolderQueue (not media_index) by looking for the queue property
+      if (storedData.queue && !storedData.mediaIndexQueue) {
+        this._log('🔗 Reconnecting to existing SubfolderQueue:', storedData.queue.queue.length, 'items');
+        
+        // Initialize the queue object first
+        this._initializeSubfolderQueue(); // This will handle the reconnection
+        
+        if (this._subfolderQueue && this._subfolderQueue.queue.length > 0) {
+          this._log('✅ SubfolderQueue reconnected with', this._subfolderQueue.queue.length, 'items');
+          this._initializationState = 'complete';
+          this._initializationInProgress = false;
+          this._lastMediaPath = currentPath;
+          
+          // CRITICAL: Setup auto-refresh after reconnection
+          this._log('🔄 Setting up auto-refresh after SubfolderQueue reconnection');
+          this._setupAutoRefresh();
+          
+          this._log('✅ SubfolderQueue reconnection completed successfully');
+          return;
+        } else {
+          this._log('⚠️ SubfolderQueue reconnection failed - will create new queue');
+        }
       }
     }
     
@@ -1873,6 +1951,17 @@ class MediaCard extends LitElement {
                   // Check if media is already loaded (queue monitor may have loaded it)
                   if (this._mediaUrl) {
                     this._log('🚫 Main initialization skipped - media already loaded by queue monitor');
+                    
+                    // CRITICAL: Still need to mark initialization as complete and setup auto-refresh
+                    this._initializationState = 'complete';
+                    this._log('✅ SubfolderQueue initialization marked complete (via queue monitor)');
+                    
+                    // CRITICAL: Set up auto-refresh even when loaded by queue monitor
+                    if (this._getEffectiveAutoRefreshSeconds() > 0 && !this._isPaused) {
+                      this._log('🔄 Setting up auto-refresh after queue monitor loaded media');
+                      this._setupAutoRefresh();
+                    }
+                    
                     return;
                   }
                   
@@ -1895,8 +1984,18 @@ class MediaCard extends LitElement {
                     this._folderContents = [randomResult.file, {}]; // At least 2 items to enable navigation
                     this._log('🎮 Set minimal folder contents for navigation controls');
                     
+                    // CRITICAL: Mark initialization as complete so auto-refresh can start
+                    this._initializationState = 'complete';
+                    this._log('✅ SubfolderQueue initialization marked complete');
+                    
                     // Clear initialization flag
                     this._initializingMedia = false;
+                    
+                    // CRITICAL: Set up auto-refresh after SubfolderQueue initialization
+                    if (this._getEffectiveAutoRefreshSeconds() > 0 && !this._isPaused) {
+                      this._log('🔄 Setting up auto-refresh after SubfolderQueue initialization');
+                      this._setupAutoRefresh();
+                    }
                     
                     return; // Exit early - queue already available
                   }
@@ -2072,13 +2171,17 @@ class MediaCard extends LitElement {
         this._log('🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
       }
       
-      // Log the actual WebSocket call for debugging
-      console.warn('📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      // Log the actual WebSocket call for debugging (only in debug mode)
+      if (this.config?.debug_queue_mode) {
+        console.warn('📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      }
       
       const wsResponse = await this.hass.callWS(wsCall);
       
-      // Log the raw response
-      console.warn('📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+      // Log the raw response (only in debug mode)
+      if (this.config?.debug_queue_mode) {
+        console.warn('📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+      }
 
       // WebSocket response can be wrapped in different ways:
       // - { response: { items: [...] } }  (standard WebSocket format)
@@ -2993,6 +3096,20 @@ class MediaCard extends LitElement {
         return { file: queueItem, index: -1 }; // Use -1 to indicate this is a queue item
       } else {
         this._log('❌ Queue getNextItem returned null/undefined - queue size:', this._subfolderQueue.queue?.length || 0, 'isScanning:', this._subfolderQueue.isScanning);
+        
+        // If queue is empty but not scanning, trigger a refill like manual navigation does
+        if (!this._subfolderQueue.isScanning && this._subfolderQueue.queue?.length === 0) {
+          this._log('🔄 Auto-refresh triggering queue refill');
+          this._subfolderQueue.refillQueue();
+          
+          // Try to get item again after refill
+          const refillItem = this._subfolderQueue.getNextItem();
+          if (refillItem) {
+            this._log('✅ Got item after queue refill:', refillItem.title);
+            return { file: refillItem, index: -1 };
+          }
+        }
+        
         this._log('⚠️ Queue empty or failed, falling back to normal random selection');
       }
     }
@@ -3500,6 +3617,7 @@ class MediaCard extends LitElement {
           ${this._renderPauseIndicator()}
           ${this._renderActionButtons()}
           ${this._renderMetadataOverlay()}
+          ${this._renderKioskIndicator()}
         </div>
       </div>
     `;
@@ -3722,6 +3840,30 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     
     return html`
       <div class="pause-indicator">⏸️</div>
+    `;
+  }
+
+  _renderKioskIndicator() {
+    // Show kiosk exit hint if kiosk mode is configured, indicator is enabled, and kiosk mode is active
+    if (!this._isKioskModeConfigured() || 
+        this.config.kiosk_mode_show_indicator === false) {
+      return html``;
+    }
+
+    // Only show hint when kiosk mode boolean is actually 'on'
+    const entity = this.config.kiosk_mode_entity.trim();
+    if (!this.hass?.states?.[entity] || this.hass.states[entity].state !== 'on') {
+      return html``;
+    }
+
+    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
+    const actionText = exitAction === 'hold' ? 'Hold' : 
+                      exitAction === 'double_tap' ? 'Double-tap' : 'Tap';
+    
+    return html`
+      <div class="kiosk-exit-hint">
+        ${actionText} to exit full-screen
+      </div>
     `;
   }
 
@@ -5181,6 +5323,14 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handleTap(e) {
+    // Check for kiosk mode exit first
+    if (this._shouldHandleKioskExit('tap')) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._handleKioskExit();
+      return;
+    }
+    
     if (!this.config.tap_action) return;
     
     // Prevent default if we have a tap action
@@ -5198,6 +5348,20 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handleDoubleTap(e) {
+    // Check for kiosk mode exit first
+    if (this._shouldHandleKioskExit('double_tap')) {
+      // Clear single tap timer if double tap occurs
+      if (this._doubleTapTimer) {
+        clearTimeout(this._doubleTapTimer);
+        this._doubleTapTimer = null;
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+      this._handleKioskExit();
+      return;
+    }
+    
     if (!this.config.double_tap_action) return;
     
     // Clear single tap timer if double tap occurs
@@ -5213,6 +5377,18 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
   }
 
   _handlePointerDown(e) {
+    // Check for kiosk mode exit (hold action)
+    if (this._shouldHandleKioskExit('hold')) {
+      // Start hold timer (500ms like standard HA cards)
+      this._holdTimer = setTimeout(() => {
+        this._handleKioskExit();
+        this._holdTriggered = true;
+      }, 500);
+      
+      this._holdTriggered = false;
+      return;
+    }
+    
     if (!this.config.hold_action) return;
     
     // Start hold timer (500ms like standard HA cards)
@@ -5243,6 +5419,84 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
     if (this.config.hold_action) {
       e.preventDefault();
     }
+  }
+
+  // Kiosk mode methods
+  _isKioskModeConfigured() {
+    return !!(this.config.kiosk_mode_entity && this.config.kiosk_mode_entity.trim());
+  }
+
+  _shouldHandleKioskExit(actionType) {
+    if (!this._isKioskModeConfigured()) return false;
+    
+    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
+    if (exitAction !== actionType) return false;
+    
+    // Only handle kiosk exit if no other action is configured for this interaction
+    // This prevents conflicts with existing tap/hold/double-tap actions
+    if (actionType === 'tap' && this.config.tap_action) return false;
+    if (actionType === 'hold' && this.config.hold_action) return false;
+    if (actionType === 'double_tap' && this.config.double_tap_action) return false;
+    
+    return true;
+  }
+
+  async _handleKioskExit() {
+    if (!this._isKioskModeConfigured()) return false;
+    
+    const entity = this.config.kiosk_mode_entity.trim();
+    
+    try {
+      // Toggle the boolean to exit kiosk mode
+      await this.hass.callService('input_boolean', 'toggle', {
+        entity_id: entity
+      });
+      
+      // Show toast notification
+      this._showToast('Exiting full-screen mode...');
+      
+      this._log('🖼️ Kiosk mode exit triggered, toggled:', entity);
+      return true;
+    } catch (error) {
+      console.warn('Failed to toggle kiosk mode entity:', entity, error);
+      return false;
+    }
+  }
+
+  _showToast(message) {
+    // Create a simple toast notification
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 10000;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    `;
+    
+    document.body.appendChild(toast);
+    
+    // Animate in
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+    });
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => {
+        document.body.removeChild(toast);
+      }, 300);
+    }, 3000);
   }
 
   // Debug mode control methods
@@ -5962,9 +6216,37 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         await this._loadMediaFromItem(item, this._folderContents.indexOf(item), true);
         return;
       } else {
-        this._log('⚠️ History path not found in folder contents, clearing history');
-        this._navigationHistory = [];
-        this._historyIndex = -1;
+        this._log('📚 History item not in current queue, but preserving history for navigation');
+        this._log(`🔍 Will try to load history item directly: ${previousPath}`);
+        
+        // Try to load the history item directly even if not in current queue
+        // This handles cases where queue was refreshed with new random items
+        try {
+          // Create a temporary item object from the path for navigation
+          const pathParts = previousPath.split('/');
+          const filename = pathParts[pathParts.length - 1];
+          const tempItem = {
+            media_content_id: previousPath,
+            title: filename,
+            media_content_type: previousPath.toLowerCase().match(/\.(mp4|mov|avi|mkv)$/i) ? 'video' : 'image',
+            // Mark as history item so we know it's not from current queue
+            _fromHistory: true
+          };
+          
+          // Handle auto-advance mode
+          this._handleAutoAdvanceMode();
+          
+          // Load the history item directly
+          await this._loadMediaFromItem(tempItem, -1, true);
+          this._log('✅ Successfully loaded history item that was not in current queue');
+          return;
+        } catch (error) {
+          this._log('❌ Failed to load history item:', error.message);
+          // Only clear history if we actually can't load the item
+          this._log('⚠️ Clearing navigation history due to load failure');
+          this._navigationHistory = [];
+          this._historyIndex = -1;
+        }
       }
     }
     
@@ -5999,12 +6281,24 @@ ${(this._subfolderQueue?.queueHistory || []).map((entry, index) => {
         await this._loadMediaFromItem(nextItem);
         return;
       } else {
-        this._log('⚠️ Queue navigation failed, falling back to folder navigation');
+        this._log('❌ SubfolderQueue getNextItem failed');
+        this._log('   Queue size:', this._subfolderQueue.queue?.length || 0);
+        this._log('   History size:', this._subfolderQueue.history?.length || 0);
+        this._log('   History index:', this._subfolderQueue.historyIndex);
+        this._log('   Discovered folders:', this._subfolderQueue.discoveredFolders?.length || 0);
+        
+        // In SubfolderQueue mode, don't fall back to broken folder navigation
+        // The queue should handle refilling automatically
+        this._log('⚠️ Staying in SubfolderQueue mode - queue should refill automatically');
+        return;
       }
     }
     
-    // Fallback to standard folder navigation
-    if (!this._folderContents || this._folderContents.length <= 1) return;
+    // Standard folder navigation (only for non-SubfolderQueue modes)
+    if (!this._folderContents || this._folderContents.length <= 1) {
+      this._log('⚠️ Navigate Next: No folder contents available');
+      return;
+    }
     
     const currentIndex = this._getCurrentMediaIndex();
     const newIndex = currentIndex < this._folderContents.length - 1 ? currentIndex + 1 : 0;
@@ -8365,17 +8659,20 @@ class SubfolderQueue {
         }
       }
 
-      // Choose allocation method based on configuration
-      const queueSize = Math.max(targetQueueSize || 15, folders.length * 10);
+      // Determine queue operation mode
+      const isAppending = customQueueSize && this.queue.length > 0;
+      const itemsToAdd = customQueueSize || Math.max(targetQueueSize || 15, folders.length * 10);
       
-      // For expansion, don't clear the queue, just add to it
-      if (!customQueueSize) {
+      if (isAppending) {
+        this._log('➕ Appending', itemsToAdd, 'items to existing queue of', this.queue.length, 'items');
+      } else {
+        this._log('🔄 Full queue population with', itemsToAdd, 'items, clearing existing queue');
         this.queue = [];
       }
       
       const allocations = this.config.equal_probability_mode 
-        ? this.calculateEqualProbabilityAllocations(folders, queueSize)
-        : this.calculateBalancedFolderAllocations(folders, queueSize);
+        ? this.calculateEqualProbabilityAllocations(folders, itemsToAdd)
+        : this.calculateBalancedFolderAllocations(folders, itemsToAdd);
       
       // Now populate queue with allocated slots
       for (const allocation of allocations) {
@@ -8803,7 +9100,9 @@ class SubfolderQueue {
   // Check if queue needs refilling (since items stay in queue, check available unshown items)
   needsRefill() {
     const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
-    return unshownCount < 15; // Refill when < 15 unshown items left for more proactive refilling
+    const historyItems = this.card?.history?.length || 0;
+    const minBuffer = Math.max(historyItems + 5, 15); // Keep history + buffer, minimum 15
+    return unshownCount < minBuffer; // Refill when running low relative to history size
   }
 
   // Clear shown items tracking (reset exclusions)
@@ -8929,19 +9228,35 @@ class SubfolderQueue {
 
     this._log('📊 Available unshown files:', totalAvailableFiles, 'of', totalFiles, 'total files, shown:', this.shownItems.size);
 
-    // If no files are available (all have been shown), reset history to start over
+    // If no files are available (all have been shown), reset exclusions to start over
+    // BUT preserve navigation history so users can still navigate backwards
     if (totalAvailableFiles === 0 && this.shownItems.size > 0) {
-      this._log('🔄 All files exhausted, resetting history to start over');
+      this._log('🔄 All files exhausted, resetting exclusions but preserving navigation history');
       this.shownItems.clear();
-      this.history = [];
-      this.historyIndex = -1;
-      this._log('✅ History reset - can now show', totalFiles, 'files again');
+      // CRITICAL: Don't clear history - users should still be able to navigate backwards
+      // this.history = []; // ❌ This breaks backward navigation
+      // this.historyIndex = -1; // ❌ This breaks current position tracking
+      this._log('✅ Exclusions reset - can now show', totalFiles, 'files again. History preserved:', this.history.length, 'items');
     }
 
-    // Re-populate queue from ALL discovered folders (this will add to existing queue)
+    // Calculate minimum queue size based on history
+    const historyItems = this.card?.history?.length || 0;
+    const minQueueSize = Math.max(historyItems + 15, 25); // Keep history + buffer, minimum 25
     const currentQueueSize = this.queue.length;
-    this.populateQueueFromFolders(this.discoveredFolders);
-    this._log('🔄 Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
+    
+    // Only refill if queue is getting low
+    if (currentQueueSize < minQueueSize) {
+      this._log('🔄 Queue needs refill:', currentQueueSize, 'items, target minimum:', minQueueSize, 'history items:', historyItems);
+      
+      // Calculate how many items to add (don't overfill)
+      const targetSize = Math.min(minQueueSize * 2, this.config.slideshow_window || 1000);
+      const customQueueSize = Math.max(targetSize - currentQueueSize, 10);
+      
+      this.populateQueueFromFolders(this.discoveredFolders, customQueueSize);
+      this._log('✅ Refill complete - queue grew from', currentQueueSize, 'to', this.queue.length, 'items');
+    } else {
+      this._log('✅ Queue has sufficient items:', currentQueueSize, '(minimum needed:', minQueueSize, ')');
+    }
   }
 }
 
@@ -9486,13 +9801,11 @@ class MediaCardEditor extends LitElement {
               <div class="config-row">
                 <label>Media Index Entity</label>
                 <div>
-                  <input
-                    type="text"
-                    .value=${this._config.media_index?.entity_id || ''}
-                    placeholder="sensor.media_index_total_files"
-                    @input=${this._mediaIndexEntityChanged}
-                  />
-                  <div class="help-text">Entity ID of your media_index sensor (e.g., sensor.media_index_total_files)</div>
+                  <select @change=${this._mediaIndexEntityChanged} .value=${this._config.media_index?.entity_id || ''}>
+                    <option value="">Select Media Index Entity...</option>
+                    ${this._renderMediaIndexEntityOptions()}
+                  </select>
+                  <div class="help-text">Select your media_index sensor entity</div>
                 </div>
               </div>
               
@@ -9709,6 +10022,48 @@ class MediaCardEditor extends LitElement {
               </select>
               <div class="help-text">Action when card is double-tapped</div>
               ${this._renderActionConfig('double_tap_action')}
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">🖼️ Kiosk Mode</div>
+          
+          <div class="config-row">
+            <label>Kiosk Control Entity</label>
+            <div>
+              <select @change=${this._kioskModeEntityChanged} .value=${this._config.kiosk_mode_entity || ''}>
+                <option value="">Select Input Boolean...</option>
+                ${this._renderInputBooleanEntityOptions()}
+              </select>
+              <div class="help-text">
+                Entity to toggle when exiting kiosk mode (requires kiosk-mode integration)<br>
+                <strong>Setup:</strong> Create input_boolean.kiosk_mode and configure kiosk-mode integration to watch it
+              </div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Kiosk Exit Action</label>
+            <div>
+              <select @change=${this._kioskModeExitActionChanged} .value=${this._config.kiosk_mode_exit_action || 'tap'}>
+                <option value="tap">Single Tap</option>
+                <option value="hold">Hold (0.5s)</option>
+                <option value="double_tap">Double Tap</option>
+              </select>
+              <div class="help-text">How to trigger kiosk mode exit (only works if no other action is configured for same gesture)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Show Exit Hint</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.kiosk_mode_show_indicator !== false}
+                @change=${this._kioskModeShowIndicatorChanged}
+              />
+              <div class="help-text">Show subtle exit hint in corner (when kiosk entity is configured)</div>
             </div>
           </div>
         </div>
@@ -10918,6 +11273,54 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     this._fireConfigChanged();
   }
 
+  _renderInputBooleanEntityOptions() {
+    if (!this.hass || !this.hass.states) {
+      return html``;
+    }
+
+    // Filter entities that start with 'input_boolean.'
+    const inputBooleanEntities = Object.keys(this.hass.states)
+      .filter(entityId => entityId.startsWith('input_boolean.'))
+      .sort();
+
+    return inputBooleanEntities.map(entityId => {
+      const state = this.hass.states[entityId];
+      const friendlyName = state.attributes.friendly_name || entityId;
+      
+      return html`
+        <option value="${entityId}">${friendlyName}</option>
+      `;
+    });
+  }
+
+  // Kiosk mode configuration event handlers
+  _kioskModeEntityChanged(ev) {
+    const entity = ev.target.value;
+    if (entity === '') {
+      const { kiosk_mode_entity, ...configWithoutKioskEntity } = this._config;
+      this._config = configWithoutKioskEntity;
+    } else {
+      this._config = { ...this._config, kiosk_mode_entity: entity };
+    }
+    this._fireConfigChanged();
+  }
+
+  _kioskModeExitActionChanged(ev) {
+    this._config = {
+      ...this._config,
+      kiosk_mode_exit_action: ev.target.value
+    };
+    this._fireConfigChanged();
+  }
+
+  _kioskModeShowIndicatorChanged(ev) {
+    this._config = {
+      ...this._config,
+      kiosk_mode_show_indicator: ev.target.checked
+    };
+    this._fireConfigChanged();
+  }
+
   // Metadata configuration event handlers
   _metadataShowFolderChanged(ev) {
     this._config = {
@@ -10995,6 +11398,26 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     };
     this._fireConfigChanged();
+  }
+
+  _renderMediaIndexEntityOptions() {
+    if (!this.hass || !this.hass.states) {
+      return html``;
+    }
+
+    // Filter entities that start with 'sensor.media_index'
+    const mediaIndexEntities = Object.keys(this.hass.states)
+      .filter(entityId => entityId.startsWith('sensor.media_index'))
+      .sort();
+
+    return mediaIndexEntities.map(entityId => {
+      const state = this.hass.states[entityId];
+      const friendlyName = state.attributes.friendly_name || entityId;
+      
+      return html`
+        <option value="${entityId}">${friendlyName}</option>
+      `;
+    });
   }
 
   _mediaIndexEntityChanged(ev) {

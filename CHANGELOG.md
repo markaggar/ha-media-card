@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2025-11-03
+
+### Added - User Experience Enhancements
+
+#### 🖥️ Kiosk Mode Integration
+
+- **Seamless Kiosk Support**: Full integration with HACS Kiosk Mode component for professional fullscreen displays
+- **Smart Exit Hints**: Visual indicator appears only when kiosk mode boolean is active, with elegant bottom-center positioning
+- **Configurable Exit Gestures**: Support for tap, double_tap, hold, and swipe_down actions to exit kiosk mode
+- **State-Aware Visibility**: Exit hint automatically shows/hides based on input_boolean entity state
+- **Template Integration**: Uses Home Assistant template syntax for kiosk mode activation: `hide_header: '{{ is_state("input_boolean.kiosk_mode", "on") }}'`
+- **Multiple Display Support**: Different boolean entities for living room, bedroom, security monitor setups
+- **Automation Ready**: Time-based and motion-triggered kiosk mode activation examples
+
+#### 🎯 Entity Picker Dropdowns
+
+- **Smart Media Index Selection**: Dropdown selector automatically discovers and filters `sensor.media_index_*` entities
+- **Input Boolean Picker**: Filtered dropdown for `input_boolean.*` entities used in kiosk mode configuration
+- **Error Prevention**: Eliminates typos and configuration errors from manual entity entry
+- **Real-Time Validation**: Instantly validates entity availability and state
+- **Enhanced User Experience**: Point-and-click configuration instead of remembering entity names
+
+#### 🖼️ Viewport Centering Improvements
+
+- **Fixed Landscape Centering**: Resolved landscape image positioning issues with improved CSS flexbox layout
+- **Proper Aspect Ratio**: Landscape images now center correctly in viewport-fit mode without cropping or distortion  
+- **Responsive Design**: Maintains proper centering across different screen sizes and orientations
+- **Performance Optimized**: Eliminates problematic absolute positioning for smoother rendering
+
+### Enhanced - Configuration Experience
+
+- **Visual Entity Selection**: GUI dropdowns replace error-prone text input for entity configuration
+- **Comprehensive Documentation**: Complete kiosk mode setup guide with step-by-step instructions
+- **Configuration Examples**: Photo slideshow and security monitor kiosk templates ready to use
+- **Pro Tips Section**: Advanced automation and multi-display configuration patterns
+
+### Technical Improvements
+
+- **Flexbox Layout**: Modern CSS layout replaces legacy positioning for better browser compatibility
+- **Template Validation**: Proper Home Assistant template syntax in documentation prevents configuration errors
+- **State Management**: Improved boolean entity state tracking for reliable kiosk hint visibility
+
 ## [4.0.0] - 2025-11-01
 
 ### Added - Major Features
