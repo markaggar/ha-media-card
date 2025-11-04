@@ -9100,13 +9100,15 @@ class SubfolderQueue {
 
     this._log('📊 Available unshown files:', totalAvailableFiles, 'of', totalFiles, 'total files, shown:', this.shownItems.size);
 
-    // If no files are available (all have been shown), reset history to start over
+    // If no files are available (all have been shown), reset exclusions to start over
+    // BUT preserve navigation history so users can still navigate backwards
     if (totalAvailableFiles === 0 && this.shownItems.size > 0) {
-      this._log('🔄 All files exhausted, resetting history to start over');
+      this._log('🔄 All files exhausted, resetting exclusions but preserving navigation history');
       this.shownItems.clear();
-      this.history = [];
-      this.historyIndex = -1;
-      this._log('✅ History reset - can now show', totalFiles, 'files again');
+      // CRITICAL: Don't clear history - users should still be able to navigate backwards
+      // this.history = []; // ❌ This breaks backward navigation
+      // this.historyIndex = -1; // ❌ This breaks current position tracking
+      this._log('✅ Exclusions reset - can now show', totalFiles, 'files again. History preserved:', this.history.length, 'items');
     }
 
     // Re-populate queue from ALL discovered folders (this will add to existing queue)
