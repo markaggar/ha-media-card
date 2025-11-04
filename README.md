@@ -7,7 +7,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
-## 🚀 What's New in v4.0 - Media Index Integration
+## 🚀 What's New in v4.x - Media Index Integration
 
 ### ⚡ **Lightning-Fast Performance** 
 *(Requires Media Index)*
@@ -71,7 +71,7 @@ MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute o
 ### 👆 **Custom Actions**
 Configure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
 
-### 🖥️ **Kiosk Mode Integration**
+### 🖥️ **Kiosk Mode Integration (v4.1)**
 Seamless integration with HACS Kiosk Mode for fullscreen displays. Smart exit hints appear only when kiosk mode is active, with configurable exit gestures (tap, double-tap, hold, swipe).
 
 ## 📥 Installation
