@@ -697,7 +697,181 @@ media_path: media-source://media_source/camera/snapshot.jpg
 - Kids' latest artwork
 - Pet monitoring cameras
 
-## 🔧 Advanced Configuration
+## �️ Kiosk Mode Integration
+
+The Media Card includes seamless integration with the popular [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) HACS integration for full-screen dashboard experiences. When kiosk mode is enabled, the media card provides visual hints and exit controls for a professional display setup.
+
+### 🎯 **Key Features**
+
+- **Smart Exit Hints**: Visual indicator appears when kiosk mode is active
+- **Configurable Exit Gestures**: Support for tap, double-tap, hold, and swipe actions
+- **State-Aware Display**: Exit hint only shows when your kiosk mode boolean is enabled
+- **Elegant Positioning**: Non-intrusive bottom-center placement with fade effects
+
+### 🛠️ **Setup Requirements**
+
+#### 1. Install Kiosk Mode
+Install the [Kiosk Mode integration](https://github.com/NemesisRE/kiosk-mode) via HACS:
+
+```
+HACS → Frontend → Search "Kiosk Mode" → Install
+```
+
+#### 2. Create Kiosk Mode Boolean
+Add an input boolean to control kiosk mode state:
+
+```yaml
+# configuration.yaml
+input_boolean:
+  kiosk_mode:
+    name: "Kiosk Mode"
+    icon: mdi:fullscreen
+```
+
+#### 3. Configure Kiosk Mode
+Add kiosk mode configuration to your dashboard view:
+
+```yaml
+# In your dashboard view configuration
+kiosk_mode:
+  hide_header: '{{ is_state("input_boolean.kiosk_mode", "on") }}'
+  hide_sidebar: '{{ is_state("input_boolean.kiosk_mode", "on") }}'
+```
+
+### ⚙️ **Media Card Configuration**
+
+Add kiosk mode settings to your media card:
+
+```yaml
+type: custom:media-card
+title: "Fullscreen Photo Display"
+media_type: image
+media_path: media-source://media_source/local/photos/
+folder_mode: random
+auto_refresh_seconds: 30
+
+# Kiosk Mode Integration
+kiosk_mode:
+  enabled: true
+  kiosk_entity: input_boolean.kiosk_mode
+  exit_action: double_tap
+  show_exit_hint: true
+```
+
+### 📋 **Configuration Options**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `kiosk_mode.enabled` | boolean | `false` | Enable kiosk mode integration |
+| `kiosk_mode.kiosk_entity` | string | **Required** | Input boolean entity controlling kiosk state |
+| `kiosk_mode.exit_action` | string | `double_tap` | Exit gesture: `tap`, `double_tap`, `hold`, `swipe_down` |
+| `kiosk_mode.show_exit_hint` | boolean | `true` | Show exit instruction overlay |
+
+### 🎨 **Complete Example Configurations**
+
+#### Photo Slideshow Kiosk
+
+```yaml
+type: custom:media-card
+title: "Family Photo Kiosk"
+media_type: image
+media_path: media-source://media_source/local/photos/family/
+folder_mode: random
+auto_refresh_seconds: 60
+aspect_mode: viewport-fit
+show_metadata: true
+metadata_position: bottom-right
+
+# Kiosk Integration
+kiosk_mode:
+  enabled: true
+  kiosk_entity: input_boolean.kiosk_mode
+  exit_action: double_tap
+  show_exit_hint: true
+
+# Enhanced Navigation
+enable_navigation_zones: true
+show_navigation_indicators: false  # Hide for clean kiosk look
+```
+
+#### Security Monitor Kiosk
+
+```yaml
+type: custom:media-card
+title: "Security Feed"
+media_type: image
+media_path: media-source://media_source/local/security/
+folder_mode: latest
+auto_refresh_seconds: 10
+aspect_mode: viewport-fill
+
+# Kiosk Integration
+kiosk_mode:
+  enabled: true
+  kiosk_entity: input_boolean.security_kiosk
+  exit_action: hold
+  show_exit_hint: true
+
+# Metadata for Context
+show_metadata: true
+metadata_position: top-left
+show_folder: false
+show_filename: true
+show_date: true
+```
+
+### 🎮 **Exit Actions**
+
+Configure how users can exit kiosk mode:
+
+| Action | Description | Best For |
+|--------|-------------|----------|
+| `tap` | Single tap anywhere | Touch screens, quick access |
+| `double_tap` | Double tap gesture | Prevents accidental exits |
+| `hold` | Tap and hold (1 second) | Secure environments |
+| `swipe_down` | Swipe down from top | Mobile/tablet interfaces |
+
+### 💡 **Pro Tips**
+
+#### Automation Integration
+Automatically enable kiosk mode based on time or presence:
+
+```yaml
+automation:
+  - alias: "Enable Evening Kiosk Mode"
+    trigger:
+      platform: time
+      at: "18:00:00"
+    action:
+      service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.kiosk_mode
+
+  - alias: "Disable Kiosk Mode on Motion"
+    trigger:
+      platform: state
+      entity_id: binary_sensor.living_room_motion
+      to: "on"
+    action:
+      service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.kiosk_mode
+```
+
+#### Multiple Display Support
+Use different boolean entities for multiple kiosk displays:
+
+```yaml
+input_boolean:
+  living_room_kiosk:
+    name: "Living Room Kiosk"
+  bedroom_kiosk:
+    name: "Bedroom Kiosk"
+  security_kiosk:
+    name: "Security Monitor Kiosk"
+```
+
+## �🔧 Advanced Configuration
 
 ### Auto-Refresh for Security Cameras
 ```yaml
