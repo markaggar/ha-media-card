@@ -71,6 +71,9 @@ MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute o
 ### 👆 **Custom Actions**
 Configure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
 
+### 🖥️ **Kiosk Mode Integration**
+Seamless integration with HACS Kiosk Mode for fullscreen displays. Smart exit hints appear only when kiosk mode is active, with configurable exit gestures (tap, double-tap, hold, swipe).
+
 ## 📥 Installation
 
 ### Install via HACS
@@ -187,6 +190,14 @@ media_path: media-source://media_source/local/cameras/front_door.jpg
 | `debug_mode` | boolean | `false` | Enable general card debug logging to browser console |
 | `debug_queue_mode` | boolean | `false` | Enable SubfolderQueue debug UI overlay |
 | `suppress_subfolder_logging` | boolean | `false` | Suppress SubfolderQueue console log messages (keeps other debug_mode logs) |
+
+### Kiosk Mode Configuration
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `kiosk_mode.enabled` | boolean | `false` | Enable kiosk mode integration |
+| `kiosk_mode.kiosk_entity` | string | **Required** | Input boolean entity controlling kiosk state |
+| `kiosk_mode.exit_action` | string | `double_tap` | Exit gesture: `tap`, `double_tap`, `hold`, `swipe_down` |
+| `kiosk_mode.show_exit_hint` | boolean | `true` | Show exit instruction overlay |
 
 ### Interactive Actions
 | Option | Type | Default | Description |
