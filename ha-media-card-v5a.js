@@ -286,6 +286,14 @@ class MediaProvider {
   }
 
   /**
+   * V5: Check if media_index integration is active
+   * Active if enabled flag is true OR entity_id is provided (implicit enablement)
+   */
+  static isMediaIndexActive(config) {
+    return !!(config?.media_index?.enabled || config?.media_index?.entity_id);
+  }
+
+  /**
    * Serialize provider state for reconnection
    * Override in subclass to save provider-specific state
    */
@@ -305,13 +313,416 @@ class MediaProvider {
 }
 
 /**
- * MediaCardV5a - Main card component (minimal placeholder)
+ * MediaIndexHelper - Shared utility for media_index integration
+ * V5: Provides unified metadata fetching for all providers
+ */
+class MediaIndexHelper {
+  /**
+   * Fetch EXIF metadata from media_index backend for a single file
+   * This is a NEW v5 feature - V4 only gets metadata via get_random_items
+   */
+  static async fetchFileMetadata(hass, config, filePath) {
+    if (!hass || !MediaProvider.isMediaIndexActive(config)) return null;
+    
+    // V4: Strip media-source:// prefix before sending to media_index
+    // Backend expects: /media/Photo/PhotoLibrary/New/file.jpg
+    // Not: media-source://media_source/media/Photo/PhotoLibrary/New/file.jpg
+    let cleanPath = filePath;
+    if (cleanPath.startsWith('media-source://media_source')) {
+      cleanPath = cleanPath.replace('media-source://media_source', '');
+    }
+    
+    try {
+      // Build WebSocket call to get_file_metadata service
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_file_metadata',
+        service_data: {
+          file_path: cleanPath  // Use cleaned path
+        },
+        return_response: true
+      };
+      
+      // If user specified a media_index entity, add target to route to correct instance
+      if (config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: config.media_index.entity_id
+        };
+      }
+      
+      const wsResponse = await hass.callWS(wsCall);
+      
+      // DEBUG: Log the actual response structure
+      console.log('📡 WebSocket response from get_file_metadata:', wsResponse);
+      
+      // WebSocket response can be wrapped in different ways
+      const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
+      console.log('📦 Unwrapped response:', response);
+      
+      // get_file_metadata returns EXIF data nested under response.exif
+      // Unlike get_random_items which flattens fields to top level
+      // Response structure: {id, path, filename, folder, exif: {date_taken, location_city, ...}}
+      if (response) {
+        const exif = response.exif || {};
+        
+        // Flatten EXIF data to match V4's get_random_items format
+        return {
+          // EXIF date/time (from nested exif object)
+          date_taken: exif.date_taken,
+          created_time: response.created_time, // Top level
+          
+          // GPS coordinates (from nested exif object)
+          latitude: exif.latitude,
+          longitude: exif.longitude,
+          
+          // Geocoded location (from nested exif object)
+          location_city: exif.location_city,
+          location_state: exif.location_state,
+          location_country: exif.location_country,
+          location_country_code: exif.location_country_code,
+          location_name: exif.location_name,
+          
+          // Geocoding status - infer from presence of data
+          has_coordinates: !!(exif.latitude && exif.longitude),
+          is_geocoded: !!(exif.location_city || exif.location_state || exif.location_country),
+          
+          // Camera info (from nested exif object)
+          camera_make: exif.camera_make,
+          camera_model: exif.camera_model,
+          
+          // User flags (from nested exif object, convert 0/1 to boolean)
+          is_favorited: exif.is_favorited === 1 || response.is_favorited === 1,
+          marked_for_edit: false, // Not in get_file_metadata response
+          
+          // File info from top level
+          filename: response.filename,
+          folder: response.folder
+        };
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn('MediaIndexHelper: Error fetching file metadata:', error);
+      return null;
+    }
+  }
+  
+  /**
+   * Parse metadata from get_random_items response (V4 pattern)
+   * Transforms backend response into consistent metadata format
+   */
+  static parseRandomItemMetadata(item) {
+    return {
+      // File paths
+      path: item.path,
+      filename: item.filename || item.path?.split('/').pop(),
+      folder: item.folder || item.path?.substring(0, item.path.lastIndexOf('/')),
+      
+      // EXIF date/time
+      date_taken: item.date_taken,
+      created_time: item.created_time,
+      
+      // GPS coordinates
+      latitude: item.latitude,
+      longitude: item.longitude,
+      
+      // Geocoded location
+      location_city: item.location_city,
+      location_state: item.location_state,
+      location_country: item.location_country,
+      location_country_code: item.location_country_code,
+      location_name: item.location_name,
+      
+      // Geocoding status
+      has_coordinates: item.has_coordinates || false,
+      is_geocoded: item.is_geocoded || false,
+      
+      // Camera info
+      camera_make: item.camera_make,
+      camera_model: item.camera_model,
+      
+      // User flags
+      is_favorited: item.is_favorited || false,
+      marked_for_edit: item.marked_for_edit || false
+    };
+  }
+}
+
+/**
+ * SingleMediaProvider - Provider for single image/video
+ * Phase 2: Simplest provider to validate architecture
+ */
+class SingleMediaProvider extends MediaProvider {
+  constructor(config, hass) {
+    super(config, hass);
+    this.mediaPath = config.single_media?.path || config.media_path;
+    this.refreshSeconds = config.single_media?.refresh_seconds || 0;
+    this.currentItem = null;
+  }
+
+  async initialize() {
+    // Extract basic metadata from path
+    let metadata = this._extractMetadataFromPath(this.mediaPath);
+    console.log('📊 Path-based metadata:', metadata);
+    
+    // DEBUG: Log media_index config
+    console.log('🔍 Checking media_index config:', {
+      hasMediaIndex: !!this.config.media_index,
+      enabled: this.config.media_index?.enabled,
+      entityId: this.config.media_index?.entity_id,
+      fullConfig: this.config.media_index,
+      hasHass: !!this.hass
+    });
+    
+    // V5: Fetch rich EXIF metadata from media_index if enabled (using shared helper)
+    // V4 pattern: enabled flag OR presence of entity_id means integration is active
+    if (MediaProvider.isMediaIndexActive(this.config) && this.hass) {
+      console.log('🔍 media_index active - fetching EXIF metadata for:', this.mediaPath);
+      try {
+        const enrichedMetadata = await MediaIndexHelper.fetchFileMetadata(
+          this.hass, 
+          this.config, 
+          this.mediaPath
+        );
+        console.log('📊 EXIF metadata from media_index:', enrichedMetadata);
+        if (enrichedMetadata) {
+          // Merge EXIF metadata with path-based metadata
+          metadata = { ...metadata, ...enrichedMetadata };
+          console.log('📊 Merged metadata:', metadata);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch media_index metadata:', error);
+        // Continue with path-based metadata
+      }
+    } else {
+      console.log('⏭️ media_index not enabled or no hass - using path-based metadata only');
+    }
+    
+    this.currentItem = {
+      media_content_id: this.mediaPath,
+      title: this._extractFilename(this.mediaPath),
+      media_content_type: this._detectMediaType(this.mediaPath),
+      metadata: metadata  // Path-based + optional EXIF metadata
+    };
+    return true;
+  }
+
+  async getNext() {
+    // Single media mode - always return same item
+    // Optional: refresh URL for camera snapshots
+    if (this.refreshSeconds > 0) {
+      await this._refreshMediaUrl();
+    }
+    return this.currentItem;
+  }
+
+  async getPrevious() {
+    // Single media mode - always return same item
+    return this.currentItem;
+  }
+
+  _extractFilename(path) {
+    return path.split('/').pop() || path;
+  }
+
+  _detectMediaType(path) {
+    const type = MediaUtils.detectFileType(path);
+    return type === 'video' ? 'video' : 'image';
+  }
+  
+  // V4: Extract metadata from file path
+  _extractMetadataFromPath(mediaPath) {
+    if (!mediaPath) return {};
+    
+    const metadata = {};
+    
+    // Extract filename and clean it up
+    const pathParts = mediaPath.split('/');
+    let filename = pathParts[pathParts.length - 1];
+    
+    // Decode URL encoding (%20 -> space, etc.)
+    try {
+      filename = decodeURIComponent(filename);
+    } catch (e) {
+      console.warn('Failed to decode filename:', filename, e);
+    }
+    
+    metadata.filename = filename;
+    
+    // Extract folder path (parent directory/directories)
+    if (pathParts.length > 1) {
+      // Find where the actual media path starts (skip /media/ prefix)
+      let folderStart = 0;
+      for (let i = 0; i < pathParts.length - 1; i++) {
+        if (pathParts[i] === 'media' && i + 1 < pathParts.length && pathParts[i + 1] !== '') {
+          folderStart = i + 1;
+          break;
+        }
+      }
+      
+      // Extract folder parts (everything between media prefix and filename)
+      if (folderStart < pathParts.length - 1) {
+        const folderParts = pathParts.slice(folderStart, -1);
+        
+        // Decode URL encoding for each folder part
+        const decodedParts = folderParts.map(part => {
+          try {
+            return decodeURIComponent(part);
+          } catch (e) {
+            console.warn('Failed to decode folder part:', part, e);
+            return part;
+          }
+        });
+        
+        // Store as relative path (e.g., "Photo/OneDrive/Mark-Pictures/Camera")
+        metadata.folder = decodedParts.join('/');
+      }
+    }
+    
+    // Try to extract date from filename (basic support - full EXIF will come from media_index)
+    const dateFromFilename = this._extractDateFromFilename(filename);
+    if (dateFromFilename) {
+      metadata.date = dateFromFilename;
+    }
+    
+    return metadata;
+  }
+  
+  _extractDateFromFilename(filename) {
+    if (!filename) return null;
+    
+    // Common date patterns in filenames
+    const patterns = [
+      // YYYY-MM-DD format
+      /(\d{4})-(\d{2})-(\d{2})/,
+      // YYYYMMDD format
+      /(\d{4})(\d{2})(\d{2})/,
+      // DD-MM-YYYY format
+      /(\d{2})-(\d{2})-(\d{4})/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = filename.match(pattern);
+      if (match) {
+        try {
+          if (match[1].length === 4) {
+            // YYYY-MM-DD or YYYYMMDD
+            return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+          } else {
+            // DD-MM-YYYY
+            return new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+          }
+        } catch (e) {
+          // Invalid date, continue to next pattern
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  async _refreshMediaUrl() {
+    // Force URL refresh by adding timestamp (useful for camera snapshots)
+    const timestamp = Date.now();
+    this.currentItem.media_content_id = this.mediaPath + (this.mediaPath.includes('?') ? '&' : '?') + `t=${timestamp}`;
+  }
+
+  serialize() {
+    return {
+      mediaPath: this.mediaPath,
+      currentItem: this.currentItem
+    };
+  }
+
+  deserialize(data) {
+    this.mediaPath = data.mediaPath;
+    this.currentItem = data.currentItem;
+  }
+}
+
+/**
+ * MediaCardV5a - Main card component
+ * Phase 2: Now uses provider pattern to display media
+ */
+/**
+ * MediaCardV5a - Main card component
+ * Phase 2: Now uses provider pattern to display media
  */
 class MediaCardV5a extends LitElement {
   static properties = {
     hass: { attribute: false },
-    config: { attribute: false }
+    config: { attribute: false },
+    currentMedia: { state: true },
+    mediaUrl: { state: true },
+    isLoading: { state: true }
   };
+
+  // V4: Image Zoom Helpers
+  _handleImageZoomClick(e) {
+    // Only for images and when enabled
+    if (this.currentMedia?.media_content_type !== 'image') return;
+    if (this.config.enable_image_zoom !== true) return;
+
+    // If user configured tap_action, don't intercept
+    if (this.config.tap_action) return;
+
+    // Determine click point as percent within image container
+    const container = e.currentTarget;
+    const img = container.querySelector('img');
+    if (!img) return;
+
+    // Toggle zoom state
+    if (this._isImageZoomed) {
+      this._resetZoom(img);
+      return;
+    }
+
+    const rect = img.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+    // Use configured zoom level with bounds
+    const level = Math.max(1.5, Math.min(5.0, this.config.zoom_level || this._zoomLevel));
+    this._zoomToPoint(img, x, y, level);
+  }
+
+  _handleImageZoomTouchEnd(e) {
+    // Treat touch end as click for simplicity
+    if (e.changedTouches && e.changedTouches.length) {
+      const touch = e.changedTouches[0];
+      // Synthesize a click-like event object
+      const synthetic = {
+        currentTarget: e.currentTarget,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+      };
+      this._handleImageZoomClick(synthetic);
+    }
+  }
+
+  _zoomToPoint(img, xPercent, yPercent, level) {
+    this._isImageZoomed = true;
+    this._zoomOriginX = xPercent;
+    this._zoomOriginY = yPercent;
+    this._zoomLevel = level;
+
+    // Set host attribute for styling/cursor
+    this.setAttribute('data-image-zoomed', '');
+
+    // Apply transform
+    img.style.transformOrigin = `${xPercent}% ${yPercent}%`;
+    img.style.transform = `scale(${level})`;
+  }
+
+  _resetZoom(img) {
+    this._isImageZoomed = false;
+    this.removeAttribute('data-image-zoomed');
+    if (img) {
+      img.style.transformOrigin = '50% 50%';
+      img.style.transform = 'none';
+    }
+  }
 
   static getConfigElement() {
     return document.createElement('media-card-v5a-editor');
@@ -325,15 +736,1260 @@ class MediaCardV5a extends LitElement {
     };
   }
 
+  constructor() {
+    super();
+    this.provider = null;
+    this.history = new NavigationHistory();
+    this.currentMedia = null;
+    this.mediaUrl = '';
+    this.isLoading = false;
+    this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
+    this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
+    this._errorState = null; // V4 error state tracking
+    this._currentMetadata = null; // V4 metadata tracking for action buttons/display
+    this._currentMediaPath = null; // V4 current file path for action buttons
+    this._tapTimeout = null; // V4 tap action double-tap detection
+    this._holdTimeout = null; // V4 hold action detection
+    this._debugMode = true; // V4 debug logging (configurable via config.debug_mode)
+    this._lastLogTime = {}; // V4 log throttling
+    this._log('💎 Constructor called, cardId:', this._cardId);
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._log('💎 connectedCallback - card attached to DOM');
+    
+    // V4: Set data attributes for CSS styling
+    const mediaType = this.currentMedia?.media_content_type || 'image';
+    this.setAttribute('data-media-type', mediaType);
+    
+    // V4: Initialize pause state attribute
+    if (this._isPaused) {
+      this.setAttribute('data-is-paused', '');
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    
+    this._log('🔌 Component disconnected - cleaning up resources');
+    
+    // V4: Stop auto-refresh interval to prevent zombie card
+    if (this._refreshInterval) {
+      this._log('🛑 Clearing auto-refresh interval:', this._refreshInterval);
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
+    
+    // V4: Clear pause flags from video-induced pauses
+    if (this._pausedByVideo) {
+      this._log('🎬 Clearing video pause flags on disconnect');
+      this._pausedByVideo = false;
+      this._isPaused = false;
+      this.removeAttribute('data-is-paused');
+    }
+    
+    // V4: Clear hold timer
+    if (this._holdTimer) {
+      clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+  }
+  
+  // V4: Debug logging with throttling
+  _log(...args) {
+    if (this._debugMode || window.location.hostname === 'localhost') {
+      // Prefix all logs with card ID and path for debugging
+      const path = this.config?.single_media?.path?.split('/').pop() || 
+                   this.config?.media_path?.split('/').pop() || 'no-path';
+      const prefix = `[${this._cardId}:${path}]`;
+      const message = args.join(' ');
+      
+      // Throttle certain frequent messages to avoid spam
+      const throttlePatterns = [
+        'hass setter called',
+        'Component updated',
+        'Media type from folder contents',
+        'Rendering media with type'
+      ];
+      
+      const shouldThrottle = throttlePatterns.some(pattern => message.includes(pattern));
+      
+      if (shouldThrottle) {
+        const now = Date.now();
+        const lastLog = this._lastLogTime?.[message] || 0;
+        
+        // Only log throttled messages every 10 seconds
+        if (now - lastLog < 10000) {
+          return;
+        }
+        
+        if (!this._lastLogTime) this._lastLogTime = {};
+        this._lastLogTime[message] = now;
+      }
+      
+      console.log(prefix, ...args);
+    }
+  }
+
   setConfig(config) {
     if (!config) {
       throw new Error('Invalid configuration');
     }
+    this._log('📝 setConfig called with:', config);
     this.config = config;
+    
+    // V4: Set debug mode from config
+    this._debugMode = this.config.debug_mode === true;
+    
+    // Set aspect ratio mode data attribute for CSS styling (from V4)
+    const aspectMode = config.aspect_mode || 'default';
+    if (aspectMode !== 'default') {
+      this.setAttribute('data-aspect-mode', aspectMode);
+    } else {
+      this.removeAttribute('data-aspect-mode');
+    }
+  }
+
+  set hass(hass) {
+    const hadHass = !!this._hass;
+    this._hass = hass;
+    
+    this._log('💎 hass setter called. Had hass before:', hadHass, 'Has provider:', !!this.provider);
+    
+    // Initialize provider when hass is first set
+    if (hass && !this.provider) {
+      this._log('💎 Triggering provider initialization');
+      this._initializeProvider();
+    }
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  async _initializeProvider() {
+    if (!this.config || !this.hass) {
+      this._log('Cannot initialize - missing config or hass');
+      return;
+    }
+
+    // Auto-detect media source type if not set
+    let type = this.config.media_source_type;
+    if (!type) {
+      if (this.config.media_path) {
+        type = 'single_media';
+        this._log('Auto-detected single_media mode from media_path');
+      } else {
+        console.error('[MediaCardV5a] No media_source_type or media_path configured');
+        return;
+      }
+    }
+
+    this._log('Initializing provider:', type, 'Config:', this.config);
+    
+    try {
+      switch(type) {
+        case 'single_media':
+          this.provider = new SingleMediaProvider(this.config, this.hass);
+          break;
+        
+        // More providers in future phases
+        default:
+          console.warn('[MediaCardV5a] Unknown media source type:', type, '- defaulting to single_media');
+          this.provider = new SingleMediaProvider(this.config, this.hass);
+      }
+
+      // Initialize provider
+      this.isLoading = true;
+      this._log('Calling provider.initialize()');
+      const success = await this.provider.initialize();
+      this._log('Provider initialized:', success);
+      
+      if (success) {
+        this._log('Loading first media');
+        await this._loadNext();
+      } else {
+        console.error('[MediaCardV5a] Provider initialization failed');
+      }
+    } catch (error) {
+      console.error('[MediaCardV5a] Error initializing provider:', error);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  async _loadNext() {
+    if (!this.provider) {
+      this._log('_loadNext called but no provider');
+      return;
+    }
+
+    try {
+      this._log('Getting next item from provider');
+      const item = await this.provider.getNext();
+      this._log('Got item:', item);
+      
+      if (item) {
+        this.history.add(item);
+        this.currentMedia = item;
+        this._log('Set currentMedia:', this.currentMedia);
+        
+        // V4: Set metadata for action buttons and display
+        this._currentMediaPath = item.media_content_id;
+        this._currentMetadata = item.metadata || null;
+        
+        await this._resolveMediaUrl();
+        this.requestUpdate(); // Force re-render
+      } else {
+        console.warn('[MediaCardV5a] Provider returned null item');
+      }
+    } catch (error) {
+      console.error('[MediaCardV5a] Error loading next media:', error);
+    }
+  }
+
+  async _loadPrevious() {
+    if (!this.provider) {
+      this._log('_loadPrevious called but no provider');
+      return;
+    }
+
+    try {
+      this._log('Getting previous item from history');
+      const item = this.history.previous();
+      this._log('Got history item:', item);
+      
+      if (item) {
+        this.currentMedia = item;
+        this._log('Set currentMedia from history:', this.currentMedia);
+        
+        // V4: Set metadata for action buttons and display
+        this._currentMediaPath = item.media_content_id;
+        this._currentMetadata = item.metadata || null;
+        
+        await this._resolveMediaUrl();
+        this.requestUpdate(); // Force re-render
+      } else {
+        console.warn('[MediaCardV5a] No previous item in history');
+      }
+    } catch (error) {
+      console.error('[MediaCardV5a] Error loading previous media:', error);
+    }
+  }
+  
+  // V5: Refresh metadata from media_index (for action button updates)
+  async _refreshMetadata() {
+    if (!MediaProvider.isMediaIndexActive(this.config) || !this._currentMediaPath || !this.hass) {
+      return;
+    }
+    
+    try {
+      // Use shared helper to fetch metadata
+      const freshMetadata = await MediaIndexHelper.fetchFileMetadata(
+        this.hass,
+        this.config,
+        this._currentMediaPath
+      );
+      
+      if (freshMetadata) {
+        // Merge updated metadata with existing path-based metadata
+        this._currentMetadata = {
+          ...this._currentMetadata,
+          ...freshMetadata
+        };
+        
+        // Update currentMedia.metadata as well
+        if (this.currentMedia) {
+          this.currentMedia.metadata = this._currentMetadata;
+        }
+        
+        this.requestUpdate();
+        this._log('📊 Refreshed metadata from media_index');
+      }
+    } catch (error) {
+      this._log('⚠️ Failed to refresh metadata:', error);
+    }
+  }
+
+  async _resolveMediaUrl() {
+    if (!this.currentMedia || !this.hass) {
+      this._log('Cannot resolve URL - missing currentMedia or hass');
+      return;
+    }
+
+    const mediaId = this.currentMedia.media_content_id;
+    this._log('Resolving media URL for:', mediaId);
+    
+    // If already a full URL, use it
+    if (mediaId.startsWith('http')) {
+      this._log('Using direct HTTP URL');
+      this.mediaUrl = mediaId;
+      this.requestUpdate();
+      return;
+    }
+
+    // If media-source:// format, resolve through HA API
+    if (mediaId.startsWith('media-source://')) {
+      try {
+        this._log('Resolving media-source:// URL via HA API');
+        const resolved = await this.hass.callWS({
+          type: "media_source/resolve_media",
+          media_content_id: mediaId,
+          expires: (60 * 60 * 3) // 3 hours
+        });
+        this._log('Resolved to:', resolved.url);
+        this.mediaUrl = resolved.url;
+        this.requestUpdate();
+      } catch (error) {
+        console.error('[MediaCardV5a] Failed to resolve media URL:', error);
+        this.mediaUrl = '';
+        this.requestUpdate();
+      }
+      return;
+    }
+
+    // If /media/ path, convert to media-source://
+    if (mediaId.startsWith('/media/')) {
+      const mediaSourceId = 'media-source://media_source' + mediaId;
+      this._log('Converting /media/ to media-source://', mediaSourceId);
+      try {
+        const resolved = await this.hass.callWS({
+          type: "media_source/resolve_media",
+          media_content_id: mediaSourceId,
+          expires: (60 * 60 * 3)
+        });
+        this._log('Resolved to:', resolved.url);
+        this.mediaUrl = resolved.url;
+        this.requestUpdate();
+      } catch (error) {
+        console.error('[MediaCardV5a] Failed to resolve media URL:', error);
+        this.mediaUrl = '';
+        this.requestUpdate();
+      }
+      return;
+    }
+
+    // Fallback: use as-is
+    this._log('Using media ID as-is (fallback)');
+    this.mediaUrl = mediaId;
+    this.requestUpdate();
+  }
+  
+  _onMediaError(e) {
+    // V4 comprehensive error handling
+    const target = e.target;
+    const error = target?.error;
+    
+    let errorMessage = 'Media file not found';
+    let is404 = false;
+    
+    // Handle case where target is null (element destroyed/replaced)
+    if (!target) {
+      errorMessage = 'Media element unavailable';
+      console.warn('[MediaCardV5a] Media error event has null target - element may have been destroyed');
+    } else if (error) {
+      switch (error.code) {
+        case error.MEDIA_ERR_ABORTED:
+          errorMessage = 'Media loading was aborted';
+          break;
+        case error.MEDIA_ERR_NETWORK:
+          errorMessage = 'Network error loading media';
+          break;
+        case error.MEDIA_ERR_DECODE:
+          errorMessage = 'Media format not supported';
+          break;
+        case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          // This is typically a 404 (file not found)
+          errorMessage = 'Media file not found';
+          is404 = true;
+          break;
+      }
+    }
+    
+    // Only log errors that aren't 404s - 404s are expected when database is out of sync
+    if (!is404) {
+      console.error('[MediaCardV5a] Media failed to load:', this.mediaUrl, e);
+    } else {
+      this._log('📭 Media file not found (404) - likely deleted/moved:', this.mediaUrl);
+    }
+    
+    // Add specific handling for Synology DSM authentication errors
+    const isSynologyUrl = this.mediaUrl && this.mediaUrl.includes('/synology_dsm/') && this.mediaUrl.includes('authSig=');
+    if (isSynologyUrl) {
+      errorMessage = 'Synology DSM authentication expired - try refreshing';
+      console.warn('[MediaCardV5a] Synology DSM URL authentication may have expired:', this.mediaUrl);
+    }
+    
+    // Check if we've already tried to retry this URL
+    const currentUrl = this.mediaUrl || 'unknown';
+    const retryCount = this._retryAttempts.get(currentUrl) || 0;
+    const maxAutoRetries = 1; // Only auto-retry once per URL
+    
+    if (retryCount < maxAutoRetries) {
+      // Clean up old retry attempts to prevent memory leaks (keep last 50)
+      if (this._retryAttempts.size > 50) {
+        const oldestKey = this._retryAttempts.keys().next().value;
+        this._retryAttempts.delete(oldestKey);
+      }
+      
+      // Mark this URL as attempted
+      this._retryAttempts.set(currentUrl, retryCount + 1);
+      
+      console.log(`[MediaCardV5a] 🔄 Auto-retrying failed URL (attempt ${retryCount + 1}/${maxAutoRetries}):`, currentUrl.substring(0, 50) + '...');
+      
+      // For single media mode, attempt URL refresh
+      if (this.config.media_source_type === 'single_media') {
+        this._attemptUrlRefresh(isSynologyUrl)
+          .then(refreshed => {
+            if (!refreshed) {
+              // If refresh failed, show error state
+              this._showMediaError(errorMessage, isSynologyUrl);
+            }
+          })
+          .catch(err => {
+            console.error('[MediaCardV5a] URL refresh attempt failed:', err);
+            this._showMediaError(errorMessage, isSynologyUrl);
+          });
+      } else {
+        // For folder/queue modes, will implement later
+        this._showMediaError(errorMessage, isSynologyUrl);
+      }
+    } else {
+      // Already tried to retry this URL, show error immediately
+      console.log(`[MediaCardV5a] ❌ Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
+      this._showMediaError(errorMessage, isSynologyUrl);
+    }
+  }
+  
+  async _attemptUrlRefresh(forceRefresh = false) {
+    this._log('🔄 Attempting URL refresh due to media load failure');
+    
+    try {
+      // For single media mode, re-resolve the media URL
+      if (this.config.media_source_type === 'single_media' && this.currentMedia) {
+        await this._resolveMediaUrl(this.currentMedia.media_content_id);
+        // Clear retry attempts for the new URL
+        if (this._retryAttempts.has(this.mediaUrl)) {
+          this._retryAttempts.delete(this.mediaUrl);
+        }
+        this._errorState = null; // Clear error state
+        this.requestUpdate();
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('[MediaCardV5a] Failed to refresh URL:', error);
+      return false;
+    }
+  }
+  
+  _showMediaError(errorMessage, isSynologyUrl = false) {
+    console.error('[MediaCardV5a] Showing media error:', errorMessage);
+    this._errorState = {
+      message: errorMessage,
+      isSynologyUrl: isSynologyUrl
+    };
+    this.requestUpdate();
+  }
+  
+  _handleRetryClick(forceRefresh) {
+    this._log('Retry button clicked, force refresh:', forceRefresh);
+    this._errorState = null;
+    this._retryAttempts.clear();
+    
+    if (this.currentMedia) {
+      this._resolveMediaUrl(this.currentMedia.media_content_id, forceRefresh);
+    }
+  }
+
+  // V4: Video event handlers
+  _onVideoLoadStart() {
+    this._log('Video started loading:', this.mediaUrl);
+    // Reset video wait timer for new video
+    this._videoWaitStartTime = null;
+  }
+
+  _onVideoCanPlay() {
+    this._log('Video can start playing:', this.mediaUrl);
+  }
+
+  _onVideoPlay() {
+    this._log('Video started playing:', this.mediaUrl);
+    // Reset video wait timer when video starts playing
+    this._videoWaitStartTime = null;
+    
+    // If slideshow was paused due to video pause, resume it when video plays
+    if (this._isPaused && this._pausedByVideo) {
+      this._log('🎬 Video resumed - resuming slideshow');
+      this._setPauseState(false);
+      this._pausedByVideo = false;
+    }
+  }
+
+  _onVideoPause() {
+    this._log('Video paused by user');
+    
+    // CRITICAL: Ignore pause events when card is disconnected
+    // Browser fires pause AFTER disconnectedCallback when navigating away
+    if (!this.isConnected) {
+      this._log('⏸️ Ignoring video pause - card is disconnected');
+      return;
+    }
+    
+    // Only pause slideshow if video was manually paused (not ended)
+    const videoElement = this.renderRoot?.querySelector('video');
+    if (videoElement && !videoElement.ended && !this._isPaused) {
+      this._log('🎬 Video manually paused - pausing slideshow');
+      this._pausedByVideo = true;
+      this._setPauseState(true);
+    }
+  }
+
+  _onVideoEnded() {
+    this._log('Video ended:', this.mediaUrl);
+    // Reset video wait timer when video ends
+    this._videoWaitStartTime = null;
+    
+    // V5: For single media with auto-refresh, reload after video ends
+    // For folder mode (future), trigger next media
+    // Will implement folder mode advancement in Phase 3+
+  }
+
+  _onVideoLoadedMetadata() {
+    const video = this.shadowRoot?.querySelector('video');
+    if (video && this.config.video_muted) {
+      // Ensure video is actually muted and the mute icon is visible
+      video.muted = true;
+      // Force the video controls to update by toggling muted state
+      setTimeout(() => {
+        video.muted = false;
+        video.muted = true;
+      }, 50);
+      this._log('Video muted state applied:', video.muted);
+    }
+  }
+
+  _onMediaLoaded() {
+    // V4: Only log once when media initially loads
+    if (!this._mediaLoadedLogged) {
+      this._log('Media loaded successfully:', this.mediaUrl);
+      this._mediaLoadedLogged = true;
+    }
+    
+    // V5: Clear error state and retry attempts on successful load
+    this._errorState = null;
+    if (this._retryAttempts.has(this.mediaUrl)) {
+      this._retryAttempts.delete(this.mediaUrl);
+    }
+  }
+  
+  // V4: Metadata display methods
+  _renderMetadataOverlay() {
+    // Only show if metadata is configured and available
+    if (!this.config.metadata || !this._currentMetadata) {
+      return html``;
+    }
+
+    const metadataText = this._formatMetadataDisplay(this._currentMetadata);
+    if (!metadataText) {
+      return html``;
+    }
+
+    const position = this.config.metadata.position || 'bottom-left';
+    const positionClass = `metadata-${position}`;
+
+    return html`
+      <div class="metadata-overlay ${positionClass}">
+        ${metadataText}
+      </div>
+    `;
+  }
+  
+  // V4: Format metadata for display
+  _formatMetadataDisplay(metadata) {
+    if (!metadata || !this.config.metadata) return '';
+    
+    const parts = [];
+    
+    if (this.config.metadata.show_folder && metadata.folder) {
+      const folderDisplay = this._formatFolderForDisplay(
+        metadata.folder,
+        this.config.metadata.show_root_folder
+      );
+      parts.push(`📁 ${folderDisplay}`);
+    }
+    
+    if (this.config.metadata.show_filename && metadata.filename) {
+      parts.push(`📄 ${metadata.filename}`);
+    }
+    
+    // Show date with fallback priority: date_taken (EXIF) -> created_time (file metadata) -> date (filesystem)
+    if (this.config.metadata.show_date) {
+      let date = null;
+      let dateSource = null;
+      
+      // Priority 1: EXIF date_taken if available (from media_index)
+      if (metadata.date_taken) {
+        dateSource = 'date_taken';
+        
+        // Backend returns date_taken as Unix timestamp (number)
+        if (typeof metadata.date_taken === 'number') {
+          date = new Date(metadata.date_taken * 1000); // Convert Unix timestamp to milliseconds
+        } 
+        // Or as string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
+        else if (typeof metadata.date_taken === 'string') {
+          // Replace colons in date part with dashes for proper parsing
+          const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+          date = new Date(dateStr);
+        }
+      }
+      
+      // Priority 2: File created_time if no EXIF date (from media_index file metadata)
+      if (!date && metadata.created_time) {
+        dateSource = 'created_time';
+        
+        // created_time is ISO string like "2019-09-24T18:51:12"
+        if (typeof metadata.created_time === 'string') {
+          date = new Date(metadata.created_time);
+        }
+        // Or Unix timestamp
+        else if (typeof metadata.created_time === 'number') {
+          date = new Date(metadata.created_time * 1000);
+        }
+      }
+      
+      // Priority 3: Filesystem date as last fallback
+      if (!date && metadata.date) {
+        dateSource = 'filesystem';
+        date = metadata.date;
+      }
+      
+      if (date && !isNaN(date.getTime())) {
+        // Use Home Assistant's locale for date formatting
+        const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
+        parts.push(`📅 ${date.toLocaleDateString(locale)}`);
+      }
+    }
+    
+    // Show geocoded location if available (from media_index)
+    if (this.config.metadata.show_location) {
+      if (metadata.location_city || metadata.location_country) {
+        // Get server's country from Home Assistant config (ISO code like "US")
+        const serverCountryCode = this.hass?.config?.country || null;
+        
+        // Map common country codes to full names for comparison
+        // Also includes common variations (e.g., "United States of America")
+        const countryMap = {
+          'US': ['United States', 'United States of America', 'USA'],
+          'CA': ['Canada'],
+          'GB': ['United Kingdom', 'Great Britain', 'UK'],
+          'AU': ['Australia'],
+          'NZ': ['New Zealand'],
+          'DE': ['Germany', 'Deutschland'],
+          'FR': ['France'],
+          'IT': ['Italy', 'Italia'],
+          'ES': ['Spain', 'España'],
+          'JP': ['Japan'],
+          'CN': ['China'],
+          'IN': ['India'],
+          'BR': ['Brazil', 'Brasil'],
+          'MX': ['Mexico', 'México'],
+          'NL': ['Netherlands', 'The Netherlands', 'Holland'],
+          'SE': ['Sweden', 'Sverige'],
+          'NO': ['Norway', 'Norge'],
+          'DK': ['Denmark', 'Danmark'],
+          'FI': ['Finland', 'Suomi'],
+          'PL': ['Poland', 'Polska'],
+          'CZ': ['Czech Republic', 'Czechia'],
+          'AT': ['Austria', 'Österreich'],
+          'CH': ['Switzerland', 'Schweiz', 'Suisse'],
+          'BE': ['Belgium', 'België', 'Belgique'],
+          'IE': ['Ireland', 'Éire'],
+          'PT': ['Portugal'],
+          'GR': ['Greece', 'Hellas'],
+          'RU': ['Russia', 'Russian Federation'],
+          'ZA': ['South Africa'],
+          'AR': ['Argentina'],
+          'CL': ['Chile'],
+          'CO': ['Colombia'],
+          'KR': ['South Korea', 'Korea'],
+          'TH': ['Thailand'],
+          'SG': ['Singapore'],
+          'MY': ['Malaysia'],
+          'ID': ['Indonesia'],
+          'PH': ['Philippines'],
+          'VN': ['Vietnam', 'Viet Nam'],
+          'IL': ['Israel'],
+          'SA': ['Saudi Arabia'],
+          'AE': ['United Arab Emirates', 'UAE'],
+          'EG': ['Egypt'],
+          'TR': ['Turkey', 'Türkiye']
+        };
+        
+        const serverCountryNames = serverCountryCode ? countryMap[serverCountryCode] : null;
+        
+        // Build location text
+        let locationText = '';
+        
+        // Add location name (specific place) if available
+        if (metadata.location_name && metadata.location_name.trim()) {
+          locationText = metadata.location_name;
+        }
+        
+        // Add city if available (skip if empty string)
+        if (metadata.location_city && metadata.location_city.trim()) {
+          if (locationText && locationText !== metadata.location_city) {
+            locationText += `, ${metadata.location_city}`;
+          } else if (!locationText) {
+            locationText = metadata.location_city;
+          }
+          
+          // Add state if available and different from city
+          if (metadata.location_state && metadata.location_state !== metadata.location_city) {
+            locationText += `, ${metadata.location_state}`;
+          }
+        } else if (metadata.location_state && metadata.location_state.trim()) {
+          // No city, but we have state - add it
+          locationText += locationText ? `, ${metadata.location_state}` : metadata.location_state;
+        }
+        
+        // Only show country if we have a server country AND it doesn't match
+        // Compare ISO code and all country name variations
+        if (metadata.location_country) {
+          const countryMatches = serverCountryCode && (
+            metadata.location_country === serverCountryCode ||
+            (serverCountryNames && serverCountryNames.includes(metadata.location_country))
+          );
+          
+          if (!countryMatches) {
+            locationText += locationText ? `, ${metadata.location_country}` : metadata.location_country;
+          }
+        }
+        
+        if (locationText) {
+          parts.push(`📍 ${locationText}`);
+        }
+      } else if (metadata.has_coordinates && !metadata.is_geocoded) {
+        // Item has GPS coordinates but hasn't been geocoded yet
+        parts.push(`📍 Loading location...`);
+      }
+    }
+    
+    return parts.join(' • ');
+  }
+  
+  // V4: Format folder path for display
+  _formatFolderForDisplay(fullFolderPath, showRoot) {
+    if (!fullFolderPath) return '';
+    
+    // Extract the scan path prefix from config.media_path or config.single_media.path
+    // e.g., "media-source://media_source/media/Photo/OneDrive" -> "/media/Photo/OneDrive"
+    let scanPrefix = '';
+    const mediaPath = this.config?.single_media?.path || this.config?.media_path;
+    if (mediaPath) {
+      const match = mediaPath.match(/media-source:\/\/media_source(\/.+)/);
+      if (match) {
+        scanPrefix = match[1];
+      }
+    }
+    
+    // Remove the scan prefix from the folder path
+    // e.g., "/media/Photo/OneDrive/Mark-Pictures/Camera" -> "Mark-Pictures/Camera"
+    let relativePath = fullFolderPath;
+    if (scanPrefix && fullFolderPath.startsWith(scanPrefix)) {
+      relativePath = fullFolderPath.substring(scanPrefix.length);
+    }
+    
+    // Clean up path (remove leading/trailing slashes)
+    relativePath = relativePath.replace(/^\/+/, '').replace(/\/+$/, '');
+    
+    // Split into parts
+    const parts = relativePath.split('/').filter(p => p.length > 0);
+    
+    if (parts.length === 0) return '';
+    if (parts.length === 1) return parts[0]; // Only one folder level
+    
+    if (showRoot) {
+      // Format: "first...last"
+      const first = parts[0];
+      const last = parts[parts.length - 1];
+      return `${first}...${last}`;
+    } else {
+      // Just show last folder
+      return parts[parts.length - 1];
+    }
+  }
+  
+  // V4: Video info overlay
+  _renderVideoInfo() {
+    // Check if we should hide video controls display
+    if (this.config.hide_video_controls_display) {
+      return '';
+    }
+    
+    const options = [];
+    if (this.config.video_autoplay) options.push('Autoplay');
+    if (this.config.video_loop) options.push('Loop');
+    if (this.config.video_muted) options.push('Muted');
+    
+    if (options.length > 0) {
+      return html`
+        <div class="video-controls">
+          Video options: ${options.join(', ')}
+        </div>
+      `;
+    }
+    return '';
+  }
+  
+  // V4: Action Buttons (Favorite/Delete/Edit)
+  _renderActionButtons() {
+    // Only show action buttons when media_index is enabled and we have a current file
+    if (!MediaProvider.isMediaIndexActive(this.config) || !this._currentMediaPath) {
+      return html``;
+    }
+
+    // Check individual button enable flags (default: true)
+    const config = this.config.action_buttons || {};
+    const enableFavorite = config.enable_favorite !== false;
+    const enableDelete = config.enable_delete !== false;
+    const enableEdit = config.enable_edit !== false;
+    
+    // Don't render anything if all are disabled
+    if (!enableFavorite && !enableDelete && !enableEdit) {
+      return html``;
+    }
+
+    const isFavorite = this._currentMetadata?.is_favorited || false;
+    const position = config.position || 'top-right';
+
+    return html`
+      <div class="action-buttons action-buttons-${position}">
+        ${enableFavorite ? html`
+          <button
+            class="action-btn favorite-btn ${isFavorite ? 'favorited' : ''}"
+            @click=${this._handleFavoriteClick}
+            title="${isFavorite ? 'Unfavorite' : 'Favorite'}">
+            <ha-icon icon="${isFavorite ? 'mdi:heart' : 'mdi:heart-outline'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableEdit ? html`
+          <button
+            class="action-btn edit-btn"
+            @click=${this._handleEditClick}
+            title="Mark for Editing">
+            <ha-icon icon="mdi:pencil-outline"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableDelete ? html`
+          <button
+            class="action-btn delete-btn"
+            @click=${this._handleDeleteClick}
+            title="Delete">
+            <ha-icon icon="mdi:delete-outline"></ha-icon>
+          </button>
+        ` : ''}
+      </div>
+    `;
   }
 
   getCardSize() {
     return 3;
+  }
+  
+  // V4: Action Button Handlers
+  async _handleFavoriteClick(e) {
+    e.stopPropagation();
+    
+    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+    
+    const newState = !(this._currentMetadata?.is_favorited || false);
+    
+    try {
+      // Call media_index service
+      const serviceData = {
+        file_path: this._currentMediaPath,
+        is_favorited: newState
+      };
+      
+      // If entity_id specified, target that instance
+      if (this.config.media_index.entity_id) {
+        serviceData.entity_id = this.config.media_index.entity_id;
+      }
+      
+      await this.hass.callService('media_index', 'mark_favorite', serviceData, true);
+      
+      // V5: Refresh metadata from backend to get updated state
+      await this._refreshMetadata();
+      
+    } catch (error) {
+      console.error('Failed to mark favorite:', error);
+      alert('Failed to mark favorite: ' + error.message);
+    }
+  }
+  
+  async _handleDeleteClick(e) {
+    e.stopPropagation();
+    
+    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+    
+    this._showDeleteConfirmation();
+  }
+  
+  _showDeleteConfirmation() {
+    if (!this._currentMediaPath) return;
+    
+    // Create confirmation dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'delete-confirmation-overlay';
+    dialog.innerHTML = `
+      <div class="delete-confirmation-content">
+        <h3>Delete Media?</h3>
+        <div class="delete-thumbnail">
+          <img src="${this._resolveMediaUrl(this._currentMediaPath)}" alt="Preview">
+        </div>
+        <p><strong>File:</strong> ${this._currentMetadata?.filename || this._currentMediaPath}</p>
+        <p>This action cannot be undone.</p>
+        <div class="delete-actions">
+          <button class="cancel-btn">Cancel</button>
+          <button class="confirm-btn">Delete</button>
+        </div>
+      </div>
+    `;
+    
+    // Add to card
+    const cardElement = this.shadowRoot.querySelector('.card');
+    cardElement.appendChild(dialog);
+    
+    // Handle cancel
+    const cancelBtn = dialog.querySelector('.cancel-btn');
+    cancelBtn.addEventListener('click', () => {
+      dialog.remove();
+    });
+    
+    // Handle confirm
+    const confirmBtn = dialog.querySelector('.confirm-btn');
+    confirmBtn.addEventListener('click', async () => {
+      dialog.remove();
+      await this._performDelete();
+    });
+  }
+  
+  async _performDelete() {
+    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+    
+    try {
+      // Call media_index delete service
+      const serviceData = {
+        file_path: this._currentMediaPath
+      };
+      
+      // If entity_id specified, target that instance
+      if (this.config.media_index.entity_id) {
+        serviceData.entity_id = this.config.media_index.entity_id;
+      }
+      
+      await this.hass.callService('media_index', 'delete_media', serviceData, true);
+      
+      // For single media mode, just clear the display
+      this._currentMedia = null;
+      this._currentMetadata = null;
+      this._currentMediaPath = null;
+      this.requestUpdate();
+      
+    } catch (error) {
+      console.error('Failed to delete media:', error);
+      alert('Failed to delete media: ' + error.message);
+    }
+  }
+  
+  async _handleEditClick(e) {
+    e.stopPropagation();
+    
+    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+    
+    this._showEditConfirmation();
+  }
+  
+  _showEditConfirmation() {
+    if (!this._currentMediaPath) return;
+    
+    // Create confirmation dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'delete-confirmation-overlay'; // Reuse delete dialog styles
+    dialog.innerHTML = `
+      <div class="delete-confirmation-content">
+        <h3>Mark for Editing?</h3>
+        <div class="delete-thumbnail">
+          <img src="${this._resolveMediaUrl(this._currentMediaPath)}" alt="Preview">
+        </div>
+        <p><strong>File:</strong> ${this._currentMetadata?.filename || this._currentMediaPath}</p>
+        <p>This will mark the file for editing in the media index.</p>
+        <div class="delete-actions">
+          <button class="cancel-btn">Cancel</button>
+          <button class="confirm-btn">Mark for Editing</button>
+        </div>
+      </div>
+    `;
+    
+    // Add to card
+    const cardElement = this.shadowRoot.querySelector('.card');
+    cardElement.appendChild(dialog);
+    
+    // Handle cancel
+    const cancelBtn = dialog.querySelector('.cancel-btn');
+    cancelBtn.addEventListener('click', () => {
+      dialog.remove();
+    });
+    
+    // Handle confirm
+    const confirmBtn = dialog.querySelector('.confirm-btn');
+    confirmBtn.addEventListener('click', async () => {
+      dialog.remove();
+      await this._performEdit();
+    });
+  }
+  
+  async _performEdit() {
+    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+    
+    try {
+      // Call media_index mark_for_edit service
+      const serviceData = {
+        file_path: this._currentMediaPath,
+        mark_for_edit: true
+      };
+      
+      // If entity_id specified, target that instance
+      if (this.config.media_index.entity_id) {
+        serviceData.entity_id = this.config.media_index.entity_id;
+      }
+      
+      await this.hass.callService('media_index', 'mark_for_edit', serviceData, true);
+      
+      // V5: Refresh metadata from backend to get updated state
+      await this._refreshMetadata();
+      
+    } catch (error) {
+      console.error('Failed to mark for edit:', error);
+      alert('Failed to mark for edit: ' + error.message);
+    }
+  }
+  
+  // V4: Tap Action Handlers
+  _hasAnyAction() {
+    return this.config.tap_action || this.config.double_tap_action || this.config.hold_action;
+  }
+  
+  _handleTap(e) {
+    // Check if in kiosk mode (URL contains kiosk parameter)
+    const isKioskMode = window.location.search.includes('kiosk');
+    
+    // In kiosk mode, single tap exits kiosk
+    if (isKioskMode && e.detail === 1) {
+      // Remove kiosk parameter from URL
+      const url = new URL(window.location);
+      url.searchParams.delete('kiosk');
+      window.history.pushState({}, '', url);
+      window.location.reload();
+      return;
+    }
+    
+    if (!this.config.tap_action) return;
+    
+    // Prevent default to avoid navigation zone clicks
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Wait 250ms to see if this is a double-tap
+    if (this._tapTimeout) {
+      clearTimeout(this._tapTimeout);
+    }
+    
+    this._tapTimeout = setTimeout(() => {
+      this._performAction(this.config.tap_action);
+      this._tapTimeout = null;
+    }, 250);
+  }
+  
+  _handleDoubleTap(e) {
+    // Check if in kiosk mode (URL contains kiosk parameter)
+    const isKioskMode = window.location.search.includes('kiosk');
+    
+    // In kiosk mode, don't process double-tap as action
+    if (isKioskMode) return;
+    
+    if (!this.config.double_tap_action) return;
+    
+    // Prevent default and stop single tap
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (this._tapTimeout) {
+      clearTimeout(this._tapTimeout);
+      this._tapTimeout = null;
+    }
+    
+    this._performAction(this.config.double_tap_action);
+  }
+  
+  _handlePointerDown(e) {
+    // Check if in kiosk mode (URL contains kiosk parameter)
+    const isKioskMode = window.location.search.includes('kiosk');
+    
+    // In kiosk mode, don't process hold action
+    if (isKioskMode) return;
+    
+    if (!this.config.hold_action) return;
+    
+    this._holdTimeout = setTimeout(() => {
+      this._performAction(this.config.hold_action);
+      this._holdTimeout = null;
+    }, 500);
+  }
+  
+  _handlePointerUp(e) {
+    if (this._holdTimeout) {
+      clearTimeout(this._holdTimeout);
+      this._holdTimeout = null;
+    }
+  }
+  
+  _handlePointerCancel(e) {
+    if (this._holdTimeout) {
+      clearTimeout(this._holdTimeout);
+      this._holdTimeout = null;
+    }
+  }
+  
+  _performAction(action) {
+    if (!action) return;
+    
+    switch (action.action) {
+      case 'more-info':
+        this._showMoreInfo(action);
+        break;
+      case 'toggle':
+        this._performToggle(action);
+        break;
+      case 'call-service':
+      case 'perform-action':
+        this._performServiceCall(action);
+        break;
+      case 'navigate':
+        this._performNavigation(action);
+        break;
+      case 'url':
+        this._performUrlOpen(action);
+        break;
+      case 'assist':
+        this._performAssist(action);
+        break;
+      case 'none':
+        break;
+      default:
+        console.warn('Unknown action:', action.action);
+    }
+  }
+  
+  _showMoreInfo(action) {
+    const entityId = action.entity || action.target?.entity_id;
+    if (!entityId) {
+      console.warn('No entity specified for more-info action');
+      return;
+    }
+    
+    const event = new Event('hass-more-info', {
+      bubbles: true,
+      composed: true,
+    });
+    event.detail = { entityId };
+    this.dispatchEvent(event);
+  }
+  
+  async _performToggle(action) {
+    const entityId = action.entity || action.target?.entity_id;
+    if (!entityId) {
+      console.warn('No entity specified for toggle action');
+      return;
+    }
+    
+    try {
+      await this.hass.callService('homeassistant', 'toggle', {
+        entity_id: entityId
+      });
+    } catch (error) {
+      console.error('Failed to toggle entity:', error);
+    }
+  }
+  
+  async _performServiceCall(action) {
+    if (!action.service && !action.perform_action) {
+      console.warn('No service specified for call-service action');
+      return;
+    }
+    
+    // Handle confirmation if specified
+    if (action.confirmation) {
+      const confirmText = typeof action.confirmation === 'string' 
+        ? action.confirmation 
+        : 'Are you sure?';
+      if (!confirm(confirmText)) {
+        return;
+      }
+    }
+    
+    // Parse service
+    const service = action.service || action.perform_action;
+    const [domain, serviceAction] = service.split('.');
+    if (!domain || !serviceAction) {
+      console.warn('Invalid service format:', service);
+      return;
+    }
+    
+    // Prepare service data
+    const serviceData = action.service_data || action.data || {};
+    
+    // Add target if specified
+    if (action.target) {
+      Object.assign(serviceData, action.target);
+    }
+    
+    try {
+      await this.hass.callService(domain, serviceAction, serviceData);
+    } catch (error) {
+      console.error('Failed to call service:', error);
+    }
+  }
+  
+  _performNavigation(action) {
+    if (!action.navigation_path) {
+      console.warn('No navigation_path specified for navigate action');
+      return;
+    }
+    
+    window.history.pushState(null, '', action.navigation_path);
+    const event = new Event('location-changed', {
+      bubbles: true,
+      composed: true,
+    });
+    event.detail = { replace: false };
+    this.dispatchEvent(event);
+  }
+  
+  _performUrlOpen(action) {
+    if (!action.url_path) {
+      console.warn('No url_path specified for url action');
+      return;
+    }
+    
+    window.open(action.url_path, '_blank');
+  }
+  
+  _performAssist(action) {
+    alert('Voice assistant is not supported in custom cards. Please use the Home Assistant mobile app or a voice assistant device.');
   }
 
   static styles = css`
@@ -341,23 +1997,417 @@ class MediaCardV5a extends LitElement {
       display: block;
     }
     .card {
-      padding: 16px;
+      position: relative;
+      overflow: hidden;
       background: var(--card-background-color);
       border-radius: var(--ha-card-border-radius);
     }
+    .media-container {
+      position: relative;
+      width: 100%;
+      background: #000;
+    }
+    
+    /* V4 Smart aspect ratio handling */
+    img, video {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    
+    :host([data-aspect-mode="viewport-fit"]) img {
+      max-height: 100vh;
+      max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    
+    :host([data-aspect-mode="viewport-fit"]) .media-container {
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) img {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      margin: 0;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) img {
+      max-height: 90vh;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: 0 auto;
+      display: block;
+    }
+
+    /* V4: Image Zoom Styles */
+    :host([data-media-type="image"]) .zoomable-container {
+      position: relative;
+      overflow: hidden;
+      cursor: zoom-in;
+    }
+    :host([data-media-type="image"][data-image-zoomed]) .zoomable-container {
+      cursor: zoom-out;
+    }
+    :host([data-media-type="image"]) .zoomable-container img {
+      transition: transform 0.25s ease, transform-origin 0.1s ease;
+      will-change: transform;
+    }
+    
+    video {
+      max-height: 400px;
+      object-fit: contain;
+    }
+
+    :host([data-aspect-mode="viewport-fit"]) video {
+      max-height: 100vh;
+      max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) video {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) video {
+      max-height: 90vh;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+    
+    /* V4 Navigation Zones - invisible overlay controls */
+    .navigation-zones {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    .nav-zone {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      pointer-events: auto;
+      user-select: none;
+    }
+
+    .nav-zone-left {
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 80px;
+      height: 200px;
+      cursor: w-resize;
+      border-radius: 8px;
+    }
+
+    .nav-zone-right {
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 80px;
+      height: 200px;
+      cursor: e-resize;
+      border-radius: 8px;
+    }
+
+    .nav-zone:hover {
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .nav-zone-left:hover::after {
+      content: '◀';
+      color: white;
+      font-size: 1.5em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.9;
+    }
+
+    .nav-zone-right:hover::after {
+      content: '▶';
+      color: white;
+      font-size: 1.5em;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0.9;
+    }
+    
+    /* V4: Metadata overlay */
+    .metadata-overlay {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      line-height: 1.2;
+      pointer-events: none;
+      z-index: 11;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      animation: fadeIn 0.3s ease;
+      max-width: calc(100% - 16px);
+      word-break: break-word;
+    }
+
+    /* Metadata positioning */
+    .metadata-overlay.metadata-bottom-left {
+      bottom: 8px;
+      left: 8px;
+    }
+
+    .metadata-overlay.metadata-bottom-right {
+      bottom: 8px;
+      right: 8px;
+    }
+
+    .metadata-overlay.metadata-top-left {
+      top: 8px;
+      left: 8px;
+    }
+
+    .metadata-overlay.metadata-top-right {
+      top: 8px;
+      right: 8px;
+    }
+
+    /* V4: Action Buttons (Favorite/Delete/Edit) */
+    .action-buttons {
+      position: absolute;
+      display: flex;
+      gap: 8px;
+      z-index: 50;
+      pointer-events: auto;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    /* Show action buttons on hover over the corner area */
+    .media-container:hover .action-buttons {
+      opacity: 1;
+    }
+
+    /* Positioning options */
+    .action-buttons-top-right {
+      top: 8px;
+      right: 8px;
+    }
+
+    .action-buttons-top-left {
+      top: 8px;
+      left: 8px;
+    }
+
+    .action-buttons-bottom-right {
+      bottom: 8px;
+      right: 8px;
+    }
+
+    .action-buttons-bottom-left {
+      bottom: 8px;
+      left: 8px;
+    }
+
+    .action-btn {
+      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.8);
+      border: 1px solid rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.2);
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: var(--primary-text-color);
+      backdrop-filter: blur(10px);
+    }
+
+    .action-btn:hover {
+      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.95);
+      transform: scale(1.15);
+      border-color: rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.4);
+    }
+
+    .action-btn ha-icon {
+      --mdc-icon-size: 24px;
+    }
+
+    .favorite-btn.favorited {
+      color: var(--error-color, #ff5252);
+    }
+
+    .favorite-btn.favorited:hover {
+      color: var(--error-color, #ff5252);
+      background: rgba(255, 82, 82, 0.1);
+    }
+
+    .edit-btn:hover {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.1);
+    }
+
+    .delete-btn:hover {
+      color: var(--error-color, #ff5252);
+      background: rgba(255, 82, 82, 0.1);
+    }
+
+    /* V4: Delete/Edit Confirmation Dialog */
+    .delete-confirmation-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .delete-confirmation-content {
+      background: var(--card-background-color);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      min-width: 300px;
+      max-width: 500px;
+      animation: dialogSlideIn 0.3s ease;
+      padding: 20px 24px;
+    }
+
+    @keyframes dialogSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .delete-confirmation-content h3 {
+      margin: 0 0 16px;
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--primary-text-color);
+    }
+
+    .delete-thumbnail {
+      width: 100%;
+      max-height: 200px;
+      margin: 0 0 16px;
+      border-radius: 4px;
+      overflow: hidden;
+      background: var(--secondary-background-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .delete-thumbnail img {
+      max-width: 100%;
+      max-height: 200px;
+      object-fit: contain;
+    }
+
+    .delete-confirmation-content p {
+      margin: 0 0 12px;
+      color: var(--primary-text-color);
+      line-height: 1.5;
+    }
+
+    .delete-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .delete-actions button {
+      padding: 8px 20px;
+      border-radius: 4px;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .cancel-btn {
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+    }
+
+    .cancel-btn:hover {
+      background: var(--divider-color);
+    }
+
+    .confirm-btn {
+      background: var(--error-color, #ff5252);
+      color: white;
+    }
+
+    .confirm-btn:hover {
+      background: var(--error-color-dark, #d32f2f);
+    }
+    
     .placeholder {
       text-align: center;
       padding: 32px;
       color: var(--secondary-text-color);
     }
+    .loading {
+      text-align: center;
+      padding: 32px;
+      color: var(--secondary-text-color);
+    }
+    .title {
+      padding: 8px 16px;
+      font-weight: 500;
+      color: var(--primary-text-color);
+      border-bottom: 1px solid var(--divider-color);
+    }
   `;
 
   render() {
-    if (!this.config) {
+    if (this.isLoading) {
       return html`
         <ha-card>
           <div class="card">
-            <div class="placeholder">No configuration</div>
+            <div class="loading">Loading media...</div>
+          </div>
+        </ha-card>
+      `;
+    }
+
+    if (!this.currentMedia) {
+      return html`
+        <ha-card>
+          <div class="card">
+            <div class="placeholder">No media configured</div>
           </div>
         </ha-card>
       `;
@@ -366,13 +2416,152 @@ class MediaCardV5a extends LitElement {
     return html`
       <ha-card>
         <div class="card">
-          <div class="placeholder">
-            <h3>Media Card v5a</h3>
-            <p>Card registered successfully!</p>
-            <p>Path: ${this.config.media_path || 'Not set'}</p>
-          </div>
+          ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
+          ${this._renderMedia()}
+          ${this._renderControls()}
         </div>
       </ha-card>
+    `;
+  }
+
+  _renderMedia() {
+    // V4: Handle error state first
+    if (this._errorState) {
+      const isSynologyUrl = this._errorState.isSynologyUrl;
+      return html`
+        <div class="placeholder" style="border-color: var(--error-color, #f44336); background: rgba(244, 67, 54, 0.1);">
+          <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
+          <div style="color: var(--error-color, #f44336); font-weight: 500;">${this._errorState.message}</div>
+          <div style="font-size: 0.85em; margin-top: 8px; opacity: 0.7; word-break: break-all;">
+            ${this.mediaUrl ? this.mediaUrl.substring(0, 100) + (this.mediaUrl.length > 100 ? '...' : '') : 'No URL'}
+          </div>
+          <div style="font-size: 0.8em; margin-top: 12px; opacity: 0.6;">
+            ${isSynologyUrl ? 'Synology DSM authentication may have expired' : 'Attempted URL refresh - check Home Assistant logs for more details'}
+          </div>
+          <div style="margin-top: 16px;">
+            <button 
+              style="margin-right: 8px; padding: 8px 16px; background: var(--primary-color); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
+              @click=${() => this._handleRetryClick(false)}
+            >
+              🔄 ${isSynologyUrl ? 'Retry Authentication' : 'Retry Load'}
+            </button>
+            ${isSynologyUrl ? html`
+              <button 
+                style="padding: 8px 16px; background: var(--accent-color, var(--primary-color)); color: var(--text-primary-color); border: none; border-radius: 4px; cursor: pointer;"
+                @click=${() => this._handleRetryClick(true)}
+              >
+                🔄 Force Refresh
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    if (!this.mediaUrl) {
+      return html`<div class="placeholder">Resolving media URL...</div>`;
+    }
+
+    const isVideo = this.currentMedia.media_content_type === 'video';
+
+    return html`
+      <div 
+        class="media-container"
+        @click=${this._handleTap}
+        @dblclick=${this._handleDoubleTap}
+        @pointerdown=${this._handlePointerDown}
+        @pointerup=${this._handlePointerUp}
+        @pointercancel=${this._handlePointerCancel}
+      >
+        ${isVideo ? html`
+          <video 
+            controls
+            preload="auto"
+            playsinline
+            crossorigin="anonymous"
+            ?loop=${this.config.video_loop || false}
+            ?autoplay=${this.config.video_autoplay || false}
+            ?muted=${this.config.video_muted || false}
+            @loadstart=${this._onVideoLoadStart}
+            @loadeddata=${this._onMediaLoaded}
+            @error=${this._onMediaError}
+            @canplay=${this._onVideoCanPlay}
+            @loadedmetadata=${this._onVideoLoadedMetadata}
+            @play=${this._onVideoPlay}
+            @pause=${this._onVideoPause}
+            @ended=${this._onVideoEnded}
+            style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
+          >
+            <source src="${this.mediaUrl}" type="video/mp4">
+            <source src="${this.mediaUrl}" type="video/webm">
+            <source src="${this.mediaUrl}" type="video/ogg">
+            <p>Your browser does not support the video tag. <a href="${this.mediaUrl}" target="_blank">Download the video</a> instead.</p>
+          </video>
+          ${this._renderVideoInfo()}
+        ` : html`
+          <div class="zoomable-container"
+               @click=${(e) => this._handleImageZoomClick(e)}
+               @touchend=${(e) => this._handleImageZoomTouchEnd(e)}
+          >
+            <img 
+              src="${this.mediaUrl}" 
+              alt="${this.currentMedia.title || 'Media'}"
+              @error=${this._onMediaError}
+              @load=${this._onMediaLoaded}
+              style="width: 100%; height: auto; display: block;"
+            />
+          </div>
+        `}
+        ${this._renderNavigationZones()}
+        ${this._renderMetadataOverlay()}
+        ${this._renderActionButtons()}
+      </div>
+    `;
+  }
+  
+  _renderNavigationZones() {
+    // For single_media mode, don't show navigation zones
+    if (this.config.media_source_type === 'single_media') {
+      return html``;
+    }
+    
+    // V4-style navigation zones (will be used for folder/queue modes)
+    return html`
+      <div class="navigation-zones">
+        <div class="nav-zone nav-zone-left"
+             @click=${this._loadPrevious}
+             title="Previous">
+        </div>
+        <div class="nav-zone nav-zone-right"  
+             @click=${this._loadNext}
+             title="Next">
+        </div>
+      </div>
+    `;
+  }
+
+  _renderControls() {
+    // In single_media mode, no controls needed
+    if (this.config.media_source_type === 'single_media') {
+      return html``;
+    }
+    
+    const canGoBack = this.history.canGoBack();
+    const canGoForward = this.history.canGoForward();
+
+    return html`
+      <div class="controls">
+        <button 
+          @click=${this._loadPrevious}
+          ?disabled=${!canGoBack}
+        >
+          ◀ Previous
+        </button>
+        <span>${this.currentMedia.title}</span>
+        <button @click=${this._loadNext}>
+          Next ▶
+        </button>
+      </div>
     `;
   }
 }
@@ -429,13 +2618,13 @@ class MediaCardV5aEditor extends LitElement {
     // random_mode → used in folder modes
     // folder_mode → preserved for folder modes
 
-    console.log('Migrated v4 config to v5:', { original: config, migrated: result });
+    this._log('Migrated v4 config to v5:', { original: config, migrated: result });
     return result;
   }
 
   // Utility methods
   _log(...args) {
-    console.log(...args);
+    // console.log(...args);
   }
 
   _getItemDisplayName(item) {
@@ -758,6 +2947,17 @@ class MediaCardV5aEditor extends LitElement {
       metadata: {
         ...this._config.metadata,
         show_folder: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _metadataShowRootFolderChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_root_folder: ev.target.checked
       }
     };
     this._fireConfigChanged();
@@ -2337,6 +4537,20 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display the parent folder name</div>
             </div>
           </div>
+          
+          ${this._config.metadata?.show_folder !== false ? html`
+            <div class="config-row">
+              <label>Show Root Folder</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.metadata?.show_root_folder || false}
+                  @change=${this._metadataShowRootFolderChanged}
+                />
+                <div class="help-text">Show "first...last" instead of just "last" folder</div>
+              </div>
+            </div>
+          ` : ''}
           
           <div class="config-row">
             <label>Show File Name</label>
