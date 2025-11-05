@@ -1442,7 +1442,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 style="margin-right: 8px;"
               />
               <div>
-                <strong>Subfolder Queue</strong>
+                <strong>Folder Hierarchy</strong>
                 <div style="font-size: 12px; opacity: 0.8;">Advanced folder navigation with subfolder management</div>
               </div>
             </label>
@@ -1889,10 +1889,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <!-- Subfolder Queue Section: Only for subfolder_queue mode -->
           ${mediaSourceType === 'subfolder_queue' ? html`
             <div class="section">
-              <div class="section-title">🚀 Subfolder Queue Settings</div>
+              <div class="section-title">🌳 Folder Hierarchy Settings</div>
               
               <div class="config-row">
-                <label>Enable Subfolder Queue</label>
+                <label>Enable Folder Hierarchy</label>
                 <div>
                   <input
                     type="checkbox"
