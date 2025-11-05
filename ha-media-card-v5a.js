@@ -277,12 +277,22 @@ class MediaCardV5aEditor extends LitElement {
 
   _handleMediaIndexEntityChange(ev) {
     const entityId = ev.target.value;
+    
+    // Get the media folder from the entity's attributes
+    let mediaFolder = '';
+    if (this.hass && entityId && this.hass.states[entityId]) {
+      const entity = this.hass.states[entityId];
+      mediaFolder = entity.attributes.media_folder || '';
+    }
+    
     this._config = {
       ...this._config,
       media_index: {
         ...this._config.media_index,
         entity_id: entityId
-      }
+      },
+      // Auto-set media_path to the indexed folder
+      media_path: mediaFolder
     };
     this._fireConfigChanged();
   }
@@ -1053,39 +1063,61 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _addFolderOptions(container, dialog, folderPath) {
-    this._log('Adding folder options for:', folderPath);
+    this._log('Adding folder selection option for:', folderPath);
     
-    const optionsHeader = document.createElement('div');
-    optionsHeader.style.cssText = `
-      padding: 8px 16px !important;
-      background: var(--secondary-background-color, #f5f5f5) !important;
-      border-radius: 6px !important;
-      margin-bottom: 8px !important;
+    // Simple "Use This Folder" button
+    const useFolderButton = document.createElement('div');
+    useFolderButton.style.cssText = `
+      padding: 16px !important;
+      border: 2px solid var(--primary-color, #007bff) !important;
+      border-radius: 8px !important;
+      cursor: pointer !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 12px !important;
+      background: var(--primary-color, #007bff) !important;
+      color: white !important;
+      margin-bottom: 16px !important;
+      pointer-events: auto !important;
       font-weight: 500 !important;
-      color: var(--primary-text-color) !important;
-      border-left: 4px solid var(--primary-color, #007bff) !important;
-      font-size: 14px !important;
+      transition: all 0.2s ease !important;
     `;
-    optionsHeader.textContent = 'Folder Display Options';
-    container.appendChild(optionsHeader);
 
-    // Show Latest option
-    const latestOption = this._createFolderOption(
-      '📅',
-      'Show Latest',
-      'Always display the newest file from this folder',
-      () => this._handleFolderModeSelected(folderPath, 'latest', dialog)
-    );
-    container.appendChild(latestOption);
+    useFolderButton.innerHTML = `
+      <span style="font-size: 24px;">📁</span>
+      <div>
+        <div style="font-size: 15px; font-weight: 600;">Use This Folder</div>
+        <div style="font-size: 12px; opacity: 0.9;">Set this as the media source folder</div>
+      </div>
+    `;
 
-    // Show Random option
-    const randomOption = this._createFolderOption(
-      '🎲',
-      'Show Random',
-      'Randomly cycle through files in this folder',
-      () => this._handleFolderModeSelected(folderPath, 'random', dialog)
-    );
-    container.appendChild(randomOption);
+    useFolderButton.onclick = () => {
+      this._log('Use This Folder clicked for:', folderPath);
+      this._config = {
+        ...this._config,
+        media_path: folderPath,
+        is_folder: true
+      };
+      this._fireConfigChanged();
+      
+      if (dialog && dialog.parentNode) {
+        document.body.removeChild(dialog);
+      }
+    };
+
+    useFolderButton.onmouseenter = () => {
+      useFolderButton.style.background = 'var(--primary-color-dark, #0056b3)';
+      useFolderButton.style.transform = 'translateY(-2px)';
+      useFolderButton.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.4)';
+    };
+
+    useFolderButton.onmouseleave = () => {
+      useFolderButton.style.background = 'var(--primary-color, #007bff)';
+      useFolderButton.style.transform = 'translateY(0)';
+      useFolderButton.style.boxShadow = 'none';
+    };
+
+    container.appendChild(useFolderButton);
 
     // Separator
     const separator = document.createElement('div');
@@ -1103,7 +1135,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       color: var(--secondary-text-color, #666) !important;
       font-size: 14px !important;
     `;
-    filesHeader.textContent = 'Individual Files';
+    filesHeader.textContent = 'Or select individual files:';
     container.appendChild(filesHeader);
   }
 
@@ -1174,56 +1206,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     return option;
   }
 
-  _handleFolderModeSelected(folderPath, mode, dialog) {
-    this._log('Folder mode selected:', mode, 'for path:', folderPath);
-    
-    const mediaSourceType = this._config.media_source_type || 'simple_folder';
-    
-    // Validate: folder selection only allowed in folder modes
-    if (mediaSourceType === 'single_media') {
-      alert('⚠️ Folder selection not allowed in Single Media mode. Please select a file instead.');
-      return;
-    }
-    
-    this._config = { 
-      ...this._config, 
-      media_path: folderPath,
-      folder_mode: mode,
-      is_folder: true,
-      // Set random_mode if user selected random
-      random_mode: mode === 'random'
-    };
-    
-    this._fireConfigChanged();
-    
-    if (dialog && dialog.parentNode) {
-      this._log('Closing dialog after folder mode selection');
-      document.body.removeChild(dialog);
-    }
-  }
-
   _handleMediaPicked(mediaContentId) {
     this._log('Media picked:', mediaContentId);
     
     const mediaSourceType = this._config.media_source_type || 'simple_folder';
     
-    // Validate: file selection behavior depends on mode
+    // For single_media: just set the file
     if (mediaSourceType === 'single_media') {
-      // Single media mode: only individual files allowed
       this._config = { 
         ...this._config, 
         media_path: mediaContentId,
-        is_folder: false,
-        folder_mode: undefined,
-        random_mode: undefined
+        is_folder: false
       };
     } else {
-      // Folder modes: allow file selection but warn user
+      // For folder modes: warn user and offer to use parent folder
       const confirmFile = confirm(
         '⚠️ You selected a file, but you\'re in folder mode.\n\n' +
         'Do you want to:\n' +
         'OK = Use the parent folder instead\n' +
-        'Cancel = Keep the file selection (will switch to Single Media mode)'
+        'Cancel = Use this file (will switch to Single Media mode)'
       );
       
       if (confirmFile) {
@@ -1235,8 +1236,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         this._config = {
           ...this._config,
           media_path: folderPath,
-          is_folder: true,
-          folder_mode: 'latest'
+          is_folder: true
         };
       } else {
         // Switch to single_media mode
@@ -1244,9 +1244,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ...this._config,
           media_source_type: 'single_media',
           media_path: mediaContentId,
-          is_folder: false,
-          folder_mode: undefined,
-          random_mode: undefined
+          is_folder: false
         };
       }
     }
@@ -1396,56 +1394,16 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     return html`
       <div class="card-config">
         
-        <!-- Mode Selection Section -->
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-          <h3 style="margin: 0 0 12px 0; font-size: 18px;">📋 Media Source Mode</h3>
-          <p style="margin: 0 0 12px 0; font-size: 13px; opacity: 0.9;">Choose how to display your media</p>
-          
-          <div style="display: flex; flex-direction: column; gap: 8px;">
-            <label style="display: flex; align-items: center; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
-              <input
-                type="radio"
-                name="media_source_type"
-                value="single_media"
-                .checked=${mediaSourceType === 'single_media'}
-                @change=${this._handleModeChange}
-                style="margin-right: 8px;"
-              />
-              <div>
-                <strong>Single Media</strong>
-                <div style="font-size: 12px; opacity: 0.8;">Display one image/video at a time</div>
-              </div>
-            </label>
-            
-            <label style="display: flex; align-items: center; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
-              <input
-                type="radio"
-                name="media_source_type"
-                value="simple_folder"
-                .checked=${mediaSourceType === 'simple_folder'}
-                @change=${this._handleModeChange}
-                style="margin-right: 8px;"
-              />
-              <div>
-                <strong>Simple Folder</strong>
-                <div style="font-size: 12px; opacity: 0.8;">Basic folder scanning with optional random mode</div>
-              </div>
-            </label>
-            
-            <label style="display: flex; align-items: center; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
-              <input
-                type="radio"
-                name="media_source_type"
-                value="subfolder_queue"
-                .checked=${mediaSourceType === 'subfolder_queue'}
-                @change=${this._handleModeChange}
-                style="margin-right: 8px;"
-              />
-              <div>
-                <strong>Folder Hierarchy</strong>
-                <div style="font-size: 12px; opacity: 0.8;">Advanced folder navigation with subfolder management</div>
-              </div>
-            </label>
+        <!-- Mode Selection Dropdown -->
+        <div class="config-row">
+          <label>Media Source Mode</label>
+          <div>
+            <select @change=${this._handleModeChange} .value=${mediaSourceType}>
+              <option value="single_media">Single Media - Display one image/video at a time</option>
+              <option value="simple_folder">Simple Folder - Basic folder scanning with optional random</option>
+              <option value="subfolder_queue">Folder Hierarchy - Advanced folder navigation</option>
+            </select>
+            <div class="help-text">Choose how to display your media</div>
           </div>
         </div>
 
@@ -1539,10 +1497,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        <!-- Auto Refresh: Single Media Mode Only -->
+        <!-- Single Media Mode Options -->
         ${mediaSourceType === 'single_media' ? html`
           <div class="config-row">
-            <label>Auto Advance</label>
+            <label>Refresh Interval</label>
             <div>
               <input
                 type="number"
@@ -1553,7 +1511,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 max="3600"
                 step="1"
               />
-              <div class="help-text">Automatically advance to next media every N seconds (0 = disabled)</div>
+              <div class="help-text">Refresh image/video every N seconds (0 = disabled, useful for cameras)</div>
             </div>
           </div>
         ` : ''}
@@ -1886,8 +1844,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
 
-          <!-- Subfolder Queue Section: Only for subfolder_queue mode -->
-          ${mediaSourceType === 'subfolder_queue' ? html`
+          <!-- Folder Hierarchy Section: Only for subfolder_queue mode WITHOUT Media Index -->
+          ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
             <div class="section">
               <div class="section-title">🌳 Folder Hierarchy Settings</div>
               
