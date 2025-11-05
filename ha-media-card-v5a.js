@@ -327,7 +327,65 @@ class MediaCardV5aEditor extends LitElement {
     
     return Object.keys(this.hass.states)
       .filter(entityId => entityId.startsWith('sensor.media_index_'))
-      .sort();
+      .map(entityId => {
+        const state = this.hass.states[entityId];
+        return {
+          entity_id: entityId,
+          friendly_name: state.attributes.friendly_name || entityId
+        };
+      })
+      .sort((a, b) => a.friendly_name.localeCompare(b.friendly_name));
+  }
+
+  _parseMediaIndexPath(entityId) {
+    // Parse entity_id like "sensor.media_index_media_photo_photolibrary_total_files"
+    // to extract path "media-source://media_source/media/Photo/PhotoLibrary"
+    
+    if (!entityId || !entityId.startsWith('sensor.media_index_')) {
+      return null;
+    }
+    
+    // Try to get the path from the entity's friendly_name attribute
+    // Format: "Media Index (/media/Photo/PhotoLibrary) Total Files"
+    if (this.hass && this.hass.states[entityId]) {
+      const entity = this.hass.states[entityId];
+      const friendlyName = entity.attributes.friendly_name;
+      
+      if (friendlyName) {
+        // Extract path from friendly name using regex: /media/...
+        const match = friendlyName.match(/\((\/.+?)\)/);
+        if (match && match[1]) {
+          const path = match[1]; // e.g., "/media/Photo/PhotoLibrary"
+          const fullPath = `media-source://media_source${path}`;
+          this._log('🔍 Extracted path from friendly_name:', friendlyName, '→', fullPath);
+          return fullPath;
+        }
+      }
+    }
+    
+    // Fallback: parse entity_id (but this has capitalization issues)
+    let pathPart = entityId
+      .replace('sensor.media_index_', '')
+      .replace(/_total_files$/, '')
+      .replace(/_file_count$/, '');
+    
+    this._log('🔍 Parsing Media Index path (fallback):', pathPart);
+    
+    // Split by underscore and capitalize each part
+    const parts = pathPart.split('_').map(part => 
+      part.charAt(0).toUpperCase() + part.slice(1)
+    );
+    
+    this._log('🔍 Path parts (fallback):', parts);
+    
+    // Build path: media-source://media_source/Part1/Part2/Part3
+    if (parts.length > 0) {
+      const fullPath = `media-source://media_source/${parts.join('/')}`;
+      this._log('🔍 Built path (fallback):', fullPath);
+      return fullPath;
+    }
+    
+    return null;
   }
 
   _titleChanged(ev) {
@@ -542,6 +600,17 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsDeleteConfirmationChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        delete_confirmation: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableEditChanged(ev) {
     this._config = {
       ...this._config,
@@ -620,14 +689,36 @@ class MediaCardV5aEditor extends LitElement {
   }
 
   _estimatedLibrarySizeChanged(ev) {
-    const size = ev.target.value;
+    const value = parseInt(ev.target.value) || 0;
     
     this._config = {
       ...this._config,
       subfolder_queue: {
         ...this._config.subfolder_queue,
         enabled: true,
-        estimated_library_size: size
+        estimated_library_size: value > 0 ? value : undefined
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _calculateQueueSize() {
+    const estimatedSize = this._config.subfolder_queue?.estimated_library_size || 0;
+    if (estimatedSize > 0) {
+      return Math.max(100, Math.floor(estimatedSize / 100));
+    }
+    return 100; // Default
+  }
+
+  _queueSizeChanged(ev) {
+    const value = parseInt(ev.target.value) || 0;
+    
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        enabled: true,
+        queue_size: value > 0 ? value : undefined
       }
     };
     this._fireConfigChanged();
@@ -759,10 +850,24 @@ class MediaCardV5aEditor extends LitElement {
     
     // If Media Index is enabled, start from the indexed folder
     if (this._config.use_media_index && this._config.media_index?.entity_id) {
-      const entity = this.hass.states[this._config.media_index.entity_id];
+      const entityId = this._config.media_index.entity_id;
+      const entity = this.hass.states[entityId];
+      
+      this._log('🔍 Media Index entity:', entityId);
+      this._log('🔍 Entity attributes:', entity?.attributes);
+      
       if (entity && entity.attributes.media_folder) {
         startPath = entity.attributes.media_folder;
-        this._log('Starting browser from Media Index folder:', startPath);
+        this._log('Starting browser from Media Index folder (attribute):', startPath);
+      } else {
+        // Fallback: parse entity_id to extract path
+        // e.g., "sensor.media_index_media_photo_photolibrary_total_files" 
+        // -> "media-source://media_source/media/Photo/PhotoLibrary"
+        const parsedPath = this._parseMediaIndexPath(entityId);
+        if (parsedPath) {
+          startPath = parsedPath;
+          this._log('Starting browser from Media Index folder (parsed):', startPath);
+        }
       }
     } else {
       // Otherwise use configured path or try to infer from current path
@@ -1123,14 +1228,24 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           return false;
         };
       } else {
-        // Media file - show icon
+        // Media file - create thumbnail
         const ext = this._getFileExtension(this._getItemDisplayName(item));
         const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext);
-        const icon = isVideo ? '🎬' : '🖼️';
-        const iconSpan = document.createElement('span');
-        iconSpan.textContent = icon;
-        iconSpan.style.fontSize = '24px';
-        thumbnailContainer.appendChild(iconSpan);
+        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
+        
+        if (isImage) {
+          // Create image thumbnail with proper loading
+          this._createImageThumbnail(thumbnailContainer, item);
+        } else if (isVideo) {
+          // Create video thumbnail
+          this._createVideoThumbnail(thumbnailContainer, item);
+        } else {
+          // Unknown file type - show generic icon
+          const iconSpan = document.createElement('span');
+          iconSpan.textContent = '📄';
+          iconSpan.style.fontSize = '24px';
+          thumbnailContainer.appendChild(iconSpan);
+        }
 
         fileItem.onclick = () => {
           this._log('File clicked:', item.media_content_id);
@@ -1290,6 +1405,163 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     option.appendChild(textContainer);
 
     return option;
+  }
+
+  async _createImageThumbnail(container, item) {
+    // Show loading indicator first
+    const loadingIcon = document.createElement('div');
+    loadingIcon.style.cssText = `
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: rgba(0, 0, 0, 0.05) !important;
+      border-radius: 4px !important;
+    `;
+    loadingIcon.innerHTML = `<span style="font-size: 16px; opacity: 0.5;">⏳</span>`;
+    container.appendChild(loadingIcon);
+
+    // Debug counter to limit console spam
+    const shouldLog = this._thumbnailDebugCount === undefined ? (this._thumbnailDebugCount = 0) < 5 : this._thumbnailDebugCount < 5;
+    if (shouldLog) {
+      this._thumbnailDebugCount++;
+      this._log('🔍 Creating thumbnail for item:', item.title || item.media_content_id);
+    }
+
+    try {
+      let thumbnailUrl = null;
+      
+      // Try multiple approaches for getting the thumbnail
+      if (item.thumbnail) {
+        thumbnailUrl = item.thumbnail;
+        if (shouldLog) this._log('✅ Using provided thumbnail:', thumbnailUrl);
+      } else if (item.thumbnail_url) {
+        thumbnailUrl = item.thumbnail_url;
+        if (shouldLog) this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
+      }
+      
+      // Try Home Assistant thumbnail API
+      if (!thumbnailUrl) {
+        try {
+          const thumbnailResponse = await this.hass.callWS({
+            type: "media_source/resolve_media",
+            media_content_id: item.media_content_id,
+            expires: 3600
+          });
+          
+          if (thumbnailResponse && thumbnailResponse.url) {
+            thumbnailUrl = thumbnailResponse.url;
+            if (shouldLog) this._log('✅ Got thumbnail from resolve_media API:', thumbnailUrl);
+          }
+        } catch (error) {
+          if (shouldLog) this._log('❌ Thumbnail resolve_media API failed:', error);
+        }
+      }
+      
+      // Try direct resolution
+      if (!thumbnailUrl) {
+        thumbnailUrl = await this._resolveMediaPath(item.media_content_id);
+        if (thumbnailUrl && shouldLog) {
+          this._log('✅ Got thumbnail from direct resolution:', thumbnailUrl);
+        }
+      }
+      
+      if (thumbnailUrl) {
+        const thumbnail = document.createElement('img');
+        thumbnail.style.cssText = `
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: cover !important;
+          border-radius: 4px !important;
+          opacity: 0 !important;
+          transition: opacity 0.3s ease !important;
+        `;
+        
+        let timeoutId;
+        
+        thumbnail.onload = () => {
+          container.innerHTML = '';
+          thumbnail.style.opacity = '1';
+          container.appendChild(thumbnail);
+          if (timeoutId) clearTimeout(timeoutId);
+          if (shouldLog) this._log('✅ Thumbnail loaded successfully');
+        };
+        
+        thumbnail.onerror = () => {
+          this._showThumbnailFallback(container, '🖼️', 'Image thumbnail failed to load');
+          if (timeoutId) clearTimeout(timeoutId);
+          if (shouldLog) this._log('❌ Thumbnail failed to load');
+        };
+        
+        thumbnail.src = thumbnailUrl;
+        
+        // Timeout fallback (5 seconds)
+        timeoutId = setTimeout(() => {
+          if (thumbnail.style.opacity === '0') {
+            this._showThumbnailFallback(container, '🖼️', 'Image thumbnail timeout');
+            if (shouldLog) this._log('⏰ Thumbnail timeout');
+          }
+        }, 5000);
+        
+      } else {
+        this._showThumbnailFallback(container, '🖼️', 'No thumbnail URL available');
+      }
+      
+    } catch (error) {
+      console.error('Error creating image thumbnail:', error);
+      this._showThumbnailFallback(container, '🖼️', 'Thumbnail error: ' + error.message);
+    }
+  }
+
+  async _createVideoThumbnail(container, item) {
+    const videoIcon = document.createElement('div');
+    videoIcon.style.cssText = `
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: rgba(33, 150, 243, 0.1) !important;
+      border-radius: 4px !important;
+      position: relative !important;
+    `;
+    
+    videoIcon.innerHTML = `
+      <span style="font-size: 24px;">🎬</span>
+      <div style="
+        position: absolute !important;
+        bottom: 2px !important;
+        right: 2px !important;
+        background: rgba(0, 0, 0, 0.7) !important;
+        color: white !important;
+        font-size: 8px !important;
+        padding: 1px 3px !important;
+        border-radius: 2px !important;
+        text-transform: uppercase !important;
+      ">VIDEO</div>
+    `;
+    
+    container.appendChild(videoIcon);
+  }
+
+  _showThumbnailFallback(container, icon, reason) {
+    container.innerHTML = '';
+    const fallbackIcon = document.createElement('div');
+    fallbackIcon.style.cssText = `
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 100% !important;
+      height: 100% !important;
+      background: rgba(0, 0, 0, 0.05) !important;
+      border-radius: 4px !important;
+    `;
+    
+    fallbackIcon.innerHTML = `<span style="font-size: 24px; opacity: 0.7;">${icon}</span>`;
+    fallbackIcon.title = reason;
+    
+    container.appendChild(fallbackIcon);
   }
 
   _handleMediaPicked(mediaContentId) {
@@ -1502,10 +1774,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               @change=${this._handleMediaIndexToggle}
               style="margin-right: 8px;"
             />
-            <strong>🚀 Use Media Index Enhancement</strong>
+            <strong>🚀 Media Index Integration</strong>
           </label>
           <p style="margin: 4px 0 ${useMediaIndex ? '12px' : '0'} 28px; font-size: 13px; color: #666;">
-            Provides rich metadata, faster queries, and caching
+            Provides faster queries, lower resource use, file metadata (location/date/rating) and rate/edit/delete actions capability. Download via HACS or <a href="https://github.com/markaggar/ha-media-index" target="_blank" style="color: var(--primary-color, #007bff);">GitHub</a>
           </p>
           
           ${useMediaIndex ? html`
@@ -1518,7 +1790,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               >
                 <option value="">Select media_index sensor...</option>
                 ${this._getMediaIndexEntities().map(entity => html`
-                  <option value="${entity}">${entity}</option>
+                  <option 
+                    value="${entity.entity_id}"
+                    .selected=${this._config.media_index?.entity_id === entity.entity_id}
+                  >${entity.friendly_name}</option>
                 `)}
               </select>
             </div>
@@ -1528,16 +1803,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         <!-- File System Scanning Enhancement Section -->
         ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #e0e0e0;">
-            <div style="display: flex; align-items: center; margin-bottom: 12px;">
-              <input
-                type="checkbox"
-                .checked=${true}
-                disabled
-                style="margin-right: 8px;"
-              />
-              <strong>🌳 File System Scanning (Auto-Enabled)</strong>
+            <div style="margin-bottom: 12px;">
+              <strong>🌳 File System Scanning</strong>
             </div>
-            <p style="margin: 4px 0 16px 28px; font-size: 13px; color: #666;">
+            <p style="margin: 4px 0 16px 0; font-size: 13px; color: #666;">
               Advanced folder hierarchy scanning for multi-folder random selection
             </p>
             
@@ -1591,18 +1860,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               ${this._config.subfolder_queue?.equal_probability_mode !== false ? html`
                 <div style="margin-bottom: 16px;">
                   <label style="display: block; margin-bottom: 4px; font-weight: 500;">Estimated Library Size:</label>
-                  <select
-                    .value=${this._config.subfolder_queue?.estimated_library_size || 'medium'}
-                    @change=${this._estimatedLibrarySizeChanged}
+                  <input
+                    type="number"
+                    min="100"
+                    step="100"
+                    .value=${this._config.subfolder_queue?.estimated_library_size || ''}
+                    @input=${this._estimatedLibrarySizeChanged}
+                    placeholder="e.g., 10000 or 200000"
                     style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-                  >
-                    <option value="small">Small (< 1,000 files)</option>
-                    <option value="medium">Medium (1,000 - 10,000 files)</option>
-                    <option value="large">Large (10,000 - 50,000 files)</option>
-                    <option value="xlarge">Extra Large (> 50,000 files)</option>
-                  </select>
+                  />
                   <div style="font-size: 12px; color: #666; margin-top: 4px;">
-                    Used to optimize queue size for equal probability sampling
+                    Estimated number of media files in your library (used to optimize queue size)
                   </div>
                 </div>
               ` : ''}
@@ -1610,19 +1878,37 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         ` : ''}
 
-        <div class="config-row">
-          <label>Title</label>
-          <div>
-            <input
-              type="text"
-              .value=${this._config.title || ''}
-              @input=${this._titleChanged}
-              placeholder="Optional card title"
-            />
-            <div class="help-text">Displayed above the media</div>
+        <!-- Random Mode (for folder-based modes) -->
+        ${mediaSourceType !== 'single_media' ? html`
+          <div class="config-row">
+            <label>Random Mode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.random_mode || false}
+                @change=${this._randomModeChanged}
+              />
+              <div class="help-text">Show media files in random order</div>
+            </div>
           </div>
-        </div>
-        
+          
+          <div class="config-row">
+            <label>Queue Size</label>
+            <div>
+              <input
+                type="number"
+                min="10"
+                max="10000"
+                step="10"
+                .value=${this._config.subfolder_queue?.queue_size || this._calculateQueueSize()}
+                @input=${this._queueSizeChanged}
+                placeholder="${this._calculateQueueSize()}"
+              />
+              <div class="help-text">Number of items to pre-load into queue (auto: max(100, library_size/100)). Useful for debugging.</div>
+            </div>
+          </div>
+        ` : ''}
+
         <div class="config-row">
           <label>Media Type</label>
           <div>
@@ -1635,19 +1921,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        <div class="config-row">
-          <label>Image Scaling</label>
-          <div>
-            <select @change=${this._aspectModeChanged} .value=${this._config.aspect_mode || 'default'}>
-              <option value="default">Default (fit to card width)</option>
-              <option value="smart-scale">Smart Scale (limit height, prevent scrolling)</option>
-              <option value="viewport-fit">Viewport Fit (fit entire image in viewport)</option>
-              <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
-            </select>
-            <div class="help-text">How images should be scaled</div>
-          </div>
-        </div>
-        
         <div class="config-row">
           <label>Media Path</label>
           <div>
@@ -1690,18 +1963,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         <!-- Folder Mode Options -->
         ${mediaSourceType !== 'single_media' ? html`
           <div class="config-row">
-            <label>Random Mode</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.random_mode || false}
-                @change=${this._randomModeChanged}
-              />
-              <div class="help-text">Show media files in random order</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
             <label>Auto-Advance Interval</label>
             <div>
               <input
@@ -1717,18 +1978,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
         ` : ''}
-
-        <div class="config-row">
-          <label>Refresh Button</label>
-          <div>
-            <input
-              type="checkbox"
-              .checked=${this._config.show_refresh_button || false}
-              @change=${this._refreshButtonChanged}
-            />
-            <div class="help-text">Show manual refresh button on the card</div>
-          </div>
-        </div>
 
         ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
           <div class="section">
@@ -1802,6 +2051,31 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <div class="section-title">🖼️ Image Options</div>
           
           <div class="config-row">
+            <label>Image Scaling</label>
+            <div>
+              <select @change=${this._aspectModeChanged} .value=${this._config.aspect_mode || 'default'}>
+                <option value="default">Default (fit to card width)</option>
+                <option value="smart-scale">Smart Scale (limit height, prevent scrolling)</option>
+                <option value="viewport-fit">Viewport Fit (fit entire image in viewport)</option>
+                <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
+              </select>
+              <div class="help-text">How images should be scaled</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Refresh Button</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.show_refresh_button || false}
+                @change=${this._refreshButtonChanged}
+              />
+              <div class="help-text">Show manual refresh button on the card</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Enable Image Zoom</label>
             <div>
               <input
@@ -1813,23 +2087,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
           
-          <div class="config-row">
-            <label>Zoom Level</label>
-            <div>
-              <input
-                type="number"
-                min="1.5"
-                max="5.0"
-                step="0.5"
-                .value=${this._config.zoom_level || 2.0}
-                @change=${this._zoomLevelChanged}
-              />
-              <div class="help-text">How much to zoom when clicked (1.5x to 5.0x)</div>
+          ${this._config.enable_image_zoom ? html`
+            <div class="config-row">
+              <label>Zoom Level</label>
+              <div>
+                <input
+                  type="number"
+                  min="1.5"
+                  max="5.0"
+                  step="0.5"
+                  .value=${this._config.zoom_level || 2.0}
+                  @change=${this._zoomLevelChanged}
+                />
+                <div class="help-text">How much to zoom when clicked (1.5x to 5.0x)</div>
+              </div>
             </div>
-          </div>
+          ` : ''}
         </div>
 
-        ${this._config.is_folder ? html`
+        ${mediaSourceType === 'simple_folder' || mediaSourceType === 'subfolder_queue' ? html`
           <div class="section">
             <div class="section-title">🧭 Navigation Options</div>
             
@@ -1885,6 +2161,19 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <div class="section">
           <div class="section-title">📋 Metadata Display</div>
+          
+          <div class="config-row">
+            <label>Title</label>
+            <div>
+              <input
+                type="text"
+                .value=${this._config.title || ''}
+                @input=${this._titleChanged}
+                placeholder="Optional card title"
+              />
+              <div class="help-text">Displayed above the media</div>
+            </div>
+          </div>
           
           <div class="config-row">
             <label>Show Folder Name</label>
@@ -1948,36 +2237,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        ${this._config.is_folder && this._config.folder_mode === 'random' ? html`
-          <div class="section">
-            <div class="section-title">🔌 Media Index Integration</div>
-            
-            <div class="config-row">
-              <label>Enable Media Index</label>
-              <div>
-                <input
-                  type="checkbox"
-                  .checked=${this._config.media_index?.enabled || false}
-                  @change=${this._mediaIndexEnabledChanged}
-                />
-                <div class="help-text">Use media_index integration for EXIF metadata and smart random selection</div>
-              </div>
-            </div>
-            
-            ${this._config.media_index?.enabled ? html`
-              <div class="config-row">
-                <label>Media Index Entity</label>
-                <div>
-                  <select @change=${this._mediaIndexEntityChanged} .value=${this._config.media_index?.entity_id || ''}>
-                    <option value="">Select Media Index Entity...</option>
-                    ${this._renderMediaIndexEntityOptions()}
-                  </select>
-                  <div class="help-text">Select your media_index sensor entity</div>
-                </div>
-              </div>
-            ` : ''}
-          </div>
-
+        ${useMediaIndex ? html`
           <div class="section">
             <div class="section-title">⭐ Action Buttons</div>
             
@@ -2004,6 +2264,20 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show trash icon to delete images (requires media_index)</div>
               </div>
             </div>
+            
+            ${this._config.action_buttons?.enable_delete !== false ? html`
+              <div class="config-row">
+                <label>Delete Confirmation</label>
+                <div>
+                  <input
+                    type="checkbox"
+                    .checked=${this._config.action_buttons?.delete_confirmation !== false}
+                    @change=${this._actionButtonsDeleteConfirmationChanged}
+                  />
+                  <div class="help-text">Require confirmation before deleting media files</div>
+                </div>
+              </div>
+            ` : ''}
             
             <div class="config-row">
               <label>Enable Edit Button</label>
