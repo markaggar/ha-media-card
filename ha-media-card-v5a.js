@@ -124,7 +124,43 @@ class MediaCardV5aEditor extends LitElement {
   }
 
   setConfig(config) {
-    this._config = { ...config };
+    // Migrate v4 config to v5 if needed
+    const migratedConfig = this._migrateV4toV5(config);
+    this._config = { ...migratedConfig };
+  }
+
+  // V4 to V5 Migration
+  _migrateV4toV5(config) {
+    // If already has media_source_type, it's v5 config
+    if (config.media_source_type) {
+      return config;
+    }
+
+    const result = { ...config };
+
+    // Detect mode from v4 configuration
+    if (config.is_folder) {
+      if (config.subfolder_queue?.enabled) {
+        result.media_source_type = 'subfolder_queue';
+      } else {
+        result.media_source_type = 'simple_folder';
+      }
+    } else {
+      result.media_source_type = 'single_media';
+    }
+
+    // Migrate Media Index detection
+    if (config.media_index?.entity_id) {
+      result.use_media_index = true;
+    }
+
+    // Preserve other settings
+    // auto_refresh_seconds → used in single_media mode
+    // random_mode → used in folder modes
+    // folder_mode → preserved for folder modes
+
+    console.log('Migrated v4 config to v5:', { original: config, migrated: result });
+    return result;
   }
 
   // Utility methods
@@ -200,6 +236,65 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  // V5 Mode and Backend handlers
+  _handleModeChange(ev) {
+    const newMode = ev.target.value;
+    this._config = { 
+      ...this._config, 
+      media_source_type: newMode 
+    };
+    
+    // Clear mode-specific settings when switching modes
+    if (newMode === 'single_media') {
+      // Remove folder-specific settings
+      delete this._config.is_folder;
+      delete this._config.folder_mode;
+      delete this._config.random_mode;
+      delete this._config.subfolder_queue_enabled;
+    } else {
+      // Remove single-media specific settings
+      delete this._config.auto_refresh_seconds;
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _handleMediaIndexToggle(ev) {
+    const enabled = ev.target.checked;
+    this._config = { 
+      ...this._config, 
+      use_media_index: enabled 
+    };
+    
+    if (!enabled) {
+      delete this._config.media_index;
+    } else if (!this._config.media_index) {
+      this._config.media_index = { entity_id: '' };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _handleMediaIndexEntityChange(ev) {
+    const entityId = ev.target.value;
+    this._config = {
+      ...this._config,
+      media_index: {
+        ...this._config.media_index,
+        entity_id: entityId
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _getMediaIndexEntities() {
+    if (!this.hass) return [];
+    
+    return Object.keys(this.hass.states)
+      .filter(entityId => entityId.startsWith('sensor.media_index_'))
+      .sort();
+  }
+
   _titleChanged(ev) {
     this._config = { ...this._config, title: ev.target.value };
     this._fireConfigChanged();
@@ -218,6 +313,11 @@ class MediaCardV5aEditor extends LitElement {
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
+    this._fireConfigChanged();
+  }
+
+  _randomModeChanged(ev) {
+    this._config = { ...this._config, random_mode: ev.target.checked };
     this._fireConfigChanged();
   }
 
@@ -1077,11 +1177,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   _handleFolderModeSelected(folderPath, mode, dialog) {
     this._log('Folder mode selected:', mode, 'for path:', folderPath);
     
+    const mediaSourceType = this._config.media_source_type || 'simple_folder';
+    
+    // Validate: folder selection only allowed in folder modes
+    if (mediaSourceType === 'single_media') {
+      alert('⚠️ Folder selection not allowed in Single Media mode. Please select a file instead.');
+      return;
+    }
+    
     this._config = { 
       ...this._config, 
       media_path: folderPath,
       folder_mode: mode,
-      is_folder: true
+      is_folder: true,
+      // Set random_mode if user selected random
+      random_mode: mode === 'random'
     };
     
     this._fireConfigChanged();
@@ -1095,12 +1205,51 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   _handleMediaPicked(mediaContentId) {
     this._log('Media picked:', mediaContentId);
     
-    this._config = { 
-      ...this._config, 
-      media_path: mediaContentId,
-      is_folder: false,
-      folder_mode: undefined
-    };
+    const mediaSourceType = this._config.media_source_type || 'simple_folder';
+    
+    // Validate: file selection behavior depends on mode
+    if (mediaSourceType === 'single_media') {
+      // Single media mode: only individual files allowed
+      this._config = { 
+        ...this._config, 
+        media_path: mediaContentId,
+        is_folder: false,
+        folder_mode: undefined,
+        random_mode: undefined
+      };
+    } else {
+      // Folder modes: allow file selection but warn user
+      const confirmFile = confirm(
+        '⚠️ You selected a file, but you\'re in folder mode.\n\n' +
+        'Do you want to:\n' +
+        'OK = Use the parent folder instead\n' +
+        'Cancel = Keep the file selection (will switch to Single Media mode)'
+      );
+      
+      if (confirmFile) {
+        // Extract parent folder from file path
+        const pathParts = mediaContentId.split('/');
+        pathParts.pop(); // Remove filename
+        const folderPath = pathParts.join('/');
+        
+        this._config = {
+          ...this._config,
+          media_path: folderPath,
+          is_folder: true,
+          folder_mode: 'latest'
+        };
+      } else {
+        // Switch to single_media mode
+        this._config = {
+          ...this._config,
+          media_source_type: 'single_media',
+          media_path: mediaContentId,
+          is_folder: false,
+          folder_mode: undefined,
+          random_mode: undefined
+        };
+      }
+    }
     
     // Auto-detect media type from extension
     const extension = mediaContentId.split('.').pop()?.toLowerCase();
@@ -1111,7 +1260,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     }
     
     this._fireConfigChanged();
-    this._log('Config updated (file selected):', this._config);
+    this._log('Config updated (media selected):', this._config);
   }
 
   static styles = css`
@@ -1241,8 +1390,97 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       return html``;
     }
 
+    const mediaSourceType = this._config.media_source_type || 'simple_folder';
+    const useMediaIndex = this._config.use_media_index || false;
+
     return html`
       <div class="card-config">
+        
+        <!-- Mode Selection Section -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 12px 0; font-size: 18px;">📋 Media Source Mode</h3>
+          <p style="margin: 0 0 12px 0; font-size: 13px; opacity: 0.9;">Choose how to display your media</p>
+          
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="display: flex; align-items: center; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
+              <input
+                type="radio"
+                name="media_source_type"
+                value="single_media"
+                .checked=${mediaSourceType === 'single_media'}
+                @change=${this._handleModeChange}
+                style="margin-right: 8px;"
+              />
+              <div>
+                <strong>Single Media</strong>
+                <div style="font-size: 12px; opacity: 0.8;">Display one image/video at a time</div>
+              </div>
+            </label>
+            
+            <label style="display: flex; align-items: center; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
+              <input
+                type="radio"
+                name="media_source_type"
+                value="simple_folder"
+                .checked=${mediaSourceType === 'simple_folder'}
+                @change=${this._handleModeChange}
+                style="margin-right: 8px;"
+              />
+              <div>
+                <strong>Simple Folder</strong>
+                <div style="font-size: 12px; opacity: 0.8;">Basic folder scanning with optional random mode</div>
+              </div>
+            </label>
+            
+            <label style="display: flex; align-items: center; cursor: pointer; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
+              <input
+                type="radio"
+                name="media_source_type"
+                value="subfolder_queue"
+                .checked=${mediaSourceType === 'subfolder_queue'}
+                @change=${this._handleModeChange}
+                style="margin-right: 8px;"
+              />
+              <div>
+                <strong>Subfolder Queue</strong>
+                <div style="font-size: 12px; opacity: 0.8;">Advanced folder navigation with subfolder management</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Media Index Enhancement Section -->
+        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #e0e0e0;">
+          <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: ${useMediaIndex ? '12px' : '0'};">
+            <input
+              type="checkbox"
+              .checked=${useMediaIndex}
+              @change=${this._handleMediaIndexToggle}
+              style="margin-right: 8px;"
+            />
+            <strong>🚀 Use Media Index Enhancement</strong>
+          </label>
+          <p style="margin: 4px 0 ${useMediaIndex ? '12px' : '0'} 28px; font-size: 13px; color: #666;">
+            Provides rich metadata, faster queries, and caching
+          </p>
+          
+          ${useMediaIndex ? html`
+            <div style="margin-left: 28px;">
+              <label style="display: block; margin-bottom: 4px; font-weight: 500;">Media Index Entity:</label>
+              <select
+                .value=${this._config.media_index?.entity_id || ''}
+                @change=${this._handleMediaIndexEntityChange}
+                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+              >
+                <option value="">Select media_index sensor...</option>
+                ${this._getMediaIndexEntities().map(entity => html`
+                  <option value="${entity}">${entity}</option>
+                `)}
+              </select>
+            </div>
+          ` : ''}
+        </div>
+
         <div class="config-row">
           <label>Title</label>
           <div>
@@ -1301,21 +1539,39 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        <div class="config-row">
-          <label>Auto Refresh</label>
-          <div>
-            <input
-              type="number"
-              .value=${this._config.auto_refresh_seconds || ''}
-              @input=${this._autoRefreshChanged}
-              placeholder="0"
-              min="0"
-              max="3600"
-              step="1"
-            />
-            <div class="help-text">Automatically check for media updates every N seconds (0 = disabled)</div>
+        <!-- Auto Refresh: Single Media Mode Only -->
+        ${mediaSourceType === 'single_media' ? html`
+          <div class="config-row">
+            <label>Auto Advance</label>
+            <div>
+              <input
+                type="number"
+                .value=${this._config.auto_refresh_seconds || ''}
+                @input=${this._autoRefreshChanged}
+                placeholder="0"
+                min="0"
+                max="3600"
+                step="1"
+              />
+              <div class="help-text">Automatically advance to next media every N seconds (0 = disabled)</div>
+            </div>
           </div>
-        </div>
+        ` : ''}
+
+        <!-- Random Mode: Folder Modes Only -->
+        ${mediaSourceType !== 'single_media' ? html`
+          <div class="config-row">
+            <label>Random Mode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.random_mode || false}
+                @change=${this._randomModeChanged}
+              />
+              <div class="help-text">Show media files in random order</div>
+            </div>
+          </div>
+        ` : ''}
 
         <div class="config-row">
           <label>Refresh Button</label>
@@ -1630,38 +1886,41 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
 
-          <div class="section">
-            <div class="section-title">🚀 Subfolder Queue (Random Mode)</div>
-            
-            <div class="config-row">
-              <label>Enable Subfolder Queue</label>
-              <div>
-                <input
-                  type="checkbox"
-                  .checked=${this._config.subfolder_queue?.enabled || false}
-                  @change=${this._subfolderQueueEnabledChanged}
-                />
-                <div class="help-text">Use background queue for faster multi-folder random selection</div>
-              </div>
-            </div>
-            
-            ${this._config.subfolder_queue?.enabled ? html`
+          <!-- Subfolder Queue Section: Only for subfolder_queue mode -->
+          ${mediaSourceType === 'subfolder_queue' ? html`
+            <div class="section">
+              <div class="section-title">🚀 Subfolder Queue Settings</div>
+              
               <div class="config-row">
-                <label>Scan Depth</label>
+                <label>Enable Subfolder Queue</label>
                 <div>
                   <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    .value=${this._config.subfolder_queue?.scan_depth ?? ''}
-                    placeholder="unlimited"
-                    @input=${this._subfolderScanDepthChanged}
+                    type="checkbox"
+                    .checked=${this._config.subfolder_queue?.enabled || false}
+                    @change=${this._subfolderQueueEnabledChanged}
                   />
-                  <div class="help-text">How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)</div>
+                  <div class="help-text">Use background queue for faster multi-folder random selection</div>
                 </div>
               </div>
-            ` : ''}
-          </div>
+              
+              ${this._config.subfolder_queue?.enabled ? html`
+                <div class="config-row">
+                  <label>Scan Depth</label>
+                  <div>
+                    <input
+                      type="number"
+                      min="0"
+                      max="10"
+                      .value=${this._config.subfolder_queue?.scan_depth ?? ''}
+                      placeholder="unlimited"
+                      @input=${this._subfolderScanDepthChanged}
+                    />
+                    <div class="help-text">How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)</div>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          ` : ''}
         ` : ''}
 
         <div class="section">
