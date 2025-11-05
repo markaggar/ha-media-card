@@ -331,6 +331,12 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _autoAdvanceChanged(ev) {
+    const seconds = parseInt(ev.target.value) || 0;
+    this._config = { ...this._config, auto_advance_seconds: seconds };
+    this._fireConfigChanged();
+  }
+
   _refreshButtonChanged(ev) {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
     this._fireConfigChanged();
@@ -681,16 +687,27 @@ class MediaCardV5aEditor extends LitElement {
     
     // Determine the starting path for the browser
     let startPath = '';
-    const configuredPath = this._config.media_path || '';
     
-    if (configuredPath) {
-      // If we have a current path, try to start from its parent folder
-      if (configuredPath.includes('/')) {
-        // Extract the parent folder from the current path
-        const pathParts = configuredPath.split('/');
-        pathParts.pop(); // Remove the filename
-        startPath = pathParts.join('/');
-        this._log('Starting browser from current folder:', startPath);
+    // If Media Index is enabled, start from the indexed folder
+    if (this._config.use_media_index && this._config.media_index?.entity_id) {
+      const entity = this.hass.states[this._config.media_index.entity_id];
+      if (entity && entity.attributes.media_folder) {
+        startPath = entity.attributes.media_folder;
+        this._log('Starting browser from Media Index folder:', startPath);
+      }
+    } else {
+      // Otherwise use configured path or try to infer from current path
+      const configuredPath = this._config.media_path || '';
+      
+      if (configuredPath) {
+        // If we have a current path, try to start from its parent folder
+        if (configuredPath.includes('/')) {
+          // Extract the parent folder from the current path
+          const pathParts = configuredPath.split('/');
+          pathParts.pop(); // Remove the filename
+          startPath = pathParts.join('/');
+          this._log('Starting browser from current folder:', startPath);
+        }
       }
     }
     
@@ -1516,7 +1533,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         ` : ''}
 
-        <!-- Random Mode: Folder Modes Only -->
+        <!-- Folder Mode Options -->
         ${mediaSourceType !== 'single_media' ? html`
           <div class="config-row">
             <label>Random Mode</label>
@@ -1527,6 +1544,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._randomModeChanged}
               />
               <div class="help-text">Show media files in random order</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Auto-Advance Interval</label>
+            <div>
+              <input
+                type="number"
+                .value=${this._config.auto_advance_seconds || ''}
+                @input=${this._autoAdvanceChanged}
+                placeholder="0"
+                min="0"
+                max="3600"
+                step="1"
+              />
+              <div class="help-text">Automatically advance to next media every N seconds (0 = disabled)</div>
             </div>
           </div>
         ` : ''}
@@ -1843,42 +1876,42 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           </div>
+        ` : ''}
 
-          <!-- Folder Hierarchy Section: Only for subfolder_queue mode WITHOUT Media Index -->
-          ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
-            <div class="section">
-              <div class="section-title">🌳 Folder Hierarchy Settings</div>
-              
+        <!-- Folder Hierarchy Section: Only for subfolder_queue mode WITHOUT Media Index -->
+        ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
+          <div class="section">
+            <div class="section-title">🌳 Folder Hierarchy Settings</div>
+            
+            <div class="config-row">
+              <label>Enable Folder Hierarchy</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.subfolder_queue?.enabled || false}
+                  @change=${this._subfolderQueueEnabledChanged}
+                />
+                <div class="help-text">Use background queue for faster multi-folder random selection</div>
+              </div>
+            </div>
+            
+            ${this._config.subfolder_queue?.enabled ? html`
               <div class="config-row">
-                <label>Enable Folder Hierarchy</label>
+                <label>Scan Depth</label>
                 <div>
                   <input
-                    type="checkbox"
-                    .checked=${this._config.subfolder_queue?.enabled || false}
-                    @change=${this._subfolderQueueEnabledChanged}
+                    type="number"
+                    min="0"
+                    max="10"
+                    .value=${this._config.subfolder_queue?.scan_depth ?? ''}
+                    placeholder="unlimited"
+                    @input=${this._subfolderScanDepthChanged}
                   />
-                  <div class="help-text">Use background queue for faster multi-folder random selection</div>
+                  <div class="help-text">How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)</div>
                 </div>
               </div>
-              
-              ${this._config.subfolder_queue?.enabled ? html`
-                <div class="config-row">
-                  <label>Scan Depth</label>
-                  <div>
-                    <input
-                      type="number"
-                      min="0"
-                      max="10"
-                      .value=${this._config.subfolder_queue?.scan_depth ?? ''}
-                      placeholder="unlimited"
-                      @input=${this._subfolderScanDepthChanged}
-                    />
-                    <div class="help-text">How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)</div>
-                  </div>
-                </div>
-              ` : ''}
-            </div>
-          ` : ''}
+            ` : ''}
+          </div>
         ` : ''}
 
         <div class="section">
