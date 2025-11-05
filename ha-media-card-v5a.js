@@ -250,10 +250,19 @@ class MediaCardV5aEditor extends LitElement {
       delete this._config.is_folder;
       delete this._config.folder_mode;
       delete this._config.random_mode;
-      delete this._config.subfolder_queue_enabled;
-    } else {
+      delete this._config.subfolder_queue;
+    } else if (newMode === 'subfolder_queue') {
+      // Auto-enable File System Scanning for Folder Hierarchy mode
+      this._config.subfolder_queue = {
+        ...this._config.subfolder_queue,
+        enabled: true
+      };
       // Remove single-media specific settings
       delete this._config.auto_refresh_seconds;
+    } else {
+      // Simple folder mode
+      delete this._config.auto_refresh_seconds;
+      delete this._config.subfolder_queue;
     }
     
     this._fireConfigChanged();
@@ -268,8 +277,24 @@ class MediaCardV5aEditor extends LitElement {
     
     if (!enabled) {
       delete this._config.media_index;
-    } else if (!this._config.media_index) {
-      this._config.media_index = { entity_id: '' };
+      // Re-enable File System Scanning if in Folder Hierarchy mode
+      if (this._config.media_source_type === 'subfolder_queue') {
+        this._config.subfolder_queue = {
+          ...this._config.subfolder_queue,
+          enabled: true
+        };
+      }
+    } else {
+      if (!this._config.media_index) {
+        this._config.media_index = { entity_id: '' };
+      }
+      // Disable File System Scanning when Media Index enabled
+      if (this._config.subfolder_queue) {
+        this._config.subfolder_queue = {
+          ...this._config.subfolder_queue,
+          enabled: false
+        };
+      }
     }
     
     this._fireConfigChanged();
@@ -558,7 +583,37 @@ class MediaCardV5aEditor extends LitElement {
       ...this._config,
       subfolder_queue: {
         ...this._config.subfolder_queue,
+        enabled: true, // Auto-enable when settings changed
         scan_depth: depth === 0 ? null : depth
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _priorityFoldersChanged(ev) {
+    const value = ev.target.value;
+    const folders = value.split(',').map(f => f.trim()).filter(f => f);
+    
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        enabled: true,
+        priority_folders: folders.length > 0 ? folders : undefined
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _estimatedLibrarySizeChanged(ev) {
+    const size = ev.target.value;
+    
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        enabled: true,
+        estimated_library_size: size
       }
     };
     this._fireConfigChanged();
@@ -1456,6 +1511,73 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ` : ''}
         </div>
 
+        <!-- File System Scanning Enhancement Section -->
+        ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #e0e0e0;">
+            <div style="display: flex; align-items: center; margin-bottom: 12px;">
+              <input
+                type="checkbox"
+                .checked=${true}
+                disabled
+                style="margin-right: 8px;"
+              />
+              <strong>🌳 File System Scanning (Auto-Enabled)</strong>
+            </div>
+            <p style="margin: 4px 0 16px 28px; font-size: 13px; color: #666;">
+              Advanced folder hierarchy scanning for multi-folder random selection
+            </p>
+            
+            <div style="margin-left: 28px;">
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Scan Depth:</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  .value=${this._config.subfolder_queue?.scan_depth ?? ''}
+                  placeholder="unlimited"
+                  @input=${this._subfolderScanDepthChanged}
+                  style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                />
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">
+                  How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)
+                </div>
+              </div>
+              
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Priority Folders:</label>
+                <input
+                  type="text"
+                  .value=${(this._config.subfolder_queue?.priority_folders || []).join(', ')}
+                  @input=${this._priorityFoldersChanged}
+                  placeholder="e.g., favorites, best, 2024"
+                  style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                />
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">
+                  Comma-separated folder names to scan first (optional)
+                </div>
+              </div>
+              
+              <div>
+                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Estimated Library Size:</label>
+                <select
+                  .value=${this._config.subfolder_queue?.estimated_library_size || 'medium'}
+                  @change=${this._estimatedLibrarySizeChanged}
+                  style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                >
+                  <option value="small">Small (< 1,000 files)</option>
+                  <option value="medium">Medium (1,000 - 10,000 files)</option>
+                  <option value="large">Large (10,000 - 50,000 files)</option>
+                  <option value="xlarge">Extra Large (> 50,000 files)</option>
+                </select>
+                <div style="font-size: 12px; color: #666; margin-top: 4px;">
+                  Optimizes queue size and scanning strategy
+                </div>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
         <div class="config-row">
           <label>Title</label>
           <div>
@@ -1875,42 +1997,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Corner position for action buttons</div>
               </div>
             </div>
-          </div>
-        ` : ''}
-
-        <!-- Folder Hierarchy Section: Only for subfolder_queue mode WITHOUT Media Index -->
-        ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
-          <div class="section">
-            <div class="section-title">🌳 Folder Hierarchy Settings</div>
-            
-            <div class="config-row">
-              <label>Enable Folder Hierarchy</label>
-              <div>
-                <input
-                  type="checkbox"
-                  .checked=${this._config.subfolder_queue?.enabled || false}
-                  @change=${this._subfolderQueueEnabledChanged}
-                />
-                <div class="help-text">Use background queue for faster multi-folder random selection</div>
-              </div>
-            </div>
-            
-            ${this._config.subfolder_queue?.enabled ? html`
-              <div class="config-row">
-                <label>Scan Depth</label>
-                <div>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    .value=${this._config.subfolder_queue?.scan_depth ?? ''}
-                    placeholder="unlimited"
-                    @input=${this._subfolderScanDepthChanged}
-                  />
-                  <div class="help-text">How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)</div>
-                </div>
-              </div>
-            ` : ''}
           </div>
         ` : ''}
 
