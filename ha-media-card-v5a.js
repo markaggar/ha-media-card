@@ -537,47 +537,6 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
-  _mediaIndexEnabledChanged(ev) {
-    this._config = {
-      ...this._config,
-      media_index: {
-        ...this._config.media_index,
-        enabled: ev.target.checked
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _mediaIndexEntityChanged(ev) {
-    this._config = {
-      ...this._config,
-      media_index: {
-        ...this._config.media_index,
-        entity_id: ev.target.value
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _renderMediaIndexEntityOptions() {
-    if (!this.hass || !this.hass.states) {
-      return html``;
-    }
-
-    const mediaIndexEntities = Object.keys(this.hass.states)
-      .filter(entityId => entityId.startsWith('sensor.media_index'))
-      .sort();
-
-    return mediaIndexEntities.map(entityId => {
-      const state = this.hass.states[entityId];
-      const friendlyName = state.attributes.friendly_name || entityId;
-      
-      return html`
-        <option value="${entityId}">${friendlyName}</option>
-      `;
-    });
-  }
-
   _actionButtonsEnableFavoriteChanged(ev) {
     this._config = {
       ...this._config,
@@ -628,17 +587,6 @@ class MediaCardV5aEditor extends LitElement {
       action_buttons: {
         ...this._config.action_buttons,
         position: ev.target.value
-      }
-    };
-    this._fireConfigChanged();
-  }
-
-  _subfolderQueueEnabledChanged(ev) {
-    this._config = {
-      ...this._config,
-      subfolder_queue: {
-        ...this._config.subfolder_queue,
-        enabled: ev.target.checked
       }
     };
     this._fireConfigChanged();
@@ -1338,73 +1286,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
     filesHeader.textContent = 'Or select individual files:';
     container.appendChild(filesHeader);
-  }
-
-  _createFolderOption(icon, title, description, clickHandler) {
-    const option = document.createElement('div');
-    option.style.cssText = `
-      padding: 12px 16px !important;
-      border: 2px solid var(--primary-color, #007bff) !important;
-      border-radius: 8px !important;
-      cursor: pointer !important;
-      display: flex !important;
-      align-items: center !important;
-      gap: 12px !important;
-      background: var(--card-background-color, #fff) !important;
-      margin-bottom: 8px !important;
-      pointer-events: auto !important;
-    `;
-
-    option.onmouseenter = () => {
-      option.style.background = 'var(--primary-color, #007bff)';
-      option.style.color = 'white';
-      option.style.transform = 'translateY(-2px)';
-      option.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.3)';
-    };
-
-    option.onmouseleave = () => {
-      option.style.background = 'var(--card-background-color, #fff)';
-      option.style.color = 'var(--primary-text-color)';
-      option.style.transform = 'translateY(0)';
-      option.style.boxShadow = 'none';
-    };
-
-    option.onclick = () => {
-      this._log('Folder option clicked:', title);
-      clickHandler();
-      return false;
-    };
-
-    const iconSpan = document.createElement('span');
-    iconSpan.style.cssText = `font-size: 24px; flex-shrink: 0;`;
-    iconSpan.textContent = icon;
-
-    const textContainer = document.createElement('div');
-    textContainer.style.flex = '1';
-
-    const titleSpan = document.createElement('div');
-    titleSpan.style.cssText = `
-      font-weight: 600;
-      font-size: 16px;
-      color: var(--primary-text-color);
-      margin-bottom: 4px;
-    `;
-    titleSpan.textContent = title;
-
-    const descSpan = document.createElement('div');
-    descSpan.style.cssText = `
-      font-size: 13px;
-      color: var(--secondary-text-color);
-      line-height: 1.3;
-    `;
-    descSpan.textContent = description;
-
-    textContainer.appendChild(titleSpan);
-    textContainer.appendChild(descSpan);
-    option.appendChild(iconSpan);
-    option.appendChild(textContainer);
-
-    return option;
   }
 
   async _createImageThumbnail(container, item) {
