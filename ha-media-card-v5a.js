@@ -605,6 +605,20 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _equalProbabilityModeChanged(ev) {
+    const enabled = ev.target.checked;
+    
+    this._config = {
+      ...this._config,
+      subfolder_queue: {
+        ...this._config.subfolder_queue,
+        enabled: true,
+        equal_probability_mode: enabled
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _estimatedLibrarySizeChanged(ev) {
     const size = ev.target.value;
     
@@ -1558,22 +1572,40 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 </div>
               </div>
               
-              <div>
-                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Estimated Library Size:</label>
-                <select
-                  .value=${this._config.subfolder_queue?.estimated_library_size || 'medium'}
-                  @change=${this._estimatedLibrarySizeChanged}
-                  style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-                >
-                  <option value="small">Small (< 1,000 files)</option>
-                  <option value="medium">Medium (1,000 - 10,000 files)</option>
-                  <option value="large">Large (10,000 - 50,000 files)</option>
-                  <option value="xlarge">Extra Large (> 50,000 files)</option>
-                </select>
-                <div style="font-size: 12px; color: #666; margin-top: 4px;">
-                  Optimizes queue size and scanning strategy
+              <div style="margin-bottom: 16px;">
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                  <input
+                    type="checkbox"
+                    .checked=${this._config.subfolder_queue?.equal_probability_mode !== false}
+                    @change=${this._equalProbabilityModeChanged}
+                    style="margin-right: 8px;"
+                  />
+                  <strong>Equal Probability Mode</strong>
+                </label>
+                <div style="font-size: 12px; color: #666; margin-top: 4px; margin-left: 28px;">
+                  <strong>Checked:</strong> Every media item has equal chance of selection (true statistical fairness)<br>
+                  <strong>Unchecked:</strong> Each folder gets equal representation (smaller folders overrepresented)
                 </div>
               </div>
+              
+              ${this._config.subfolder_queue?.equal_probability_mode !== false ? html`
+                <div style="margin-bottom: 16px;">
+                  <label style="display: block; margin-bottom: 4px; font-weight: 500;">Estimated Library Size:</label>
+                  <select
+                    .value=${this._config.subfolder_queue?.estimated_library_size || 'medium'}
+                    @change=${this._estimatedLibrarySizeChanged}
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  >
+                    <option value="small">Small (< 1,000 files)</option>
+                    <option value="medium">Medium (1,000 - 10,000 files)</option>
+                    <option value="large">Large (10,000 - 50,000 files)</option>
+                    <option value="xlarge">Extra Large (> 50,000 files)</option>
+                  </select>
+                  <div style="font-size: 12px; color: #666; margin-top: 4px;">
+                    Used to optimize queue size for equal probability sampling
+                  </div>
+                </div>
+              ` : ''}
             </div>
           </div>
         ` : ''}
