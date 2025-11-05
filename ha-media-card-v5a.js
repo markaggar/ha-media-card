@@ -35,6 +35,276 @@ const MediaUtils = {
 };
 
 /**
+ * V5 Core Infrastructure Classes
+ * Phase 1A: Foundation for provider pattern
+ */
+
+/**
+ * MediaQueue - Unified queue management for all providers
+ * Based on SubfolderQueue pattern from V4 (lines 6658-6750)
+ */
+class MediaQueue {
+  constructor() {
+    this.items = [];              // Queue of media items to show
+    this.shownItems = new Set();  // Blacklist of already shown items
+    this.currentIndex = 0;        // For sequential modes
+  }
+
+  /**
+   * Add single item to queue if not already present
+   */
+  add(item) {
+    if (!this.items.find(i => i.media_content_id === item.media_content_id)) {
+      this.items.push(item);
+    }
+  }
+
+  /**
+   * Add multiple items to queue
+   */
+  addBatch(items) {
+    items.forEach(item => this.add(item));
+  }
+
+  /**
+   * Get next unshown item from queue
+   * Returns null if all items shown or queue empty
+   */
+  getNext() {
+    // Find first unshown item
+    for (let i = 0; i < this.items.length; i++) {
+      const item = this.items[i];
+      if (!this.shownItems.has(item.media_content_id)) {
+        this.shownItems.add(item.media_content_id);
+        return item;
+      }
+    }
+    return null; // All items shown or queue empty
+  }
+
+  /**
+   * Check if queue is empty
+   */
+  isEmpty() {
+    return this.items.length === 0;
+  }
+
+  /**
+   * Check if queue needs refilling
+   */
+  needsRefill() {
+    const unshownCount = this.items.filter(
+      item => !this.shownItems.has(item.media_content_id)
+    ).length;
+    return unshownCount < 10; // Refill when less than 10 unshown items
+  }
+
+  /**
+   * Clear the shown items blacklist
+   */
+  clearShownItems() {
+    this.shownItems.clear();
+  }
+
+  /**
+   * Serialize queue state for reconnection
+   */
+  serialize() {
+    return {
+      items: this.items,
+      shownItems: Array.from(this.shownItems),
+      currentIndex: this.currentIndex
+    };
+  }
+
+  /**
+   * Restore queue state from serialized data
+   */
+  deserialize(data) {
+    this.items = data.items || [];
+    this.shownItems = new Set(data.shownItems || []);
+    this.currentIndex = data.currentIndex || 0;
+  }
+}
+
+/**
+ * NavigationHistory - Unified navigation history for all providers
+ * Based on main card _navigationHistory from V4 (lines 102, 1560, 6204-6220)
+ * Fixes dual history bug in SubfolderQueue reconnection
+ */
+class NavigationHistory {
+  constructor(maxSize = 100) {
+    this.items = [];        // Array of media items shown
+    this.currentIndex = -1; // Current position in history (-1 = at latest)
+    this.maxSize = maxSize;
+  }
+
+  /**
+   * Add item to history
+   * Truncates future history if user navigated back then forward
+   */
+  add(item) {
+    // If we're in the middle of history, truncate future
+    if (this.currentIndex < this.items.length - 1) {
+      this.items = this.items.slice(0, this.currentIndex + 1);
+    }
+    
+    this.items.push(item);
+    
+    // Limit history size
+    if (this.items.length > this.maxSize) {
+      this.items.shift();
+    }
+    
+    this.currentIndex = this.items.length - 1;
+  }
+
+  /**
+   * Navigate to previous item in history
+   * Returns null if at beginning
+   */
+  previous() {
+    if (this.currentIndex > 0) {
+      this.currentIndex--;
+      return this.items[this.currentIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Navigate to next item in history
+   * Returns null if at end
+   */
+  next() {
+    if (this.currentIndex < this.items.length - 1) {
+      this.currentIndex++;
+      return this.items[this.currentIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Get current item without changing position
+   */
+  getCurrent() {
+    if (this.currentIndex >= 0 && this.currentIndex < this.items.length) {
+      return this.items[this.currentIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Check if we can go backward
+   */
+  canGoBack() {
+    return this.currentIndex > 0;
+  }
+
+  /**
+   * Check if we can go forward
+   */
+  canGoForward() {
+    return this.currentIndex < this.items.length - 1;
+  }
+
+  /**
+   * Get history size
+   */
+  getSize() {
+    return this.items.length;
+  }
+
+  /**
+   * Serialize history for reconnection
+   */
+  serialize() {
+    return {
+      items: this.items,
+      currentIndex: this.currentIndex
+    };
+  }
+
+  /**
+   * Restore history from serialized data
+   */
+  deserialize(data) {
+    this.items = data.items || [];
+    this.currentIndex = data.currentIndex !== undefined ? data.currentIndex : -1;
+  }
+}
+
+/**
+ * MediaProvider - Base class for all media providers
+ * All providers must implement: initialize(), getNext(), getPrevious()
+ */
+class MediaProvider {
+  constructor(config, hass) {
+    this.config = config;
+    this.hass = hass;
+    this.isPaused = false;
+  }
+
+  /**
+   * Initialize provider (load initial data, scan folders, etc.)
+   * Must be implemented by subclasses
+   * @returns {Promise<boolean>} true if initialization successful
+   */
+  async initialize() {
+    throw new Error('MediaProvider.initialize() must be implemented by subclass');
+  }
+
+  /**
+   * Get next media item
+   * Must be implemented by subclasses
+   * @returns {Promise<Object|null>} media item or null if none available
+   */
+  async getNext() {
+    throw new Error('MediaProvider.getNext() must be implemented by subclass');
+  }
+
+  /**
+   * Get previous media item (uses external NavigationHistory)
+   * Must be implemented by subclasses
+   * @returns {Promise<Object|null>} media item or null if none available
+   */
+  async getPrevious() {
+    throw new Error('MediaProvider.getPrevious() must be implemented by subclass');
+  }
+
+  /**
+   * Pause provider activity (stop scanning, timers, etc.)
+   */
+  pause() {
+    this.isPaused = true;
+  }
+
+  /**
+   * Resume provider activity
+   */
+  resume() {
+    this.isPaused = false;
+  }
+
+  /**
+   * Serialize provider state for reconnection
+   * Override in subclass to save provider-specific state
+   */
+  serialize() {
+    return {
+      isPaused: this.isPaused
+    };
+  }
+
+  /**
+   * Restore provider state from serialized data
+   * Override in subclass to restore provider-specific state
+   */
+  deserialize(data) {
+    this.isPaused = data.isPaused || false;
+  }
+}
+
+/**
  * MediaCardV5a - Main card component (minimal placeholder)
  */
 class MediaCardV5a extends LitElement {
