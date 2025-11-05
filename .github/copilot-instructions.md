@@ -53,7 +53,9 @@ This is a custom Home Assistant Lovelace card that can display both images and M
 
 **Goal:** 0% new algorithms - 100% proven V4 code reorganized into provider architecture
 
-**Reference:** See `dev-docs/v5-architecture-spec.md` for architecture details
+**References:** 
+- Architecture: `dev-docs/v5-architecture-spec.md`
+- Implementation Plan: `dev-docs/v5-implementation-plan.md` - **Phase-by-phase development strategy**
 
 ## V5 MANDATORY IMPLEMENTATION WORKFLOW
 
