@@ -1917,6 +1917,12 @@ class MediaCardV5a extends LitElement {
     this._holdTimeout = null; // V4 hold action detection
     this._debugMode = true; // V4 debug logging (configurable via config.debug_mode)
     this._lastLogTime = {}; // V4 log throttling
+    
+    // V4: Circuit breaker for 404 errors
+    this._consecutive404Count = 0;
+    this._last404Time = 0;
+    this._errorAutoAdvanceTimeout = null;
+    
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
 
@@ -2028,6 +2034,12 @@ class MediaCardV5a extends LitElement {
     // Apply defaults for metadata display and media source type
     this.config = {
       media_source_type: 'single_media', // Default to single_media mode
+      // V4: Navigation options defaults
+      enable_navigation_zones: true,
+      show_position_indicator: true,
+      show_dots_indicator: true,
+      enable_keyboard_navigation: true,
+      auto_advance_mode: 'reset', // V4: reset | continue
       ...config,
       metadata: {
         show_filename: false,
@@ -2147,6 +2159,9 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
+    // V4: Handle auto_advance_mode when manually navigating
+    this._handleAutoAdvanceModeOnNavigate();
+
     try {
       // Check if we're replaying history (went back, now going forward)
       if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
@@ -2209,6 +2224,9 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
+    // V4: Handle auto_advance_mode when manually navigating
+    this._handleAutoAdvanceModeOnNavigate();
+
     // V5: Simple history navigation - just move index back
     if (this.history.length === 0) {
       this._log('📖 No history available');
@@ -2237,6 +2255,41 @@ class MediaCardV5a extends LitElement {
       this.requestUpdate();
     } else {
       console.warn('[MediaCardV5a] Invalid history index:', this.historyIndex);
+    }
+  }
+
+  // V4: Handle auto_advance_mode behavior when user manually navigates
+  _handleAutoAdvanceModeOnNavigate() {
+    const mode = this.config.auto_advance_mode || 'reset';
+    
+    this._log(`🎮 auto_advance_mode: "${mode}" - handling manual navigation`);
+    
+    switch (mode) {
+      case 'pause':
+        // Pause auto-refresh by clearing the interval
+        if (this._refreshInterval) {
+          this._log('🔄 Pausing auto-refresh due to manual navigation (clearing interval', this._refreshInterval, ')');
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+          // Mark that we paused due to navigation (for potential resume)
+          this._pausedForNavigation = true;
+        }
+        break;
+        
+      case 'continue':
+        // Do nothing - let auto-refresh continue normally
+        this._log('🔄 Continuing auto-refresh during manual navigation (interval', this._refreshInterval, 'remains active)');
+        break;
+        
+      case 'reset':
+        // Reset the auto-refresh timer
+        const oldInterval = this._refreshInterval;
+        this._log(`🔄 Resetting auto-refresh timer due to manual navigation (clearing interval ${oldInterval}, will create new one)`);
+        this._lastRefreshTime = Date.now();
+        // Restart the timer (this will clear old interval and create new one)
+        this._setupAutoRefresh();
+        this._log(`✅ Auto-refresh timer reset complete - old interval: ${oldInterval}, new interval: ${this._refreshInterval}`);
+        break;
     }
   }
 
@@ -2351,17 +2404,10 @@ class MediaCardV5a extends LitElement {
       try {
         console.log('[MediaCardV5a] ✅ Resolving media-source:// URL via HA API');
         
-        // V5: Fix doubled /media/ in media_content_id BEFORE resolving
-        // HA bug: browse_media returns media-source://media_source/media/... but should be media-source://media_source/...
-        let fixedMediaId = mediaId;
-        if (mediaId.includes('/media/media/')) {
-          fixedMediaId = mediaId.replace('media-source://media_source/media/', 'media-source://media_source/');
-          console.log('[MediaCardV5a] 🔧 Fixed doubled /media/ in media_content_id:', mediaId, '->', fixedMediaId);
-        }
-        
+        // V5: Copy V4's approach - just pass through to HA without modification
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
-          media_content_id: fixedMediaId,
+          media_content_id: mediaId,
           expires: (60 * 60 * 3) // 3 hours
         });
         console.log('[MediaCardV5a] ✅ HA resolved to:', resolved.url);
@@ -2492,31 +2538,164 @@ class MediaCardV5a extends LitElement {
   async _attemptUrlRefresh(forceRefresh = false) {
     this._log('🔄 Attempting URL refresh due to media load failure');
     
+    // V4: Log additional context for Synology DSM URLs
+    if (this.mediaUrl && this.mediaUrl.includes('/synology_dsm/')) {
+      this._log('🔄 Synology DSM URL detected - checking authentication signature');
+      console.warn('[MediaCardV5a] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
+    }
+    
     try {
-      // For single media mode, re-resolve the media URL
-      if (this.config.media_source_type === 'single_media' && this.currentMedia) {
-        await this._resolveMediaUrl(this.currentMedia.media_content_id);
-        // Clear retry attempts for the new URL
-        if (this._retryAttempts.has(this.mediaUrl)) {
-          this._retryAttempts.delete(this.mediaUrl);
+      let refreshedUrl = null;
+      
+      // V4: Add retry logic with exponential backoff for Synology DSM URLs
+      const isSynologyUrl = this.mediaUrl && this.mediaUrl.includes('/synology_dsm/');
+      const maxRetries = isSynologyUrl ? 3 : 1;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // For single media mode, re-resolve the media URL
+          if (this.config.media_source_type === 'single_media' && this.currentMedia) {
+            this._log(`🔄 Refreshing single media (attempt ${attempt}/${maxRetries}):`, this.currentMedia.media_content_id);
+            await this._resolveMediaUrl(this.currentMedia.media_content_id);
+            refreshedUrl = this.mediaUrl;
+          }
+          
+          // If we got a different URL or this is a forced refresh, consider it successful
+          if (refreshedUrl && (refreshedUrl !== this.mediaUrl || forceRefresh)) {
+            this._log('✅ URL refresh successful, updating media');
+            // Clear retry attempts for the new URL
+            if (this._retryAttempts.has(refreshedUrl)) {
+              this._retryAttempts.delete(refreshedUrl);
+            }
+            this._errorState = null; // Clear error state
+            this.requestUpdate();
+            return true;
+          } else if (refreshedUrl === this.mediaUrl && !forceRefresh) {
+            this._log(`⚠️ URL refresh returned same URL (attempt ${attempt}/${maxRetries})`);
+            if (attempt < maxRetries) {
+              // Wait before retrying (exponential backoff)
+              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+              this._log(`⏱️ Waiting ${delay}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+          } else {
+            this._log(`❌ No URL returned (attempt ${attempt}/${maxRetries})`);
+            if (attempt < maxRetries) {
+              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+          }
+        } catch (attemptError) {
+          this._log(`❌ Attempt ${attempt}/${maxRetries} failed:`, attemptError.message);
+          if (attempt < maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          throw attemptError;
         }
-        this._errorState = null; // Clear error state
-        this.requestUpdate();
-        return true;
       }
       
+      console.warn('[MediaCardV5a] ⚠️ All URL refresh attempts failed or returned same URL');
       return false;
+      
     } catch (error) {
-      console.error('[MediaCardV5a] Failed to refresh URL:', error);
+      console.error('[MediaCardV5a] ❌ URL refresh failed:', error);
       return false;
     }
   }
   
-  _showMediaError(errorMessage, isSynologyUrl = false) {
+  _showMediaError(errorMessage, is404 = false) {
+    // V4: If not explicitly provided, check if this is a 404 error (file not found - likely deleted/moved)
+    if (!is404) {
+      is404 = this.mediaUrl && errorMessage.includes('not found');
+    }
+    const currentPath = this.currentMedia?.media_content_id;
+    const now = Date.now();
+    
+    // V4: 🚨 CIRCUIT BREAKER: Detect if we're stuck in 404 loop with deleted files
+    if (is404 || errorMessage.includes('Media file not found')) {
+      // Check if this is a rapid succession 404 (within 10 seconds of last)
+      if (now - this._last404Time < 10000) {
+        this._consecutive404Count++;
+        this._log(`⚠️ Consecutive 404 error #${this._consecutive404Count} for: ${currentPath}`);
+      } else {
+        // Reset counter if it's been more than 10 seconds
+        this._consecutive404Count = 1;
+        this._log(`⚠️ First 404 in new time window for: ${currentPath}`);
+      }
+      this._last404Time = now;
+      
+      // V4: CIRCUIT BREAKER TRIGGERED - For folder mode, remove from queue
+      if (this._consecutive404Count >= 3) {
+        this._log(`🚨 CIRCUIT BREAKER TRIGGERED: ${this._consecutive404Count} consecutive 404s`);
+        this._consecutive404Count = 0; // Reset
+        
+        // V5: For folder mode, trigger provider refresh
+        if (this.config.media_source_type === 'folder' && this.provider) {
+          this._log('🔄 Circuit breaker: Requesting provider to refresh');
+          // Provider will handle its own queue refresh logic
+        }
+      }
+    } else {
+      // Non-404 error, reset circuit breaker
+      this._consecutive404Count = 0;
+    }
+    
+    // V4: For 404s in folder mode, skip silently without showing error UI - just auto-advance
+    if (is404 && this.config.media_source_type === 'folder') {
+      this._log('🔇 Skipping 404 error UI - will auto-advance silently');
+      
+      // V4: Remove from queue if provider supports it
+      if (currentPath && this.provider && this.queue) {
+        this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
+        
+        // Find and remove from queue
+        const queueIndex = this.queue.findIndex(item => item.media_content_id === currentPath);
+        if (queueIndex !== -1) {
+          this.queue.splice(queueIndex, 1);
+          this._log(`🗑️ Removed from queue at index ${queueIndex} (${this.queue.length} remaining)`);
+        }
+        
+        // Also mark in shownItems to avoid showing again
+        this.shownItems.add(currentPath);
+      }
+      
+      // V4: In folder mode with auto-refresh enabled, automatically advance to next image immediately
+      const effectiveRefreshSeconds = this.config.auto_advance_seconds || 0;
+      if (effectiveRefreshSeconds > 0 && !this._isPaused) {
+        const autoAdvanceDelay = 100; // Very brief delay for 404s to avoid flickering
+        
+        this._log(`⏭️ Auto-advancing to next image in ${autoAdvanceDelay}ms (silent 404 skip)`);
+        
+        // Clear any existing auto-advance timeout
+        if (this._errorAutoAdvanceTimeout) {
+          clearTimeout(this._errorAutoAdvanceTimeout);
+        }
+        
+        this._errorAutoAdvanceTimeout = setTimeout(async () => {
+          if (!this._isPaused) {
+            this._log('⏭️ Auto-advancing to next image after 404 (silent)');
+            
+            try {
+              await this._loadNext();
+            } catch (error) {
+              this._log('❌ Auto-advance after 404 failed:', error);
+            }
+          }
+        }, autoAdvanceDelay);
+      }
+      return; // Skip error UI rendering for 404s in folder mode
+    }
+    
+    // V4: For non-404 errors, or 404s in single media mode, store error state and show UI
     console.error('[MediaCardV5a] Showing media error:', errorMessage);
     this._errorState = {
       message: errorMessage,
-      isSynologyUrl: isSynologyUrl
+      timestamp: now,
+      isSynologyUrl: this.mediaUrl && this.mediaUrl.includes('/synology_dsm/')
     };
     this.requestUpdate();
   }
@@ -2595,6 +2774,52 @@ class MediaCardV5a extends LitElement {
         video.muted = true;
       }, 50);
       this._log('Video muted state applied:', video.muted);
+    }
+  }
+
+  // V4: Keyboard navigation handler
+  _handleKeyDown(e) {
+    // Handle keyboard navigation
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      this._loadPrevious();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      this._loadNext();
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      // Space or Enter on navigation zones acts like a click
+      if (e.target.classList.contains('nav-zone-left')) {
+        this._loadPrevious();
+      } else if (e.target.classList.contains('nav-zone-right')) {
+        this._loadNext();
+      } else if (e.target.classList.contains('nav-zone-center')) {
+        this._handleCenterClick(e);
+      }
+    }
+  }
+
+  // V4: Center click handler for pause/resume
+  _handleCenterClick(e) {
+    e.stopPropagation();
+    
+    this._log('🖱️ Center click detected - isPaused:', this._isPaused);
+    
+    // Toggle pause state
+    this._setPauseState(!this._isPaused);
+    this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow`);
+    
+    // Pause/resume the auto-advance timer
+    if (this._isPaused) {
+      // Pause: Clear the interval
+      if (this._refreshInterval) {
+        this._log('🔄 Clearing interval on pause, ID:', this._refreshInterval);
+        clearInterval(this._refreshInterval);
+        this._refreshInterval = null;
+      }
+    } else {
+      // Resume: Restart auto-advance
+      this._setupAutoRefresh();
     }
   }
 
@@ -3847,20 +4072,36 @@ class MediaCardV5a extends LitElement {
   }
   
   _renderNavigationZones() {
+    // V4: Check if navigation zones should be shown
     // For single_media mode, don't show navigation zones
     if (this.config.media_source_type === 'single_media') {
       return html``;
     }
     
-    // V4-style navigation zones (will be used for folder/queue modes)
+    // V4: Respect enable_navigation_zones config option
+    if (this.config.enable_navigation_zones === false) {
+      return html``;
+    }
+    
+    // V4-style navigation zones with keyboard support
     return html`
       <div class="navigation-zones">
         <div class="nav-zone nav-zone-left"
              @click=${this._loadPrevious}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
              title="Previous">
+        </div>
+        <div class="nav-zone nav-zone-center"
+             @click=${this._handleCenterClick}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
+             title="Pause/Resume">
         </div>
         <div class="nav-zone nav-zone-right"  
              @click=${this._loadNext}
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0"
              title="Next">
         </div>
       </div>
@@ -4494,6 +4735,11 @@ class MediaCardV5aEditor extends LitElement {
 
   _keyboardNavigationChanged(ev) {
     this._config = { ...this._config, enable_keyboard_navigation: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _autoAdvanceModeChanged(ev) {
+    this._config = { ...this._config, auto_advance_mode: ev.target.value };
     this._fireConfigChanged();
   }
 
@@ -6068,7 +6314,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ` : ''}
         </div>
 
-        ${mediaSourceType === 'simple_folder' || mediaSourceType === 'subfolder_queue' ? html`
+        ${mediaSourceType === 'folder' ? html`
           <div class="section">
             <div class="section-title">🧭 Navigation Options</div>
             
@@ -6117,6 +6363,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._keyboardNavigationChanged}
                 />
                 <div class="help-text">Enable left/right arrow keys for navigation</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Auto-Advance on Navigate</label>
+              <div>
+                <select @change=${this._autoAdvanceModeChanged} .value=${this._config.auto_advance_mode || 'reset'}>
+                  <option value="pause">Pause auto-refresh when navigating manually</option>
+                  <option value="continue">Continue auto-refresh during manual navigation</option>
+                  <option value="reset">Reset auto-refresh timer on manual navigation</option>
+                </select>
+                <div class="help-text">How auto-refresh behaves when navigating manually</div>
               </div>
             </div>
           </div>
@@ -6369,28 +6627,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show subtle exit hint in corner (when kiosk entity is configured)</div>
             </div>
           </div>
-        </div>
-
-        <div style="margin-top: 16px; padding: 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white;">
-          <h4 style="margin-top: 0; color: white;">🎉 V4 Editor COMPLETE!</h4>
-          <ul style="margin: 8px 0; padding-left: 20px; font-size: 13px; color: rgba(255,255,255,0.95);">
-            <li>✅ Basic settings (title, media type, scaling)</li>
-            <li>✅ Media path with validation</li>
-            <li>✅ Auto refresh controls</li>
-            <li>✅ Video options (autoplay, loop, muted, duration)</li>
-            <li>✅ Image options (zoom)</li>
-            <li>✅ Navigation options (zones, indicators, keyboard)</li>
-            <li>✅ Metadata display (folder, filename, date, location)</li>
-            <li>✅ Media Index integration</li>
-            <li>✅ Action Buttons (favorite, delete, edit)</li>
-            <li>✅ Subfolder Queue settings</li>
-            <li>✅ Interactions (tap, hold, double-tap)</li>
-            <li>✅ Kiosk mode</li>
-            <li>✅ <strong>Full working media browser with folder navigation!</strong></li>
-          </ul>
-          <p style="margin: 8px 0 0 0; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.3); font-size: 13px;">
-            <strong>Next step:</strong> Adapt for v5 Mode+Backend architecture
-          </p>
         </div>
       </div>
     `;
