@@ -40,14 +40,439 @@ const MediaUtils = {
  */
 
 /**
+ * NavigationHistory - Track user navigation path with back/forward support
+ * Copied from V4 (lines 102, 5844-5900, 4952-4981, 643-666)
+ */
+class NavigationHistory {
+  constructor(maxSize = 100) {
+    this.items = [];           // Copy from V4 line 102: this._navigationHistory = []
+    this.currentIndex = -1;    // Copy from V4 pattern: this._historyIndex
+    this.maxSize = maxSize;    // NEW - add size limit (V4 has unlimited)
+  }
+
+  /**
+   * Add item to history
+   * Copy from V4 pattern - adds to end and moves index forward
+   */
+  add(item) {
+    // If we're in the middle of history, truncate future items
+    if (this.currentIndex < this.items.length - 1) {
+      this.items = this.items.slice(0, this.currentIndex + 1);
+    }
+
+    // Add new item
+    this.items.push(item);
+    this.currentIndex = this.items.length - 1;
+
+    // Enforce max size (NEW - V4 doesn't limit size)
+    if (this.items.length > this.maxSize) {
+      const excess = this.items.length - this.maxSize;
+      this.items.splice(0, excess);
+      this.currentIndex -= excess;
+    }
+  }
+
+  /**
+   * Navigate to previous item in history
+   */
+  previous() {
+    if (this.currentIndex > 0) {
+      this.currentIndex--;
+      return this.items[this.currentIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Navigate to next item in history (after going back)
+   */
+  next() {
+    if (this.currentIndex < this.items.length - 1) {
+      this.currentIndex++;
+      return this.items[this.currentIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Remove item from history
+   * Copy from V4 lines 5844-5856 - indexOf, splice, index adjustment
+   */
+  removeItem(itemPath) {
+    const index = this.items.findIndex(item => item.path === itemPath);
+    if (index >= 0) {
+      this.items.splice(index, 1);
+      // Adjust current index if we removed an earlier item
+      // Copy from V4 lines 5848-5850
+      if (index <= this.currentIndex) {
+        this.currentIndex--;
+      }
+    }
+  }
+
+  /**
+   * Clear all history
+   */
+  clear() {
+    this.items = [];
+    this.currentIndex = -1;
+  }
+
+  /**
+   * Get current item without changing index
+   */
+  getCurrent() {
+    if (this.currentIndex >= 0 && this.currentIndex < this.items.length) {
+      return this.items[this.currentIndex];
+    }
+    return null;
+  }
+
+  /**
+   * Serialize history for reconnection
+   * Copy from V4 lines 4954-4955
+   */
+  serialize() {
+    return {
+      items: this.items,
+      currentIndex: this.currentIndex
+    };
+  }
+
+  /**
+   * Deserialize history from stored state
+   * Copy from V4 lines 653-654
+   */
+  deserialize(data) {
+    this.items = data.items || [];
+    this.currentIndex = data.currentIndex !== undefined ? data.currentIndex : -1;
+  }
+
+  /**
+   * Get history size
+   */
+  size() {
+    return this.items.length;
+  }
+}
+
+/**
+ * ReconnectionManager - Preserve queue state across disconnections
+ * Copied from V4 (lines 12-13, 4945-4981, 643-666)
+ * 
+ * Uses global window.Map to survive card disconnections when navigating
+ * between views in Home Assistant
+ */
+class ReconnectionManager {
+  constructor() {
+    // Copy from V4 lines 12-13 - Global Map initialization
+    if (!window.mediaCardSubfolderQueues) {
+      window.mediaCardSubfolderQueues = new Map();
+    }
+    this.globalQueues = window.mediaCardSubfolderQueues;
+  }
+
+  /**
+   * Preserve queue state when card disconnects
+   * Copy from V4 lines 4952-4981
+   */
+  preserveQueue(cardId, queueData) {
+    this.globalQueues.set(cardId, {
+      ...queueData,
+      timestamp: Date.now()  // NEW - add timestamp for cleanup (V4 doesn't have this)
+    });
+  }
+
+  /**
+   * Restore queue state when card reconnects
+   * Copy from V4 lines 643-666
+   */
+  restoreQueue(cardId) {
+    if (this.globalQueues.has(cardId)) {
+      const preserved = this.globalQueues.get(cardId);
+      
+      // NEW - check timestamp validity (V4 doesn't validate age)
+      if (this._isValid(preserved)) {
+        // Copy from V4 line 656 - delete after successful restore
+        this.globalQueues.delete(cardId);
+        return preserved;
+      } else {
+        // Expired - clean up
+        this.globalQueues.delete(cardId);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Clean up old queues to prevent memory leaks
+   * NEW - V4 has no cleanup mechanism
+   */
+  cleanup() {
+    const now = Date.now();
+    const maxAge = 30 * 60 * 1000; // 30 minutes
+    
+    for (const [key, data] of this.globalQueues) {
+      if (data.timestamp && (now - data.timestamp) > maxAge) {
+        this.globalQueues.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Validate preserved queue is not too old
+   * NEW - V4 doesn't validate timestamp
+   */
+  _isValid(preserved) {
+    if (!preserved.timestamp) return true; // Backward compat - accept old data without timestamp
+    const maxAge = 30 * 60 * 1000; // 30 minutes
+    return (Date.now() - preserved.timestamp) < maxAge;
+  }
+
+  /**
+   * Get count of preserved queues
+   */
+  getPreservedCount() {
+    return this.globalQueues.size;
+  }
+
+  /**
+   * Get all preserved queue IDs
+   */
+  getPreservedIds() {
+    return Array.from(this.globalQueues.keys());
+  }
+}
+
+/**
+ * VisibilityManager - Handle card visibility and pause/resume
+ * Copied from V4 (lines 5080-5156, 1632-1665)
+ * 
+ * Tracks both card visibility (IntersectionObserver) and page visibility
+ * (document.visibilityState) to pause activity when card not visible
+ */
+class VisibilityManager {
+  constructor(card) {
+    this.card = card;
+    
+    // Copy from V4 lines 5080-5087 - Dual visibility tracking
+    this.isCardVisible = true;      // IntersectionObserver - is card in viewport?
+    this.isPageVisible = true;      // visibilitychange - is tab active?
+    this.isBackgroundPaused = false; // Combined pause state
+    this.isEditMode = false;         // NEW - track edit mode (V4 doesn't have this)
+  }
+
+  /**
+   * Handle visibility changes for both card and page
+   * Copy from V4 lines 5117-5156
+   */
+  handleVisibilityChange(isCardVisible, isPageVisible) {
+    this.isCardVisible = isCardVisible;
+    this.isPageVisible = isPageVisible;
+    
+    // Copy from V4 line 5119 - Calculate combined visibility
+    const shouldBeActive = this.isCardVisible && this.isPageVisible;
+    
+    // Copy from V4 lines 5123-5155 - Resume or pause based on visibility
+    if (shouldBeActive && this.isBackgroundPaused) {
+      this._resume();
+    } else if (!shouldBeActive && !this.isBackgroundPaused) {
+      this._pause();
+    }
+  }
+
+  /**
+   * Resume all activity when card becomes visible
+   * Copy from V4 lines 5123-5143
+   */
+  _resume() {
+    this.isBackgroundPaused = false;
+    
+    // Callback to card to resume all activity
+    if (this.card.resumeAllActivity) {
+      this.card.resumeAllActivity();
+    }
+  }
+
+  /**
+   * Pause all activity when card becomes hidden
+   * Copy from V4 lines 5145-5154
+   */
+  _pause() {
+    this.isBackgroundPaused = true;
+    
+    // Callback to card to pause all activity
+    if (this.card.pauseAllActivity) {
+      this.card.pauseAllActivity();
+    }
+  }
+
+  /**
+   * Enter edit mode - destroy preview queues
+   * NEW - V4 doesn't have explicit edit mode detection
+   */
+  onEditModeEnter() {
+    this.isEditMode = true;
+    if (this.card.destroyPreviewQueues) {
+      this.card.destroyPreviewQueues();
+    }
+  }
+
+  /**
+   * Exit edit mode - reinitialize card
+   * NEW - V4 doesn't have explicit edit mode detection
+   */
+  onEditModeExit() {
+    this.isEditMode = false;
+    if (this.card.reinitialize) {
+      this.card.reinitialize();
+    }
+  }
+
+  /**
+   * Check if activity should be paused
+   * Copy from V4 lines 1632-1665 - Used by timers to check before running
+   */
+  shouldPauseActivity() {
+    return this.isBackgroundPaused || this.isEditMode;
+  }
+
+  /**
+   * Get current visibility state for debugging
+   */
+  getState() {
+    return {
+      isCardVisible: this.isCardVisible,
+      isPageVisible: this.isPageVisible,
+      isBackgroundPaused: this.isBackgroundPaused,
+      isEditMode: this.isEditMode,
+      shouldBeActive: this.isCardVisible && this.isPageVisible
+    };
+  }
+}
+
+/**
+ * VideoManager - Handle video playback and auto-advance
+ * Copied from V4 (lines 4400-4453)
+ * 
+ * Manages video pause/resume events and auto-advance on video end
+ */
+class VideoManager {
+  constructor(config) {
+    this.maxDuration = config.video?.max_duration_seconds || 0;
+    this.advanceOnEnd = config.video?.advance_on_end !== false;
+    this.loop = config.video?.loop === true;
+    
+    // Copy from V4 lines 88-90 - Pause tracking
+    this.pausedByVideo = false;
+    this.currentTimer = null;
+    this.isConnected = true; // Track connection state
+  }
+
+  /**
+   * Handle video start event
+   * Copy from V4 lines 4400-4413
+   */
+  onVideoStart(videoElement, advanceCallback, resumeCallback) {
+    // Resume slideshow if it was paused by video pause
+    // Copy from V4 lines 4406-4410
+    if (this.pausedByVideo && resumeCallback) {
+      resumeCallback();
+      this.pausedByVideo = false;
+    }
+
+    // Set up max duration timer if configured
+    // NEW - V4 doesn't have this in onVideoStart, but it's logical placement
+    if (this.maxDuration > 0 && advanceCallback) {
+      this.currentTimer = setTimeout(() => {
+        advanceCallback();
+      }, this.maxDuration * 1000);
+    }
+
+    // Set up end event listener
+    // Copy from V4 pattern - advance on video end
+    if (this.advanceOnEnd && !this.loop && videoElement && advanceCallback) {
+      videoElement.addEventListener('ended', () => {
+        this.onVideoEnd(advanceCallback);
+      }, { once: true });
+    }
+  }
+
+  /**
+   * Handle video pause event
+   * Copy from V4 lines 4415-4430
+   */
+  onVideoPause(pauseCallback) {
+    // CRITICAL: Ignore pause events when disconnected
+    // Copy from V4 lines 4417-4421
+    if (!this.isConnected) {
+      return;
+    }
+
+    // Pause slideshow when user manually pauses video
+    // Copy from V4 lines 4424-4428
+    if (!this.pausedByVideo && pauseCallback) {
+      this.pausedByVideo = true;
+      pauseCallback();
+    }
+  }
+
+  /**
+   * Handle video ended event
+   * Copy from V4 lines 4432-4453
+   */
+  onVideoEnd(advanceCallback) {
+    // Clear max duration timer
+    if (this.currentTimer) {
+      clearTimeout(this.currentTimer);
+      this.currentTimer = null;
+    }
+
+    // Advance to next video with delay
+    // Copy from V4 lines 4441-4451 - setTimeout delay pattern
+    if (this.advanceOnEnd && !this.loop && advanceCallback) {
+      setTimeout(() => {
+        advanceCallback();
+      }, 100); // Small delay to ensure video ended event is fully processed
+    }
+  }
+
+  /**
+   * Set connection state
+   * Copy from V4 line 4417 logic - prevents pause events after disconnect
+   */
+  setConnectionState(isConnected) {
+    this.isConnected = isConnected;
+  }
+
+  /**
+   * Clean up timers
+   */
+  cleanup() {
+    if (this.currentTimer) {
+      clearTimeout(this.currentTimer);
+      this.currentTimer = null;
+    }
+    this.pausedByVideo = false;
+  }
+}
+
+/**
  * MediaQueue - Unified queue management for all providers
  * Based on SubfolderQueue pattern from V4 (lines 6658-6750)
  */
 class MediaQueue {
-  constructor() {
+  constructor(config = {}) {
     this.items = [];              // Queue of media items to show
     this.shownItems = new Set();  // Blacklist of already shown items
     this.currentIndex = 0;        // For sequential modes
+    
+    // Copy from V4 lines 1611-1680 - Auto-advance timer
+    this.autoRefreshSeconds = config.auto_refresh_seconds || 0;
+    this.refreshInterval = null;
+    this.isPaused = false;
+    this.isBackgroundPaused = false;
+    this.loggedPausedState = false;
   }
 
   /**
@@ -107,6 +532,93 @@ class MediaQueue {
   }
 
   /**
+   * Setup auto-advance timer
+   * Copy from V4 lines 1611-1680
+   */
+  setupAutoAdvance(advanceCallback, isDiscoveryCallback = null) {
+    // Clear any existing interval FIRST to prevent multiple timers
+    // Copy from V4 lines 1613-1617
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+
+    // Don't set up auto-refresh if paused or not visible
+    // Copy from V4 lines 1619-1633
+    if (this.isPaused) {
+      // Only log once when transitioning to paused state
+      if (!this.loggedPausedState) {
+        console.log('[MediaQueue] Auto-advance setup skipped - currently paused');
+        this.loggedPausedState = true;
+      }
+      return;
+    } else {
+      // Reset flag when not paused
+      this.loggedPausedState = false;
+    }
+    
+    if (this.isBackgroundPaused) {
+      console.log('[MediaQueue] Auto-advance setup skipped - background activity paused (not visible)');
+      return;
+    }
+
+    // Set up auto-advance if enabled
+    // Copy from V4 lines 1635-1677
+    if (this.autoRefreshSeconds > 0 && advanceCallback) {
+      console.log(`[MediaQueue] Setting up auto-advance every ${this.autoRefreshSeconds} seconds`);
+      
+      this.refreshInterval = setInterval(() => {
+        // Check both pause states before running
+        // Copy from V4 lines 1648-1650
+        if (!this.isPaused && !this.isBackgroundPaused) {
+          // Skip if discovery is actively in progress AND queue is empty
+          // Copy from V4 lines 1652-1663
+          if (isDiscoveryCallback && isDiscoveryCallback()) {
+            // Only block if queue is empty - if we have items, continue while scanning in background
+            if (this.items.length === 0) {
+              console.log('[MediaQueue] Auto-advance skipped - discovery in progress (queue empty)');
+              return;
+            } else {
+              console.log(`[MediaQueue] Auto-advance proceeding - discovery in progress but queue has ${this.items.length} items`);
+            }
+          }
+          
+          // Trigger advance
+          advanceCallback();
+        } else {
+          console.log(`[MediaQueue] Auto-advance skipped - isPaused: ${this.isPaused}, backgroundPaused: ${this.isBackgroundPaused}`);
+        }
+      }, this.autoRefreshSeconds * 1000);
+      
+      console.log('[MediaQueue] Auto-advance interval started with ID:', this.refreshInterval);
+    } else {
+      console.log('[MediaQueue] Auto-advance disabled or not configured:', {
+        autoRefreshSeconds: this.autoRefreshSeconds,
+        hasCallback: !!advanceCallback
+      });
+    }
+  }
+
+  /**
+   * Stop auto-advance timer
+   */
+  stopAutoAdvance() {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+  }
+
+  /**
+   * Set pause state
+   * Copy from V4 pause/resume patterns
+   */
+  setPauseState(isPaused, isBackgroundPaused = false) {
+    this.isPaused = isPaused;
+    this.isBackgroundPaused = isBackgroundPaused;
+  }
+
+  /**
    * Serialize queue state for reconnection
    */
   serialize() {
@@ -124,112 +636,6 @@ class MediaQueue {
     this.items = data.items || [];
     this.shownItems = new Set(data.shownItems || []);
     this.currentIndex = data.currentIndex || 0;
-  }
-}
-
-/**
- * NavigationHistory - Unified navigation history for all providers
- * Based on main card _navigationHistory from V4 (lines 102, 1560, 6204-6220)
- * Fixes dual history bug in SubfolderQueue reconnection
- */
-class NavigationHistory {
-  constructor(maxSize = 100) {
-    this.items = [];        // Array of media items shown
-    this.currentIndex = -1; // Current position in history (-1 = at latest)
-    this.maxSize = maxSize;
-  }
-
-  /**
-   * Add item to history
-   * Truncates future history if user navigated back then forward
-   */
-  add(item) {
-    // If we're in the middle of history, truncate future
-    if (this.currentIndex < this.items.length - 1) {
-      this.items = this.items.slice(0, this.currentIndex + 1);
-    }
-    
-    this.items.push(item);
-    
-    // Limit history size
-    if (this.items.length > this.maxSize) {
-      this.items.shift();
-    }
-    
-    this.currentIndex = this.items.length - 1;
-  }
-
-  /**
-   * Navigate to previous item in history
-   * Returns null if at beginning
-   */
-  previous() {
-    if (this.currentIndex > 0) {
-      this.currentIndex--;
-      return this.items[this.currentIndex];
-    }
-    return null;
-  }
-
-  /**
-   * Navigate to next item in history
-   * Returns null if at end
-   */
-  next() {
-    if (this.currentIndex < this.items.length - 1) {
-      this.currentIndex++;
-      return this.items[this.currentIndex];
-    }
-    return null;
-  }
-
-  /**
-   * Get current item without changing position
-   */
-  getCurrent() {
-    if (this.currentIndex >= 0 && this.currentIndex < this.items.length) {
-      return this.items[this.currentIndex];
-    }
-    return null;
-  }
-
-  /**
-   * Check if we can go backward
-   */
-  canGoBack() {
-    return this.currentIndex > 0;
-  }
-
-  /**
-   * Check if we can go forward
-   */
-  canGoForward() {
-    return this.currentIndex < this.items.length - 1;
-  }
-
-  /**
-   * Get history size
-   */
-  getSize() {
-    return this.items.length;
-  }
-
-  /**
-   * Serialize history for reconnection
-   */
-  serialize() {
-    return {
-      items: this.items,
-      currentIndex: this.currentIndex
-    };
-  }
-
-  /**
-   * Restore history from serialized data
-   */
-  deserialize(data) {
-    this.items = data.items || [];
-    this.currentIndex = data.currentIndex !== undefined ? data.currentIndex : -1;
   }
 }
 
@@ -462,6 +868,12 @@ class SingleMediaProvider extends MediaProvider {
   }
 
   async initialize() {
+    // Validate media path
+    if (!this.mediaPath) {
+      console.warn('[SingleMediaProvider] No media path configured');
+      return false;
+    }
+    
     // Extract basic metadata from path
     let metadata = this._extractMetadataFromPath(this.mediaPath);
     console.log('📊 Path-based metadata:', metadata);
@@ -837,7 +1249,21 @@ class MediaCardV5a extends LitElement {
       throw new Error('Invalid configuration');
     }
     this._log('📝 setConfig called with:', config);
-    this.config = config;
+    
+    // Apply defaults for metadata display and media source type
+    this.config = {
+      media_source_type: 'single_media', // Default to single_media mode
+      ...config,
+      metadata: {
+        show_filename: false,
+        show_folder: true,
+        show_date: true,
+        show_location: true,
+        show_root_folder: true,
+        position: 'bottom-left',
+        ...config.metadata
+      }
+    };
     
     // V4: Set debug mode from config
     this._debugMode = this.config.debug_mode === true;
@@ -877,11 +1303,11 @@ class MediaCardV5a extends LitElement {
     // Auto-detect media source type if not set
     let type = this.config.media_source_type;
     if (!type) {
-      if (this.config.media_path) {
+      if (this.config.media_path && this.config.media_path.trim()) {
         type = 'single_media';
         this._log('Auto-detected single_media mode from media_path');
       } else {
-        console.error('[MediaCardV5a] No media_source_type or media_path configured');
+        this._log('⚙️ Card configuration incomplete - waiting for media source setup');
         return;
       }
     }
@@ -894,7 +1320,11 @@ class MediaCardV5a extends LitElement {
           this.provider = new SingleMediaProvider(this.config, this.hass);
           break;
         
-        // More providers in future phases
+        case 'folder':
+          this._log('⏳ Folder mode not yet implemented - coming in next phase');
+          this.isLoading = false;
+          return;
+        
         default:
           console.warn('[MediaCardV5a] Unknown media source type:', type, '- defaulting to single_media');
           this.provider = new SingleMediaProvider(this.config, this.hass);
@@ -2698,35 +3128,225 @@ class MediaCardV5aEditor extends LitElement {
   // V5 Mode and Backend handlers
   _handleModeChange(ev) {
     const newMode = ev.target.value;
-    this._config = { 
-      ...this._config, 
-      media_source_type: newMode 
-    };
     
-    // Clear mode-specific settings when switching modes
     if (newMode === 'single_media') {
-      // Remove folder-specific settings
-      delete this._config.is_folder;
-      delete this._config.folder_mode;
-      delete this._config.random_mode;
-      delete this._config.subfolder_queue;
-    } else if (newMode === 'subfolder_queue') {
-      // Auto-enable File System Scanning for Folder Hierarchy mode
-      this._config.subfolder_queue = {
-        ...this._config.subfolder_queue,
-        enabled: true
+      this._config = { 
+        type: this._config.type, // Preserve card type
+        media_source_type: 'single_media',
+        single_media: {
+          path: this._config.media_path || null,
+          refresh_seconds: this._config.auto_refresh_seconds || 0
+        },
+        // Preserve common settings
+        media_type: this._config.media_type,
+        display: this._config.display,
+        navigation: this._config.navigation,
+        metadata: this._config.metadata,
+        video: this._config.video,
+        title: this._config.title,
+        media_index: this._config.media_index // Preserve media_index for metadata/actions
       };
-      // Remove single-media specific settings
-      delete this._config.auto_refresh_seconds;
-    } else {
-      // Simple folder mode
-      delete this._config.auto_refresh_seconds;
-      delete this._config.subfolder_queue;
+    } else if (newMode === 'folder') {
+      // Get path from media_index entity if available
+      let folderPath = this._config.media_path || null;
+      const mediaIndexEntityId = this._config.media_index?.entity_id;
+      
+      if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
+        const entity = this.hass.states[mediaIndexEntityId];
+        folderPath = entity.attributes?.media_folder || 
+                     entity.attributes?.folder_path || 
+                     entity.attributes?.base_path || null;
+        if (folderPath) {
+          this._log('📁 Auto-populated folder path from media_index:', folderPath);
+        }
+      }
+      
+      this._config = { 
+        type: this._config.type, // Preserve card type
+        media_source_type: 'folder',
+        folder: {
+          path: folderPath,
+          mode: 'random',
+          recursive: true
+        },
+        // Preserve common settings
+        media_type: this._config.media_type,
+        display: this._config.display,
+        navigation: this._config.navigation,
+        metadata: this._config.metadata,
+        video: this._config.video,
+        title: this._config.title,
+        media_index: this._config.media_index // Keep root-level for metadata/actions
+      };
     }
     
     this._fireConfigChanged();
   }
 
+  _handleFolderModeChange(ev) {
+    const mode = ev.target.value;
+    
+    const folderConfig = {
+      ...this._config.folder,
+      mode: mode
+    };
+    
+    // Add sequential defaults when switching to sequential mode
+    if (mode === 'sequential') {
+      folderConfig.sequential = {
+        order_by: this._config.folder?.sequential?.order_by || 'date_taken',
+        order_direction: this._config.folder?.sequential?.order_direction || 'desc'
+      };
+    } else {
+      // Remove sequential config when switching to random
+      delete folderConfig.sequential;
+    }
+    
+    this._config = {
+      ...this._config,
+      folder: folderConfig
+    };
+    this._fireConfigChanged();
+  }
+
+  _handleRecursiveChanged(ev) {
+    const recursive = ev.target.checked;
+    this._config = {
+      ...this._config,
+      folder: {
+        ...this._config.folder,
+        recursive: recursive
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _handleSequentialOrderByChange(ev) {
+    const orderBy = ev.target.value;
+    this._config = {
+      ...this._config,
+      folder: {
+        ...this._config.folder,
+        sequential: {
+          order_by: orderBy,
+          order_direction: this._config.folder?.sequential?.order_direction || 'desc'
+        }
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _handleSequentialOrderDirectionChange(ev) {
+    const direction = ev.target.value;
+    this._config = {
+      ...this._config,
+      folder: {
+        ...this._config.folder,
+        sequential: {
+          order_by: this._config.folder?.sequential?.order_by || 'date_taken',
+          order_direction: direction
+        }
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _handleRootMediaIndexEntityChange(ev) {
+    const entityId = ev.target.value;
+    console.log('🎯 _handleRootMediaIndexEntityChange called with:', entityId);
+    console.log('🎯 Current media_source_type:', this._config.media_source_type);
+    console.log('🎯 this.hass exists:', !!this.hass);
+    
+    if (entityId) {
+      // Enable media_index at root level (works for both single_media and folder)
+      this._config = {
+        ...this._config,
+        media_index: {
+          ...this._config.media_index,
+          entity_id: entityId
+        }
+      };
+      
+      // Auto-populate folder path from entity if available
+      if (this.hass && this.hass.states[entityId]) {
+        const entity = this.hass.states[entityId];
+        console.log('🔍 Media Index entity FULL:', entity);
+        console.log('🔍 Media Index entity attributes:', entity.attributes);
+        console.log('🔍 Available attribute keys:', Object.keys(entity.attributes));
+        
+        // Try different possible attribute names
+        const mediaFolder = entity.attributes?.media_path ||   // media_index uses this
+                           entity.attributes?.media_folder || 
+                           entity.attributes?.folder_path ||
+                           entity.attributes?.base_path;
+        
+        console.log('📁 Extracted media folder:', mediaFolder);
+        console.log('📁 Is in folder mode?', this._config.media_source_type === 'folder');
+        
+        if (mediaFolder) {
+          console.log('✅ Auto-populating path from media_index entity:', mediaFolder);
+          
+          // For folder mode: set folder.path
+          if (this._config.media_source_type === 'folder') {
+            console.log('✅ Setting folder.path to:', mediaFolder);
+            this._config.folder = {
+              ...this._config.folder,
+              path: mediaFolder
+            };
+            console.log('✅ Updated folder config:', this._config.folder);
+          } else if (this._config.media_source_type === 'single_media') {
+            // For single_media mode: optionally set as starting folder for browse
+            // Don't auto-set single_media.path as it should be a file, not folder
+            console.log('💡 Folder available for browsing:', mediaFolder);
+          }
+        } else {
+          console.warn('⚠️ No media_folder attribute found on entity');
+        }
+      } else {
+        console.warn('⚠️ Entity not found in hass.states:', entityId);
+      }
+    } else {
+      // Disable media_index
+      const newConfig = { ...this._config };
+      delete newConfig.media_index;
+      this._config = newConfig;
+    }
+    
+    console.log('🎯 Final config before fire:', this._config);
+    this._fireConfigChanged();
+  }
+
+  // Legacy handler - can be removed later
+  _handleMediaIndexEntityChange(ev) {
+    const entityId = ev.target.value;
+    
+    if (entityId) {
+      // Enable media_index backend
+      this._config = {
+        ...this._config,
+        folder: {
+          ...this._config.folder,
+          media_index: {
+            ...this._config.folder?.media_index,
+            entity_id: entityId
+          }
+        }
+      };
+    } else {
+      // Disable media_index backend (use filesystem)
+      this._config = {
+        ...this._config,
+        folder: {
+          ...this._config.folder,
+          media_index: {}
+        }
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  // Legacy handler - can be removed later
   _handleMediaIndexToggle(ev) {
     const enabled = ev.target.checked;
     this._config = { 
@@ -3266,8 +3886,33 @@ class MediaCardV5aEditor extends LitElement {
     // Determine the starting path for the browser
     let startPath = '';
     
-    // If Media Index is enabled, start from the indexed folder
-    if (this._config.use_media_index && this._config.media_index?.entity_id) {
+    // First, try to get path from current config structure (v5)
+    const mediaSourceType = this._config.media_source_type || 'single_media';
+    let configuredPath = '';
+    
+    if (mediaSourceType === 'single_media') {
+      configuredPath = this._config.single_media?.path || this._config.media_path || '';
+    } else if (mediaSourceType === 'folder') {
+      configuredPath = this._config.folder?.path || this._config.media_path || '';
+    }
+    
+    this._log('🔍 Configured path:', configuredPath);
+    
+    if (configuredPath) {
+      // If we have a path, start browsing from that location (or its parent)
+      if (mediaSourceType === 'single_media' && configuredPath.includes('/')) {
+        // For single media, start from parent folder
+        const pathParts = configuredPath.split('/');
+        pathParts.pop(); // Remove the filename
+        startPath = pathParts.join('/');
+        this._log('Starting browser from parent folder:', startPath);
+      } else {
+        // For folders, start from the folder itself
+        startPath = configuredPath;
+        this._log('Starting browser from configured folder:', startPath);
+      }
+    } else if (this._config.media_index?.entity_id) {
+      // If Media Index is configured but no path, try to get from entity
       const entityId = this._config.media_index.entity_id;
       const entity = this.hass.states[entityId];
       
@@ -3279,26 +3924,10 @@ class MediaCardV5aEditor extends LitElement {
         this._log('Starting browser from Media Index folder (attribute):', startPath);
       } else {
         // Fallback: parse entity_id to extract path
-        // e.g., "sensor.media_index_media_photo_photolibrary_total_files" 
-        // -> "media-source://media_source/media/Photo/PhotoLibrary"
         const parsedPath = this._parseMediaIndexPath(entityId);
         if (parsedPath) {
           startPath = parsedPath;
           this._log('Starting browser from Media Index folder (parsed):', startPath);
-        }
-      }
-    } else {
-      // Otherwise use configured path or try to infer from current path
-      const configuredPath = this._config.media_path || '';
-      
-      if (configuredPath) {
-        // If we have a current path, try to start from its parent folder
-        if (configuredPath.includes('/')) {
-          // Extract the parent folder from the current path
-          const pathParts = configuredPath.split('/');
-          pathParts.pop(); // Remove the filename
-          startPath = pathParts.join('/');
-          this._log('Starting browser from current folder:', startPath);
         }
       }
     }
@@ -3712,11 +4341,48 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
     useFolderButton.onclick = () => {
       this._log('Use This Folder clicked for:', folderPath);
-      this._config = {
-        ...this._config,
-        media_path: folderPath,
-        is_folder: true
-      };
+      
+      const mediaSourceType = this._config.media_source_type || 'single_media';
+      
+      if (mediaSourceType === 'folder') {
+        // Already in folder mode - just update the path
+        this._config = {
+          ...this._config,
+          folder: {
+            ...this._config.folder,
+            path: folderPath
+          }
+        };
+      } else {
+        // In single_media mode - ask if they want to switch to folder mode
+        const switchToFolder = confirm(
+          '📁 You selected a folder.\n\n' +
+          'Do you want to:\n' +
+          'OK = Switch to Folder mode (random/sequential slideshow)\n' +
+          'Cancel = Stay in Single Media mode (shows folder as single item)'
+        );
+        
+        if (switchToFolder) {
+          this._config = {
+            ...this._config,
+            media_source_type: 'folder',
+            folder: {
+              path: folderPath,
+              mode: 'random',
+              recursive: true
+            }
+          };
+        } else {
+          this._config = {
+            ...this._config,
+            single_media: {
+              ...this._config.single_media,
+              path: folderPath
+            }
+          };
+        }
+      }
+      
       this._fireConfigChanged();
       
       if (dialog && dialog.parentNode) {
@@ -3918,17 +4584,19 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   _handleMediaPicked(mediaContentId) {
     this._log('Media picked:', mediaContentId);
     
-    const mediaSourceType = this._config.media_source_type || 'simple_folder';
+    const mediaSourceType = this._config.media_source_type || 'single_media';
     
-    // For single_media: just set the file
+    // For single_media: just set the file in single_media.path
     if (mediaSourceType === 'single_media') {
       this._config = { 
-        ...this._config, 
-        media_path: mediaContentId,
-        is_folder: false
+        ...this._config,
+        single_media: {
+          ...this._config.single_media,
+          path: mediaContentId
+        }
       };
-    } else {
-      // For folder modes: warn user and offer to use parent folder
+    } else if (mediaSourceType === 'folder') {
+      // For folder mode: warn user and offer to use parent folder
       const confirmFile = confirm(
         '⚠️ You selected a file, but you\'re in folder mode.\n\n' +
         'Do you want to:\n' +
@@ -3944,16 +4612,20 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         
         this._config = {
           ...this._config,
-          media_path: folderPath,
-          is_folder: true
+          folder: {
+            ...this._config.folder,
+            path: folderPath
+          }
         };
       } else {
-        // Switch to single_media mode
+        // Switch to single_media mode with this file
         this._config = {
           ...this._config,
           media_source_type: 'single_media',
-          media_path: mediaContentId,
-          is_folder: false
+          single_media: {
+            path: mediaContentId,
+            refresh_seconds: 0
+          }
         };
       }
     }
@@ -4097,167 +4769,121 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       return html``;
     }
 
-    const mediaSourceType = this._config.media_source_type || 'simple_folder';
-    const useMediaIndex = this._config.use_media_index || false;
+    const mediaSourceType = this._config.media_source_type || 'folder';
+    const isFolderMode = mediaSourceType === 'folder';
+    const folderConfig = this._config.folder || {};
+    const folderMode = folderConfig.mode || 'random';
+    const mediaIndexEntityId = this._config.media_index?.entity_id || folderConfig.media_index?.entity_id || '';
+    const hasMediaIndex = !!mediaIndexEntityId;
 
     return html`
       <div class="card-config">
         
-        <!-- Mode Selection Dropdown -->
+        <!-- Mode Selection Dropdown (2 options: single_media or folder) -->
         <div class="config-row">
-          <label>Media Source Mode</label>
+          <label>Media Source Type</label>
           <div>
             <select @change=${this._handleModeChange} .value=${mediaSourceType}>
-              <option value="single_media">Single Media - Display one image/video at a time</option>
-              <option value="simple_folder">Simple Folder - Basic folder scanning with optional random</option>
-              <option value="subfolder_queue">Folder Hierarchy - Advanced folder navigation</option>
+              <option value="single_media">Single Media</option>
+              <option value="folder">Folder</option>
             </select>
-            <div class="help-text">Choose how to display your media</div>
+            <div class="help-text">
+              ${mediaSourceType === 'single_media' 
+                ? 'Display a single image/video (with optional periodic refresh)' 
+                : 'Display media from a folder (random or sequential)'}
+            </div>
           </div>
         </div>
 
-        <!-- Media Index Enhancement Section -->
-        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #e0e0e0;">
-          <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: ${useMediaIndex ? '12px' : '0'};">
-            <input
-              type="checkbox"
-              .checked=${useMediaIndex}
-              @change=${this._handleMediaIndexToggle}
-              style="margin-right: 8px;"
-            />
-            <strong>🚀 Media Index Integration</strong>
-          </label>
-          <p style="margin: 4px 0 ${useMediaIndex ? '12px' : '0'} 28px; font-size: 13px; color: #666;">
-            Provides faster queries, lower resource use, file metadata (location/date/rating) and rate/edit/delete actions capability. Download via HACS or <a href="https://github.com/markaggar/ha-media-index" target="_blank" style="color: var(--primary-color, #007bff);">GitHub</a>
+        <!-- Media Index Integration (Available for both Single Media and Folder modes) -->
+        <div style="background: #f0f7ff; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #d0e7ff;">
+          <div style="margin-bottom: 12px;">
+            <strong>🚀 Media Index Integration (Optional)</strong>
+          </div>
+          <p style="margin: 4px 0 16px 0; font-size: 13px; color: #666;">
+            Enable EXIF metadata display (date, location, camera info) and action buttons (favorite, delete, edit). 
+            ${isFolderMode ? 'Also provides faster database-backed queries for folder scanning. ' : ''}
+            Download via HACS or <a href="https://github.com/markaggar/ha-media-index" target="_blank" style="color: var(--primary-color, #007bff);">GitHub</a>
           </p>
           
-          ${useMediaIndex ? html`
-            <div style="margin-left: 28px;">
-              <label style="display: block; margin-bottom: 4px; font-weight: 500;">Media Index Entity:</label>
-              <select
-                .value=${this._config.media_index?.entity_id || ''}
-                @change=${this._handleMediaIndexEntityChange}
-                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-              >
-                <option value="">Select media_index sensor...</option>
-                ${this._getMediaIndexEntities().map(entity => html`
-                  <option 
-                    value="${entity.entity_id}"
-                    .selected=${this._config.media_index?.entity_id === entity.entity_id}
-                  >${entity.friendly_name}</option>
-                `)}
-              </select>
-            </div>
-          ` : ''}
-        </div>
-
-        <!-- File System Scanning Enhancement Section -->
-        ${mediaSourceType === 'subfolder_queue' && !useMediaIndex ? html`
-          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #e0e0e0;">
-            <div style="margin-bottom: 12px;">
-              <strong>🌳 File System Scanning</strong>
-            </div>
-            <p style="margin: 4px 0 16px 0; font-size: 13px; color: #666;">
-              Advanced folder hierarchy scanning for multi-folder random selection
-            </p>
-            
-            <div style="margin-left: 28px;">
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Scan Depth:</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="10"
-                  .value=${this._config.subfolder_queue?.scan_depth ?? ''}
-                  placeholder="unlimited"
-                  @input=${this._subfolderScanDepthChanged}
-                  style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-                />
-                <div style="font-size: 12px; color: #666; margin-top: 4px;">
-                  How many folder levels to scan (empty/0 = unlimited, 1-10 = limit depth)
-                </div>
-              </div>
-              
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; margin-bottom: 4px; font-weight: 500;">Priority Folders:</label>
-                <input
-                  type="text"
-                  .value=${(this._config.subfolder_queue?.priority_folders || []).join(', ')}
-                  @input=${this._priorityFoldersChanged}
-                  placeholder="e.g., favorites, best, 2024"
-                  style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-                />
-                <div style="font-size: 12px; color: #666; margin-top: 4px;">
-                  Comma-separated folder names to scan first (optional)
-                </div>
-              </div>
-              
-              <div style="margin-bottom: 16px;">
-                <label style="display: flex; align-items: center; cursor: pointer;">
-                  <input
-                    type="checkbox"
-                    .checked=${this._config.subfolder_queue?.equal_probability_mode !== false}
-                    @change=${this._equalProbabilityModeChanged}
-                    style="margin-right: 8px;"
-                  />
-                  <strong>Equal Probability Mode</strong>
-                </label>
-                <div style="font-size: 12px; color: #666; margin-top: 4px; margin-left: 28px;">
-                  <strong>Checked:</strong> Every media item has equal chance of selection (true statistical fairness)<br>
-                  <strong>Unchecked:</strong> Each folder gets equal representation (smaller folders overrepresented)
-                </div>
-              </div>
-              
-              ${this._config.subfolder_queue?.equal_probability_mode !== false ? html`
-                <div style="margin-bottom: 16px;">
-                  <label style="display: block; margin-bottom: 4px; font-weight: 500;">Estimated Library Size:</label>
-                  <input
-                    type="number"
-                    min="100"
-                    step="100"
-                    .value=${this._config.subfolder_queue?.estimated_library_size || ''}
-                    @input=${this._estimatedLibrarySizeChanged}
-                    placeholder="e.g., 10000 or 200000"
-                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-                  />
-                  <div style="font-size: 12px; color: #666; margin-top: 4px;">
-                    Estimated number of media files in your library (used to optimize queue size)
-                  </div>
-                </div>
-              ` : ''}
+          <div style="margin-left: 0;">
+            <label style="display: block; margin-bottom: 4px; font-weight: 500;">Media Index Entity:</label>
+            <select
+              .value=${mediaIndexEntityId}
+              @change=${this._handleRootMediaIndexEntityChange}
+              style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+            >
+              <option value="">(None - No metadata or action buttons)</option>
+              ${this._getMediaIndexEntities().map(entity => html`
+                <option 
+                  value="${entity.entity_id}"
+                  .selected=${mediaIndexEntityId === entity.entity_id}
+                >${entity.friendly_name}</option>
+              `)}
+            </select>
+            <div style="font-size: 12px; color: #666; margin-top: 4px;">
+              ${hasMediaIndex 
+                ? `✅ Metadata and action buttons enabled${isFolderMode ? ' + database queries for folder scanning' : ''}` 
+                : '❌ Metadata and action buttons disabled'}
             </div>
           </div>
-        ` : ''}
+        </div>
 
-        <!-- Random Mode (for folder-based modes) -->
-        ${mediaSourceType !== 'single_media' ? html`
+        <!-- Folder Configuration (when media_source_type = "folder") -->
+        ${isFolderMode ? html`
           <div class="config-row">
-            <label>Random Mode</label>
+            <label>Folder Mode</label>
+            <div>
+              <select @change=${this._handleFolderModeChange} .value=${folderMode}>
+                <option value="random">Random</option>
+                <option value="sequential">Sequential</option>
+              </select>
+              <div class="help-text">
+                ${folderMode === 'random' 
+                  ? 'Show files in random order' 
+                  : 'Show files in sequential order'}
+              </div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Recursive Scan</label>
             <div>
               <input
                 type="checkbox"
-                .checked=${this._config.random_mode || false}
-                @change=${this._randomModeChanged}
+                .checked=${folderConfig.recursive !== false}
+                @change=${this._handleRecursiveChanged}
               />
-              <div class="help-text">Show media files in random order</div>
+              <div class="help-text">Include files from subfolders</div>
             </div>
           </div>
-          
-          <div class="config-row">
-            <label>Queue Size</label>
-            <div>
-              <input
-                type="number"
-                min="10"
-                max="10000"
-                step="10"
-                .value=${this._config.subfolder_queue?.queue_size || this._calculateQueueSize()}
-                @input=${this._queueSizeChanged}
-                placeholder="${this._calculateQueueSize()}"
-              />
-              <div class="help-text">Number of items to pre-load into queue (auto: max(100, library_size/100)). Useful for debugging.</div>
+
+          <!-- Sequential Mode Options (only when mode = "sequential") -->
+          ${folderMode === 'sequential' ? html`
+            <div class="config-row">
+              <label>Sort By</label>
+              <div>
+                <select @change=${this._handleSequentialOrderByChange} .value=${folderConfig.sequential?.order_by || 'date_taken'}>
+                  <option value="date_taken">Date Taken (EXIF)</option>
+                  <option value="filename">Filename</option>
+                  <option value="path">Full Path</option>
+                  <option value="modified_time">File Modified Time</option>
+                </select>
+                <div class="help-text">Field to use for sorting files</div>
+              </div>
             </div>
-          </div>
+
+            <div class="config-row">
+              <label>Sort Direction</label>
+              <div>
+                <select @change=${this._handleSequentialOrderDirectionChange} .value=${folderConfig.sequential?.order_direction || 'desc'}>
+                  <option value="asc">Ascending (oldest/A-Z first)</option>
+                  <option value="desc">Descending (newest/Z-A first)</option>
+                </select>
+                <div class="help-text">Sort order direction</div>
+              </div>
+            </div>
+          ` : ''}
         ` : ''}
 
         <div class="config-row">
@@ -4602,7 +5228,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        ${useMediaIndex ? html`
+        ${hasMediaIndex ? html`
           <div class="section">
             <div class="section-title">⭐ Action Buttons</div>
             
