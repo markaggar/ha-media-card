@@ -40,123 +40,6 @@ const MediaUtils = {
  */
 
 /**
- * NavigationHistory - Track user navigation path with back/forward support
- * Copied from V4 (lines 102, 5844-5900, 4952-4981, 643-666)
- */
-class NavigationHistory {
-  constructor(maxSize = 100) {
-    this.items = [];           // Copy from V4 line 102: this._navigationHistory = []
-    this.currentIndex = -1;    // Copy from V4 pattern: this._historyIndex
-    this.maxSize = maxSize;    // NEW - add size limit (V4 has unlimited)
-  }
-
-  /**
-   * Add item to history
-   * Copy from V4 pattern - adds to end and moves index forward
-   */
-  add(item) {
-    // If we're in the middle of history, truncate future items
-    if (this.currentIndex < this.items.length - 1) {
-      this.items = this.items.slice(0, this.currentIndex + 1);
-    }
-
-    // Add new item
-    this.items.push(item);
-    this.currentIndex = this.items.length - 1;
-
-    // Enforce max size (NEW - V4 doesn't limit size)
-    if (this.items.length > this.maxSize) {
-      const excess = this.items.length - this.maxSize;
-      this.items.splice(0, excess);
-      this.currentIndex -= excess;
-    }
-  }
-
-  /**
-   * Navigate to previous item in history
-   */
-  previous() {
-    if (this.currentIndex > 0) {
-      this.currentIndex--;
-      return this.items[this.currentIndex];
-    }
-    return null;
-  }
-
-  /**
-   * Navigate to next item in history (after going back)
-   */
-  next() {
-    if (this.currentIndex < this.items.length - 1) {
-      this.currentIndex++;
-      return this.items[this.currentIndex];
-    }
-    return null;
-  }
-
-  /**
-   * Remove item from history
-   * Copy from V4 lines 5844-5856 - indexOf, splice, index adjustment
-   */
-  removeItem(itemPath) {
-    const index = this.items.findIndex(item => item.path === itemPath);
-    if (index >= 0) {
-      this.items.splice(index, 1);
-      // Adjust current index if we removed an earlier item
-      // Copy from V4 lines 5848-5850
-      if (index <= this.currentIndex) {
-        this.currentIndex--;
-      }
-    }
-  }
-
-  /**
-   * Clear all history
-   */
-  clear() {
-    this.items = [];
-    this.currentIndex = -1;
-  }
-
-  /**
-   * Get current item without changing index
-   */
-  getCurrent() {
-    if (this.currentIndex >= 0 && this.currentIndex < this.items.length) {
-      return this.items[this.currentIndex];
-    }
-    return null;
-  }
-
-  /**
-   * Serialize history for reconnection
-   * Copy from V4 lines 4954-4955
-   */
-  serialize() {
-    return {
-      items: this.items,
-      currentIndex: this.currentIndex
-    };
-  }
-
-  /**
-   * Deserialize history from stored state
-   * Copy from V4 lines 653-654
-   */
-  deserialize(data) {
-    this.items = data.items || [];
-    this.currentIndex = data.currentIndex !== undefined ? data.currentIndex : -1;
-  }
-
-  /**
-   * Get history size
-   */
-  size() {
-    return this.items.length;
-  }
-}
-
-/**
  * ReconnectionManager - Preserve queue state across disconnections
  * Copied from V4 (lines 12-13, 4945-4981, 643-666)
  * 
@@ -700,6 +583,163 @@ class MediaProvider {
   }
 
   /**
+   * V4: Extract filename from path (shared utility)
+   * Moved from SingleMediaProvider for reuse by other providers
+   */
+  static extractFilename(path) {
+    if (!path) return '';
+    return path.split('/').pop() || path;
+  }
+
+  /**
+   * V4: Extract parent folder name from file path (shared utility)
+   * Moved from SubfolderQueue for reuse by other providers
+   */
+  static extractFolderName(pathOrFile) {
+    const path = typeof pathOrFile === 'string' ? pathOrFile : pathOrFile?.media_content_id;
+    if (!path) return 'unknown';
+    const pathParts = path.split('/');
+    return pathParts[pathParts.length - 2] || 'root';
+  }
+
+  /**
+   * V4: Detect media type from path (shared utility)
+   * Moved from SingleMediaProvider for reuse by other providers
+   */
+  static detectMediaType(path) {
+    const type = MediaUtils.detectFileType(path);
+    return type === 'video' ? 'video' : 'image';
+  }
+
+  /**
+   * V4: Extract metadata from file path (shared by providers and card)
+   * Moved from SingleMediaProvider to base class for reuse
+   */
+  static extractMetadataFromPath(mediaPath) {
+    if (!mediaPath) return {};
+    
+    const metadata = {};
+    
+    // Extract filename and clean it up
+    const pathParts = mediaPath.split('/');
+    let filename = pathParts[pathParts.length - 1];
+    
+    // Decode URL encoding (%20 -> space, etc.)
+    try {
+      filename = decodeURIComponent(filename);
+    } catch (e) {
+      console.warn('Failed to decode filename:', filename, e);
+    }
+    
+    metadata.filename = filename;
+    
+    // Extract folder path (parent directory/directories)
+    if (pathParts.length > 1) {
+      // Find where the actual media path starts (skip /media/ prefix)
+      let folderStart = 0;
+      for (let i = 0; i < pathParts.length - 1; i++) {
+        if (pathParts[i] === 'media' && i + 1 < pathParts.length && pathParts[i + 1] !== '') {
+          folderStart = i + 1;
+          break;
+        }
+      }
+      
+      // Extract folder parts (everything between media prefix and filename)
+      if (folderStart < pathParts.length - 1) {
+        const folderParts = pathParts.slice(folderStart, -1);
+        
+        // Decode URL encoding for each folder part
+        const decodedParts = folderParts.map(part => {
+          try {
+            return decodeURIComponent(part);
+          } catch (e) {
+            console.warn('Failed to decode folder part:', part, e);
+            return part;
+          }
+        });
+        
+        // Store as relative path (e.g., "Photo/OneDrive/Mark-Pictures/Camera")
+        metadata.folder = decodedParts.join('/');
+      }
+    }
+    
+    // Try to extract date from filename (basic support - full EXIF will come from media_index)
+    const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+    if (dateFromFilename) {
+      metadata.date = dateFromFilename;
+    }
+    
+    return metadata;
+  }
+  
+  /**
+   * V4: Extract date from filename patterns (shared helper)
+   * Moved from SingleMediaProvider to base class for reuse
+   */
+  static extractDateFromFilename(filename) {
+    if (!filename) return null;
+    
+    // Common date patterns in filenames
+    const patterns = [
+      // YYYY-MM-DD format
+      /(\d{4})-(\d{2})-(\d{2})/,
+      // YYYYMMDD format
+      /(\d{4})(\d{2})(\d{2})/,
+      // DD-MM-YYYY format
+      /(\d{2})-(\d{2})-(\d{4})/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = filename.match(pattern);
+      if (match) {
+        try {
+          if (match[1].length === 4) {
+            // YYYY-MM-DD or YYYYMMDD
+            return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+          } else {
+            // DD-MM-YYYY
+            return new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+          }
+        } catch (e) {
+          // Invalid date, continue to next pattern
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * V4: Extract metadata with optional media_index EXIF enrichment (shared helper)
+   * Used by both SingleMediaProvider and card's _extractMetadataFromItem
+   */
+  static async extractMetadataWithExif(mediaPath, config, hass) {
+    // Step 1: Extract path-based metadata
+    let metadata = MediaProvider.extractMetadataFromPath(mediaPath);
+    
+    // Step 2: Enrich with media_index EXIF data if configured
+    if (MediaProvider.isMediaIndexActive(config) && hass) {
+      try {
+        const enrichedMetadata = await MediaIndexHelper.fetchFileMetadata(
+          hass,
+          config.media_index.entity_id,
+          mediaPath
+        );
+        
+        if (enrichedMetadata) {
+          // Merge path-based and EXIF metadata (EXIF takes precedence)
+          metadata = { ...metadata, ...enrichedMetadata };
+        }
+      } catch (error) {
+        console.warn('Failed to fetch media_index metadata:', error);
+        // Fall back to path-based metadata only
+      }
+    }
+    
+    return metadata;
+  }
+
+  /**
    * Serialize provider state for reconnection
    * Override in subclass to save provider-specific state
    */
@@ -874,47 +914,18 @@ class SingleMediaProvider extends MediaProvider {
       return false;
     }
     
-    // Extract basic metadata from path
-    let metadata = this._extractMetadataFromPath(this.mediaPath);
-    console.log('📊 Path-based metadata:', metadata);
-    
-    // DEBUG: Log media_index config
-    console.log('🔍 Checking media_index config:', {
-      hasMediaIndex: !!this.config.media_index,
-      enabled: this.config.media_index?.enabled,
-      entityId: this.config.media_index?.entity_id,
-      fullConfig: this.config.media_index,
-      hasHass: !!this.hass
-    });
-    
-    // V5: Fetch rich EXIF metadata from media_index if enabled (using shared helper)
-    // V4 pattern: enabled flag OR presence of entity_id means integration is active
-    if (MediaProvider.isMediaIndexActive(this.config) && this.hass) {
-      console.log('🔍 media_index active - fetching EXIF metadata for:', this.mediaPath);
-      try {
-        const enrichedMetadata = await MediaIndexHelper.fetchFileMetadata(
-          this.hass, 
-          this.config, 
-          this.mediaPath
-        );
-        console.log('📊 EXIF metadata from media_index:', enrichedMetadata);
-        if (enrichedMetadata) {
-          // Merge EXIF metadata with path-based metadata
-          metadata = { ...metadata, ...enrichedMetadata };
-          console.log('📊 Merged metadata:', metadata);
-        }
-      } catch (error) {
-        console.warn('Failed to fetch media_index metadata:', error);
-        // Continue with path-based metadata
-      }
-    } else {
-      console.log('⏭️ media_index not enabled or no hass - using path-based metadata only');
-    }
+    // V5: Use shared metadata extraction helper (path-based + optional EXIF)
+    const metadata = await MediaProvider.extractMetadataWithExif(
+      this.mediaPath,
+      this.config,
+      this.hass
+    );
+    console.log('📊 Extracted metadata for single media:', metadata);
     
     this.currentItem = {
       media_content_id: this.mediaPath,
-      title: this._extractFilename(this.mediaPath),
-      media_content_type: this._detectMediaType(this.mediaPath),
+      title: MediaProvider.extractFilename(this.mediaPath),
+      media_content_type: MediaProvider.detectMediaType(this.mediaPath),
       metadata: metadata  // Path-based + optional EXIF metadata
     };
     return true;
@@ -927,111 +938,6 @@ class SingleMediaProvider extends MediaProvider {
       await this._refreshMediaUrl();
     }
     return this.currentItem;
-  }
-
-  async getPrevious() {
-    // Single media mode - always return same item
-    return this.currentItem;
-  }
-
-  _extractFilename(path) {
-    return path.split('/').pop() || path;
-  }
-
-  _detectMediaType(path) {
-    const type = MediaUtils.detectFileType(path);
-    return type === 'video' ? 'video' : 'image';
-  }
-  
-  // V4: Extract metadata from file path
-  _extractMetadataFromPath(mediaPath) {
-    if (!mediaPath) return {};
-    
-    const metadata = {};
-    
-    // Extract filename and clean it up
-    const pathParts = mediaPath.split('/');
-    let filename = pathParts[pathParts.length - 1];
-    
-    // Decode URL encoding (%20 -> space, etc.)
-    try {
-      filename = decodeURIComponent(filename);
-    } catch (e) {
-      console.warn('Failed to decode filename:', filename, e);
-    }
-    
-    metadata.filename = filename;
-    
-    // Extract folder path (parent directory/directories)
-    if (pathParts.length > 1) {
-      // Find where the actual media path starts (skip /media/ prefix)
-      let folderStart = 0;
-      for (let i = 0; i < pathParts.length - 1; i++) {
-        if (pathParts[i] === 'media' && i + 1 < pathParts.length && pathParts[i + 1] !== '') {
-          folderStart = i + 1;
-          break;
-        }
-      }
-      
-      // Extract folder parts (everything between media prefix and filename)
-      if (folderStart < pathParts.length - 1) {
-        const folderParts = pathParts.slice(folderStart, -1);
-        
-        // Decode URL encoding for each folder part
-        const decodedParts = folderParts.map(part => {
-          try {
-            return decodeURIComponent(part);
-          } catch (e) {
-            console.warn('Failed to decode folder part:', part, e);
-            return part;
-          }
-        });
-        
-        // Store as relative path (e.g., "Photo/OneDrive/Mark-Pictures/Camera")
-        metadata.folder = decodedParts.join('/');
-      }
-    }
-    
-    // Try to extract date from filename (basic support - full EXIF will come from media_index)
-    const dateFromFilename = this._extractDateFromFilename(filename);
-    if (dateFromFilename) {
-      metadata.date = dateFromFilename;
-    }
-    
-    return metadata;
-  }
-  
-  _extractDateFromFilename(filename) {
-    if (!filename) return null;
-    
-    // Common date patterns in filenames
-    const patterns = [
-      // YYYY-MM-DD format
-      /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format
-      /(\d{4})(\d{2})(\d{2})/,
-      // DD-MM-YYYY format
-      /(\d{2})-(\d{2})-(\d{4})/
-    ];
-    
-    for (const pattern of patterns) {
-      const match = filename.match(pattern);
-      if (match) {
-        try {
-          if (match[1].length === 4) {
-            // YYYY-MM-DD or YYYYMMDD
-            return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
-          } else {
-            // DD-MM-YYYY
-            return new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
-          }
-        } catch (e) {
-          // Invalid date, continue to next pattern
-        }
-      }
-    }
-    
-    return null;
   }
 
   async _refreshMediaUrl() {
@@ -1148,27 +1054,18 @@ class FolderProvider extends MediaProvider {
     return false;
   }
 
+  // V5: Simple passthrough - just get next item from queue
+  // Card manages history, provider just supplies items
   async getNext() {
     if (this.subfolderQueue) {
-      console.log('[FolderProvider] getNext() - queue length:', this.subfolderQueue.queue.length);
-      const item = this.subfolderQueue.getNextItem();
-      console.log('[FolderProvider] getNext() returned:', item);
-      return item;
+      return this.subfolderQueue.getNextItem();
     }
     console.warn('[FolderProvider] getNext() called but no subfolderQueue');
     return null;
   }
 
-  async getPrevious() {
-    if (this.subfolderQueue) {
-      console.log('[FolderProvider] getPrevious() - history length:', this.subfolderQueue.history.length);
-      const item = this.subfolderQueue.getPreviousItem();
-      console.log('[FolderProvider] getPrevious() returned:', item);
-      return item;
-    }
-    console.warn('[FolderProvider] getPrevious() called but no subfolderQueue');
-    return null;
-  }
+  // V5: REMOVED - Card handles previous navigation via history
+  // getPrevious() deleted - card manages this
 }
 
 // =================================================================
@@ -1181,7 +1078,7 @@ class SubfolderQueue {
     this.card = card;
     this.config = card.config.subfolder_queue;
     this.queue = [];
-    this.shownItems = new Set();
+    this.shownItems = new Set();  // V5: Will move to card level eventually
     this.discoveredFolders = [];
     this.folderWeights = new Map();
     this.isScanning = false;
@@ -1199,9 +1096,8 @@ class SubfolderQueue {
     this.SHUFFLE_MAX_BATCH = 1000;
     this.SHUFFLE_PERCENTAGE = 0.10;
     
-    // Navigation history
-    this.history = [];
-    this.historyIndex = -1;
+    // V5: Navigation history REMOVED - card owns this now
+    // (Was: this.history = [], this.historyIndex = -1)
     
     // Probability calculation cache
     this.cachedTotalCount = null;
@@ -1298,8 +1194,7 @@ class SubfolderQueue {
       }
       
       this.shownItems.clear();
-      this.history = [];
-      this.historyIndex = -1;
+      // V5: history removed - card owns navigation history
       this.queue = [];
       this.discoveredFolders = [];
       this.folderWeights.clear();
@@ -1732,7 +1627,7 @@ class SubfolderQueue {
     const historyEntry = {
       file: file,
       timestamp: new Date().toISOString(),
-      folderName: folderName || this.extractFolderName(file),
+      folderName: folderName || MediaProvider.extractFolderName(file),
       source: 'hierarchical_scan'
     };
     this.queueHistory.push(historyEntry);
@@ -1783,19 +1678,10 @@ class SubfolderQueue {
     }
   }
 
-  extractFolderName(file) {
-    if (!file || !file.media_content_id) return 'unknown';
-    const pathParts = file.media_content_id.split('/');
-    return pathParts[pathParts.length - 2] || 'root';
-  }
-
+  // V5: Simplified - just return next item from queue
+  // Card manages history/navigation, provider just supplies items
   getNextItem() {
-    if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
-      this.historyIndex++;
-      const item = this.history[this.historyIndex];
-      return item;
-    }
-
+    // Refill if empty
     if (this.queue.length === 0) {
       this.refillQueue();
       if (this.queue.length === 0) {
@@ -1803,21 +1689,14 @@ class SubfolderQueue {
       }
     }
 
+    // Find first unshown item
     for (let i = 0; i < this.queue.length; i++) {
       const item = this.queue[i];
       if (!this.shownItems.has(item.media_content_id)) {
         this.shownItems.add(item.media_content_id);
-        
-        this.history.push(item);
-        this.historyIndex = this.history.length - 1;
-        
-        if (this.history.length > 100) {
-          this.history.shift();
-          this.historyIndex = this.history.length - 1;
-        }
-        
         this.queue.splice(i, 1);
         
+        // Trigger refill if running low
         if (this.needsRefill()) {
           setTimeout(() => this.refillQueue(), 100);
         }
@@ -1826,44 +1705,22 @@ class SubfolderQueue {
       }
     }
 
+    // All items in queue have been shown - age out and try again
     this.ageOutShownItems();
     this.refillQueue();
     
     if (this.queue.length > 0) {
       const item = this.queue[0];
       this.shownItems.add(item.media_content_id);
-      
-      this.history.push(item);
-      this.historyIndex = this.history.length - 1;
-      
       this.queue.shift();
-      
       return item;
     }
     
     return null;
   }
 
-  getPreviousItem() {
-    if (this.history.length === 0) {
-      return null;
-    }
-
-    if (this.historyIndex === -1) {
-      this.historyIndex = this.history.length - 2;
-    } else if (this.historyIndex > 0) {
-      this.historyIndex--;
-    } else {
-      return this.history[0];
-    }
-
-    if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
-      const item = this.history[this.historyIndex];
-      return item;
-    }
-
-    return null;
-  }
+  // V5: REMOVED - Card handles previous navigation via history
+  // getPreviousItem() deleted - card.history manages this
 
   needsRefill() {
     const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
@@ -2041,7 +1898,13 @@ class MediaCardV5a extends LitElement {
   constructor() {
     super();
     this.provider = null;
-    this.history = new NavigationHistory();
+    
+    // V5 Unified Architecture: Card owns queue/history, providers just populate
+    this.queue = [];              // Upcoming items from provider
+    this.history = [];            // Navigation trail (what user has seen)
+    this.historyIndex = -1;       // Current position in history (-1 = at end)
+    this.shownItems = new Set();  // Prevent duplicate display until aged out
+    
     this.currentMedia = null;
     this.mediaUrl = '';
     this.isLoading = false;
@@ -2140,6 +2003,28 @@ class MediaCardV5a extends LitElement {
     }
     this._log('📝 setConfig called with:', config);
     
+    // V5: Clear auto-advance timer when reconfiguring (prevents duplicate timers)
+    if (this._refreshInterval) {
+      this._log('🧹 Clearing existing auto-advance timer before reconfiguration');
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
+    
+    // V5: Reset provider to force reinitialization with new config
+    if (this.provider) {
+      this._log('🧹 Clearing existing provider before reconfiguration');
+      this.provider = null;
+    }
+    
+    // V5: Reset navigation state for fresh start
+    this.queue = [];
+    this.history = [];
+    this.historyIndex = -1;
+    this.shownItems = new Set();
+    this.currentMedia = null;
+    this._currentMediaPath = null;
+    this._currentMetadata = null;
+    
     // Apply defaults for metadata display and media source type
     this.config = {
       media_source_type: 'single_media', // Default to single_media mode
@@ -2164,6 +2049,12 @@ class MediaCardV5a extends LitElement {
       this.setAttribute('data-aspect-mode', aspectMode);
     } else {
       this.removeAttribute('data-aspect-mode');
+    }
+    
+    // V5: Trigger reinitialization if we already have hass
+    if (this._hass) {
+      this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
+      this._initializeProvider();
     }
   }
 
@@ -2249,6 +2140,7 @@ class MediaCardV5a extends LitElement {
     }
   }
 
+  // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
     if (!this.provider) {
       this._log('_loadNext called but no provider');
@@ -2256,21 +2148,53 @@ class MediaCardV5a extends LitElement {
     }
 
     try {
+      // Check if we're replaying history (went back, now going forward)
+      if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
+        this.historyIndex++;
+        const item = this.history[this.historyIndex];
+        this._log('📖 Replaying from history:', item.title);
+        this.currentMedia = item;
+        this._currentMediaPath = item.media_content_id;
+        this._currentMetadata = item.metadata || null;
+        await this._resolveMediaUrl();
+        this.requestUpdate();
+        return;
+      }
+
+      // Get fresh item from provider
       this._log('Getting next item from provider');
       const item = await this.provider.getNext();
       this._log('Got item:', item);
       
       if (item) {
-        this.history.add(item);
+        // V5: Extract metadata from path if not provided by backend (now async with media_index support)
+        if (!item.metadata) {
+          item.metadata = await this._extractMetadataFromItem(item);
+          this._log('📊 Extracted metadata:', item.metadata);
+        }
+        
+        // Add to history
+        this.history.push(item);
+        this.historyIndex = this.history.length - 1;
+        
+        // Limit history size (V4 keeps unlimited, v5 caps at 100)
+        if (this.history.length > 100) {
+          this.history.shift();
+          this.historyIndex = this.history.length - 1;
+        }
+        
         this.currentMedia = item;
         this._log('Set currentMedia:', this.currentMedia);
         
         // V4: Set metadata for action buttons and display
         this._currentMediaPath = item.media_content_id;
-        this._currentMetadata = item.metadata || null;
+        this._currentMetadata = item.metadata;
         
         await this._resolveMediaUrl();
         this.requestUpdate(); // Force re-render
+        
+        // V5: Setup auto-advance after successfully loading media
+        this._setupAutoRefresh();
       } else {
         console.warn('[MediaCardV5a] Provider returned null item');
       }
@@ -2285,27 +2209,89 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
-    try {
-      this._log('Getting previous item from history');
-      const item = this.history.previous();
-      this._log('Got history item:', item);
-      
-      if (item) {
-        this.currentMedia = item;
-        this._log('Set currentMedia from history:', this.currentMedia);
-        
-        // V4: Set metadata for action buttons and display
-        this._currentMediaPath = item.media_content_id;
-        this._currentMetadata = item.metadata || null;
-        
-        await this._resolveMediaUrl();
-        this.requestUpdate(); // Force re-render
-      } else {
-        console.warn('[MediaCardV5a] No previous item in history');
-      }
-    } catch (error) {
-      console.error('[MediaCardV5a] Error loading previous media:', error);
+    // V5: Simple history navigation - just move index back
+    if (this.history.length === 0) {
+      this._log('📖 No history available');
+      return;
     }
+
+    // If at end (-1), go to second-to-last item
+    if (this.historyIndex === -1) {
+      this.historyIndex = this.history.length - 2;
+    } else if (this.historyIndex > 0) {
+      this.historyIndex--;
+    } else {
+      this._log('📖 Already at oldest item in history');
+      return;
+    }
+
+    if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
+      const item = this.history[this.historyIndex];
+      this._log('📖 Going back to history item:', item.title);
+      
+      this.currentMedia = item;
+      this._currentMediaPath = item.media_content_id;
+      this._currentMetadata = item.metadata || null;
+      
+      await this._resolveMediaUrl();
+      this.requestUpdate();
+    } else {
+      console.warn('[MediaCardV5a] Invalid history index:', this.historyIndex);
+    }
+  }
+
+  // V5: Setup auto-advance timer (copied from V4 lines 1611-1680)
+  _setupAutoRefresh() {
+    // Clear any existing interval FIRST to prevent multiple timers
+    if (this._refreshInterval) {
+      this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
+      clearInterval(this._refreshInterval);
+      this._refreshInterval = null;
+    }
+
+    // Don't set up auto-refresh if paused
+    if (this._isPaused) {
+      this._log('🔄 Auto-refresh setup skipped - currently paused');
+      return;
+    }
+    
+    if (this._backgroundPaused) {
+      this._log('🔄 Auto-refresh setup skipped - background paused (not visible)');
+      return;
+    }
+
+    // V5: Get auto-advance seconds from config (NOT auto_refresh_seconds)
+    const advanceSeconds = this.config?.auto_advance_seconds;
+    if (advanceSeconds && advanceSeconds > 0 && this.hass) {
+      this._log(`🔄 Setting up auto-advance every ${advanceSeconds} seconds`);
+      
+      this._refreshInterval = setInterval(() => {
+        // Check pause states before advancing
+        if (!this._isPaused && !this._backgroundPaused) {
+          this._log('🔄 Auto-advance timer triggered - loading next');
+          this._loadNext();
+        } else {
+          this._log('🔄 Auto-advance skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
+        }
+      }, advanceSeconds * 1000);
+      
+      this._log('✅ Auto-advance interval started with ID:', this._refreshInterval);
+    } else {
+      this._log('🔄 Auto-advance disabled or not configured:', {
+        advanceSeconds,
+        hasHass: !!this.hass
+      });
+    }
+  }
+
+  // V5: Extract metadata from browse_media item (uses shared helper with media_index support)
+  async _extractMetadataFromItem(item) {
+    if (!item) return {};
+    
+    const mediaPath = item.media_content_id || item.title;
+    
+    // Use shared MediaProvider helper for consistent extraction across providers and card
+    return await MediaProvider.extractMetadataWithExif(mediaPath, this.config, this.hass);
   }
   
   // V5: Refresh metadata from media_index (for action button updates)
@@ -2344,16 +2330,17 @@ class MediaCardV5a extends LitElement {
 
   async _resolveMediaUrl() {
     if (!this.currentMedia || !this.hass) {
-      this._log('Cannot resolve URL - missing currentMedia or hass');
+      console.log('[MediaCardV5a] Cannot resolve URL - missing currentMedia or hass');
       return;
     }
 
     const mediaId = this.currentMedia.media_content_id;
-    this._log('Resolving media URL for:', mediaId);
+    console.log('[MediaCardV5a] 🔍 _resolveMediaUrl called with mediaId:', mediaId);
+    console.log('[MediaCardV5a] 🔍 currentMedia object:', this.currentMedia);
     
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
-      this._log('Using direct HTTP URL');
+      console.log('[MediaCardV5a] Using direct HTTP URL');
       this.mediaUrl = mediaId;
       this.requestUpdate();
       return;
@@ -2362,13 +2349,23 @@ class MediaCardV5a extends LitElement {
     // If media-source:// format, resolve through HA API
     if (mediaId.startsWith('media-source://')) {
       try {
-        this._log('Resolving media-source:// URL via HA API');
+        console.log('[MediaCardV5a] ✅ Resolving media-source:// URL via HA API');
+        
+        // V5: Fix doubled /media/ in media_content_id BEFORE resolving
+        // HA bug: browse_media returns media-source://media_source/media/... but should be media-source://media_source/...
+        let fixedMediaId = mediaId;
+        if (mediaId.includes('/media/media/')) {
+          fixedMediaId = mediaId.replace('media-source://media_source/media/', 'media-source://media_source/');
+          console.log('[MediaCardV5a] 🔧 Fixed doubled /media/ in media_content_id:', mediaId, '->', fixedMediaId);
+        }
+        
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
-          media_content_id: mediaId,
+          media_content_id: fixedMediaId,
           expires: (60 * 60 * 3) // 3 hours
         });
-        this._log('Resolved to:', resolved.url);
+        console.log('[MediaCardV5a] ✅ HA resolved to:', resolved.url);
+        
         this.mediaUrl = resolved.url;
         this.requestUpdate();
       } catch (error) {
@@ -2382,7 +2379,7 @@ class MediaCardV5a extends LitElement {
     // If /media/ path, convert to media-source://
     if (mediaId.startsWith('/media/')) {
       const mediaSourceId = 'media-source://media_source' + mediaId;
-      this._log('Converting /media/ to media-source://', mediaSourceId);
+      console.log('[MediaCardV5a] ⚠️ Converting /media/ to media-source://', mediaSourceId);
       try {
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
