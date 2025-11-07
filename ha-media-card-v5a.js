@@ -1024,48 +1024,325 @@ class FolderProvider extends MediaProvider {
     
     console.log('[FolderProvider] Initialize - mode:', mode, 'recursive:', recursive);
     console.log('[FolderProvider] Config:', this.config);
-    console.log('[FolderProvider] Adapted config for SubfolderQueue:', this.cardAdapter.config);
+    
+    // V5 ARCHITECTURE: Check if media_index should be used for discovery
+    // Default: true when media_index is configured (use_media_index_for_discovery defaults to true)
+    const useMediaIndex = this.config.folder?.use_media_index_for_discovery !== false && 
+                          MediaProvider.isMediaIndexActive(this.config);
+    
+    console.log('[FolderProvider] useMediaIndex:', useMediaIndex);
     
     // Only support random mode with recursive scanning for now
     if (mode === 'random' && recursive) {
-      // Create SubfolderQueue instance with V4-compatible card adapter
-      this.subfolderQueue = new SubfolderQueue(this.cardAdapter);
-      console.log('[FolderProvider] SubfolderQueue created, calling initialize...');
-      console.log('[FolderProvider] cardAdapter config:', this.cardAdapter.config);
-      console.log('[FolderProvider] cardAdapter._debugMode:', this.cardAdapter._debugMode);
-      
-      const success = await this.subfolderQueue.initialize();
-      
-      console.log('[FolderProvider] Initialize returned:', success);
-      console.log('[FolderProvider] Queue length after initialize:', this.subfolderQueue.queue.length);
-      console.log('[FolderProvider] Discovered folders:', this.subfolderQueue.discoveredFolders.length);
-      
-      if (!success) {
-        console.warn('[FolderProvider] SubfolderQueue initialization failed');
-        return false;
+      // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
+      if (useMediaIndex) {
+        console.log('[FolderProvider] Using MediaIndexProvider for discovery');
+        this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass);
+        const success = await this.mediaIndexProvider.initialize();
+        
+        if (!success) {
+          console.warn('[FolderProvider] MediaIndexProvider initialization failed, falling back to SubfolderQueue');
+          // Fallback to filesystem scanning
+          this.mediaIndexProvider = null;
+        } else {
+          console.log('[FolderProvider] ✅ MediaIndexProvider initialized');
+          return true;
+        }
       }
       
-      console.log('[FolderProvider] ✅ SubfolderQueue initialized');
-      return true;
+      // Use SubfolderQueue (filesystem scanning) if media_index disabled or failed
+      if (!this.mediaIndexProvider) {
+        console.log('[FolderProvider] Using SubfolderQueue for filesystem scanning');
+        console.log('[FolderProvider] Adapted config for SubfolderQueue:', this.cardAdapter.config);
+        
+        // Create SubfolderQueue instance with V4-compatible card adapter
+        this.subfolderQueue = new SubfolderQueue(this.cardAdapter);
+        console.log('[FolderProvider] SubfolderQueue created, calling initialize...');
+        console.log('[FolderProvider] cardAdapter config:', this.cardAdapter.config);
+        console.log('[FolderProvider] cardAdapter._debugMode:', this.cardAdapter._debugMode);
+        
+        const success = await this.subfolderQueue.initialize();
+        
+        console.log('[FolderProvider] Initialize returned:', success);
+        console.log('[FolderProvider] Queue length after initialize:', this.subfolderQueue.queue.length);
+        console.log('[FolderProvider] Discovered folders:', this.subfolderQueue.discoveredFolders.length);
+        
+        if (!success) {
+          console.warn('[FolderProvider] SubfolderQueue initialization failed');
+          return false;
+        }
+        
+        console.log('[FolderProvider] ✅ SubfolderQueue initialized');
+        return true;
+      }
     }
     
-    // TODO Phase 5+: Sequential mode, single folder (recursive=false), media_index mode
+    // TODO Phase 5+: Sequential mode, single folder (recursive=false)
     console.warn('[FolderProvider] Only random+recursive mode supported currently. Mode:', mode, 'Recursive:', recursive);
     return false;
   }
 
-  // V5: Simple passthrough - just get next item from queue
+  // V5: Simple passthrough - delegate to active provider
   // Card manages history, provider just supplies items
   async getNext() {
+    if (this.mediaIndexProvider) {
+      return this.mediaIndexProvider.getNext();
+    }
+    
     if (this.subfolderQueue) {
       return this.subfolderQueue.getNextItem();
     }
-    console.warn('[FolderProvider] getNext() called but no subfolderQueue');
+    
+    console.warn('[FolderProvider] getNext() called but no provider initialized');
     return null;
   }
 
   // V5: REMOVED - Card handles previous navigation via history
   // getPrevious() deleted - card manages this
+}
+
+// =================================================================
+// MEDIA INDEX PROVIDER - Database-backed random media queries
+// =================================================================
+// V4 CODE REUSE: Copied from ha-media-card.js lines 2121-2250 (_queryMediaIndex)
+// Adapted for provider pattern architecture
+
+class MediaIndexProvider extends MediaProvider {
+  constructor(config, hass) {
+    super(config, hass);
+    this.queue = []; // Internal queue of items from database
+    this.queueSize = config.slideshow_window || 100;
+    this.excludedFiles = new Set(); // Track excluded files (moved to _Junk/_Edit)
+  }
+
+  async initialize() {
+    console.log('[MediaIndexProvider] Initializing...');
+    
+    // Check if media_index is configured
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('[MediaIndexProvider] Media index not configured');
+      return false;
+    }
+    
+    // Initial query to fill queue
+    const items = await this._queryMediaIndex(this.queueSize);
+    
+    if (!items || items.length === 0) {
+      console.warn('[MediaIndexProvider] No items returned from media_index');
+      return false;
+    }
+    
+    this.queue = items;
+    console.log('[MediaIndexProvider] ✅ Initialized with', this.queue.length, 'items');
+    return true;
+  }
+
+  async getNext() {
+    // Refill queue if running low
+    if (this.queue.length < 10) {
+      console.log('[MediaIndexProvider] Queue low, refilling...');
+      const items = await this._queryMediaIndex(this.queueSize);
+      if (items && items.length > 0) {
+        this.queue.push(...items);
+        console.log('[MediaIndexProvider] Refilled queue, now', this.queue.length, 'items');
+      }
+    }
+    
+    // Return next item from queue
+    if (this.queue.length > 0) {
+      const item = this.queue.shift();
+      
+      // Extract metadata using MediaProvider helper (V5 architecture)
+      // V4 code already includes EXIF fields in item, so we merge path-based + EXIF
+      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
+      
+      return {
+        media_content_id: item.url, // Already resolved URL from _queryMediaIndex
+        media_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        metadata: {
+          ...pathMetadata,
+          // EXIF data from media_index backend (V4 pattern)
+          date_taken: item.date_taken,
+          created_time: item.created_time,
+          location_city: item.location_city,
+          location_state: item.location_state,
+          location_country: item.location_country,
+          location_name: item.location_name,
+          has_coordinates: item.has_coordinates || false,
+          is_geocoded: item.is_geocoded || false,
+          latitude: item.latitude,
+          longitude: item.longitude,
+          is_favorited: item.is_favorited || false
+        }
+      };
+    }
+    
+    console.warn('[MediaIndexProvider] Queue empty, no items to return');
+    return null;
+  }
+
+  // V4 CODE REUSE: Copied from ha-media-card.js lines 2121-2250
+  // Modified: Removed card-specific references (this.config → config, this.hass → hass)
+  async _queryMediaIndex(count = 10) {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('[MediaIndexProvider] Media index not configured');
+      return null;
+    }
+
+    try {
+      console.log('[MediaIndexProvider] 🔍 Querying media_index for', count, 'random items...');
+      
+      // V4 CODE: Extract folder path from media_path config
+      // Database stores full paths like: /media/Photo/PhotoLibrary/2023/06
+      // Config might be: media-source://media_source/media/Photo/PhotoLibrary
+      // We need to extract: /media/Photo/PhotoLibrary
+      let folderFilter = null;
+      if (this.config.folder?.path) {
+        let path = this.config.folder.path;
+        // Remove media-source://media_source prefix if present
+        if (path.startsWith('media-source://media_source')) {
+          path = path.replace('media-source://media_source', '');
+        }
+        // Now path should be like: /media/Photo/PhotoLibrary
+        folderFilter = path;
+        console.log('[MediaIndexProvider] 🔍 Filtering by folder:', folderFilter);
+      }
+      
+      // V4 CODE: Call media_index.get_random_items service with return_response via WebSocket
+      // CRITICAL: Use config.media_type (user's preference), NOT current item's type
+      const configuredMediaType = this.config.media_type || 'all';
+      
+      // V4 CODE: Build WebSocket call with optional target for multi-instance support
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_random_items',
+        service_data: {
+          count: count,
+          folder: folderFilter,
+          // Use configured media type preference
+          file_type: configuredMediaType === 'all' ? undefined : configuredMediaType
+        },
+        return_response: true
+      };
+      
+      // V4 CODE: If user specified a media_index entity, add target to route to correct instance
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+        console.log('[MediaIndexProvider] 🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
+      }
+      
+      // V4 CODE: Log the actual WebSocket call for debugging (only in debug mode)
+      if (this.config?.debug_queue_mode) {
+        console.warn('[MediaIndexProvider] 📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      }
+      
+      const wsResponse = await this.hass.callWS(wsCall);
+      
+      // V4 CODE: Log the raw response (only in debug mode)
+      if (this.config?.debug_queue_mode) {
+        console.warn('[MediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+      }
+
+      // V4 CODE: WebSocket response can be wrapped in different ways
+      // - { response: { items: [...] } }  (standard WebSocket format)
+      // - { service_response: { items: [...] } }  (REST API format)
+      // Try both formats for maximum compatibility
+      const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
+
+      if (response && response.items && Array.isArray(response.items)) {
+        console.log('[MediaIndexProvider] ✅ Received', response.items.length, 'items from media_index');
+        
+        // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
+        const filteredItems = response.items.filter(item => {
+          const isExcluded = this.excludedFiles.has(item.path);
+          if (isExcluded) {
+            console.log(`[MediaIndexProvider] ⏭️ Filtering out excluded file: ${item.path}`);
+            return false;
+          }
+          
+          // V4 CODE: Filter out unsupported media formats
+          const fileName = item.path.split('/').pop() || item.path;
+          const extension = fileName.split('.').pop()?.toLowerCase();
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          
+          if (!isMedia) {
+            console.log(`[MediaIndexProvider] ⏭️ Filtering out unsupported format: ${item.path}`);
+            return false;
+          }
+          
+          return true;
+        });
+        
+        if (filteredItems.length < response.items.length) {
+          console.log(`[MediaIndexProvider] 📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
+        }
+        
+        // V4 CODE: Transform items to include resolved URLs
+        const items = await Promise.all(filteredItems.map(async (item) => {
+          // Backend returns 'path', not 'file_path'
+          const filePath = item.path;
+          const resolvedUrl = await this._resolveMediaPath(filePath);
+          return {
+            ...item,
+            url: resolvedUrl,
+            path: filePath,
+            filename: item.filename || filePath.split('/').pop(),
+            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            // EXIF metadata (already present in backend response)
+            date_taken: item.date_taken,
+            created_time: item.created_time, // File creation time as fallback
+            location_city: item.location_city,
+            location_state: item.location_state,
+            location_country: item.location_country,
+            location_name: item.location_name,
+            // Geocoding status
+            has_coordinates: item.has_coordinates || false,
+            is_geocoded: item.is_geocoded || false,
+            latitude: item.latitude,
+            longitude: item.longitude,
+            // Favorite status
+            is_favorited: item.is_favorited || false
+          };
+        }));
+        
+        console.warn(`[MediaIndexProvider] 📊 QUERY RESULT: Received ${items.length} items from database`);
+        items.slice(0, 3).forEach((item, idx) => {
+          console.warn(`[MediaIndexProvider] 📊 Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
+        });
+        
+        return items;
+      } else {
+        console.warn('[MediaIndexProvider] ⚠️ No items in response:', response);
+        return null;
+      }
+    } catch (error) {
+      console.error('[MediaIndexProvider] ❌ Error querying media_index:', error);
+      return null;
+    }
+  }
+
+  // V4 CODE REUSE: Copied from ha-media-card.js _resolveMediaPath (lines ~2350)
+  // Convert /media/Photo/... path to media-source://media_source/media/Photo/...
+  async _resolveMediaPath(filePath) {
+    // V4 pattern: If path starts with /media/, convert to media-source:// URL
+    if (filePath.startsWith('/media/')) {
+      return `media-source://media_source${filePath}`;
+    }
+    // If already media-source:// format, return as-is
+    if (filePath.startsWith('media-source://')) {
+      return filePath;
+    }
+    // Otherwise assume it's a relative path under /media/
+    return `media-source://media_source/media/${filePath}`;
+  }
+
+  // Track files that have been moved to _Junk/_Edit folders
+  excludeFile(path) {
+    this.excludedFiles.add(path);
+  }
 }
 
 // =================================================================
@@ -1937,6 +2214,13 @@ class MediaCardV5a extends LitElement {
     // V4: Initialize pause state attribute
     if (this._isPaused) {
       this.setAttribute('data-is-paused', '');
+    }
+    
+    // V5: Restart auto-refresh if it was running before disconnect
+    // Only restart if we have a provider, currentMedia, and auto_advance is configured
+    if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
+      this._log('🔄 Reconnected - restarting auto-refresh timer');
+      this._setupAutoRefresh();
     }
   }
 
@@ -4340,6 +4624,18 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _handleUseMediaIndexForDiscoveryChanged(ev) {
+    const useMediaIndex = ev.target.checked;
+    this._config = {
+      ...this._config,
+      folder: {
+        ...this._config.folder,
+        use_media_index_for_discovery: useMediaIndex
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _handleScanDepthChanged(ev) {
     const value = ev.target.value;
     const scanDepth = value === '' ? null : parseInt(value, 10);
@@ -6009,6 +6305,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 : '❌ Metadata and action buttons disabled'}
             </div>
           </div>
+          
+          <!-- Use Media Index for Discovery (folder mode only) -->
+          ${hasMediaIndex && isFolderMode ? html`
+            <div style="margin-left: 0; margin-top: 16px;">
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: 500;">
+                <input
+                  type="checkbox"
+                  .checked=${folderConfig.use_media_index_for_discovery !== false}
+                  @change=${this._handleUseMediaIndexForDiscoveryChanged}
+                />
+                <span>Use Media Index for file discovery</span>
+              </label>
+              <div style="font-size: 12px; color: #666; margin-top: 4px; margin-left: 24px;">
+                ${folderConfig.use_media_index_for_discovery !== false
+                  ? '🚀 Using database queries for fast random selection'
+                  : '📁 Using filesystem scanning (slower but includes unindexed files)'}
+              </div>
+            </div>
+          ` : ''}
         </div>
 
         <!-- Folder Configuration (when media_source_type = "folder") -->
