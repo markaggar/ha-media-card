@@ -1032,7 +1032,51 @@ class FolderProvider extends MediaProvider {
     
     console.log('[FolderProvider] useMediaIndex:', useMediaIndex);
     
-    // Only support random mode with recursive scanning for now
+    // SEQUENTIAL MODE - Ordered iteration through files
+    if (mode === 'sequential') {
+      if (useMediaIndex) {
+        // Full sequential mode with database ordering
+        console.log('[FolderProvider] Using SequentialMediaIndexProvider for ordered queries');
+        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass);
+        const success = await this.sequentialProvider.initialize();
+        
+        if (!success) {
+          console.warn('[FolderProvider] SequentialMediaIndexProvider initialization failed');
+          return false;
+        }
+        
+        console.log('[FolderProvider] ✅ SequentialMediaIndexProvider initialized');
+        return true;
+        
+      } else {
+        // Filesystem sequential mode (single folder only)
+        console.log('[FolderProvider] Using SubfolderQueue in sequential mode (filesystem - single folder)');
+        
+        // Force single folder scan for filesystem sequential
+        const adaptedConfig = this._adaptConfigForV4();
+        adaptedConfig.subfolder_queue.enabled = false; // No recursive
+        adaptedConfig.subfolder_queue.scan_depth = 0;  // Single folder only
+        
+        // Update cardAdapter config
+        this.cardAdapter.config = adaptedConfig;
+        
+        this.subfolderQueue = new SubfolderQueue(this.cardAdapter);
+        const success = await this.subfolderQueue.initialize();
+        
+        if (!success) {
+          console.warn('[FolderProvider] SubfolderQueue initialization failed');
+          return false;
+        }
+        
+        // Sort queue after scan
+        this._sortQueueSequential();
+        
+        console.log('[FolderProvider] ✅ SubfolderQueue initialized and sorted for sequential mode');
+        return true;
+      }
+    }
+    
+    // RANDOM MODE - Random selection with weighted folders
     if (mode === 'random' && recursive) {
       // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
       if (useMediaIndex) {
@@ -1077,14 +1121,68 @@ class FolderProvider extends MediaProvider {
       }
     }
     
-    // TODO Phase 5+: Sequential mode, single folder (recursive=false)
-    console.warn('[FolderProvider] Only random+recursive mode supported currently. Mode:', mode, 'Recursive:', recursive);
+    // Unsupported mode
+    console.warn('[FolderProvider] Unsupported mode/configuration. Mode:', mode, 'Recursive:', recursive);
     return false;
+  }
+
+  // Sort SubfolderQueue for sequential mode (filesystem fallback)
+  _sortQueueSequential() {
+    const orderBy = this.config.folder?.sequential?.order_by || 'filename';
+    const direction = this.config.folder?.sequential?.order_direction || 'desc';
+    
+    console.log('[FolderProvider] Sorting queue by', orderBy, direction);
+    
+    this.subfolderQueue.queue.sort((a, b) => {
+      let aVal, bVal;
+      
+      switch(orderBy) {
+        case 'filename':
+          aVal = MediaProvider.extractFilename(a.media_content_id);
+          bVal = MediaProvider.extractFilename(b.media_content_id);
+          break;
+        case 'path':
+          aVal = a.media_content_id;
+          bVal = b.media_content_id;
+          break;
+        case 'date_taken':
+        case 'modified_time':
+          // Extract date/time from filename (YYYYMMDD_HHMMSS or similar patterns)
+          const aFilename = MediaProvider.extractFilename(a.media_content_id);
+          const bFilename = MediaProvider.extractFilename(b.media_content_id);
+          const aDate = MediaProvider.extractDateFromFilename(aFilename);
+          const bDate = MediaProvider.extractDateFromFilename(bFilename);
+          
+          // Use timestamp if date found, otherwise use filename
+          aVal = aDate ? aDate.getTime() : aFilename;
+          bVal = bDate ? bDate.getTime() : bFilename;
+          break;
+        default:
+          aVal = a.media_content_id;
+          bVal = b.media_content_id;
+      }
+      
+      // Handle comparison for both strings and numbers
+      let comparison;
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal;
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal));
+      }
+      
+      return direction === 'asc' ? comparison : -comparison;
+    });
+    
+    console.log('[FolderProvider] Queue sorted:', this.subfolderQueue.queue.length, 'items');
   }
 
   // V5: Simple passthrough - delegate to active provider
   // Card manages history, provider just supplies items
   async getNext() {
+    if (this.sequentialProvider) {
+      return this.sequentialProvider.getNext();
+    }
+    
     if (this.mediaIndexProvider) {
       return this.mediaIndexProvider.getNext();
     }
@@ -1158,7 +1256,7 @@ class MediaIndexProvider extends MediaProvider {
       
       return {
         media_content_id: item.url, // Already resolved URL from _queryMediaIndex
-        media_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend (V4 pattern)
@@ -1342,6 +1440,290 @@ class MediaIndexProvider extends MediaProvider {
   // Track files that have been moved to _Junk/_Edit folders
   excludeFile(path) {
     this.excludedFiles.add(path);
+  }
+}
+
+// =================================================================
+// SEQUENTIAL MEDIA INDEX PROVIDER - Database-backed ordered queries
+// =================================================================
+// NEW V5 FEATURE: Sequential mode with cursor-based pagination
+// Uses media_index.get_ordered_files service for deterministic ordering
+
+class SequentialMediaIndexProvider extends MediaProvider {
+  constructor(config, hass) {
+    super(config, hass);
+    this.queue = []; // Internal queue of items from database
+    this.queueSize = config.slideshow_window || 100;
+    this.excludedFiles = new Set(); // Track excluded files
+    
+    // Sequential mode configuration
+    this.orderBy = config.folder?.sequential?.order_by || 'date_taken';
+    this.orderDirection = config.folder?.sequential?.order_direction || 'desc';
+    this.recursive = config.folder?.recursive !== false; // Default true
+    this.lastSeenValue = null; // Cursor for pagination
+    this.hasMore = true; // Flag to track if more items available
+    this.reachedEnd = false; // Flag to track if we've hit the end
+  }
+
+  async initialize() {
+    console.log('[SequentialMediaIndexProvider] Initializing...');
+    console.log('[SequentialMediaIndexProvider] Order by:', this.orderBy, this.orderDirection);
+    console.log('[SequentialMediaIndexProvider] Recursive:', this.recursive);
+    
+    // Check if media_index is configured
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('[SequentialMediaIndexProvider] Media index not configured');
+      return false;
+    }
+    
+    // Initial query to fill queue
+    const items = await this._queryOrderedFiles();
+    
+    if (!items || items.length === 0) {
+      console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+      return false;
+    }
+    
+    this.queue = items;
+    console.log('[SequentialMediaIndexProvider] ✅ Initialized with', this.queue.length, 'items');
+    return true;
+  }
+
+  async getNext() {
+    // Refill queue if running low (and more items available)
+    if (this.queue.length < 10 && this.hasMore && !this.reachedEnd) {
+      console.log('[SequentialMediaIndexProvider] Queue low, refilling...');
+      const items = await this._queryOrderedFiles();
+      if (items && items.length > 0) {
+        this.queue.push(...items);
+        console.log('[SequentialMediaIndexProvider] Refilled queue, now', this.queue.length, 'items');
+      } else {
+        console.log('[SequentialMediaIndexProvider] No more items available from database');
+        this.reachedEnd = true;
+      }
+    }
+    
+    // Return next item from queue
+    if (this.queue.length > 0) {
+      const item = this.queue.shift();
+      
+      // Update cursor for pagination
+      // Store the value of the sort field for this item
+      switch(this.orderBy) {
+        case 'date_taken':
+          this.lastSeenValue = item.date_taken;
+          break;
+        case 'filename':
+          this.lastSeenValue = item.filename;
+          break;
+        case 'path':
+          this.lastSeenValue = item.path;
+          break;
+        case 'modified_time':
+          this.lastSeenValue = item.modified_time;
+          break;
+        default:
+          this.lastSeenValue = item.path;
+      }
+      
+      // Extract metadata using MediaProvider helper (V5 architecture)
+      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
+      
+      return {
+        media_content_id: item.url, // Already resolved URL
+        media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        metadata: {
+          ...pathMetadata,
+          // EXIF data from media_index backend
+          date_taken: item.date_taken,
+          created_time: item.created_time,
+          location_city: item.location_city,
+          location_state: item.location_state,
+          location_country: item.location_country,
+          location_name: item.location_name,
+          has_coordinates: item.has_coordinates || false,
+          is_geocoded: item.is_geocoded || false,
+          latitude: item.latitude,
+          longitude: item.longitude,
+          is_favorited: item.is_favorited || false
+        }
+      };
+    }
+    
+    console.warn('[SequentialMediaIndexProvider] Queue empty, no items to return');
+    return null;
+  }
+
+  // Query ordered files from media_index (similar to _queryMediaIndex but different service)
+  async _queryOrderedFiles() {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('[SequentialMediaIndexProvider] Media index not configured');
+      return null;
+    }
+
+    try {
+      console.log('[SequentialMediaIndexProvider] 🔍 Querying media_index for ordered files...');
+      
+      // Extract folder path from config
+      let folderFilter = null;
+      if (this.config.folder?.path) {
+        let path = this.config.folder.path;
+        // Remove media-source://media_source prefix if present
+        if (path.startsWith('media-source://media_source')) {
+          path = path.replace('media-source://media_source', '');
+        }
+        folderFilter = path;
+        console.log('[SequentialMediaIndexProvider] 🔍 Filtering by folder:', folderFilter);
+      }
+      
+      // Build service data
+      const serviceData = {
+        count: this.queueSize,
+        folder: folderFilter,
+        recursive: this.recursive,
+        file_type: this.config.media_type === 'all' ? undefined : this.config.media_type,
+        order_by: this.orderBy,
+        order_direction: this.orderDirection
+      };
+      
+      // Add cursor for pagination (if we've seen items before)
+      if (this.lastSeenValue !== null) {
+        serviceData.after_value = this.lastSeenValue;
+        console.log('[SequentialMediaIndexProvider] 🔍 Using cursor (after_value):', this.lastSeenValue);
+      }
+      
+      // Build WebSocket call
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_ordered_files',
+        service_data: serviceData,
+        return_response: true
+      };
+      
+      // Target specific media_index entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+        console.log('[SequentialMediaIndexProvider] 🎯 Targeting entity:', this.config.media_index.entity_id);
+      }
+      
+      // Debug logging
+      if (this.config?.debug_queue_mode) {
+        console.warn('[SequentialMediaIndexProvider] 📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
+      }
+      
+      const wsResponse = await this.hass.callWS(wsCall);
+      
+      if (this.config?.debug_queue_mode) {
+        console.warn('[SequentialMediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+      }
+
+      // Handle response formats
+      const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
+
+      if (response && response.items && Array.isArray(response.items)) {
+        console.log('[SequentialMediaIndexProvider] ✅ Received', response.items.length, 'items from media_index');
+        
+        // Check if we got fewer items than requested (indicates end of sequence)
+        if (response.items.length < this.queueSize) {
+          console.log('[SequentialMediaIndexProvider] 📝 Received fewer items than requested - may be at end of sequence');
+          this.hasMore = false;
+        }
+        
+        // Filter excluded files and unsupported formats
+        const filteredItems = response.items.filter(item => {
+          const isExcluded = this.excludedFiles.has(item.path);
+          if (isExcluded) {
+            console.log(`[SequentialMediaIndexProvider] ⏭️ Filtering out excluded file: ${item.path}`);
+            return false;
+          }
+          
+          // Filter unsupported formats
+          const fileName = item.path.split('/').pop() || item.path;
+          const extension = fileName.split('.').pop()?.toLowerCase();
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          
+          if (!isMedia) {
+            console.log(`[SequentialMediaIndexProvider] ⏭️ Filtering out unsupported format: ${item.path}`);
+            return false;
+          }
+          
+          return true;
+        });
+        
+        if (filteredItems.length < response.items.length) {
+          console.log(`[SequentialMediaIndexProvider] 📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining)`);
+        }
+        
+        // Transform items to include resolved URLs
+        const items = await Promise.all(filteredItems.map(async (item) => {
+          const filePath = item.path;
+          const resolvedUrl = await this._resolveMediaPath(filePath);
+          return {
+            ...item,
+            url: resolvedUrl,
+            path: filePath,
+            filename: item.filename || filePath.split('/').pop(),
+            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            // EXIF metadata from backend
+            date_taken: item.date_taken,
+            created_time: item.created_time,
+            modified_time: item.modified_time,
+            location_city: item.location_city,
+            location_state: item.location_state,
+            location_country: item.location_country,
+            location_name: item.location_name,
+            has_coordinates: item.has_coordinates || false,
+            is_geocoded: item.is_geocoded || false,
+            latitude: item.latitude,
+            longitude: item.longitude,
+            is_favorited: item.is_favorited || false
+          };
+        }));
+        
+        console.warn(`[SequentialMediaIndexProvider] 📊 QUERY RESULT: Received ${items.length} ordered items`);
+        items.slice(0, 3).forEach((item, idx) => {
+          console.warn(`[SequentialMediaIndexProvider] 📊 Item ${idx}: path="${item.path}", ${this.orderBy}=${item[this.orderBy]}`);
+        });
+        
+        return items;
+      } else {
+        console.warn('[SequentialMediaIndexProvider] ⚠️ No items in response:', response);
+        this.hasMore = false;
+        return null;
+      }
+    } catch (error) {
+      console.error('[SequentialMediaIndexProvider] ❌ Error querying media_index:', error);
+      return null;
+    }
+  }
+
+  // Reuse from MediaIndexProvider
+  async _resolveMediaPath(filePath) {
+    if (filePath.startsWith('/media/')) {
+      return `media-source://media_source${filePath}`;
+    }
+    if (filePath.startsWith('media-source://')) {
+      return filePath;
+    }
+    return `media-source://media_source/media/${filePath}`;
+  }
+
+  // Track excluded files
+  excludeFile(path) {
+    this.excludedFiles.add(path);
+  }
+
+  // Reset to beginning of sequence (for loop functionality)
+  reset() {
+    console.log('[SequentialMediaIndexProvider] Resetting to beginning of sequence');
+    this.queue = [];
+    this.lastSeenValue = null;
+    this.hasMore = true;
+    this.reachedEnd = false;
+    return this.initialize();
   }
 }
 
