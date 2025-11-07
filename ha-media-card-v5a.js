@@ -717,23 +717,34 @@ class MediaProvider {
     // Step 1: Extract path-based metadata
     let metadata = MediaProvider.extractMetadataFromPath(mediaPath);
     
+    console.log('🔍 extractMetadataWithExif - mediaPath:', mediaPath);
+    console.log('🔍 media_index active?', MediaProvider.isMediaIndexActive(config));
+    console.log('🔍 hass available?', !!hass);
+    console.log('🔍 config:', config);
+    
     // Step 2: Enrich with media_index EXIF data if configured
     if (MediaProvider.isMediaIndexActive(config) && hass) {
+      console.log('📡 Fetching EXIF metadata from media_index...');
       try {
         const enrichedMetadata = await MediaIndexHelper.fetchFileMetadata(
           hass,
-          config.media_index.entity_id,
+          config,  // Pass full config, not just entity_id
           mediaPath
         );
+        
+        console.log('📊 Got enriched metadata:', enrichedMetadata);
         
         if (enrichedMetadata) {
           // Merge path-based and EXIF metadata (EXIF takes precedence)
           metadata = { ...metadata, ...enrichedMetadata };
+          console.log('✅ Merged metadata:', metadata);
         }
       } catch (error) {
-        console.warn('Failed to fetch media_index metadata:', error);
+        console.warn('❌ Failed to fetch media_index metadata:', error);
         // Fall back to path-based metadata only
       }
+    } else {
+      console.log('⏭️ Skipping EXIF enrichment');
     }
     
     return metadata;
@@ -1003,6 +1014,13 @@ class FolderProvider extends MediaProvider {
       media_path: this.config.folder?.path || '',
       folder_mode: this.config.folder?.mode || 'random',  // V4 expects this at root level
       slideshow_window: this.config.slideshow_window || 1000,
+      folder: {
+        order_by: this.config.folder?.order_by || 'date_taken',
+        sequential: {
+          order_by: this.config.folder?.order_by || 'date_taken',
+          order_direction: this.config.folder?.sequential?.order_direction || 'desc'
+        }
+      },
       subfolder_queue: {
         enabled: this.config.folder?.recursive !== false,
         scan_depth: this.config.folder?.scan_depth !== undefined ? this.config.folder.scan_depth : null, // null = unlimited
@@ -1069,7 +1087,7 @@ class FolderProvider extends MediaProvider {
         }
         
         // Sort queue after scan
-        this._sortQueueSequential();
+        await this._sortQueueSequential();
         
         console.log('[FolderProvider] ✅ SubfolderQueue initialized and sorted for sequential mode');
         return true;
@@ -1116,7 +1134,7 @@ class FolderProvider extends MediaProvider {
           return false;
         }
         
-        console.log('[FolderProvider] ✅ SubfolderQueue initialized');
+        console.log('[FolderProvider] ✅ SubfolderQueue initialized - enrichment will happen on-demand');
         return true;
       }
     }
@@ -1127,51 +1145,50 @@ class FolderProvider extends MediaProvider {
   }
 
   // Sort SubfolderQueue for sequential mode (filesystem fallback)
-  _sortQueueSequential() {
-    const orderBy = this.config.folder?.sequential?.order_by || 'filename';
+  async _sortQueueSequential() {
+    const orderBy = this.config.folder?.order_by || 'date_taken';
     const direction = this.config.folder?.sequential?.order_direction || 'desc';
     
     console.log('[FolderProvider] Sorting queue by', orderBy, direction);
     
-    this.subfolderQueue.queue.sort((a, b) => {
-      let aVal, bVal;
+    // If media_index is active AND we're sorting by EXIF data, enrich items first
+    // Otherwise, enrichment happens on-demand when displaying items
+    const needsUpfrontEnrichment = MediaProvider.isMediaIndexActive(this.config) && 
+                                   (orderBy === 'date_taken' || orderBy === 'modified_time');
+    
+    if (needsUpfrontEnrichment) {
+      console.log('[FolderProvider] Enriching items with EXIF data for sorting by', orderBy);
       
-      switch(orderBy) {
-        case 'filename':
-          aVal = MediaProvider.extractFilename(a.media_content_id);
-          bVal = MediaProvider.extractFilename(b.media_content_id);
-          break;
-        case 'path':
-          aVal = a.media_content_id;
-          bVal = b.media_content_id;
-          break;
-        case 'date_taken':
-        case 'modified_time':
-          // Extract date/time from filename (YYYYMMDD_HHMMSS or similar patterns)
-          const aFilename = MediaProvider.extractFilename(a.media_content_id);
-          const bFilename = MediaProvider.extractFilename(b.media_content_id);
-          const aDate = MediaProvider.extractDateFromFilename(aFilename);
-          const bDate = MediaProvider.extractDateFromFilename(bFilename);
+      // Enrich each item in queue using MediaIndexHelper
+      let enrichedCount = 0;
+      for (const item of this.subfolderQueue.queue) {
+        if (item.metadata?.has_coordinates !== undefined) continue; // Already enriched
+        
+        try {
+          const enrichedMetadata = await MediaIndexHelper.fetchFileMetadata(
+            this.hass,
+            this.config,
+            item.media_content_id
+          );
           
-          // Use timestamp if date found, otherwise use filename
-          aVal = aDate ? aDate.getTime() : aFilename;
-          bVal = bDate ? bDate.getTime() : bFilename;
-          break;
-        default:
-          aVal = a.media_content_id;
-          bVal = b.media_content_id;
+          if (enrichedMetadata) {
+            item.metadata = { ...item.metadata, ...enrichedMetadata };
+            enrichedCount++;
+          }
+        } catch (error) {
+          // File might not be in database - skip
+          continue;
+        }
       }
       
-      // Handle comparison for both strings and numbers
-      let comparison;
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        comparison = aVal - bVal;
-      } else {
-        comparison = String(aVal).localeCompare(String(bVal));
-      }
-      
-      return direction === 'asc' ? comparison : -comparison;
-    });
+      console.log('[FolderProvider] Enriched', enrichedCount, 'items for sorting');
+      console.log('[FolderProvider] Sample item:', this.subfolderQueue.queue[0]);
+    } else {
+      console.log('[FolderProvider] Skipping upfront enrichment - will enrich on-demand when displaying');
+    }
+    
+    // Use shared sorting method in SubfolderQueue
+    this.subfolderQueue._sortQueue();
     
     console.log('[FolderProvider] Queue sorted:', this.subfolderQueue.queue.length, 'items');
   }
@@ -2028,8 +2045,10 @@ class SubfolderQueue {
   async initialize() {
     this._checkPathChange();
     
-    if (!this.config.enabled || this.card.config.folder_mode !== 'random') {
-      this._log('❌ Queue disabled or not in random mode');
+    // V5: Allow both random and sequential modes
+    const folderMode = this.card.config.folder_mode || 'random';
+    if (!this.config.enabled && folderMode === 'random') {
+      this._log('❌ Queue disabled');
       return false;
     }
 
@@ -2130,7 +2149,9 @@ class SubfolderQueue {
     
     const effectiveMaxDepth = maxDepth !== null ? maxDepth : this.config.scan_depth;
     
-    if (effectiveMaxDepth !== null && effectiveMaxDepth > 0 && currentDepth >= effectiveMaxDepth) {
+    // For scan_depth=0: scan base folder (depth 0) only, not subfolders (depth 1+)
+    // For scan_depth=1: scan base folder + 1 level of subfolders (depth 0-1)
+    if (effectiveMaxDepth !== null && effectiveMaxDepth >= 0 && currentDepth > effectiveMaxDepth) {
       this._log('📁 Max depth reached:', currentDepth, '(configured limit:', effectiveMaxDepth, ')');
       return { filesProcessed: 0, foldersProcessed: 0 };
     }
@@ -2165,7 +2186,22 @@ class SubfolderQueue {
       const folderName = basePath.split('/').pop() || 'root';
       
       const allFiles = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
-      const files = allFiles.filter(file => this.card._isMediaFile(file.media_content_id || file.title || ''));
+      let files = allFiles.filter(file => this.card._isMediaFile(file.media_content_id || file.title || ''));
+      
+      // Filter by configured media_type (image/video/all)
+      const configuredMediaType = this.card.config.media_type || 'all';
+      if (configuredMediaType !== 'all') {
+        files = files.filter(file => {
+          const filePath = file.media_content_id || file.title || '';
+          const isVideo = filePath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
+          const isImage = filePath.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i);
+          
+          if (configuredMediaType === 'video') return isVideo;
+          if (configuredMediaType === 'image') return isImage;
+          return true;
+        });
+      }
+      
       const subfolders = folderContents.children.filter(child => child.can_expand);
 
       if (files.length > 0 || subfolders.length > 0) {
@@ -2187,7 +2223,11 @@ class SubfolderQueue {
       }
 
       let filesAdded = 0;
-      const basePerFileProbability = this.calculatePerFileProbability();
+      
+      // Sequential mode: add ALL files (no probability sampling)
+      // Random mode: use probability sampling for large folders
+      const isSequentialMode = this.card.config.folder_mode === 'sequential';
+      const basePerFileProbability = isSequentialMode ? 1.0 : this.calculatePerFileProbability();
       const weightMultiplier = this.getPathWeightMultiplier(basePath);
       const perFileProbability = Math.min(basePerFileProbability * weightMultiplier, 1.0);
       
@@ -2207,8 +2247,12 @@ class SubfolderQueue {
       }
 
       let subfoldersProcessed = 0;
+      // Recursion logic:
+      // - scan_depth=null: Recurse infinitely
+      // - scan_depth=0: Don't recurse (single folder only)
+      // - scan_depth=N: Recurse up to depth N (e.g., scan_depth=1 means base + 1 level)
       const shouldRecurse = subfolders.length > 0 && 
-        (effectiveMaxDepth === null || effectiveMaxDepth === 0 || currentDepth < effectiveMaxDepth - 1);
+        (effectiveMaxDepth === null || currentDepth < effectiveMaxDepth);
       
       if (shouldRecurse) {
         await this._waitIfBackgroundPaused();
@@ -2280,6 +2324,23 @@ class SubfolderQueue {
 
   async addFileToQueueWithBatching(file, folderName = null) {
     if (!file) return;
+
+    // Ensure media_content_type is set for video detection
+    if (!file.media_content_type && file.media_class) {
+      // Set based on media_class (image/video)
+      if (file.media_class === 'video') {
+        file.media_content_type = 'video';
+      } else if (file.media_class === 'image') {
+        file.media_content_type = 'image';
+      }
+    }
+    
+    // Fallback: detect from file extension if still not set
+    if (!file.media_content_type) {
+      const filePath = file.media_content_id || file.title || '';
+      const isVideo = filePath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
+      file.media_content_type = isVideo ? 'video' : 'image';
+    }
 
     this.queue.push(file);
 
@@ -2453,9 +2514,123 @@ class SubfolderQueue {
     const currentQueueSize = this.queue.length;
     
     if (currentQueueSize < minQueueSize) {
-      // TODO: Implement populateQueueFromFolders for v5
-      this._log('❌ populateQueueFromFolders not yet implemented in v5');
+      this._log('🔄 Queue needs refill:', currentQueueSize, 'items, target minimum:', minQueueSize);
+      
+      // Calculate how many items to add
+      const targetSize = Math.min(minQueueSize * 2, this.config.slideshow_window || 1000);
+      const itemsToAdd = Math.max(targetSize - currentQueueSize, 10);
+      
+      // V4: Copy populateQueueFromFolders logic for refilling queue
+      this._populateQueueFromDiscoveredFolders(itemsToAdd);
+      this._log('✅ Refill complete - queue now has', this.queue.length, 'items');
+    } else {
+      this._log('✅ Queue sufficient:', currentQueueSize, '(min needed:', minQueueSize, ')');
     }
+  }
+
+  // V4 CODE REUSE: Adapted from populateQueueFromFolders (ha-media-card.js lines 9312+)
+  async _populateQueueFromDiscoveredFolders(itemsToAdd) {
+    const folderMode = this.card.config.folder_mode || 'random';
+    
+    if (folderMode === 'sequential') {
+      // Sequential mode: collect available items, add to queue, then sort entire queue
+      const availableFiles = [];
+      
+      for (const folder of this.discoveredFolders) {
+        if (!folder.files) continue;
+        
+        for (const file of folder.files) {
+          // Skip if already in queue or already shown
+          if (this.queue.some(q => q.media_content_id === file.media_content_id)) continue;
+          if (this.shownItems.has(file.media_content_id)) continue;
+          
+          availableFiles.push(file);
+        }
+      }
+      
+      // Add items to queue (up to itemsToAdd)
+      const toAdd = availableFiles.slice(0, itemsToAdd);
+      this.queue.push(...toAdd);
+      
+      // Sort entire queue using shared sorting logic
+      this._sortQueue();
+      
+      this._log('🔄 Added', toAdd.length, 'sequential items to queue and re-sorted');
+    } else {
+      // Random mode: randomly select from discoveredFolders
+      const availableFiles = [];
+      
+      for (const folder of this.discoveredFolders) {
+        if (!folder.files) continue;
+        
+        for (const file of folder.files) {
+          // Skip if already in queue or already shown
+          if (this.queue.some(q => q.media_content_id === file.media_content_id)) continue;
+          if (this.shownItems.has(file.media_content_id)) continue;
+          
+          availableFiles.push(file);
+        }
+      }
+      
+      // Randomly shuffle and add
+      const shuffled = availableFiles.sort(() => Math.random() - 0.5);
+      const toAdd = shuffled.slice(0, itemsToAdd);
+      this.queue.push(...toAdd);
+      
+      this._log('🔄 Added', toAdd.length, 'random items to queue from', availableFiles.length, 'available');
+    }
+  }
+
+  // Shared sorting logic for queue (used by initial fill and refill)
+  _sortQueue() {
+    const orderBy = this.card.config.folder?.order_by || 'date_taken';
+    const direction = this.card.config.folder?.sequential?.order_direction || 'desc';
+    
+    console.log('[SubfolderQueue] _sortQueue - orderBy:', orderBy, 'direction:', direction);
+    console.log('[SubfolderQueue] Full sequential config:', this.card.config.folder?.sequential);
+    
+    this.queue.sort((a, b) => {
+      let aVal, bVal;
+      
+      switch(orderBy) {
+        case 'filename':
+          aVal = MediaProvider.extractFilename(a.media_content_id);
+          bVal = MediaProvider.extractFilename(b.media_content_id);
+          break;
+        case 'path':
+          aVal = a.media_content_id;
+          bVal = b.media_content_id;
+          break;
+        case 'date_taken':
+        case 'modified_time':
+          // Use EXIF data if available from enrichment
+          if (a.metadata?.date_taken && b.metadata?.date_taken) {
+            aVal = new Date(a.metadata.date_taken).getTime();
+            bVal = new Date(b.metadata.date_taken).getTime();
+          } else {
+            // Fallback: filename-based date extraction
+            const aFilename = MediaProvider.extractFilename(a.media_content_id);
+            const bFilename = MediaProvider.extractFilename(b.media_content_id);
+            const aDate = MediaProvider.extractDateFromFilename(aFilename);
+            const bDate = MediaProvider.extractDateFromFilename(bFilename);
+            aVal = aDate ? aDate.getTime() : aFilename;
+            bVal = bDate ? bDate.getTime() : bFilename;
+          }
+          break;
+        default:
+          aVal = a.media_content_id;
+          bVal = b.media_content_id;
+      }
+      
+      let comparison;
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal;
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal));
+      }
+      
+      return direction === 'asc' ? comparison : -comparison;
+    });
   }
 }
 
@@ -2576,6 +2751,7 @@ class MediaCardV5a extends LitElement {
     this._holdTimeout = null; // V4 hold action detection
     this._debugMode = true; // V4 debug logging (configurable via config.debug_mode)
     this._lastLogTime = {}; // V4 log throttling
+    this._isPaused = false; // V4 pause state for slideshow
     
     // V4: Circuit breaker for 404 errors
     this._consecutive404Count = 0;
@@ -2630,6 +2806,29 @@ class MediaCardV5a extends LitElement {
     if (this._holdTimer) {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
+    }
+  }
+
+  // V4: Force video reload when URL changes
+  updated(changedProperties) {
+    super.updated(changedProperties);
+    
+    if (changedProperties.has('mediaUrl')) {
+      // Wait for next frame to ensure video element is rendered
+      requestAnimationFrame(() => {
+        const videoElement = this.shadowRoot?.querySelector('video');
+        
+        if (videoElement && this.mediaUrl) {
+          videoElement.load(); // Force browser to reload the video with new source
+          
+          // Auto-play if configured
+          if (this.config.video_autoplay) {
+            videoElement.play().catch(err => {
+              console.warn('Video autoplay failed (user interaction may be required):', err);
+            });
+          }
+        }
+      });
     }
   }
   
@@ -2849,9 +3048,14 @@ class MediaCardV5a extends LitElement {
       
       if (item) {
         // V5: Extract metadata from path if not provided by backend (now async with media_index support)
+        console.log('🔍 Item metadata check - has metadata:', !!item.metadata, 'item:', item);
         if (!item.metadata) {
+          console.log('📡 Calling _extractMetadataFromItem for:', item.media_content_id);
           item.metadata = await this._extractMetadataFromItem(item);
-          this._log('📊 Extracted metadata:', item.metadata);
+          console.log('📊 Extracted metadata:', item.metadata);
+        } else {
+          console.log('✅ Item already has metadata from queue enrichment');
+          console.log('📋 Metadata content:', item.metadata);
         }
         
         // Add to history
@@ -2984,9 +3188,16 @@ class MediaCardV5a extends LitElement {
     if (advanceSeconds && advanceSeconds > 0 && this.hass) {
       this._log(`🔄 Setting up auto-advance every ${advanceSeconds} seconds`);
       
-      this._refreshInterval = setInterval(() => {
+      this._refreshInterval = setInterval(async () => {
         // Check pause states before advancing
         if (!this._isPaused && !this._backgroundPaused) {
+          // V4 CODE REUSE: Check if we should wait for video to complete
+          // Based on V4 lines 3259-3302
+          if (await this._shouldWaitForVideoCompletion()) {
+            this._log('🔄 Auto-advance skipped - waiting for video to complete');
+            return;
+          }
+          
           this._log('🔄 Auto-advance timer triggered - loading next');
           this._loadNext();
         } else {
@@ -3113,6 +3324,40 @@ class MediaCardV5a extends LitElement {
     this._log('Using media ID as-is (fallback)');
     this.mediaUrl = mediaId;
     this.requestUpdate();
+  }
+
+  // V4 CODE REUSE: Helper to resolve a media path parameter (for dialogs, etc)
+  // Copied from ha-media-card.js _resolveMediaPath (lines 3489-3515)
+  async _resolveMediaPathParam(mediaPath) {
+    if (!mediaPath || !this.hass) return '';
+    
+    // If it's already a fully resolved authenticated URL, return as-is
+    if (mediaPath.startsWith('http')) {
+      return mediaPath;
+    }
+    
+    // Convert local media paths to media-source format
+    if (mediaPath.startsWith('/media/')) {
+      mediaPath = 'media-source://media_source' + mediaPath;
+    }
+    
+    // Use Home Assistant's media source resolution for media-source URLs
+    if (mediaPath.startsWith('media-source://')) {
+      try {
+        const resolved = await this.hass.callWS({
+          type: "media_source/resolve_media",
+          media_content_id: mediaPath,
+          expires: (60 * 60 * 3) // 3 hours
+        });
+        return resolved.url;
+      } catch (error) {
+        console.error('[MediaCardV5a] Failed to resolve media path:', mediaPath, error);
+        return '';
+      }
+    }
+    
+    // Return as-is for other formats
+    return mediaPath;
   }
   
   _onMediaError(e) {
@@ -3419,14 +3664,74 @@ class MediaCardV5a extends LitElement {
     }
   }
 
+  // V4 CODE REUSE: Check if we should wait for video to complete before advancing
+  // Based on V4 lines 3259-3302
+  async _shouldWaitForVideoCompletion() {
+    const videoElement = this.renderRoot?.querySelector('video');
+    
+    // No video playing, don't wait
+    if (!videoElement || !this.mediaUrl || this.currentMedia?.media_content_type?.startsWith('image')) {
+      return false;
+    }
+
+    // If video is paused, don't wait (user intentionally paused)
+    if (videoElement.paused) {
+      return false;
+    }
+
+    // Get configuration values
+    const videoMaxDuration = this.config.video_max_duration || 0;
+    const autoAdvanceSeconds = this.config.auto_advance_seconds || 30;
+
+    this._log('🎬 Video completion check - videoMaxDuration:', videoMaxDuration, 'autoAdvanceSeconds:', autoAdvanceSeconds);
+
+    // If video_max_duration is 0, wait indefinitely for video completion
+    if (videoMaxDuration === 0) {
+      this._log('🎬 Video playing - waiting for completion (no time limit set)');
+      return true;
+    }
+
+    // Check if we've been waiting too long based on video_max_duration
+    const now = Date.now();
+    if (!this._videoWaitStartTime) {
+      this._videoWaitStartTime = now;
+      this._log('🎬 Starting video wait timer at:', new Date(now).toLocaleTimeString());
+    }
+
+    const waitTimeMs = now - this._videoWaitStartTime;
+    const waitTimeSeconds = Math.floor(waitTimeMs / 1000);
+    const maxWaitMs = videoMaxDuration * 1000;
+
+    // Use the larger of video_max_duration and auto_advance_seconds as the actual limit
+    // This prevents auto_advance_seconds from cutting off long videos
+    const effectiveMaxWaitMs = Math.max(maxWaitMs, autoAdvanceSeconds * 1000);
+    const effectiveMaxWaitSeconds = Math.floor(effectiveMaxWaitMs / 1000);
+
+    if (waitTimeMs >= effectiveMaxWaitMs) {
+      this._log(`🎬 Video max duration reached (${waitTimeSeconds}s/${effectiveMaxWaitSeconds}s), proceeding with refresh`);
+      this._videoWaitStartTime = null; // Reset for next video
+      return false;
+    }
+
+    this._log(`🎬 Video playing - waiting for completion (${waitTimeSeconds}s/${effectiveMaxWaitSeconds}s)`);
+    return true;
+  }
+
   _onVideoEnded() {
-    this._log('Video ended:', this.mediaUrl);
+    this._log('🎬 Video ended:', this.mediaUrl);
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
-    // V5: For single media with auto-refresh, reload after video ends
-    // For folder mode (future), trigger next media
-    // Will implement folder mode advancement in Phase 3+
+    // V4: Trigger immediate navigation to next media in folder/slideshow mode
+    if (this.provider) {
+      this._log('🎬 Video ended - triggering immediate next media');
+      // Small delay to ensure video ended event is fully processed
+      setTimeout(() => {
+        this._loadNext().catch(err => {
+          console.error('Error advancing to next media after video end:', err);
+        });
+      }, 100);
+    }
   }
 
   _onVideoLoadedMetadata() {
@@ -3459,9 +3764,24 @@ class MediaCardV5a extends LitElement {
         this._loadPrevious();
       } else if (e.target.classList.contains('nav-zone-right')) {
         this._loadNext();
-      } else if (e.target.classList.contains('nav-zone-center')) {
-        this._handleCenterClick(e);
       }
+    } else if (e.key === 'p' || e.key === 'P') {
+      // V4: Pause/Resume with 'P' key
+      e.preventDefault();
+      this._setPauseState(!this._isPaused);
+      this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (keyboard)`);
+      
+      // Pause/resume the auto-advance timer
+      if (this._isPaused) {
+        if (this._refreshInterval) {
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+      } else {
+        this._setupAutoRefresh();
+      }
+      
+      this.requestUpdate();
     }
   }
 
@@ -3487,6 +3807,21 @@ class MediaCardV5a extends LitElement {
       // Resume: Restart auto-advance
       this._setupAutoRefresh();
     }
+  }
+  
+  // V4: Pause state management (copied from ha-media-card.js)
+  _setPauseState(isPaused) {
+    this._isPaused = isPaused;
+    
+    // Update DOM attribute for CSS styling
+    if (isPaused) {
+      this.setAttribute('data-is-paused', '');
+    } else {
+      this.removeAttribute('data-is-paused');
+    }
+    
+    // Force re-render to update pause indicator
+    this.requestUpdate();
   }
 
   _onMediaLoaded() {
@@ -3515,7 +3850,7 @@ class MediaCardV5a extends LitElement {
       return html``;
     }
 
-    const position = this.config.metadata.position || 'bottom-left';
+    const position = this.config.metadata.position || 'top-left';
     const positionClass = `metadata-${position}`;
 
     return html`
@@ -3688,10 +4023,10 @@ class MediaCardV5a extends LitElement {
         
         if (locationText) {
           parts.push(`📍 ${locationText}`);
+        } else if (metadata.has_coordinates) {
+          // Has GPS but no city/state/country text yet - geocoding pending
+          parts.push(`📍 Loading location...`);
         }
-      } else if (metadata.has_coordinates && !metadata.is_geocoded) {
-        // Item has GPS coordinates but hasn't been geocoded yet
-        parts.push(`📍 Loading location...`);
       }
     }
     
@@ -3764,28 +4099,40 @@ class MediaCardV5a extends LitElement {
   
   // V4: Action Buttons (Favorite/Delete/Edit)
   _renderActionButtons() {
-    // Only show action buttons when media_index is enabled and we have a current file
-    if (!MediaProvider.isMediaIndexActive(this.config) || !this._currentMediaPath) {
-      return html``;
-    }
-
+    // V4: Show pause button always (if enabled in config)
+    // Show media_index action buttons only when media_index active and file loaded
+    const showMediaIndexButtons = MediaProvider.isMediaIndexActive(this.config) && this._currentMediaPath;
+    
     // Check individual button enable flags (default: true)
     const config = this.config.action_buttons || {};
+    const enablePause = config.enable_pause !== false;
     const enableFavorite = config.enable_favorite !== false;
     const enableDelete = config.enable_delete !== false;
     const enableEdit = config.enable_edit !== false;
     
     // Don't render anything if all are disabled
-    if (!enableFavorite && !enableDelete && !enableEdit) {
+    if (!enablePause && !showMediaIndexButtons) {
+      return html``;
+    }
+    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit) {
       return html``;
     }
 
     const isFavorite = this._currentMetadata?.is_favorited || false;
+    const isPaused = this._isPaused || false;
     const position = config.position || 'top-right';
 
     return html`
       <div class="action-buttons action-buttons-${position}">
-        ${enableFavorite ? html`
+        ${enablePause ? html`
+          <button
+            class="action-btn pause-btn ${isPaused ? 'paused' : ''}"
+            @click=${this._handlePauseClick}
+            title="${isPaused ? 'Resume' : 'Pause'}">
+            <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && enableFavorite ? html`
           <button
             class="action-btn favorite-btn ${isFavorite ? 'favorited' : ''}"
             @click=${this._handleFavoriteClick}
@@ -3793,7 +4140,7 @@ class MediaCardV5a extends LitElement {
             <ha-icon icon="${isFavorite ? 'mdi:heart' : 'mdi:heart-outline'}"></ha-icon>
           </button>
         ` : ''}
-        ${enableEdit ? html`
+        ${showMediaIndexButtons && enableEdit ? html`
           <button
             class="action-btn edit-btn"
             @click=${this._handleEditClick}
@@ -3801,7 +4148,7 @@ class MediaCardV5a extends LitElement {
             <ha-icon icon="mdi:pencil-outline"></ha-icon>
           </button>
         ` : ''}
-        ${enableDelete ? html`
+        ${showMediaIndexButtons && enableDelete ? html`
           <button
             class="action-btn delete-btn"
             @click=${this._handleDeleteClick}
@@ -3826,26 +4173,43 @@ class MediaCardV5a extends LitElement {
     const newState = !(this._currentMetadata?.is_favorited || false);
     
     try {
-      // Call media_index service
-      const serviceData = {
-        file_path: this._currentMediaPath,
-        is_favorited: newState
+      // V4: Call media_index service via WebSocket API
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'mark_favorite',
+        service_data: {
+          file_path: this._currentMediaPath,
+          is_favorite: newState
+        },
+        return_response: true
       };
       
-      // If entity_id specified, target that instance
-      if (this.config.media_index.entity_id) {
-        serviceData.entity_id = this.config.media_index.entity_id;
+      // V4: If entity_id specified, add target object
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
       }
       
-      await this.hass.callService('media_index', 'mark_favorite', serviceData, true);
+      await this.hass.callWS(wsCall);
       
-      // V5: Refresh metadata from backend to get updated state
-      await this._refreshMetadata();
+      // Update current metadata
+      if (this._currentMetadata) {
+        this._currentMetadata.is_favorited = newState;
+      }
+      
+      this.requestUpdate();
       
     } catch (error) {
       console.error('Failed to mark favorite:', error);
       alert('Failed to mark favorite: ' + error.message);
     }
+  }
+
+  // V4: Handle pause button click
+  _handlePauseClick(e) {
+    e.stopPropagation();
+    this._setPauseState(!this._isPaused);
+    this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
   }
   
   async _handleDeleteClick(e) {
@@ -3856,8 +4220,11 @@ class MediaCardV5a extends LitElement {
     this._showDeleteConfirmation();
   }
   
-  _showDeleteConfirmation() {
+  async _showDeleteConfirmation() {
     if (!this._currentMediaPath) return;
+    
+    // V4: Use current resolved URL for thumbnail (already resolved in _resolveMediaUrl)
+    const thumbnailUrl = this.mediaUrl;
     
     // Create confirmation dialog
     const dialog = document.createElement('div');
@@ -3866,7 +4233,7 @@ class MediaCardV5a extends LitElement {
       <div class="delete-confirmation-content">
         <h3>Delete Media?</h3>
         <div class="delete-thumbnail">
-          <img src="${this._resolveMediaUrl(this._currentMediaPath)}" alt="Preview">
+          <img src="${thumbnailUrl}" alt="Preview">
         </div>
         <p><strong>File:</strong> ${this._currentMetadata?.filename || this._currentMediaPath}</p>
         <p>This action cannot be undone.</p>
@@ -3931,8 +4298,11 @@ class MediaCardV5a extends LitElement {
     this._showEditConfirmation();
   }
   
-  _showEditConfirmation() {
+  async _showEditConfirmation() {
     if (!this._currentMediaPath) return;
+    
+    // V4: Use already-resolved media URL for thumbnail
+    const thumbnailUrl = this.mediaUrl;
     
     // Create confirmation dialog
     const dialog = document.createElement('div');
@@ -3941,7 +4311,7 @@ class MediaCardV5a extends LitElement {
       <div class="delete-confirmation-content">
         <h3>Mark for Editing?</h3>
         <div class="delete-thumbnail">
-          <img src="${this._resolveMediaUrl(this._currentMediaPath)}" alt="Preview">
+          <img src="${thumbnailUrl}" alt="Preview">
         </div>
         <p><strong>File:</strong> ${this._currentMetadata?.filename || this._currentMediaPath}</p>
         <p>This will mark the file for editing in the media index.</p>
@@ -4360,7 +4730,7 @@ class MediaCardV5a extends LitElement {
       text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
       opacity: 0.9;
     }
-
+    
     .nav-zone-right:hover::after {
       content: '▶';
       color: white;
@@ -4471,6 +4841,17 @@ class MediaCardV5a extends LitElement {
       --mdc-icon-size: 24px;
     }
 
+    /* V4: Highlight pause button when paused */
+    .pause-btn.paused {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.15);
+    }
+
+    .pause-btn.paused:hover {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.25);
+    }
+
     .favorite-btn.favorited {
       color: var(--error-color, #ff5252);
     }
@@ -4524,6 +4905,34 @@ class MediaCardV5a extends LitElement {
         opacity: 1;
         transform: translateY(0);
       }
+    }
+    
+    /* V4: Pause Indicator (copied from ha-media-card.js) */
+    .pause-indicator {
+      position: absolute;
+      top: 76px;
+      right: 8px;
+      width: 60px;
+      height: 60px;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      border-radius: 8px;
+      font-size: 1.2em;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 12;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn 0.3s ease;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     .delete-confirmation-content h3 {
@@ -4636,6 +5045,7 @@ class MediaCardV5a extends LitElement {
         <div class="card">
           ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
           ${this._renderMedia()}
+          ${this._renderPauseIndicator()}
           ${this._renderControls()}
         </div>
       </ha-card>
@@ -4680,7 +5090,9 @@ class MediaCardV5a extends LitElement {
       return html`<div class="placeholder">Resolving media URL...</div>`;
     }
 
-    const isVideo = this.currentMedia.media_content_type === 'video';
+    // V4: Detect media type from media_content_type or filename
+    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
+                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
 
     return html`
       <div 
@@ -4758,12 +5170,6 @@ class MediaCardV5a extends LitElement {
              tabindex="0"
              title="Previous">
         </div>
-        <div class="nav-zone nav-zone-center"
-             @click=${this._handleCenterClick}
-             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
-             tabindex="0"
-             title="Pause/Resume">
-        </div>
         <div class="nav-zone nav-zone-right"  
              @click=${this._loadNext}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
@@ -4771,6 +5177,18 @@ class MediaCardV5a extends LitElement {
              title="Next">
         </div>
       </div>
+    `;
+  }
+  
+  // V4: Pause indicator (copied from ha-media-card.js line 3830)
+  _renderPauseIndicator() {
+    // Only show in folder mode when paused
+    if (!this._isPaused || !this.config.is_folder) {
+      return html``;
+    }
+    
+    return html`
+      <div class="pause-indicator">⏸️</div>
     `;
   }
 
@@ -6731,9 +7149,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <input
                 type="checkbox"
                 .checked=${folderConfig.recursive !== false}
+                .disabled=${folderMode === 'sequential' && !hasMediaIndex}
                 @change=${this._handleRecursiveChanged}
               />
-              <div class="help-text">Include files from subfolders</div>
+              <div class="help-text">
+                ${folderMode === 'sequential' && !hasMediaIndex
+                  ? 'Sequential mode without media_index only supports single folder'
+                  : 'Include files from subfolders'}
+              </div>
             </div>
           </div>
 
