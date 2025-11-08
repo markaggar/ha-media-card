@@ -1360,14 +1360,31 @@ class MediaIndexProvider extends MediaProvider {
         const newItems = items.filter(item => 
           !existingPaths.has(item.path) && !historyPaths.has(item.path)
         );
-        console.log('[MediaIndexProvider] Filtered', items.length - newItems.length, 'duplicate/history items');
+        const filteredCount = items.length - newItems.length;
+        const filteredPercent = (filteredCount / items.length) * 100;
+        console.log('[MediaIndexProvider] Filtered', filteredCount, 'duplicate/history items (', filteredPercent.toFixed(1), '%)');
+        
+        // V5 SMART RETRY: If >80% filtered and priority_new_files was enabled, retry without it
+        // This handles case where all recent files are in history, need non-recent random files
+        if (filteredPercent > 80 && this.config.folder?.priority_new_files) {
+          console.log('[MediaIndexProvider] 🔄 Most items filtered! Retrying with priority_new_files=false to get non-recent random files');
+          const nonRecentItems = await this._queryMediaIndex(this.queueSize, false); // false = disable priority
+          
+          if (nonRecentItems && nonRecentItems.length > 0) {
+            const additionalItems = nonRecentItems.filter(item => 
+              !existingPaths.has(item.path) && !historyPaths.has(item.path)
+            );
+            console.log('[MediaIndexProvider] Retry got', additionalItems.length, 'non-recent items');
+            newItems.push(...additionalItems);
+          }
+        }
         
         if (newItems.length > 0) {
           // V5: Prepend new items to queue (priority files come first from backend)
           this.queue.unshift(...newItems);
           console.log('[MediaIndexProvider] Refilled queue with', newItems.length, 'items, now', this.queue.length, 'total');
         } else {
-          console.warn('[MediaIndexProvider] All new items were duplicates or in history, queue not refilled');
+          console.warn('[MediaIndexProvider] ⚠️ All items were duplicates/history and retry failed - queue not refilled');
         }
       }
     }
@@ -1410,7 +1427,8 @@ class MediaIndexProvider extends MediaProvider {
 
   // V4 CODE REUSE: Copied from ha-media-card.js lines 2121-2250
   // Modified: Removed card-specific references (this.config → config, this.hass → hass)
-  async _queryMediaIndex(count = 10) {
+  // V5 ENHANCEMENT: Added forcePriorityMode parameter for smart retry logic
+  async _queryMediaIndex(count = 10, forcePriorityMode = null) {
     if (!MediaProvider.isMediaIndexActive(this.config)) {
       console.warn('[MediaIndexProvider] Media index not configured');
       return null;
@@ -1439,12 +1457,13 @@ class MediaIndexProvider extends MediaProvider {
       // CRITICAL: Use config.media_type (user's preference), NOT current item's type
       const configuredMediaType = this.config.media_type || 'all';
       
-      // V5 FEATURE: Priority new files parameters
-      const priorityNewFiles = this.config.folder?.priority_new_files || false;
+      // V5 FEATURE: Priority new files parameters (with override for smart retry)
+      const priorityNewFiles = forcePriorityMode !== null ? forcePriorityMode : (this.config.folder?.priority_new_files || false);
       const thresholdSeconds = this.config.folder?.new_files_threshold_seconds || 3600;
       
       console.log('[MediaIndexProvider] 🆕 Priority new files config:', {
         enabled: priorityNewFiles,
+        forced: forcePriorityMode !== null,
         threshold: thresholdSeconds,
         'config.folder': this.config.folder
       });
@@ -3260,8 +3279,27 @@ class MediaCardV5a extends LitElement {
         this.history.push(item);
         this.historyIndex = this.history.length - 1;
         
-        // Limit history size (V4 keeps unlimited, v5 caps at 100)
-        if (this.history.length > 100) {
+        // V5: Dynamic history size formula to prevent duplicates with priority_new_files
+        // Formula considers:
+        // - Multiple queue refills (5x multiplier ensures variety)
+        // - Discovery window duration (prevent re-showing files within window)
+        // Memory: ~600-800 bytes per item = 80KB @ 100, 800KB @ 1000, 4MB @ 5000 (negligible)
+        const queueSize = this._config.slideshow_window || 100;
+        const autoAdvanceInterval = this._config.auto_advance_interval || 5;
+        const discoveryWindow = this._config.folder?.new_files_threshold_seconds || 3600;
+        
+        const minQueueMultiplier = 5; // See at least 5 queue refills before repeating
+        const discoveryWindowItems = Math.floor(discoveryWindow / autoAdvanceInterval);
+        const maxHistory = Math.min(
+          Math.max(
+            queueSize * minQueueMultiplier,  // e.g., 20 × 5 = 100
+            discoveryWindowItems,             // e.g., 3600/5 = 720
+            100                               // Absolute minimum
+          ),
+          5000 // Cap for memory sanity
+        );
+        
+        if (this.history.length > maxHistory) {
           this.history.shift();
           this.historyIndex = this.history.length - 1;
         }
@@ -6312,6 +6350,16 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _handleSlideshowWindowChanged(ev) {
+    const value = ev.target.value;
+    const slideshowWindow = value === '' ? null : parseInt(value, 10);
+    this._config = {
+      ...this._config,
+      slideshow_window: slideshowWindow
+    };
+    this._fireConfigChanged();
+  }
+
   _handlePriorityFoldersChanged(ev) {
     const patterns = ev.target.value
       .split('\n')
@@ -7989,6 +8037,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 ${folderMode === 'random' 
                   ? 'Show files in random order' 
                   : 'Show files in sequential order'}
+              </div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Queue Size</label>
+            <div>
+              <input
+                type="number"
+                min="5"
+                max="5000"
+                .value=${this._config.slideshow_window || 100}
+                @input=${this._handleSlideshowWindowChanged}
+                placeholder="100"
+              />
+              <div class="help-text">
+                ${folderMode === 'random' 
+                  ? 'Number of random items to fetch from media index (smaller = faster refresh of new files)' 
+                  : 'Maximum files to scan (performance limit for recursive scans)'}
               </div>
             </div>
           </div>
