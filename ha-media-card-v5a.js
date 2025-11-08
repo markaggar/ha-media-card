@@ -1328,7 +1328,8 @@ class MediaIndexProvider extends MediaProvider {
       console.log('[MediaIndexProvider] Queue low, refilling...');
       const items = await this._queryMediaIndex(this.queueSize);
       if (items && items.length > 0) {
-        this.queue.push(...items);
+        // V5: Prepend new items to queue (priority files come first from backend)
+        this.queue.unshift(...items);
         console.log('[MediaIndexProvider] Refilled queue, now', this.queue.length, 'items');
       }
     }
@@ -1400,6 +1401,16 @@ class MediaIndexProvider extends MediaProvider {
       // CRITICAL: Use config.media_type (user's preference), NOT current item's type
       const configuredMediaType = this.config.media_type || 'all';
       
+      // V5 FEATURE: Priority new files parameters
+      const priorityNewFiles = this.config.folder?.priority_new_files || false;
+      const thresholdSeconds = this.config.folder?.new_files_threshold_seconds || 3600;
+      
+      console.log('[MediaIndexProvider] 🆕 Priority new files config:', {
+        enabled: priorityNewFiles,
+        threshold: thresholdSeconds,
+        'config.folder': this.config.folder
+      });
+      
       // V4 CODE: Build WebSocket call with optional target for multi-instance support
       const wsCall = {
         type: 'call_service',
@@ -1412,8 +1423,8 @@ class MediaIndexProvider extends MediaProvider {
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
-          priority_new_files: this.config.folder?.priority_new_files || false,
-          new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
+          priority_new_files: priorityNewFiles,
+          new_files_threshold_seconds: thresholdSeconds
         },
         return_response: true
       };
