@@ -1272,11 +1272,14 @@ class MediaIndexProvider extends MediaProvider {
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
       
       return {
-        media_content_id: item.url, // Already resolved URL from _queryMediaIndex
+        // V4: Use database path for media_content_id (service calls need this)
+        // URL resolution happens separately in card's _resolveMediaUrl()
+        media_content_id: item.path,
         media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend (V4 pattern)
+          path: item.path, // V4: Store actual file path in metadata too
           date_taken: item.date_taken,
           created_time: item.created_time,
           location_city: item.location_city,
@@ -1547,11 +1550,13 @@ class SequentialMediaIndexProvider extends MediaProvider {
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
       
       return {
-        media_content_id: item.url, // Already resolved URL
+        // V4: Use database path for media_content_id (service calls need this)
+        media_content_id: item.path,
         media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend
+          path: item.path, // V4: Store actual file path in metadata
           date_taken: item.date_taken,
           created_time: item.created_time,
           location_city: item.location_city,
@@ -2928,6 +2933,10 @@ class MediaCardV5a extends LitElement {
       this.removeAttribute('data-aspect-mode');
     }
     
+    // V5: Set media source type attribute for CSS targeting
+    const mediaSourceType = this.config.media_source_type || 'single_media';
+    this.setAttribute('data-media-source-type', mediaSourceType);
+    
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
@@ -3034,6 +3043,7 @@ class MediaCardV5a extends LitElement {
         const item = this.history[this.historyIndex];
         this._log('📖 Replaying from history:', item.title);
         this.currentMedia = item;
+        // V4: media_content_id should be the path for service calls
         this._currentMediaPath = item.media_content_id;
         this._currentMetadata = item.metadata || null;
         await this._resolveMediaUrl();
@@ -3071,7 +3081,8 @@ class MediaCardV5a extends LitElement {
         this.currentMedia = item;
         this._log('Set currentMedia:', this.currentMedia);
         
-        // V4: Set metadata for action buttons and display
+        // V4: Set current path for action buttons
+        // media_content_id should be the database path, not a media-source:// URL
         this._currentMediaPath = item.media_content_id;
         this._currentMetadata = item.metadata;
         
@@ -3118,6 +3129,7 @@ class MediaCardV5a extends LitElement {
       this._log('📖 Going back to history item:', item.title);
       
       this.currentMedia = item;
+      // V4: media_content_id should be the path for service calls
       this._currentMediaPath = item.media_content_id;
       this._currentMetadata = item.metadata || null;
       
@@ -4160,6 +4172,55 @@ class MediaCardV5a extends LitElement {
     `;
   }
 
+  // V4 CODE REUSE: Navigation indicators (position and dots)
+  // Based on V4 lines 4187-4233
+  _renderNavigationIndicators() {
+    // Don't show in single_media mode
+    if (this.config.media_source_type === 'single_media') {
+      return html``;
+    }
+
+    // Get total count from provider queue (not history which grows unbounded)
+    const totalCount = this.provider?.subfolderQueue?.queue?.length || 0;
+    if (totalCount <= 1) {
+      return html``;
+    }
+
+    // Current position in history (historyIndex === -1 means at end/latest)
+    const currentIndex = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+
+    // Show position indicator if enabled
+    let positionIndicator = html``;
+    if (this.config.show_position_indicator !== false) {
+      positionIndicator = html`
+        <div class="position-indicator">
+          ${currentIndex + 1} of ${totalCount}
+        </div>
+      `;
+    }
+
+    // Show dots indicator if enabled and not too many items (limit to 15)
+    let dotsIndicator = html``;
+    if (this.config.show_dots_indicator !== false && totalCount <= 15) {
+      const dots = [];
+      for (let i = 0; i < totalCount; i++) {
+        dots.push(html`
+          <div class="dot ${i === currentIndex ? 'active' : ''}"></div>
+        `);
+      }
+      dotsIndicator = html`
+        <div class="dots-indicator">
+          ${dots}
+        </div>
+      `;
+    }
+
+    return html`
+      ${positionIndicator}
+      ${dotsIndicator}
+    `;
+  }
+
   getCardSize() {
     return 3;
   }
@@ -4170,7 +4231,13 @@ class MediaCardV5a extends LitElement {
     
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
-    const newState = !(this._currentMetadata?.is_favorited || false);
+    // CRITICAL: Capture current state NOW before async operations
+    const targetPath = this._currentMediaPath;
+    const isFavorite = this._currentMetadata?.is_favorited || false;
+    const newState = !isFavorite;
+    
+    console.warn(`💗 FAVORITE CAPTURE: path="${targetPath}", current_is_favorited=${isFavorite}, new_state=${newState}`);
+    console.warn(`💗 CURRENT METADATA:`, this._currentMetadata);
     
     try {
       // V4: Call media_index service via WebSocket API
@@ -4179,7 +4246,7 @@ class MediaCardV5a extends LitElement {
         domain: 'media_index',
         service: 'mark_favorite',
         service_data: {
-          file_path: this._currentMediaPath,
+          file_path: targetPath,
           is_favorite: newState
         },
         return_response: true
@@ -4190,7 +4257,9 @@ class MediaCardV5a extends LitElement {
         wsCall.target = { entity_id: this.config.media_index.entity_id };
       }
       
-      await this.hass.callWS(wsCall);
+      const response = await this.hass.callWS(wsCall);
+      
+      console.warn(`✅ Favorite toggled for ${targetPath}: ${newState}`, response);
       
       // Update current metadata
       if (this._currentMetadata) {
@@ -4266,23 +4335,30 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      // Call media_index delete service
-      const serviceData = {
-        file_path: this._currentMediaPath
+      // V4: Call media_index service via WebSocket API
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'delete_media',
+        service_data: {
+          file_path: this._currentMediaPath
+        },
+        return_response: true
       };
       
-      // If entity_id specified, target that instance
-      if (this.config.media_index.entity_id) {
-        serviceData.entity_id = this.config.media_index.entity_id;
+      // V4: Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
       }
       
-      await this.hass.callService('media_index', 'delete_media', serviceData, true);
+      await this.hass.callWS(wsCall);
       
-      // For single media mode, just clear the display
-      this._currentMedia = null;
-      this._currentMetadata = null;
-      this._currentMediaPath = null;
-      this.requestUpdate();
+      this._log('✅ Media deleted successfully');
+      
+      // Advance to next media after delete
+      await this._loadNext();
       
     } catch (error) {
       console.error('Failed to delete media:', error);
@@ -4344,18 +4420,28 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      // Call media_index mark_for_edit service
-      const serviceData = {
-        file_path: this._currentMediaPath,
-        mark_for_edit: true
+      // V4: Call media_index service via WebSocket API
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'mark_for_edit',
+        service_data: {
+          file_path: this._currentMediaPath,
+          mark_for_edit: true
+        },
+        return_response: true
       };
       
-      // If entity_id specified, target that instance
-      if (this.config.media_index.entity_id) {
-        serviceData.entity_id = this.config.media_index.entity_id;
+      // V4: Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
       }
       
-      await this.hass.callService('media_index', 'mark_for_edit', serviceData, true);
+      await this.hass.callWS(wsCall);
+      
+      this._log('✅ File marked for editing');
       
       // V5: Refresh metadata from backend to get updated state
       await this._refreshMetadata();
@@ -4935,6 +5021,57 @@ class MediaCardV5a extends LitElement {
       to { opacity: 1; transform: translateY(0); }
     }
 
+    /* V4: Navigation Indicators (position and dots) */
+    /* Copied from V4 lines 1362-1425 */
+    .position-indicator {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.8em;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 15;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+
+    .dots-indicator {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      pointer-events: none;
+      z-index: 15;
+      max-width: 200px;
+      overflow: hidden;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.4);
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .dot.active {
+      background: rgba(255, 255, 255, 0.9);
+      transform: scale(1.2);
+    }
+
+    /* Hide indicators when in single_media mode */
+    :host([data-media-source-type="single_media"]) .position-indicator,
+    :host([data-media-source-type="single_media"]) .dots-indicator {
+      display: none;
+    }
+
     .delete-confirmation-content h3 {
       margin: 0 0 16px;
       font-size: 18px;
@@ -5145,6 +5282,7 @@ class MediaCardV5a extends LitElement {
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
         ${this._renderActionButtons()}
+        ${this._renderNavigationIndicators()}
       </div>
     `;
   }
