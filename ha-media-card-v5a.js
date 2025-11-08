@@ -1410,7 +1410,8 @@ class MediaIndexProvider extends MediaProvider {
           folder: folderFilter,
           // Use configured media type preference
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
-          // V5 FEATURE: Priority new files - inject recently added files to front of queue
+          // V5 FEATURE: Priority new files - prepend recently indexed files to results
+          // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: this.config.folder?.priority_new_files || false,
           new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
         },
@@ -1696,7 +1697,8 @@ class SequentialMediaIndexProvider extends MediaProvider {
         file_type: this.config.media_type === 'all' ? undefined : this.config.media_type,
         order_by: this.orderBy,
         order_direction: this.orderDirection,
-        // V5 FEATURE: Priority new files - prepend recently scanned files to results
+        // V5 FEATURE: Priority new files - prepend recently indexed files to results
+        // Note: Recently indexed = newly discovered by scanner, not necessarily new files
         priority_new_files: this.config.folder?.priority_new_files || false,
         new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
       };
@@ -2734,7 +2736,8 @@ class SubfolderQueue {
     };
     
     // V5 FEATURE: Priority new files - filesystem scanning mode
-    // Prepend recently modified files to front of queue (V4 feature restoration)
+    // Prepend recently discovered files to front of queue (V4 feature restoration)
+    // Note: "New" means recently discovered by file scanner, not necessarily recent file dates
     if (priorityNewFiles) {
       const now = Date.now();
       const thresholdMs = thresholdSeconds * 1000;
@@ -2742,14 +2745,14 @@ class SubfolderQueue {
       const oldFiles = [];
       
       for (const item of this.queue) {
-        // Extract modification time from item
+        // Extract modification time from item (when file was last changed/added)
         // Browse_media returns items with extra.last_modified or check file creation time from metadata
         const lastModified = item.extra?.last_modified || item.created_time || 0;
         const modifiedMs = typeof lastModified === 'number' ? lastModified * 1000 : new Date(lastModified).getTime();
         
         if (modifiedMs && (now - modifiedMs) < thresholdMs) {
           newFiles.push(item);
-          console.log('[SubfolderQueue] 🆕 Priority file (modified recently):', MediaProvider.extractFilename(item.media_content_id));
+          console.log('[SubfolderQueue] 🆕 Priority file (discovered recently):', MediaProvider.extractFilename(item.media_content_id));
         } else {
           oldFiles.push(item);
         }
@@ -2759,10 +2762,10 @@ class SubfolderQueue {
       newFiles.sort(compareItems);
       oldFiles.sort(compareItems);
       
-      // Reconstruct queue: new files first, then old files
+      // Reconstruct queue: newly discovered files first, then rest
       this.queue = [...newFiles, ...oldFiles];
       
-      console.log('[SubfolderQueue] ✅ Priority sorting complete:', newFiles.length, 'new files,', oldFiles.length, 'old files');
+      console.log('[SubfolderQueue] ✅ Priority sorting complete:', newFiles.length, 'recently discovered,', oldFiles.length, 'older');
     } else {
       // Standard sorting without priority
       this.queue.sort(compareItems);
@@ -7950,18 +7953,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   .checked=${folderConfig.priority_new_files || false}
                   @change=${this._handlePriorityNewFilesChanged}
                 />
-                <span>Show recently added files first</span>
+                <span>Show recently discovered files first</span>
               </label>
               <div class="help-text">
                 ${folderMode === 'random' 
-                  ? 'Display newly scanned files before random selection' 
-                  : 'Display newly added/modified files at the start of the sequence'}
+                  ? 'Display newly discovered files before random selection' 
+                  : 'Display newly discovered files at the start of the sequence'}
               </div>
             </div>
 
             ${folderConfig.priority_new_files ? html`
               <div class="config-row">
-                <label>New Files Threshold</label>
+                <label>Discovery Window</label>
                 <div>
                   <select 
                     @change=${this._handleNewFilesThresholdChanged}
@@ -7974,7 +7977,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                     <option value="86400">24 hours</option>
                   </select>
                   <div class="help-text">
-                    How recently a file must be ${hasMediaIndex && folderConfig.use_media_index_for_discovery !== false ? 'scanned' : 'modified'} to appear first
+                    How recently a file must be ${hasMediaIndex && folderConfig.use_media_index_for_discovery !== false ? 'indexed' : 'discovered'} to appear first
                   </div>
                 </div>
               </div>
