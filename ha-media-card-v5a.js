@@ -1409,7 +1409,10 @@ class MediaIndexProvider extends MediaProvider {
           count: count,
           folder: folderFilter,
           // Use configured media type preference
-          file_type: configuredMediaType === 'all' ? undefined : configuredMediaType
+          file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
+          // V5 FEATURE: Priority new files - inject recently added files to front of queue
+          priority_new_files: this.config.folder?.priority_new_files || false,
+          new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
         },
         return_response: true
       };
@@ -6164,6 +6167,32 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _handlePriorityNewFilesChanged(ev) {
+    const priorityNewFiles = ev.target.checked;
+    this._config = {
+      ...this._config,
+      folder: {
+        ...this._config.folder,
+        priority_new_files: priorityNewFiles,
+        // Set default threshold when enabling
+        new_files_threshold_seconds: this._config.folder?.new_files_threshold_seconds || 3600
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _handleNewFilesThresholdChanged(ev) {
+    const threshold = parseInt(ev.target.value, 10);
+    this._config = {
+      ...this._config,
+      folder: {
+        ...this._config.folder,
+        new_files_threshold_seconds: threshold
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _handleScanDepthChanged(ev) {
     const value = ev.target.value;
     const scanDepth = value === '' ? null : parseInt(value, 10);
@@ -7870,6 +7899,46 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           </div>
+
+          <!-- Priority New Files (only when mode = "random" AND use_media_index_for_discovery = true) -->
+          ${folderMode === 'random' && hasMediaIndex && folderConfig.use_media_index_for_discovery !== false ? html`
+            <div style="margin-left: 20px; padding: 12px; background: #fff3e0; border-left: 3px solid #ff9800; border-radius: 4px;">
+              <div class="config-row">
+                <label style="display: flex; align-items: center; gap: 8px;">
+                  <input
+                    type="checkbox"
+                    .checked=${folderConfig.priority_new_files || false}
+                    @change=${this._handlePriorityNewFilesChanged}
+                  />
+                  <span>Show recently added files first</span>
+                </label>
+                <div class="help-text">
+                  Display newly scanned files before random selection
+                </div>
+              </div>
+
+              ${folderConfig.priority_new_files ? html`
+                <div class="config-row">
+                  <label>New Files Threshold</label>
+                  <div>
+                    <select 
+                      @change=${this._handleNewFilesThresholdChanged}
+                      .value=${folderConfig.new_files_threshold_seconds || 3600}
+                    >
+                      <option value="1800">30 minutes</option>
+                      <option value="3600">1 hour</option>
+                      <option value="7200">2 hours</option>
+                      <option value="21600">6 hours</option>
+                      <option value="86400">24 hours</option>
+                    </select>
+                    <div class="help-text">
+                      How recently a file must be scanned to appear first
+                    </div>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          ` : ''}
 
           <div class="config-row">
             <label>Recursive Scan</label>
