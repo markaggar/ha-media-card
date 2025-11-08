@@ -976,9 +976,10 @@ class SingleMediaProvider extends MediaProvider {
 // =================================================================
 
 class FolderProvider extends MediaProvider {
-  constructor(config, hass) {
+  constructor(config, hass, card = null) {
     super(config, hass);
     this.subfolderQueue = null;
+    this.card = card; // V5: Reference to card for accessing navigation history
     
     // Create a card-like object for SubfolderQueue (V4 compatibility)
     this.cardAdapter = {
@@ -1101,7 +1102,7 @@ class FolderProvider extends MediaProvider {
       // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
       if (useMediaIndex) {
         console.log('[FolderProvider] Using MediaIndexProvider for discovery');
-        this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass);
+        this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.mediaIndexProvider.initialize();
         
         if (!success) {
@@ -1293,11 +1294,12 @@ class FolderProvider extends MediaProvider {
 // Adapted for provider pattern architecture
 
 class MediaIndexProvider extends MediaProvider {
-  constructor(config, hass) {
+  constructor(config, hass, card = null) {
     super(config, hass);
     this.queue = []; // Internal queue of items from database
     this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files (moved to _Junk/_Edit)
+    this.card = card; // V5: Reference to card for accessing navigation history
   }
 
   async initialize() {
@@ -1325,12 +1327,38 @@ class MediaIndexProvider extends MediaProvider {
   async getNext() {
     // Refill queue if running low
     if (this.queue.length < 10) {
-      console.log('[MediaIndexProvider] Queue low, refilling...');
+      console.log('[MediaIndexProvider] Queue low, refilling...', 'current queue size:', this.queue.length);
+      
+      // V5 FIX: Track paths already in queue to avoid duplicates
+      const existingPaths = new Set(this.queue.map(item => item.path));
+      console.log('[MediaIndexProvider] Existing paths in queue:', existingPaths.size);
+      
+      // V5 FIX: Also exclude paths in navigation history
+      const historyPaths = new Set();
+      if (this.card && this.card.history) {
+        this.card.history.forEach(historyItem => {
+          if (historyItem.media_content_id) {
+            historyPaths.add(historyItem.media_content_id);
+          }
+        });
+        console.log('[MediaIndexProvider] Paths in history:', historyPaths.size);
+      }
+      
       const items = await this._queryMediaIndex(this.queueSize);
       if (items && items.length > 0) {
-        // V5: Prepend new items to queue (priority files come first from backend)
-        this.queue.unshift(...items);
-        console.log('[MediaIndexProvider] Refilled queue, now', this.queue.length, 'items');
+        // V5 FIX: Filter out items already in queue OR history to avoid duplicates
+        const newItems = items.filter(item => 
+          !existingPaths.has(item.path) && !historyPaths.has(item.path)
+        );
+        console.log('[MediaIndexProvider] Filtered', items.length - newItems.length, 'duplicate/history items');
+        
+        if (newItems.length > 0) {
+          // V5: Prepend new items to queue (priority files come first from backend)
+          this.queue.unshift(...newItems);
+          console.log('[MediaIndexProvider] Refilled queue with', newItems.length, 'items, now', this.queue.length, 'total');
+        } else {
+          console.warn('[MediaIndexProvider] All new items were duplicates or in history, queue not refilled');
+        }
       }
     }
     
@@ -3145,7 +3173,7 @@ class MediaCardV5a extends LitElement {
           const folderMode = this.config.folder.mode || 'subfolder_queue';
           this._log(`📁 Initializing FolderProvider - mode: ${folderMode}, path: ${this.config.folder.path}`);
           
-          this.provider = new FolderProvider(this.config, this.hass);
+          this.provider = new FolderProvider(this.config, this.hass, this);
           break;
         
         default:
