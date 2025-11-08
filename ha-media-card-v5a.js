@@ -1070,13 +1070,23 @@ class FolderProvider extends MediaProvider {
         return true;
         
       } else {
-        // Filesystem sequential mode (single folder only)
-        console.log('[FolderProvider] Using SubfolderQueue in sequential mode (filesystem - single folder)');
+        // V5 FEATURE: Filesystem sequential mode with recursive support
+        // Use case: Integration sources (Reolink cameras, Synology Photos) with hierarchical folders
+        console.log('[FolderProvider] Using SubfolderQueue in sequential mode (filesystem with recursive scan)');
         
-        // Force single folder scan for filesystem sequential
+        // V5: Enable recursive scanning for sequential filesystem mode
         const adaptedConfig = this._adaptConfigForV4();
-        adaptedConfig.subfolder_queue.enabled = false; // No recursive
-        adaptedConfig.subfolder_queue.scan_depth = 0;  // Single folder only
+        adaptedConfig.subfolder_queue.enabled = recursive; // Use config recursive setting
+        adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null; // Use config or unlimited
+        
+        // Use slideshow_window as scan limit (performance control)
+        adaptedConfig.slideshow_window = this.config.slideshow_window || 1000;
+        
+        console.log('[FolderProvider] Sequential scan config:', {
+          recursive: adaptedConfig.subfolder_queue.enabled,
+          scan_depth: adaptedConfig.subfolder_queue.scan_depth || 'unlimited',
+          slideshow_window: adaptedConfig.slideshow_window
+        });
         
         // Update cardAdapter config
         this.cardAdapter.config = adaptedConfig;
@@ -8029,13 +8039,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <input
                 type="checkbox"
                 .checked=${folderConfig.recursive !== false}
-                .disabled=${folderMode === 'sequential' && !hasMediaIndex}
                 @change=${this._handleRecursiveChanged}
               />
               <div class="help-text">
+                Include files from subfolders
                 ${folderMode === 'sequential' && !hasMediaIndex
-                  ? 'Sequential mode without media_index only supports single folder'
-                  : 'Include files from subfolders'}
+                  ? ' (supports integration sources like Reolink/Synology)'
+                  : ''}
               </div>
             </div>
           </div>
