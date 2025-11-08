@@ -718,17 +718,18 @@ class MediaProvider {
     let metadata = MediaProvider.extractMetadataFromPath(mediaPath);
     
     console.log('🔍 extractMetadataWithExif - mediaPath:', mediaPath);
-    console.log('🔍 media_index active?', MediaProvider.isMediaIndexActive(config));
+    console.log('🔍 media_index configured?', MediaProvider.isMediaIndexActive(config));
     console.log('🔍 hass available?', !!hass);
-    console.log('🔍 config:', config);
     
-    // Step 2: Enrich with media_index EXIF data if configured
-    if (MediaProvider.isMediaIndexActive(config) && hass) {
-      console.log('📡 Fetching EXIF metadata from media_index...');
+    // Step 2: Enrich with media_index EXIF data if hass is available
+    // Try to call media_index even if not explicitly configured as media source
+    // This allows metadata enrichment for subfolder/simple folder modes
+    if (hass) {
+      console.log('📡 Attempting to fetch EXIF metadata from media_index...');
       try {
         const enrichedMetadata = await MediaIndexHelper.fetchFileMetadata(
           hass,
-          config,  // Pass full config, not just entity_id
+          config,  // Pass full config
           mediaPath
         );
         
@@ -740,11 +741,11 @@ class MediaProvider {
           console.log('✅ Merged metadata:', metadata);
         }
       } catch (error) {
-        console.warn('❌ Failed to fetch media_index metadata:', error);
+        console.warn('⚠️ Failed to fetch media_index metadata (service may not be installed):', error);
         // Fall back to path-based metadata only
       }
     } else {
-      console.log('⏭️ Skipping EXIF enrichment');
+      console.log('⏭️ Skipping EXIF enrichment - hass not available');
     }
     
     return metadata;
@@ -1014,6 +1015,7 @@ class FolderProvider extends MediaProvider {
       media_path: this.config.folder?.path || '',
       folder_mode: this.config.folder?.mode || 'random',  // V4 expects this at root level
       slideshow_window: this.config.slideshow_window || 1000,
+      media_type: this.config.media_type || 'all',  // V5: Pass through media_type for filtering
       folder: {
         order_by: this.config.folder?.order_by || 'date_taken',
         sequential: {
@@ -1205,7 +1207,75 @@ class FolderProvider extends MediaProvider {
     }
     
     if (this.subfolderQueue) {
-      return this.subfolderQueue.getNextItem();
+      const item = this.subfolderQueue.getNextItem();
+      
+      // V5: Enrich with metadata from media_index if available
+      // Even when not using media_index for discovery, we can still use it for metadata
+      if (item && MediaProvider.isMediaIndexActive(this.config)) {
+        console.log('[FolderProvider] 🔍 Attempting to enrich item:', item.media_content_id);
+        
+        // Extract file path - media_index expects /media/... format
+        let filePath = item.media_content_id?.replace('media-source://media_source/', '/') || '';
+        console.log('[FolderProvider] 📂 Extracted file path:', filePath);
+        
+        if (filePath) {
+          try {
+            // Try to get full metadata from media_index service
+            const wsCall = {
+              type: 'call_service',
+              domain: 'media_index',
+              service: 'get_file_metadata',
+              service_data: { file_path: filePath },
+              return_response: true
+            };
+            
+            console.log('[FolderProvider] 📡 Calling get_file_metadata with:', wsCall);
+            const response = await this.hass.callWS(wsCall);
+            console.log('[FolderProvider] 📥 Service response:', response);
+            
+            if (response?.response && !response.response.error) {
+              // Flatten EXIF data to match MediaIndexProvider format
+              const serviceMetadata = response.response;
+              const exif = serviceMetadata.exif || {};
+              
+              // Merge media_index metadata with path-based metadata
+              const pathMetadata = MediaProvider.extractMetadataFromPath(filePath);
+              item.metadata = {
+                ...pathMetadata,
+                ...serviceMetadata,
+                // Flatten EXIF fields to top level for metadata overlay compatibility
+                date_taken: exif.date_taken,
+                location_city: exif.location_city,
+                location_state: exif.location_state,
+                location_country: exif.location_country,
+                location_name: exif.location_name,
+                latitude: exif.latitude,
+                longitude: exif.longitude,
+                has_coordinates: exif.has_coordinates || false,
+                is_geocoded: exif.is_geocoded || false
+              };
+              console.log('[FolderProvider] ✅ Enriched item with media_index metadata:', item.metadata);
+            } else {
+              console.warn('[FolderProvider] ⚠️ Service returned error or no metadata:', response?.response);
+              item.metadata = MediaProvider.extractMetadataFromPath(filePath);
+            }
+          } catch (error) {
+            // Fallback to path-based metadata if service call fails
+            console.error('[FolderProvider] ❌ Could not fetch media_index metadata:', error);
+            item.metadata = MediaProvider.extractMetadataFromPath(filePath);
+          }
+        } else {
+          console.warn('[FolderProvider] ⚠️ Could not extract file path from media_content_id');
+        }
+      } else {
+        if (!item) {
+          console.warn('[FolderProvider] ⚠️ SubfolderQueue returned null item');
+        } else if (!MediaProvider.isMediaIndexActive(this.config)) {
+          console.log('[FolderProvider] ℹ️ Media index not active, skipping metadata enrichment');
+        }
+      }
+      
+      return item;
     }
     
     console.warn('[FolderProvider] getNext() called but no provider initialized');
@@ -1520,6 +1590,23 @@ class SequentialMediaIndexProvider extends MediaProvider {
       } else {
         console.log('[SequentialMediaIndexProvider] No more items available from database');
         this.reachedEnd = true;
+      }
+    }
+    
+    // If queue is empty and we've reached the end, loop back to start
+    if (this.queue.length === 0 && this.reachedEnd) {
+      console.log('[SequentialMediaIndexProvider] 🔄 Reached end of sequence, looping back to start...');
+      this.lastSeenValue = null;
+      this.reachedEnd = false;
+      this.hasMore = true;
+      
+      const items = await this._queryOrderedFiles();
+      if (items && items.length > 0) {
+        this.queue = items;
+        console.log('[SequentialMediaIndexProvider] ✅ Restarted sequence with', this.queue.length, 'items');
+      } else {
+        console.warn('[SequentialMediaIndexProvider] ❌ Failed to restart sequence - no items returned');
+        return null;
       }
     }
     
@@ -2757,6 +2844,7 @@ class MediaCardV5a extends LitElement {
     this._debugMode = true; // V4 debug logging (configurable via config.debug_mode)
     this._lastLogTime = {}; // V4 log throttling
     this._isPaused = false; // V4 pause state for slideshow
+    this._showInfoOverlay = false; // Info overlay toggle
     
     // V4: Circuit breaker for 404 errors
     this._consecutive404Count = 0;
@@ -3046,6 +3134,10 @@ class MediaCardV5a extends LitElement {
         // V4: media_content_id should be the path for service calls
         this._currentMediaPath = item.media_content_id;
         this._currentMetadata = item.metadata || null;
+        
+        // V5: Clear cached full metadata when media changes
+        this._fullMetadata = null;
+        
         await this._resolveMediaUrl();
         this.requestUpdate();
         return;
@@ -3085,6 +3177,9 @@ class MediaCardV5a extends LitElement {
         // media_content_id should be the database path, not a media-source:// URL
         this._currentMediaPath = item.media_content_id;
         this._currentMetadata = item.metadata;
+        
+        // V5: Clear cached full metadata when media changes
+        this._fullMetadata = null;
         
         await this._resolveMediaUrl();
         this.requestUpdate(); // Force re-render
@@ -3132,6 +3227,9 @@ class MediaCardV5a extends LitElement {
       // V4: media_content_id should be the path for service calls
       this._currentMediaPath = item.media_content_id;
       this._currentMetadata = item.metadata || null;
+      
+      // V5: Clear cached full metadata when media changes
+      this._fullMetadata = null;
       
       await this._resolveMediaUrl();
       this.requestUpdate();
@@ -4121,17 +4219,19 @@ class MediaCardV5a extends LitElement {
     const enableFavorite = config.enable_favorite !== false;
     const enableDelete = config.enable_delete !== false;
     const enableEdit = config.enable_edit !== false;
+    const enableInfo = config.enable_info !== false;
     
     // Don't render anything if all are disabled
     if (!enablePause && !showMediaIndexButtons) {
       return html``;
     }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit) {
+    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo) {
       return html``;
     }
 
     const isFavorite = this._currentMetadata?.is_favorited || false;
     const isPaused = this._isPaused || false;
+    const isInfoActive = this._showInfoOverlay || false;
     const position = config.position || 'top-right';
 
     return html`
@@ -4142,6 +4242,14 @@ class MediaCardV5a extends LitElement {
             @click=${this._handlePauseClick}
             title="${isPaused ? 'Resume' : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && enableInfo ? html`
+          <button
+            class="action-btn info-btn ${isInfoActive ? 'active' : ''}"
+            @click=${this._handleInfoClick}
+            title="Show Info">
+            <ha-icon icon="mdi:information-outline"></ha-icon>
           </button>
         ` : ''}
         ${showMediaIndexButtons && enableFavorite ? html`
@@ -4221,6 +4329,232 @@ class MediaCardV5a extends LitElement {
     `;
   }
 
+  // Info overlay rendering with formatted metadata
+  _renderInfoOverlay() {
+    if (!this._showInfoOverlay) {
+      return html``;
+    }
+
+    // If overlay is open but we don't have full metadata, fetch it now
+    if (!this._fullMetadata && this._currentMediaPath && MediaProvider.isMediaIndexActive(this.config)) {
+      // Trigger async fetch (don't await, will update on next render)
+      this._fetchFullMetadataAsync();
+    }
+
+    // Use full metadata if available, otherwise fall back to current metadata
+    const metadata = this._fullMetadata || this._currentMetadata || {};
+    const exif = metadata.exif || {};
+
+    // Format timestamp to locale date/time
+    const formatTimestamp = (timestamp) => {
+      if (!timestamp) return 'N/A';
+      const date = new Date(timestamp * 1000);
+      return date.toLocaleString();
+    };
+
+    // Format file size to human-readable
+    const formatFileSize = (bytes) => {
+      if (!bytes) return 'N/A';
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    };
+
+    return html`
+      <div class="info-overlay">
+        <div class="info-content">
+          <div class="info-header">
+            <h3>Media Information</h3>
+            <button class="info-close-btn" @click=${() => { this._showInfoOverlay = false; this.requestUpdate(); }}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="info-body">
+            ${metadata.path ? html`
+              <div class="info-section">
+                <div class="info-label">Path:</div>
+                <div class="info-value">${metadata.path}</div>
+              </div>
+            ` : ''}
+            ${metadata.rating !== null && metadata.rating !== undefined ? html`
+              <div class="info-section">
+                <div class="info-label">Rating:</div>
+                <div class="info-value">${metadata.rating} ${'⭐'.repeat(Math.min(5, Math.max(0, metadata.rating)))}</div>
+              </div>
+            ` : ''}
+            
+            ${exif.date_taken || exif.location_name || exif.location_city ? html`
+              <div class="info-group-header">📍 Location & Time</div>
+            ` : ''}
+            ${exif.date_taken ? html`
+              <div class="info-section">
+                <div class="info-label">Date Taken:</div>
+                <div class="info-value">${formatTimestamp(exif.date_taken)}</div>
+              </div>
+            ` : ''}
+            ${exif.location_name ? html`
+              <div class="info-section">
+                <div class="info-label">Location Name:</div>
+                <div class="info-value">${exif.location_name}</div>
+              </div>
+            ` : ''}
+            ${exif.location_city ? html`
+              <div class="info-section">
+                <div class="info-label">City:</div>
+                <div class="info-value">${exif.location_city}</div>
+              </div>
+            ` : ''}
+            ${exif.location_state ? html`
+              <div class="info-section">
+                <div class="info-label">State:</div>
+                <div class="info-value">${exif.location_state}</div>
+              </div>
+            ` : ''}
+            ${exif.location_country ? html`
+              <div class="info-section">
+                <div class="info-label">Country:</div>
+                <div class="info-value">${exif.location_country}</div>
+              </div>
+            ` : ''}
+            ${exif.altitude !== null && exif.altitude !== undefined ? html`
+              <div class="info-section">
+                <div class="info-label">Altitude:</div>
+                <div class="info-value">${exif.altitude} m</div>
+              </div>
+            ` : ''}
+            ${exif.latitude || exif.longitude ? html`
+              <div class="info-section">
+                <div class="info-label">Coordinates:</div>
+                <div class="info-value">${exif.latitude?.toFixed(6)}, ${exif.longitude?.toFixed(6)}</div>
+              </div>
+            ` : ''}
+            
+            ${exif.camera_make || exif.camera_model ? html`
+              <div class="info-group-header">📷 Camera</div>
+            ` : ''}
+            ${exif.camera_make ? html`
+              <div class="info-section">
+                <div class="info-label">Make:</div>
+                <div class="info-value">${exif.camera_make}</div>
+              </div>
+            ` : ''}
+            ${exif.camera_model ? html`
+              <div class="info-section">
+                <div class="info-label">Model:</div>
+                <div class="info-value">${exif.camera_model}</div>
+              </div>
+            ` : ''}
+            ${exif.flash ? html`
+              <div class="info-section">
+                <div class="info-label">Flash:</div>
+                <div class="info-value">${exif.flash}</div>
+              </div>
+            ` : ''}
+            ${exif.iso ? html`
+              <div class="info-section">
+                <div class="info-label">ISO:</div>
+                <div class="info-value">${exif.iso}</div>
+              </div>
+            ` : ''}
+            ${exif.aperture ? html`
+              <div class="info-section">
+                <div class="info-label">Aperture:</div>
+                <div class="info-value">f/${exif.aperture}</div>
+              </div>
+            ` : ''}
+            ${exif.shutter_speed ? html`
+              <div class="info-section">
+                <div class="info-label">Shutter Speed:</div>
+                <div class="info-value">${exif.shutter_speed}</div>
+              </div>
+            ` : ''}
+            ${exif.focal_length ? html`
+              <div class="info-section">
+                <div class="info-label">Focal Length:</div>
+                <div class="info-value">${exif.focal_length} mm</div>
+              </div>
+            ` : ''}
+            ${exif.focal_length_35mm ? html`
+              <div class="info-section">
+                <div class="info-label">Focal Length (35mm):</div>
+                <div class="info-value">${exif.focal_length_35mm} mm</div>
+              </div>
+            ` : ''}
+            ${exif.exposure_compensation ? html`
+              <div class="info-section">
+                <div class="info-label">Exposure Compensation:</div>
+                <div class="info-value">${exif.exposure_compensation}</div>
+              </div>
+            ` : ''}
+            ${exif.metering_mode ? html`
+              <div class="info-section">
+                <div class="info-label">Metering Mode:</div>
+                <div class="info-value">${exif.metering_mode}</div>
+              </div>
+            ` : ''}
+            ${exif.white_balance ? html`
+              <div class="info-section">
+                <div class="info-label">White Balance:</div>
+                <div class="info-value">${exif.white_balance}</div>
+              </div>
+            ` : ''}
+            ${metadata.orientation ? html`
+              <div class="info-section">
+                <div class="info-label">Orientation:</div>
+                <div class="info-value">${metadata.orientation}</div>
+              </div>
+            ` : ''}
+            
+            <div class="info-group-header">📁 File Info</div>
+            ${metadata.file_size ? html`
+              <div class="info-section">
+                <div class="info-label">File Size:</div>
+                <div class="info-value">${formatFileSize(metadata.file_size)}</div>
+              </div>
+            ` : ''}
+            ${metadata.file_id ? html`
+              <div class="info-section">
+                <div class="info-label">File ID:</div>
+                <div class="info-value">${metadata.file_id}</div>
+              </div>
+            ` : ''}
+            ${metadata.modified_time ? html`
+              <div class="info-section">
+                <div class="info-label">Modified:</div>
+                <div class="info-value">${new Date(metadata.modified_time).toLocaleString()}</div>
+              </div>
+            ` : ''}
+            ${metadata.created_time ? html`
+              <div class="info-section">
+                <div class="info-label">Created:</div>
+                <div class="info-value">${new Date(metadata.created_time).toLocaleString()}</div>
+              </div>
+            ` : ''}
+            ${metadata.duration !== null && metadata.duration !== undefined ? html`
+              <div class="info-section">
+                <div class="info-label">Duration:</div>
+                <div class="info-value">${metadata.duration ? `${metadata.duration.toFixed(1)}s` : 'N/A'}</div>
+              </div>
+            ` : ''}
+            ${metadata.width && metadata.height ? html`
+              <div class="info-section">
+                <div class="info-label">Dimensions:</div>
+                <div class="info-value">${metadata.width} × ${metadata.height}</div>
+              </div>
+            ` : ''}
+            ${metadata.last_scanned ? html`
+              <div class="info-section">
+                <div class="info-label">Last Scanned:</div>
+                <div class="info-value">${formatTimestamp(metadata.last_scanned)}</div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   getCardSize() {
     return 3;
   }
@@ -4279,6 +4613,96 @@ class MediaCardV5a extends LitElement {
     e.stopPropagation();
     this._setPauseState(!this._isPaused);
     this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
+  }
+  
+  // Handle info button click - toggle overlay and fetch full metadata
+  async _handleInfoClick(e) {
+    e.stopPropagation();
+    
+    // Toggle state
+    this._showInfoOverlay = !this._showInfoOverlay;
+    
+    // If opening overlay and we have a file path, fetch full metadata
+    // Or if overlay is already open but media changed (no cached metadata)
+    if (this._showInfoOverlay && this._currentMediaPath && !this._fullMetadata) {
+      try {
+        // Convert media-source:// URL to database path format
+        let filePath = this._currentMediaPath;
+        if (filePath.startsWith('media-source://media_source/')) {
+          filePath = filePath.replace('media-source://media_source/', '/');
+        }
+        
+        const wsCall = {
+          type: 'call_service',
+          domain: 'media_index',
+          service: 'get_file_metadata',
+          service_data: {
+            file_path: filePath
+          },
+          return_response: true
+        };
+        
+        if (this.config.media_index?.entity_id) {
+          wsCall.target = { entity_id: this.config.media_index.entity_id };
+        }
+        
+        const response = await this.hass.callWS(wsCall);
+        
+        // Store full metadata for overlay rendering
+        this._fullMetadata = response.response;
+        this._log('📊 Fetched full metadata for info overlay:', this._fullMetadata);
+        
+      } catch (error) {
+        console.error('Failed to fetch metadata:', error);
+        this._fullMetadata = this._currentMetadata; // Fallback to basic metadata
+      }
+    }
+    
+    this.requestUpdate();
+    this._log(`ℹ️ ${this._showInfoOverlay ? 'SHOWING' : 'HIDING'} info overlay`);
+  }
+  
+  // Helper to fetch full metadata asynchronously (called from render when overlay is open)
+  async _fetchFullMetadataAsync() {
+    // Prevent duplicate fetches
+    if (this._fetchingMetadata) return;
+    this._fetchingMetadata = true;
+    
+    try {
+      // Convert media-source:// URL to database path format
+      let filePath = this._currentMediaPath;
+      if (filePath.startsWith('media-source://media_source/')) {
+        filePath = filePath.replace('media-source://media_source/', '/');
+      }
+      
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_file_metadata',
+        service_data: {
+          file_path: filePath
+        },
+        return_response: true
+      };
+      
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
+      
+      // Store full metadata and trigger re-render
+      this._fullMetadata = response.response;
+      this._log('📊 Auto-fetched full metadata for open info overlay:', this._fullMetadata);
+      this.requestUpdate();
+      
+    } catch (error) {
+      console.error('Failed to auto-fetch metadata:', error);
+      this._fullMetadata = this._currentMetadata; // Fallback to basic metadata
+      this.requestUpdate();
+    } finally {
+      this._fetchingMetadata = false;
+    }
   }
   
   async _handleDeleteClick(e) {
@@ -5138,6 +5562,171 @@ class MediaCardV5a extends LitElement {
       background: var(--error-color-dark, #d32f2f);
     }
     
+    /* Info Overlay Styles - Modern dropdown design */
+    .info-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    .info-content {
+      position: absolute;
+      top: 56px;
+      width: 400px;
+      max-width: calc(100% - 32px);
+      max-height: calc(100% - 72px);
+      background: rgba(0, 0, 0, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      pointer-events: auto;
+      animation: dropdownSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    /* Position info panel based on action button placement */
+    .action-buttons-top-right ~ .info-overlay .info-content {
+      right: 8px;
+    }
+    
+    .action-buttons-top-left ~ .info-overlay .info-content {
+      left: 8px;
+    }
+
+    @keyframes dropdownSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-12px) scale(0.95);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .info-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .info-header h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.95);
+      letter-spacing: 0.3px;
+    }
+
+    .info-close-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: none;
+      cursor: pointer;
+      color: rgba(255, 255, 255, 0.8);
+      padding: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .info-close-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 1);
+    }
+
+    .info-close-btn ha-icon {
+      --mdc-icon-size: 20px;
+    }
+
+    .info-body {
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 1;
+      user-select: text;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+    }
+
+    /* Webkit scrollbar styling for dark theme */
+    .info-body::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .info-body::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+    }
+
+    .info-body::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+    }
+
+    .info-body::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .info-group-header {
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(3, 169, 244, 0.9);
+      margin: 20px 0 10px 0;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(3, 169, 244, 0.2);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .info-group-header:first-child {
+      margin-top: 0;
+    }
+
+    .info-section {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 12px;
+      margin: 10px 0;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .info-label {
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
+    }
+
+    .info-value {
+      color: rgba(255, 255, 255, 0.9);
+      word-break: break-word;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    .info-btn.active {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.15);
+    }
+
+    .info-btn.active:hover {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.25);
+    }
+    
     .placeholder {
       text-align: center;
       padding: 32px;
@@ -5283,6 +5872,7 @@ class MediaCardV5a extends LitElement {
         ${this._renderMetadataOverlay()}
         ${this._renderActionButtons()}
         ${this._renderNavigationIndicators()}
+        ${this._renderInfoOverlay()}
       </div>
     `;
   }
