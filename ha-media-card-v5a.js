@@ -1695,7 +1695,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
         recursive: this.recursive,
         file_type: this.config.media_type === 'all' ? undefined : this.config.media_type,
         order_by: this.orderBy,
-        order_direction: this.orderDirection
+        order_direction: this.orderDirection,
+        // V5 FEATURE: Priority new files - prepend recently scanned files to results
+        priority_new_files: this.config.folder?.priority_new_files || false,
+        new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
       };
       
       // Add cursor for pagination (if we've seen items before)
@@ -2680,11 +2683,14 @@ class SubfolderQueue {
   _sortQueue() {
     const orderBy = this.card.config.folder?.order_by || 'date_taken';
     const direction = this.card.config.folder?.sequential?.order_direction || 'desc';
+    const priorityNewFiles = this.card.config.folder?.priority_new_files || false;
+    const thresholdSeconds = this.card.config.folder?.new_files_threshold_seconds || 3600;
     
-    console.log('[SubfolderQueue] _sortQueue - orderBy:', orderBy, 'direction:', direction);
+    console.log('[SubfolderQueue] _sortQueue - orderBy:', orderBy, 'direction:', direction, 'priorityNewFiles:', priorityNewFiles);
     console.log('[SubfolderQueue] Full sequential config:', this.card.config.folder?.sequential);
     
-    this.queue.sort((a, b) => {
+    // Standard sort comparator function
+    const compareItems = (a, b) => {
       let aVal, bVal;
       
       switch(orderBy) {
@@ -2725,7 +2731,42 @@ class SubfolderQueue {
       }
       
       return direction === 'asc' ? comparison : -comparison;
-    });
+    };
+    
+    // V5 FEATURE: Priority new files - filesystem scanning mode
+    // Prepend recently modified files to front of queue (V4 feature restoration)
+    if (priorityNewFiles) {
+      const now = Date.now();
+      const thresholdMs = thresholdSeconds * 1000;
+      const newFiles = [];
+      const oldFiles = [];
+      
+      for (const item of this.queue) {
+        // Extract modification time from item
+        // Browse_media returns items with extra.last_modified or check file creation time from metadata
+        const lastModified = item.extra?.last_modified || item.created_time || 0;
+        const modifiedMs = typeof lastModified === 'number' ? lastModified * 1000 : new Date(lastModified).getTime();
+        
+        if (modifiedMs && (now - modifiedMs) < thresholdMs) {
+          newFiles.push(item);
+          console.log('[SubfolderQueue] 🆕 Priority file (modified recently):', MediaProvider.extractFilename(item.media_content_id));
+        } else {
+          oldFiles.push(item);
+        }
+      }
+      
+      // Sort each group independently
+      newFiles.sort(compareItems);
+      oldFiles.sort(compareItems);
+      
+      // Reconstruct queue: new files first, then old files
+      this.queue = [...newFiles, ...oldFiles];
+      
+      console.log('[SubfolderQueue] ✅ Priority sorting complete:', newFiles.length, 'new files,', oldFiles.length, 'old files');
+    } else {
+      // Standard sorting without priority
+      this.queue.sort(compareItems);
+    }
   }
 }
 
@@ -7900,44 +7941,44 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
 
-          <!-- Priority New Files (only when mode = "random" AND use_media_index_for_discovery = true) -->
-          ${folderMode === 'random' && hasMediaIndex && folderConfig.use_media_index_for_discovery !== false ? html`
-            <div style="margin-left: 20px; padding: 12px; background: #fff3e0; border-left: 3px solid #ff9800; border-radius: 4px;">
-              <div class="config-row">
-                <label style="display: flex; align-items: center; gap: 8px;">
-                  <input
-                    type="checkbox"
-                    .checked=${folderConfig.priority_new_files || false}
-                    @change=${this._handlePriorityNewFilesChanged}
-                  />
-                  <span>Show recently added files first</span>
-                </label>
-                <div class="help-text">
-                  Display newly scanned files before random selection
-                </div>
+          <!-- Priority New Files (available when: random+media_index OR sequential mode) -->
+          ${(folderMode === 'random' && hasMediaIndex && folderConfig.use_media_index_for_discovery !== false) || folderMode === 'sequential' ? html`
+            <div class="config-row">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                <input
+                  type="checkbox"
+                  .checked=${folderConfig.priority_new_files || false}
+                  @change=${this._handlePriorityNewFilesChanged}
+                />
+                <span>Show recently added files first</span>
+              </label>
+              <div class="help-text">
+                ${folderMode === 'random' 
+                  ? 'Display newly scanned files before random selection' 
+                  : 'Display newly added/modified files at the start of the sequence'}
               </div>
+            </div>
 
-              ${folderConfig.priority_new_files ? html`
-                <div class="config-row">
-                  <label>New Files Threshold</label>
-                  <div>
-                    <select 
-                      @change=${this._handleNewFilesThresholdChanged}
-                      .value=${folderConfig.new_files_threshold_seconds || 3600}
-                    >
-                      <option value="1800">30 minutes</option>
-                      <option value="3600">1 hour</option>
-                      <option value="7200">2 hours</option>
-                      <option value="21600">6 hours</option>
-                      <option value="86400">24 hours</option>
-                    </select>
-                    <div class="help-text">
-                      How recently a file must be scanned to appear first
-                    </div>
+            ${folderConfig.priority_new_files ? html`
+              <div class="config-row">
+                <label>New Files Threshold</label>
+                <div>
+                  <select 
+                    @change=${this._handleNewFilesThresholdChanged}
+                    .value=${folderConfig.new_files_threshold_seconds || 3600}
+                  >
+                    <option value="1800">30 minutes</option>
+                    <option value="3600">1 hour</option>
+                    <option value="7200">2 hours</option>
+                    <option value="21600">6 hours</option>
+                    <option value="86400">24 hours</option>
+                  </select>
+                  <div class="help-text">
+                    How recently a file must be ${hasMediaIndex && folderConfig.use_media_index_for_discovery !== false ? 'scanned' : 'modified'} to appear first
                   </div>
                 </div>
-              ` : ''}
-            </div>
+              </div>
+            ` : ''}
           ` : ''}
 
           <div class="config-row">
