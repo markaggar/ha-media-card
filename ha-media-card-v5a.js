@@ -985,7 +985,7 @@ class FolderProvider extends MediaProvider {
     this.cardAdapter = {
       config: this._adaptConfigForV4(),
       hass: hass,
-      _debugMode: true,  // TEMP: Force debug to see scan logs
+      _debugMode: !!this.config.debug_mode,  // Controlled via YAML config
       _backgroundPaused: false,
       _log: (...args) => console.log('[FolderProvider]', ...args),
       
@@ -2100,7 +2100,8 @@ class SubfolderQueue {
       this._initializedPath = currentPath;
       this._log('✅ Queue cleared and scanning stopped due to path change - new path:', currentPath);
       
-      this.pauseScanning();
+      // V5 FIX: Don't call pauseScanning() here - it sets _scanCancelled=true which prevents
+      // initialize() from working. We already stopped scanning above (isScanning=false).
       
       this._log('🔄 Restarting queue scanning with new path');
       this.initialize().catch(error => {
@@ -3018,7 +3019,7 @@ class MediaCardV5a extends LitElement {
     this._currentMediaPath = null; // V4 current file path for action buttons
     this._tapTimeout = null; // V4 tap action double-tap detection
     this._holdTimeout = null; // V4 hold action detection
-    this._debugMode = true; // V4 debug logging (configurable via config.debug_mode)
+    this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
     this._lastLogTime = {}; // V4 log throttling
     this._isPaused = false; // V4 pause state for slideshow
     this._showInfoOverlay = false; // Info overlay toggle
@@ -3076,18 +3077,11 @@ class MediaCardV5a extends LitElement {
         historyIndex: this.historyPosition
       };
       
-      // If using SubfolderQueue, pause scanning and store the queue instance
+      // If using SubfolderQueue, store the queue instance for reconnection
+      // V5 FIX: Don't pause the queue on disconnect - other cards may be using it!
+      // The queue is shared globally per media_path, so pausing affects all cards.
       if (this.provider && this.provider.subfolderQueue) {
-        this._log('⏸️ Pausing SubfolderQueue scanning for reconnection');
         const queue = this.provider.subfolderQueue;
-        
-        if (queue.pauseScanning) {
-          queue.pauseScanning();
-        }
-        
-        // Set cancellation flag to stop ongoing scans
-        queue._scanCancelled = true;
-        
         stateToStore.queue = queue;
         this._log('💾 Stored queue with', queue.queue.length, 'items,', queue.discoveredFolders?.length || 0, 'folders');
       }
@@ -8501,6 +8495,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                     <option value="7200">2 hours</option>
                     <option value="21600">6 hours</option>
                     <option value="86400">24 hours</option>
+                    <option value="604800">1 week</option>
+                    <option value="1209600">2 weeks</option>
+                    <option value="2592000">1 month</option>
+                    <option value="5184000">2 months</option>
+                    <option value="7776000">3 months</option>
+                    <option value="15552000">6 months</option>
+                    <option value="31536000">1 year</option>
                   </select>
                   <div class="help-text">
                     How recently a file must be ${hasMediaIndex && folderConfig.use_media_index_for_discovery !== false ? 'indexed' : 'discovered'} to appear first
@@ -9124,6 +9125,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._kioskModeShowIndicatorChanged}
               />
               <div class="help-text">Show subtle exit hint in corner (when kiosk entity is configured)</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="section">
+          <div class="section-title">🛠️ Developer Options</div>
+          
+          <div class="config-row">
+            <label>Debug Mode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.debug_mode === true}
+                @change=${this._debugModeChanged}
+              />
+              <div class="help-text">Enable verbose console logging (card + queue operations)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Queue Debug Mode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.debug_queue_mode === true}
+                @change=${this._debugQueueModeChanged}
+              />
+              <div class="help-text">Enable detailed queue WebSocket/API logging</div>
             </div>
           </div>
         </div>
