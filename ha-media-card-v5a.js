@@ -1128,6 +1128,19 @@ class FolderProvider extends MediaProvider {
       // Use SubfolderQueue (filesystem scanning) if media_index disabled or failed
       if (!this.mediaIndexProvider) {
         console.log('[FolderProvider] Using SubfolderQueue for filesystem scanning');
+        
+        // V5 RECONNECTION: Check if card has existing SubfolderQueue from reconnection
+        if (this.card && this.card._existingSubfolderQueue) {
+          console.log('[FolderProvider] 🔗 Using reconnected SubfolderQueue from registry');
+          this.subfolderQueue = this.card._existingSubfolderQueue;
+          this.card._existingSubfolderQueue = null; // Clear reference after using
+          
+          // Update cardAdapter reference in reconnected queue
+          this.subfolderQueue.card = this.cardAdapter;
+          console.log('[FolderProvider] ✅ SubfolderQueue reconnected with', this.subfolderQueue.queue.length, 'items');
+          return true;
+        }
+        
         console.log('[FolderProvider] Adapted config for SubfolderQueue:', this.cardAdapter.config);
         
         // Create SubfolderQueue instance with V4-compatible card adapter
@@ -3015,6 +3028,12 @@ class MediaCardV5a extends LitElement {
       this.setAttribute('data-is-paused', '');
     }
     
+    // NEW: Auto-enable kiosk mode if configured
+    // This monitors the kiosk entity and auto-enables it when card loads
+    if (this.config.kiosk_mode_auto_enable && this._isKioskModeConfigured()) {
+      this._setupKioskModeMonitoring();
+    }
+    
     // V5: Restart auto-refresh if it was running before disconnect
     // Only restart if we have a provider, currentMedia, and auto_advance is configured
     if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
@@ -3027,6 +3046,43 @@ class MediaCardV5a extends LitElement {
     super.disconnectedCallback();
     
     this._log('🔌 Component disconnected - cleaning up resources');
+    
+    // NEW: Cleanup kiosk mode monitoring
+    this._cleanupKioskModeMonitoring();
+    
+    // V4 CODE REUSE: Store navigation history and queue for reconnection (ha-media-card.js lines 4945-4975)
+    const mediaPath = this.config?.folder?.path || this.config?.media_path;
+    if (mediaPath && (this.provider || this.history.length > 0)) {
+      this._log('💾 Storing state for reconnection - path:', mediaPath);
+      
+      const stateToStore = {
+        navigationHistory: [...this.history],  // Clone array
+        historyIndex: this.historyPosition
+      };
+      
+      // If using SubfolderQueue, pause scanning and store the queue instance
+      if (this.provider && this.provider.subfolderQueue) {
+        this._log('⏸️ Pausing SubfolderQueue scanning for reconnection');
+        const queue = this.provider.subfolderQueue;
+        
+        if (queue.pauseScanning) {
+          queue.pauseScanning();
+        }
+        
+        // Set cancellation flag to stop ongoing scans
+        queue._scanCancelled = true;
+        
+        stateToStore.queue = queue;
+        this._log('💾 Stored queue with', queue.queue.length, 'items,', queue.discoveredFolders?.length || 0, 'folders');
+      }
+      
+      // Store in global registry
+      if (!window.mediaCardSubfolderQueues) {
+        window.mediaCardSubfolderQueues = new Map();
+      }
+      window.mediaCardSubfolderQueues.set(mediaPath, stateToStore);
+      this._log('✅ State stored in registry for path:', mediaPath);
+    }
     
     // V4: Stop auto-refresh interval to prevent zombie card
     if (this._refreshInterval) {
@@ -3128,14 +3184,21 @@ class MediaCardV5a extends LitElement {
       this.provider = null;
     }
     
-    // V5: Reset navigation state for fresh start
-    this.queue = [];
-    this.history = [];
-    this.historyIndex = -1;
-    this.shownItems = new Set();
-    this.currentMedia = null;
-    this._currentMediaPath = null;
-    this._currentMetadata = null;
+    // V5 FIX: Don't clear navigation state on reconfiguration
+    // Reconnection logic will restore from registry if available
+    // Only clear if this is initial configuration (no history yet)
+    if (!this.history || this.history.length === 0) {
+      this._log('📋 Initializing empty navigation state (new card)');
+      this.queue = [];
+      this.history = [];
+      this.historyPosition = -1;
+      this.shownItems = new Set();
+      this.currentMedia = null;
+      this._currentMediaPath = null;
+      this._currentMetadata = null;
+    } else {
+      this._log('📋 Preserving navigation state during reconfiguration (', this.history.length, 'items in history)');
+    }
     
     // Apply defaults for metadata display and media source type
     this.config = {
@@ -3215,6 +3278,42 @@ class MediaCardV5a extends LitElement {
       }
     }
 
+    // V4 CODE REUSE: Check for existing queue in registry (ha-media-card.js lines 643-660)
+    // Reconnection logic - restore history/position from paused provider
+    const mediaPath = this.config.folder?.path || this.config.media_path;
+    if (mediaPath && window.mediaCardSubfolderQueues?.has(mediaPath)) {
+      this._log('🔗 Reconnecting to existing queue for path:', mediaPath);
+      const storedData = window.mediaCardSubfolderQueues.get(mediaPath);
+      
+      // Restore navigation history and position
+      if (storedData.navigationHistory) {
+        this.history = storedData.navigationHistory;
+        this.historyPosition = storedData.historyIndex !== undefined ? storedData.historyIndex : -1;
+        this._log('📚 Restored navigation history:', this.history.length, 'items, position:', this.historyPosition);
+      }
+      
+      // For SubfolderQueue, reconnect to existing queue instance
+      if (storedData.queue) {
+        this._log('🔗 Queue has', storedData.queue.queue.length, 'items,', storedData.queue.discoveredFolders?.length || 0, 'folders');
+        
+        // Resume the queue with this card instance
+        if (storedData.queue.resumeWithNewCard) {
+          const reconnected = storedData.queue.resumeWithNewCard(this);
+          if (reconnected) {
+            // FolderProvider will use this existing queue
+            this._existingSubfolderQueue = storedData.queue;
+            this._log('✅ SubfolderQueue reconnected successfully');
+          } else {
+            this._log('⚠️ SubfolderQueue reconnection failed - will create new queue');
+          }
+        }
+      }
+      
+      // Remove from registry after reconnecting
+      window.mediaCardSubfolderQueues.delete(mediaPath);
+      this._log('🗑️ Removed queue from registry after reconnection');
+    }
+
     this._log('Initializing provider:', type, 'Config:', this.config);
     
     try {
@@ -3250,8 +3349,21 @@ class MediaCardV5a extends LitElement {
       this._log('Provider initialized:', success);
       
       if (success) {
-        this._log('Loading first media');
-        await this._loadNext();
+        // V5 FIX: If we reconnected with history, restore current media from history
+        if (this.history.length > 0 && this.historyPosition >= 0) {
+          this._log('🔄 Reconnected with history - loading media at position', this.historyPosition);
+          const historyItem = this.history[this.historyPosition];
+          if (historyItem) {
+            this.currentMedia = historyItem;
+            await this._resolveMediaUrl();
+          } else {
+            // Fallback to loading next if history position invalid
+            await this._loadNext();
+          }
+        } else {
+          this._log('Loading first media');
+          await this._loadNext();
+        }
       } else {
         console.error('[MediaCardV5a] Provider initialization failed');
       }
@@ -5093,16 +5205,11 @@ class MediaCardV5a extends LitElement {
   }
   
   _handleTap(e) {
-    // Check if in kiosk mode (URL contains kiosk parameter)
-    const isKioskMode = window.location.search.includes('kiosk');
-    
-    // In kiosk mode, single tap exits kiosk
-    if (isKioskMode && e.detail === 1) {
-      // Remove kiosk parameter from URL
-      const url = new URL(window.location);
-      url.searchParams.delete('kiosk');
-      window.history.pushState({}, '', url);
-      window.location.reload();
+    // V4 CODE: Check for kiosk mode exit first (line 5326-5348)
+    if (this._shouldHandleKioskExit('tap')) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._handleKioskExit();
       return;
     }
     
@@ -5124,11 +5231,19 @@ class MediaCardV5a extends LitElement {
   }
   
   _handleDoubleTap(e) {
-    // Check if in kiosk mode (URL contains kiosk parameter)
-    const isKioskMode = window.location.search.includes('kiosk');
-    
-    // In kiosk mode, don't process double-tap as action
-    if (isKioskMode) return;
+    // V4 CODE: Check for kiosk mode exit first (line 5350-5376)
+    if (this._shouldHandleKioskExit('double_tap')) {
+      // Clear single tap timer if double tap occurs
+      if (this._tapTimeout) {
+        clearTimeout(this._tapTimeout);
+        this._tapTimeout = null;
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+      this._handleKioskExit();
+      return;
+    }
     
     if (!this.config.double_tap_action) return;
     
@@ -5145,18 +5260,27 @@ class MediaCardV5a extends LitElement {
   }
   
   _handlePointerDown(e) {
-    // Check if in kiosk mode (URL contains kiosk parameter)
-    const isKioskMode = window.location.search.includes('kiosk');
-    
-    // In kiosk mode, don't process hold action
-    if (isKioskMode) return;
+    // V4 CODE: Check for kiosk mode exit (hold action) (line 5379-5403)
+    if (this._shouldHandleKioskExit('hold')) {
+      // Start hold timer (500ms like standard HA cards)
+      this._holdTimeout = setTimeout(() => {
+        this._handleKioskExit();
+        this._holdTriggered = true;
+      }, 500);
+      
+      this._holdTriggered = false;
+      return;
+    }
     
     if (!this.config.hold_action) return;
     
+    // Start hold timer (500ms like standard HA cards)
     this._holdTimeout = setTimeout(() => {
       this._performAction(this.config.hold_action);
-      this._holdTimeout = null;
+      this._holdTriggered = true;
     }, 500);
+    
+    this._holdTriggered = false;
   }
   
   _handlePointerUp(e) {
@@ -5170,6 +5294,111 @@ class MediaCardV5a extends LitElement {
     if (this._holdTimeout) {
       clearTimeout(this._holdTimeout);
       this._holdTimeout = null;
+    }
+  }
+
+  // V4 CODE: Kiosk mode methods (line 5423-5492)
+  _isKioskModeConfigured() {
+    return !!(this.config.kiosk_mode_entity && this.config.kiosk_mode_entity.trim());
+  }
+
+  _shouldHandleKioskExit(actionType) {
+    if (!this._isKioskModeConfigured()) return false;
+    
+    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
+    if (exitAction !== actionType) return false;
+    
+    // Only handle kiosk exit if no other action is configured for this interaction
+    // This prevents conflicts with existing tap/hold/double-tap actions
+    if (actionType === 'tap' && this.config.tap_action) return false;
+    if (actionType === 'hold' && this.config.hold_action) return false;
+    if (actionType === 'double_tap' && this.config.double_tap_action) return false;
+    
+    return true;
+  }
+
+  async _handleKioskExit() {
+    if (!this._isKioskModeConfigured()) return false;
+    
+    const entity = this.config.kiosk_mode_entity.trim();
+    
+    try {
+      // Toggle the boolean to exit kiosk mode
+      await this.hass.callService('input_boolean', 'toggle', {
+        entity_id: entity
+      });
+      
+      // Show toast notification
+      this._showToast('Exiting full-screen mode...');
+      
+      this._log('🖼️ Kiosk mode exit triggered, toggled:', entity);
+      return true;
+    } catch (error) {
+      console.warn('Failed to toggle kiosk mode entity:', entity, error);
+      return false;
+    }
+  }
+
+  _showToast(message) {
+    // V4 CODE: Simple toast notification (line 5470-5492)
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 10000;
+      pointer-events: none;
+    `;
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+      toast.remove();
+    }, 2000);
+  }
+
+  // NEW: Auto-enable kiosk mode monitoring
+  async _setupKioskModeMonitoring() {
+    if (!this._isKioskModeConfigured()) return;
+    
+    const entity = this.config.kiosk_mode_entity.trim();
+    
+    // Check if entity is off and auto-enable it
+    if (this.hass?.states?.[entity]?.state === 'off') {
+      try {
+        await this.hass.callService('input_boolean', 'turn_on', {
+          entity_id: entity
+        });
+        this._log('🖼️ Auto-enabled kiosk mode entity:', entity);
+      } catch (error) {
+        console.warn('Failed to auto-enable kiosk mode entity:', entity, error);
+      }
+    }
+    
+    // Set up state monitoring to track entity changes
+    // This allows the card to react when kiosk mode is manually toggled
+    this._kioskStateSubscription = this.hass.connection.subscribeEvents(
+      (event) => {
+        if (event.data.entity_id === entity) {
+          this._log('🖼️ Kiosk mode entity state changed:', event.data.new_state.state);
+          this.requestUpdate(); // Re-render to show/hide kiosk indicator
+        }
+      },
+      'state_changed'
+    );
+  }
+
+  _cleanupKioskModeMonitoring() {
+    if (this._kioskStateSubscription) {
+      this._kioskStateSubscription();
+      this._kioskStateSubscription = null;
     }
   }
   
@@ -5651,6 +5880,23 @@ class MediaCardV5a extends LitElement {
       text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
     }
 
+    /* V4: Kiosk Exit Hint (line 1346-1361) */
+    .kiosk-exit-hint {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      pointer-events: none;
+      z-index: 12;
+      opacity: 0.7;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(-4px); }
       to { opacity: 1; transform: translateY(0); }
@@ -5983,6 +6229,7 @@ class MediaCardV5a extends LitElement {
           ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
           ${this._renderMedia()}
           ${this._renderPauseIndicator()}
+          ${this._renderKioskIndicator()}
           ${this._renderControls()}
         </div>
       </ha-card>
@@ -6128,6 +6375,31 @@ class MediaCardV5a extends LitElement {
     
     return html`
       <div class="pause-indicator">⏸️</div>
+    `;
+  }
+
+  // V4 CODE: Kiosk indicator (line 3847-3874)
+  _renderKioskIndicator() {
+    // Show kiosk exit hint if kiosk mode is configured, indicator is enabled, and kiosk mode is active
+    if (!this._isKioskModeConfigured() || 
+        this.config.kiosk_mode_show_indicator === false) {
+      return html``;
+    }
+
+    // Only show hint when kiosk mode boolean is actually 'on'
+    const entity = this.config.kiosk_mode_entity.trim();
+    if (!this.hass?.states?.[entity] || this.hass.states[entity].state !== 'on') {
+      return html``;
+    }
+
+    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
+    const actionText = exitAction === 'hold' ? 'Hold' : 
+                      exitAction === 'double_tap' ? 'Double-tap' : 'Tap';
+    
+    return html`
+      <div class="kiosk-exit-hint">
+        ${actionText} to exit full-screen
+      </div>
     `;
   }
 
@@ -7071,6 +7343,14 @@ class MediaCardV5aEditor extends LitElement {
     this._config = {
       ...this._config,
       kiosk_mode_show_indicator: ev.target.checked
+    };
+    this._fireConfigChanged();
+  }
+
+  _kioskModeAutoEnableChanged(ev) {
+    this._config = {
+      ...this._config,
+      kiosk_mode_auto_enable: ev.target.checked
     };
     this._fireConfigChanged();
   }
@@ -8755,6 +9035,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 ${this._renderInputBooleanEntityOptions()}
               </select>
               <div class="help-text">Entity to toggle when exiting kiosk mode (requires kiosk-mode integration)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Auto-Enable Kiosk</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.kiosk_mode_auto_enable !== false}
+                @change=${this._kioskModeAutoEnableChanged}
+              />
+              <div class="help-text">Automatically turn on kiosk entity when card loads (requires kiosk entity)</div>
             </div>
           </div>
           
