@@ -2416,7 +2416,23 @@ class SubfolderQueue {
         });
       }
       
-      const subfolders = folderContents.children.filter(child => child.can_expand);
+      // V5 FIX: Exclude _Junk and _Edit folders from root of media path
+      const rootMediaPath = this.card.config.media_path;
+      const subfolders = folderContents.children.filter(child => {
+        if (!child.can_expand) return false;
+        
+        // Only exclude _Junk and _Edit if they're direct children of root
+        if (basePath === rootMediaPath) {
+          const folderName = (child.media_content_id || child.title || '').split('/').pop() || '';
+          
+          if (folderName === '_Junk' || folderName === '_Edit') {
+            this._log('🚫 Excluding root folder:', folderName);
+            return false;
+          }
+        }
+        
+        return true;
+      });
 
       if (files.length > 0 || subfolders.length > 0) {
         const folderInfo = {
