@@ -1310,6 +1310,11 @@ class MediaIndexProvider extends MediaProvider {
     this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files (moved to _Junk/_Edit)
     this.card = card; // V5: Reference to card for accessing navigation history
+    
+    // V5 OPTIMIZATION: Track recent file exhaustion to avoid wasteful service calls
+    this.recentFilesExhausted = false; // Flag: skip priority_new_files if recent cache exhausted
+    this.consecutiveHighFilterCount = 0; // Counter: consecutive queries with >80% filter rate
+    this.EXHAUSTION_THRESHOLD = 2; // After 2 consecutive high-filter queries, consider exhausted
   }
 
   async initialize() {
@@ -1354,7 +1359,15 @@ class MediaIndexProvider extends MediaProvider {
         console.log('[MediaIndexProvider] Paths in history:', historyPaths.size);
       }
       
-      const items = await this._queryMediaIndex(this.queueSize);
+      // V5 OPTIMIZATION: Skip priority_new_files if recent cache is exhausted
+      // This avoids wasteful double service calls when we know recent files are depleted
+      const shouldUsePriority = this.config.folder?.priority_new_files && !this.recentFilesExhausted;
+      
+      if (!shouldUsePriority && this.config.folder?.priority_new_files) {
+        console.log('[MediaIndexProvider] ⚡ Skipping priority_new_files query - recent cache exhausted (saves service call)');
+      }
+      
+      const items = await this._queryMediaIndex(this.queueSize, shouldUsePriority ? null : false);
       if (items && items.length > 0) {
         // V5 FIX: Filter out items already in queue OR history to avoid duplicates
         const newItems = items.filter(item => 
@@ -1364,9 +1377,29 @@ class MediaIndexProvider extends MediaProvider {
         const filteredPercent = (filteredCount / items.length) * 100;
         console.log('[MediaIndexProvider] Filtered', filteredCount, 'duplicate/history items (', filteredPercent.toFixed(1), '%)');
         
+        // V5 OPTIMIZATION: Track consecutive high filter rates to detect cache exhaustion
+        if (filteredPercent > 80) {
+          this.consecutiveHighFilterCount++;
+          console.log('[MediaIndexProvider] 📊 High filter rate detected (', this.consecutiveHighFilterCount, '/', this.EXHAUSTION_THRESHOLD, ' consecutive)');
+          
+          // Mark recent cache as exhausted after threshold
+          if (this.consecutiveHighFilterCount >= this.EXHAUSTION_THRESHOLD && !this.recentFilesExhausted) {
+            this.recentFilesExhausted = true;
+            console.log('[MediaIndexProvider] 🚫 Recent file cache EXHAUSTED - will skip priority_new_files on future queries');
+          }
+        } else {
+          // Good query - reset exhaustion tracking
+          if (this.consecutiveHighFilterCount > 0) {
+            console.log('[MediaIndexProvider] ✅ Good query (low filter rate) - resetting exhaustion counter');
+          }
+          this.consecutiveHighFilterCount = 0;
+          this.recentFilesExhausted = false; // Reset exhaustion flag
+        }
+        
         // V5 SMART RETRY: If >80% filtered and priority_new_files was enabled, retry without it
         // This handles case where all recent files are in history, need non-recent random files
-        if (filteredPercent > 80 && this.config.folder?.priority_new_files) {
+        // BUT: Only retry if we haven't already skipped priority_new_files due to exhaustion
+        if (filteredPercent > 80 && shouldUsePriority && this.config.folder?.priority_new_files) {
           console.log('[MediaIndexProvider] 🔄 Most items filtered! Retrying with priority_new_files=false to get non-recent random files');
           const nonRecentItems = await this._queryMediaIndex(this.queueSize, false); // false = disable priority
           
@@ -3284,9 +3317,9 @@ class MediaCardV5a extends LitElement {
         // - Multiple queue refills (5x multiplier ensures variety)
         // - Discovery window duration (prevent re-showing files within window)
         // Memory: ~600-800 bytes per item = 80KB @ 100, 800KB @ 1000, 4MB @ 5000 (negligible)
-        const queueSize = this._config.slideshow_window || 100;
-        const autoAdvanceInterval = this._config.auto_advance_interval || 5;
-        const discoveryWindow = this._config.folder?.new_files_threshold_seconds || 3600;
+        const queueSize = this.config.slideshow_window || 100;
+        const autoAdvanceInterval = this.config.auto_advance_interval || 5;
+        const discoveryWindow = this.config.folder?.new_files_threshold_seconds || 3600;
         
         const minQueueMultiplier = 5; // See at least 5 queue refills before repeating
         const discoveryWindowItems = Math.floor(discoveryWindow / autoAdvanceInterval);
@@ -4893,13 +4926,15 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
+      const pathToDelete = this._currentMediaPath;
+      
       // V4: Call media_index service via WebSocket API
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'delete_media',
         service_data: {
-          file_path: this._currentMediaPath
+          file_path: pathToDelete
         },
         return_response: true
       };
@@ -4914,6 +4949,26 @@ class MediaCardV5a extends LitElement {
       await this.hass.callWS(wsCall);
       
       this._log('✅ Media deleted successfully');
+      
+      // V4 CODE REUSE: Remove file from history and exclude from future queries
+      // Same logic as _performEdit - prevent showing deleted files
+      
+      // Add to provider's exclusion list
+      if (this.provider && this.provider.excludedFiles) {
+        this.provider.excludedFiles.add(pathToDelete);
+        this._log(`📝 Added to provider exclusion list: ${pathToDelete}`);
+      }
+      
+      // Remove from navigation history
+      const historyIndex = this.history.findIndex(h => h.media_content_id === pathToDelete);
+      if (historyIndex >= 0) {
+        this.history.splice(historyIndex, 1);
+        // Adjust history position if we removed an earlier item
+        if (historyIndex <= this.historyPosition) {
+          this.historyPosition--;
+        }
+        this._log(`📚 Removed from navigation history at index ${historyIndex} (${this.history.length} remaining)`);
+      }
       
       // Advance to next media after delete
       await this._loadNext();
@@ -4978,13 +5033,15 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
+      const pathToEdit = this._currentMediaPath;
+      
       // V4: Call media_index service via WebSocket API
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_for_edit',
         service_data: {
-          file_path: this._currentMediaPath,
+          file_path: pathToEdit,
           mark_for_edit: true
         },
         return_response: true
@@ -5001,8 +5058,28 @@ class MediaCardV5a extends LitElement {
       
       this._log('✅ File marked for editing');
       
-      // V5: Refresh metadata from backend to get updated state
-      await this._refreshMetadata();
+      // V4 CODE REUSE: Remove file from history and exclude from future queries
+      // Copied from ha-media-card.js lines 6008-6020
+      
+      // Add to provider's exclusion list to prevent reappearance
+      if (this.provider && this.provider.excludedFiles) {
+        this.provider.excludedFiles.add(pathToEdit);
+        this._log(`📝 Added to provider exclusion list: ${pathToEdit}`);
+      }
+      
+      // Remove from navigation history
+      const historyIndex = this.history.findIndex(h => h.media_content_id === pathToEdit);
+      if (historyIndex >= 0) {
+        this.history.splice(historyIndex, 1);
+        // Adjust history position if we removed an earlier item
+        if (historyIndex <= this.historyPosition) {
+          this.historyPosition--;
+        }
+        this._log(`📚 Removed from navigation history at index ${historyIndex} (${this.history.length} remaining)`);
+      }
+      
+      // V4 CODE: Automatically advance to next media (line 6030-6032)
+      await this._loadNext();
       
     } catch (error) {
       console.error('Failed to mark for edit:', error);
