@@ -5005,7 +5005,13 @@ class MediaCardV5a extends LitElement {
     
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
-    this._showDeleteConfirmation();
+    // V4 PATTERN: Capture path at button click time to prevent wrong file deletion
+    // if slideshow auto-advances while confirmation dialog is open
+    const targetPath = this._currentMediaPath;
+    const thumbnailUrl = this.mediaUrl;
+    const filename = this._currentMetadata?.filename || targetPath.split('/').pop();
+    
+    this._showDeleteConfirmation(targetPath, thumbnailUrl, filename);
   }
 
   // V5 FIX: Convert media-source URI to filesystem path for media_index services
@@ -5022,12 +5028,10 @@ class MediaCardV5a extends LitElement {
     return mediaSourceUri;
   }
   
-  async _showDeleteConfirmation() {
-    if (!this._currentMediaPath) return;
+  async _showDeleteConfirmation(targetPath, thumbnailUrl, filename) {
+    if (!targetPath) return;
     
-    // V4: Use current resolved URL for thumbnail (already resolved in _resolveMediaUrl)
-    const thumbnailUrl = this.mediaUrl;
-    
+    // V4 PATTERN: Use captured values, not current state
     // Create confirmation dialog
     const dialog = document.createElement('div');
     dialog.className = 'delete-confirmation-overlay';
@@ -5037,7 +5041,7 @@ class MediaCardV5a extends LitElement {
         <div class="delete-thumbnail">
           <img src="${thumbnailUrl}" alt="Preview">
         </div>
-        <p><strong>File:</strong> ${this._currentMetadata?.filename || this._currentMediaPath}</p>
+        <p><strong>File:</strong> ${filename}</p>
         <p>This action cannot be undone.</p>
         <div class="delete-actions">
           <button class="cancel-btn">Cancel</button>
@@ -5056,26 +5060,26 @@ class MediaCardV5a extends LitElement {
       dialog.remove();
     });
     
-    // Handle confirm
+    // Handle confirm - pass captured targetPath to perform delete
     const confirmBtn = dialog.querySelector('.confirm-btn');
     confirmBtn.addEventListener('click', async () => {
       dialog.remove();
-      await this._performDelete();
+      await this._performDelete(targetPath);
     });
   }
   
-  async _performDelete() {
-    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+  async _performDelete(targetPath) {
+    if (!targetPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
       // V5 FIX: Convert media-source URI to filesystem path
-      const filesystemPath = this._convertToFilesystemPath(this._currentMediaPath);
+      const filesystemPath = this._convertToFilesystemPath(targetPath);
       
       if (!filesystemPath) {
         throw new Error('Invalid media path');
       }
       
-      this._log('🗑️ Deleting file:', filesystemPath, '(from URI:', this._currentMediaPath, ')');
+      this._log('🗑️ Deleting file:', filesystemPath, '(from URI:', targetPath, ')');
       
       // V4: Call media_index service via WebSocket API
       const wsCall = {
@@ -5102,14 +5106,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Same logic as _performEdit - prevent showing deleted files
       
-      // Add to provider's exclusion list (use original URI for exclusion)
+      // Add to provider's exclusion list (use captured targetPath for exclusion)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(this._currentMediaPath);
-        this._log(`📝 Added to provider exclusion list: ${this._currentMediaPath}`);
+        this.provider.excludedFiles.add(targetPath);
+        this._log(`📝 Added to provider exclusion list: ${targetPath}`);
       }
       
-      // Remove from navigation history
-      const historyIndex = this.history.findIndex(h => h.media_content_id === this._currentMediaPath);
+      // Remove from navigation history (use captured targetPath)
+      const historyIndex = this.history.findIndex(h => h.media_content_id === targetPath);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
@@ -5133,14 +5137,19 @@ class MediaCardV5a extends LitElement {
     
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
-    this._showEditConfirmation();
+    // V4 PATTERN: Capture path at button click time to prevent wrong file being marked
+    // if slideshow auto-advances while confirmation dialog is open
+    const targetPath = this._currentMediaPath;
+    const thumbnailUrl = this.mediaUrl;
+    const filename = this._currentMetadata?.filename || targetPath.split('/').pop();
+    
+    this._showEditConfirmation(targetPath, thumbnailUrl, filename);
   }
   
-  async _showEditConfirmation() {
-    if (!this._currentMediaPath) return;
+  async _showEditConfirmation(targetPath, thumbnailUrl, filename) {
+    if (!targetPath) return;
     
-    // V4: Use already-resolved media URL for thumbnail
-    const thumbnailUrl = this.mediaUrl;
+    // V4 PATTERN: Use captured values, not current state
     
     // Create confirmation dialog
     const dialog = document.createElement('div');
@@ -5151,7 +5160,7 @@ class MediaCardV5a extends LitElement {
         <div class="delete-thumbnail">
           <img src="${thumbnailUrl}" alt="Preview">
         </div>
-        <p><strong>File:</strong> ${this._currentMetadata?.filename || this._currentMediaPath}</p>
+        <p><strong>File:</strong> ${filename}</p>
         <p>This will mark the file for editing in the media index.</p>
         <div class="delete-actions">
           <button class="cancel-btn">Cancel</button>
@@ -5170,26 +5179,26 @@ class MediaCardV5a extends LitElement {
       dialog.remove();
     });
     
-    // Handle confirm
+    // Handle confirm - pass captured targetPath to perform edit
     const confirmBtn = dialog.querySelector('.confirm-btn');
     confirmBtn.addEventListener('click', async () => {
       dialog.remove();
-      await this._performEdit();
+      await this._performEdit(targetPath);
     });
   }
   
-  async _performEdit() {
-    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+  async _performEdit(targetPath) {
+    if (!targetPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
       // V5 FIX: Convert media-source URI to filesystem path
-      const filesystemPath = this._convertToFilesystemPath(this._currentMediaPath);
+      const filesystemPath = this._convertToFilesystemPath(targetPath);
       
       if (!filesystemPath) {
         throw new Error('Invalid media path');
       }
       
-      this._log('✏️ Marking file for edit:', filesystemPath, '(from URI:', this._currentMediaPath, ')');
+      this._log('✏️ Marking file for edit:', filesystemPath, '(from URI:', targetPath, ')');
       
       // V4: Call media_index service via WebSocket API
       const wsCall = {
@@ -5217,14 +5226,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Copied from ha-media-card.js lines 6008-6020
       
-      // Add to provider's exclusion list to prevent reappearance (use original URI)
+      // Add to provider's exclusion list to prevent reappearance (use captured targetPath)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(this._currentMediaPath);
-        this._log(`📝 Added to provider exclusion list: ${this._currentMediaPath}`);
+        this.provider.excludedFiles.add(targetPath);
+        this._log(`📝 Added to provider exclusion list: ${targetPath}`);
       }
       
-      // Remove from navigation history
-      const historyIndex = this.history.findIndex(h => h.media_content_id === this._currentMediaPath);
+      // Remove from navigation history (use captured targetPath)
+      const historyIndex = this.history.findIndex(h => h.media_content_id === targetPath);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
