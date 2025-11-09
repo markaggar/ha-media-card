@@ -5109,7 +5109,7 @@ class MediaCardV5a extends LitElement {
       }
       
       // Remove from navigation history
-      const historyIndex = this.history.findIndex(h => h.media_content_id === pathToDelete);
+      const historyIndex = this.history.findIndex(h => h.media_content_id === this._currentMediaPath);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
