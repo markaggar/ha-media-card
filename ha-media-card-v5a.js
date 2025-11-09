@@ -5026,20 +5026,32 @@ class MediaCardV5a extends LitElement {
     if (!targetPath) return;
     
     // V4 PATTERN: Use captured values, not current state
+    // Detect if this is a video based on file extension
+    const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(filename);
+    
+    // Construct the destination path for display
+    // Extract the root path from the media_path config
+    const rootPath = this.config?.media_path || this.config?.folder?.path || '';
+    // Strip media-source:// prefix if present
+    const cleanRootPath = rootPath.replace('media-source://media_source', '');
+    const destinationPath = `${cleanRootPath}/_Junk/${filename}`;
+    
     // Create confirmation dialog
     const dialog = document.createElement('div');
     dialog.className = 'delete-confirmation-overlay';
     dialog.innerHTML = `
       <div class="delete-confirmation-content">
         <h3>Delete Media?</h3>
+        ${!isVideo ? `
         <div class="delete-thumbnail">
           <img src="${thumbnailUrl}" alt="Preview">
         </div>
+        ` : ''}
         <p><strong>File:</strong> ${filename}</p>
-        <p>This action cannot be undone.</p>
+        <p><strong>Moving to:</strong> ${destinationPath}</p>
         <div class="delete-actions">
           <button class="cancel-btn">Cancel</button>
-          <button class="confirm-btn">Delete</button>
+          <button class="confirm-btn">Move to _Junk</button>
         </div>
       </div>
     `;
@@ -5144,6 +5156,15 @@ class MediaCardV5a extends LitElement {
     if (!targetPath) return;
     
     // V4 PATTERN: Use captured values, not current state
+    // Detect if this is a video based on file extension
+    const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(filename);
+    
+    // Construct the destination path for display
+    // Extract the root path from the media_path config
+    const rootPath = this.config?.media_path || this.config?.folder?.path || '';
+    // Strip media-source:// prefix if present
+    const cleanRootPath = rootPath.replace('media-source://media_source', '');
+    const destinationPath = `${cleanRootPath}/_Edit/${filename}`;
     
     // Create confirmation dialog
     const dialog = document.createElement('div');
@@ -5151,14 +5172,16 @@ class MediaCardV5a extends LitElement {
     dialog.innerHTML = `
       <div class="delete-confirmation-content">
         <h3>Mark for Editing?</h3>
+        ${!isVideo ? `
         <div class="delete-thumbnail">
           <img src="${thumbnailUrl}" alt="Preview">
         </div>
+        ` : ''}
         <p><strong>File:</strong> ${filename}</p>
-        <p>This will mark the file for editing in the media index.</p>
+        <p><strong>Moving to:</strong> ${destinationPath}</p>
         <div class="delete-actions">
           <button class="cancel-btn">Cancel</button>
-          <button class="confirm-btn">Mark for Editing</button>
+          <button class="confirm-btn">Move to _Edit</button>
         </div>
       </div>
     `;
@@ -5884,9 +5907,12 @@ class MediaCardV5a extends LitElement {
     }
 
     .delete-confirmation-content {
-      background: var(--card-background-color);
-      border-radius: 8px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      background: rgba(0, 0, 0, 0.60);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
       min-width: 300px;
       max-width: 500px;
       animation: dialogSlideIn 0.3s ease;
@@ -6002,9 +6028,10 @@ class MediaCardV5a extends LitElement {
 
     .delete-confirmation-content h3 {
       margin: 0 0 16px;
-      font-size: 18px;
-      font-weight: 500;
-      color: var(--primary-text-color);
+      font-size: 16px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.95);
+      letter-spacing: 0.3px;
     }
 
     .delete-thumbnail {
@@ -6013,7 +6040,7 @@ class MediaCardV5a extends LitElement {
       margin: 0 0 16px;
       border-radius: 4px;
       overflow: hidden;
-      background: var(--secondary-background-color);
+      background: rgba(0, 0, 0, 0.3);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -6027,8 +6054,16 @@ class MediaCardV5a extends LitElement {
 
     .delete-confirmation-content p {
       margin: 0 0 12px;
-      color: var(--primary-text-color);
+      color: rgba(255, 255, 255, 0.9);
       line-height: 1.5;
+      font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+    
+    .delete-confirmation-content p strong {
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
     }
 
     .delete-actions {
@@ -6049,12 +6084,14 @@ class MediaCardV5a extends LitElement {
     }
 
     .cancel-btn {
-      background: var(--secondary-background-color);
-      color: var(--primary-text-color);
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
 
     .cancel-btn:hover {
-      background: var(--divider-color);
+      background: rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 1);
     }
 
     .confirm-btn {
@@ -6083,7 +6120,7 @@ class MediaCardV5a extends LitElement {
       width: 400px;
       max-width: calc(100% - 32px);
       max-height: calc(100% - 72px);
-      background: rgba(0, 0, 0, 0.92);
+      background: rgba(0, 0, 0, 0.60);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border-radius: 12px;
