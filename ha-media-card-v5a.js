@@ -5007,6 +5007,20 @@ class MediaCardV5a extends LitElement {
     
     this._showDeleteConfirmation();
   }
+
+  // V5 FIX: Convert media-source URI to filesystem path for media_index services
+  _convertToFilesystemPath(mediaSourceUri) {
+    if (!mediaSourceUri) return null;
+    
+    // Strip media-source://media_source prefix if present
+    // Example: media-source://media_source/media/Photo/PhotoLibrary/file.jpg -> /media/Photo/PhotoLibrary/file.jpg
+    if (mediaSourceUri.startsWith('media-source://media_source')) {
+      return mediaSourceUri.replace('media-source://media_source', '');
+    }
+    
+    // Already a filesystem path
+    return mediaSourceUri;
+  }
   
   async _showDeleteConfirmation() {
     if (!this._currentMediaPath) return;
@@ -5054,7 +5068,14 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      const pathToDelete = this._currentMediaPath;
+      // V5 FIX: Convert media-source URI to filesystem path
+      const filesystemPath = this._convertToFilesystemPath(this._currentMediaPath);
+      
+      if (!filesystemPath) {
+        throw new Error('Invalid media path');
+      }
+      
+      this._log('🗑️ Deleting file:', filesystemPath, '(from URI:', this._currentMediaPath, ')');
       
       // V4: Call media_index service via WebSocket API
       const wsCall = {
@@ -5062,7 +5083,7 @@ class MediaCardV5a extends LitElement {
         domain: 'media_index',
         service: 'delete_media',
         service_data: {
-          file_path: pathToDelete
+          file_path: filesystemPath
         },
         return_response: true
       };
@@ -5081,10 +5102,10 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Same logic as _performEdit - prevent showing deleted files
       
-      // Add to provider's exclusion list
+      // Add to provider's exclusion list (use original URI for exclusion)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(pathToDelete);
-        this._log(`📝 Added to provider exclusion list: ${pathToDelete}`);
+        this.provider.excludedFiles.add(this._currentMediaPath);
+        this._log(`📝 Added to provider exclusion list: ${this._currentMediaPath}`);
       }
       
       // Remove from navigation history
@@ -5161,7 +5182,14 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      const pathToEdit = this._currentMediaPath;
+      // V5 FIX: Convert media-source URI to filesystem path
+      const filesystemPath = this._convertToFilesystemPath(this._currentMediaPath);
+      
+      if (!filesystemPath) {
+        throw new Error('Invalid media path');
+      }
+      
+      this._log('✏️ Marking file for edit:', filesystemPath, '(from URI:', this._currentMediaPath, ')');
       
       // V4: Call media_index service via WebSocket API
       const wsCall = {
@@ -5169,7 +5197,7 @@ class MediaCardV5a extends LitElement {
         domain: 'media_index',
         service: 'mark_for_edit',
         service_data: {
-          file_path: pathToEdit,
+          file_path: filesystemPath,
           mark_for_edit: true
         },
         return_response: true
@@ -5189,14 +5217,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Copied from ha-media-card.js lines 6008-6020
       
-      // Add to provider's exclusion list to prevent reappearance
+      // Add to provider's exclusion list to prevent reappearance (use original URI)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(pathToEdit);
-        this._log(`📝 Added to provider exclusion list: ${pathToEdit}`);
+        this.provider.excludedFiles.add(this._currentMediaPath);
+        this._log(`📝 Added to provider exclusion list: ${this._currentMediaPath}`);
       }
       
       // Remove from navigation history
-      const historyIndex = this.history.findIndex(h => h.media_content_id === pathToEdit);
+      const historyIndex = this.history.findIndex(h => h.media_content_id === this._currentMediaPath);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
