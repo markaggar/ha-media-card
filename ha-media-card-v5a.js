@@ -3224,6 +3224,7 @@ class MediaCardV5a extends LitElement {
         show_filename: false,
         show_folder: true,
         show_date: true,
+        show_time: false,
         show_location: true,
         show_root_folder: true,
         position: 'bottom-left',
@@ -4322,6 +4323,11 @@ class MediaCardV5a extends LitElement {
         // Use Home Assistant's locale for date formatting
         const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
         parts.push(`📅 ${date.toLocaleDateString(locale)}`);
+        
+        // V5: Add time if configured
+        if (this.config.metadata.show_time) {
+          parts.push(`🕐 ${date.toLocaleTimeString(locale)}`);
+        }
       }
     }
     
@@ -7214,6 +7220,17 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _metadataShowTimeChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_time: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataShowLocationChanged(ev) {
     this._config = {
       ...this._config,
@@ -8968,6 +8985,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._metadataShowDateChanged}
               />
               <div class="help-text">Display the file date (if available in filename)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Show Time</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_time === true}
+                @change=${this._metadataShowTimeChanged}
+              />
+              <div class="help-text">Display the file time with seconds (if available)</div>
             </div>
           </div>
           
