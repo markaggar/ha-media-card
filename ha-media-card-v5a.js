@@ -9323,34 +9323,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
         </div>
-        
-        <div class="section">
-          <div class="section-title">🛠️ Developer Options</div>
-          
-          <div class="config-row">
-            <label>Debug Mode</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.debug_mode === true}
-                @change=${this._debugModeChanged}
-              />
-              <div class="help-text">Enable verbose console logging (card + queue operations)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Queue Debug Mode</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.debug_queue_mode === true}
-                @change=${this._debugQueueModeChanged}
-              />
-              <div class="help-text">Enable detailed queue WebSocket/API logging</div>
-            </div>
-          </div>
-        </div>
       </div>
     `;
   }
