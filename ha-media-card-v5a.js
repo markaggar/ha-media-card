@@ -2321,7 +2321,7 @@ class SubfolderQueue {
       this._log('🏗️ Using hierarchical scan architecture');
       
       try {
-        const scanResult = await this.hierarchicalScanAndPopulate(basePath, 0);
+        const scanResult = await this.hierarchicalScanAndPopulate(basePath, 0, this.config.scan_depth);
         
         if (!scanResult || scanResult.error) {
           this._log('⚠️ Hierarchical scan failed:', scanResult?.error || 'unknown error');
@@ -2333,6 +2333,12 @@ class SubfolderQueue {
                  'files added:', scanResult.filesAdded, 
                  'folders processed:', scanResult.foldersProcessed,
                  'queue size:', this.queue.length);
+        
+        this._log('📊 discoveredFolders array has', this.discoveredFolders.length, 'folders');
+        if (this.discoveredFolders.length > 0) {
+          this._log('📂 Discovered folder paths:', 
+                    this.discoveredFolders.map(f => `${f.path} (${f.fileCount} files)`).join(', '));
+        }
         
         if (this.queue.length > 0) {
           this.shuffleQueue();
@@ -2434,6 +2440,11 @@ class SubfolderQueue {
         
         return true;
       });
+      
+      this._log('📊 At depth', currentDepth, 'found:', files.length, 'files,', subfolders.length, 'subfolders');
+      if (subfolders.length > 0) {
+        this._log('📂 Subfolder names:', subfolders.map(f => f.title || f.media_content_id.split('/').pop()).join(', '));
+      }
 
       if (files.length > 0 || subfolders.length > 0) {
         const folderInfo = {
@@ -2484,6 +2495,11 @@ class SubfolderQueue {
       // - scan_depth=N: Recurse up to depth N (e.g., scan_depth=1 means base + 1 level)
       const shouldRecurse = subfolders.length > 0 && 
         (effectiveMaxDepth === null || currentDepth < effectiveMaxDepth);
+      
+      this._log('🔍 Recursion check at depth', currentDepth, ':', 
+                'subfolders:', subfolders.length, 
+                'effectiveMaxDepth:', effectiveMaxDepth, 
+                'shouldRecurse:', shouldRecurse);
       
       if (shouldRecurse) {
         await this._waitIfBackgroundPaused();
@@ -2736,8 +2752,11 @@ class SubfolderQueue {
       return count + availableInFolder;
     }, 0);
 
-    if (totalAvailableFiles === 0 && this.shownItems.size > 0) {
-      this.shownItems.clear();
+    this._log('🔍 Total available files:', totalAvailableFiles, 'shownItems.size:', this.shownItems.size, 'queue.length:', this.queue.length);
+    
+    const shouldClearShownItems = totalAvailableFiles === 0 && this.shownItems.size > 0;
+    if (shouldClearShownItems) {
+      this._log('♻️ All files shown - will clear shownItems after collecting files for refill');
     }
 
     const historyItems = this.card?.history?.length || 0;
@@ -2752,7 +2771,7 @@ class SubfolderQueue {
       const itemsToAdd = Math.max(targetSize - currentQueueSize, 10);
       
       // V4: Copy populateQueueFromFolders logic for refilling queue
-      this._populateQueueFromDiscoveredFolders(itemsToAdd);
+      this._populateQueueFromDiscoveredFolders(itemsToAdd, shouldClearShownItems);
       this._log('✅ Refill complete - queue now has', this.queue.length, 'items');
     } else {
       this._log('✅ Queue sufficient:', currentQueueSize, '(min needed:', minQueueSize, ')');
@@ -2760,8 +2779,11 @@ class SubfolderQueue {
   }
 
   // V4 CODE REUSE: Adapted from populateQueueFromFolders (ha-media-card.js lines 9312+)
-  async _populateQueueFromDiscoveredFolders(itemsToAdd) {
+  async _populateQueueFromDiscoveredFolders(itemsToAdd, clearShownItemsAfter = false) {
     const folderMode = this.card.config.folder_mode || 'random';
+    
+    this._log('🔍 Refill check - discoveredFolders:', this.discoveredFolders.length, 
+              'folders, mode:', folderMode, 'clearShownItemsAfter:', clearShownItemsAfter);
     
     if (folderMode === 'sequential') {
       // Sequential mode: collect available items, add to queue, then sort entire queue
@@ -2769,6 +2791,8 @@ class SubfolderQueue {
       
       for (const folder of this.discoveredFolders) {
         if (!folder.files) continue;
+        
+        this._log('📂 Checking folder:', folder.path, 'with', folder.files.length, 'files');
         
         for (const file of folder.files) {
           // Skip if already in queue or already shown
@@ -2779,14 +2803,32 @@ class SubfolderQueue {
         }
       }
       
-      // Add items to queue (up to itemsToAdd)
+      this._log('🔍 Available files for refill:', availableFiles.length);
+      
+      // NOW clear shownItems AFTER collecting available files
+      if (clearShownItemsAfter) {
+        this._log('♻️ Clearing shownItems now (after collecting available files)');
+        this.shownItems.clear();
+      }
+      
+      // Sort available files first, then add to queue
+      // This preserves queue order without re-sorting already-queued items
+      const orderBy = this.card.config.folder?.order_by || 'date_taken';
+      const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
+      
+      availableFiles.sort((a, b) => {
+        const aValue = a.metadata?.[orderBy];
+        const bValue = b.metadata?.[orderBy];
+        if (!aValue || !bValue) return 0;
+        const comparison = aValue < bValue ? -1 : (aValue > bValue ? 1 : 0);
+        return orderDirection === 'desc' ? -comparison : comparison;
+      });
+      
+      // Add sorted items to queue (up to itemsToAdd)
       const toAdd = availableFiles.slice(0, itemsToAdd);
       this.queue.push(...toAdd);
       
-      // Sort entire queue using shared sorting logic
-      this._sortQueue();
-      
-      this._log('🔄 Added', toAdd.length, 'sequential items to queue and re-sorted');
+      this._log('🔄 Added', toAdd.length, 'sequential items to queue (pre-sorted, not re-sorting entire queue)');
     } else {
       // Random mode: randomly select from discoveredFolders
       const availableFiles = [];
