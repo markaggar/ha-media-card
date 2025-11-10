@@ -2845,6 +2845,14 @@ class SubfolderQueue {
         }
       }
       
+      this._log('🔍 Available files for refill:', availableFiles.length);
+      
+      // NOW clear shownItems AFTER collecting available files (same as sequential mode)
+      if (clearShownItemsAfter) {
+        this._log('♻️ Clearing shownItems now (after collecting available files)');
+        this.shownItems.clear();
+      }
+      
       // Randomly shuffle and add
       const shuffled = availableFiles.sort(() => Math.random() - 0.5);
       const toAdd = shuffled.slice(0, itemsToAdd);
