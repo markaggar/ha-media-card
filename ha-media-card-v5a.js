@@ -1012,8 +1012,16 @@ class FolderProvider extends MediaProvider {
     // V4 SubfolderQueue expects: card.config.subfolder_queue and card.config.media_path
     // V5 has: config.folder.path, config.folder.priority_folders, config.slideshow_window
     
+    // V5 FIX: Convert filesystem path to media-source:// URI if needed for browse_media API
+    // When useMediaIndex is false, SubfolderQueue uses browse_media which requires media-source:// URIs
+    let mediaPath = this.config.folder?.path || '';
+    if (mediaPath && !mediaPath.startsWith('media-source://')) {
+      // Convert /media/Photo/PhotoLibrary → media-source://media_source/media/Photo/PhotoLibrary
+      mediaPath = `media-source://media_source${mediaPath}`;
+    }
+    
     return {
-      media_path: this.config.folder?.path || '',
+      media_path: mediaPath,
       folder_mode: this.config.folder?.mode || 'random',  // V4 expects this at root level
       slideshow_window: this.config.slideshow_window || 1000,
       media_type: this.config.media_type || 'all',  // V5: Pass through media_type for filtering
