@@ -2979,6 +2979,41 @@ class MediaCardV5a extends LitElement {
     isLoading: { state: true }
   };
 
+  // Unified image click handler - prioritize fullscreen over zoom
+  _handleImageClick(e) {
+    // If user configured tap_action, don't intercept
+    if (this.config.tap_action) return;
+    
+    // Priority 1: Fullscreen (if enabled)
+    if (this.config.enable_fullscreen_on_click === true) {
+      this._openModal(e);
+      return;
+    }
+    
+    // Priority 2: Zoom (if enabled)
+    if (this.config.enable_image_zoom === true) {
+      this._handleImageZoomClick(e);
+      return;
+    }
+  }
+
+  _handleImageTouchEnd(e) {
+    // If user configured tap_action, don't intercept
+    if (this.config.tap_action) return;
+    
+    // Priority 1: Fullscreen (if enabled)
+    if (this.config.enable_fullscreen_on_click === true) {
+      this._openModal(e);
+      return;
+    }
+    
+    // Priority 2: Zoom (if enabled)
+    if (this.config.enable_image_zoom === true) {
+      this._handleImageZoomTouchEnd(e);
+      return;
+    }
+  }
+
   // V4: Image Zoom Helpers
   _handleImageZoomClick(e) {
     // Only for images and when enabled
@@ -3081,6 +3116,11 @@ class MediaCardV5a extends LitElement {
     this._lastLogTime = {}; // V4 log throttling
     this._isPaused = false; // V4 pause state for slideshow
     this._showInfoOverlay = false; // Info overlay toggle
+    
+    // Modal overlay state (gallery-card pattern)
+    this._modalOpen = false;
+    this._modalImageUrl = '';
+    this._modalCaption = '';
     
     // V4: Circuit breaker for 404 errors
     this._consecutive404Count = 0;
@@ -5333,6 +5373,140 @@ class MediaCardV5a extends LitElement {
     }
   }
   
+  // GALLERY-CARD PATTERN: Modal overlay for image viewing (lines 238-268, 908-961)
+  // V4 CODE REUSE: Based on gallery-card's proven modal implementation
+  // Direct fullscreen on image click (simplified UX)
+  _openModal(e) {
+    // Don't open fullscreen for videos - they have native controls
+    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
+                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
+    
+    // Check config - default to false (disabled)
+    if (this.config.enable_fullscreen_on_click !== true) {
+      return;
+    }
+    
+    e.stopPropagation();
+    
+    // Pause slideshow by default (to examine image), unless advance_in_fullscreen is enabled
+    const shouldPause = this.config.advance_in_fullscreen !== true;
+    this._fullscreenWasPaused = this._isPaused;
+    
+    if (shouldPause && !this._isPaused) {
+      this._setPauseState(true);
+    }
+    
+    // Go straight to fullscreen
+    const img = e.target.closest('img');
+    if (!img) return;
+    
+    const requestFullscreen = img.requestFullscreen || img.webkitRequestFullscreen || img.msRequestFullscreen;
+    
+    if (requestFullscreen) {
+      requestFullscreen.call(img);
+      
+      // Add fullscreen change listener to resume slideshow when exiting
+      const exitFullscreenHandler = () => {
+        if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+          // User exited fullscreen - resume slideshow if it was running before
+          if (shouldPause && !this._fullscreenWasPaused && this._isPaused) {
+            this._setPauseState(false);
+          }
+          document.removeEventListener('fullscreenchange', exitFullscreenHandler);
+          document.removeEventListener('webkitfullscreenchange', exitFullscreenHandler);
+          document.removeEventListener('MSFullscreenChange', exitFullscreenHandler);
+          this._log('🔍 Exited fullscreen - slideshow resumed');
+        }
+      };
+      
+      document.addEventListener('fullscreenchange', exitFullscreenHandler);
+      document.addEventListener('webkitfullscreenchange', exitFullscreenHandler);
+      document.addEventListener('MSFullscreenChange', exitFullscreenHandler);
+      
+      const mode = shouldPause ? 'paused for examination' : 'auto-advancing';
+      this._log(`🔍 Entering fullscreen (${mode}) - ESC or tap to exit`);
+    }
+  }
+  
+  _closeModal(e) {
+    // Not needed anymore - fullscreen API handles exit
+  }
+  
+  // Not needed anymore - going straight to fullscreen
+  _handleModalImageClick(e) {
+    e.stopPropagation(); // Don't close modal
+    
+    // Check if zoom is enabled (default to false)
+    if (this.config.enable_zoom !== true) {
+      return;
+    }
+    
+    // Request fullscreen on the image element
+    const img = e.target;
+    const requestFullscreen = img.requestFullscreen || img.webkitRequestFullscreen || img.msRequestFullscreen;
+    
+    if (requestFullscreen) {
+      requestFullscreen.call(img);
+      
+      // Add fullscreen change listener to exit modal when exiting fullscreen
+      const exitFullscreenHandler = () => {
+        if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+          // User exited fullscreen - close modal and resume slideshow
+          this._closeModal();
+          document.removeEventListener('fullscreenchange', exitFullscreenHandler);
+          document.removeEventListener('webkitfullscreenchange', exitFullscreenHandler);
+          document.removeEventListener('MSFullscreenChange', exitFullscreenHandler);
+        }
+      };
+      
+      document.addEventListener('fullscreenchange', exitFullscreenHandler);
+      document.addEventListener('webkitfullscreenchange', exitFullscreenHandler);
+      document.addEventListener('MSFullscreenChange', exitFullscreenHandler);
+      
+      this._log('🔍 Entering fullscreen zoom - ESC or pinch to exit');
+    }
+  }
+  
+  // GALLERY-CARD PATTERN: Touch navigation in modal (lines 299-331)
+  _handleModalTouchStart(e) {
+    if (!this.config.media_source_type || this.config.media_source_type === 'single_media') {
+      return; // No navigation for single media
+    }
+    
+    this._modalTouchStartX = e.touches[0].clientX;
+    this._modalTouchStartY = e.touches[0].clientY;
+  }
+  
+  _handleModalTouchMove(e) {
+    if (!this._modalTouchStartX || !this._modalTouchStartY) {
+      return;
+    }
+    
+    if (!this.config.media_source_type || this.config.media_source_type === 'single_media') {
+      return; // No navigation for single media
+    }
+    
+    const xDiff = this._modalTouchStartX - e.touches[0].clientX;
+    const yDiff = this._modalTouchStartY - e.touches[0].clientY;
+    
+    // Horizontal swipe detection
+    if (Math.abs(xDiff) > Math.abs(yDiff)) {
+      if (xDiff > 50) {
+        // Left swipe - next
+        this._loadNext();
+        e.preventDefault();
+      } else if (xDiff < -50) {
+        // Right swipe - previous
+        this._loadPrevious();
+        e.preventDefault();
+      }
+    }
+    
+    // Reset values
+    this._modalTouchStartX = null;
+    this._modalTouchStartY = null;
+  }
+  
   // V4: Tap Action Handlers
   _hasAnyAction() {
     return this.config.tap_action || this.config.double_tap_action || this.config.hold_action;
@@ -5742,10 +5916,6 @@ class MediaCardV5a extends LitElement {
     :host([data-aspect-mode="viewport-fit"]) video {
       max-height: 100vh;
       max-width: 100vw;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      display: block;
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
@@ -6373,7 +6543,9 @@ class MediaCardV5a extends LitElement {
 
     return html`
       <ha-card>
-        <div class="card">
+        <div class="card"
+             @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
+             tabindex="0">
           ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
           ${this._renderMedia()}
           ${this._renderPauseIndicator()}
@@ -6462,15 +6634,15 @@ class MediaCardV5a extends LitElement {
           ${this._renderVideoInfo()}
         ` : html`
           <div class="zoomable-container"
-               @click=${(e) => this._handleImageZoomClick(e)}
-               @touchend=${(e) => this._handleImageZoomTouchEnd(e)}
+               @click=${(e) => this._handleImageClick(e)}
+               @touchend=${(e) => this._handleImageTouchEnd(e)}
           >
             <img 
               src="${this.mediaUrl}" 
               alt="${this.currentMedia.title || 'Media'}"
               @error=${this._onMediaError}
               @load=${this._onMediaLoaded}
-              style="width: 100%; height: auto; display: block;"
+              style="width: 100%; height: auto; display: block; ${this.config.enable_fullscreen_on_click || this.config.enable_image_zoom ? 'cursor: pointer;' : ''}"
             />
           </div>
         `}
@@ -7503,6 +7675,125 @@ class MediaCardV5aEditor extends LitElement {
       this._config = { ...this._config, double_tap_action: { action } };
     }
     this._fireConfigChanged();
+  }
+
+  // V4 CODE: Action configuration helpers (ha-media-card.js lines 11125-11240)
+  _renderActionConfig(actionType) {
+    const action = this._config[actionType];
+    if (!action || action.action === 'none') return '';
+    
+    return html`
+      <div style="margin-top: 8px; padding: 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--secondary-background-color);">
+        ${action.action === 'more-info' || action.action === 'toggle' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Entity ID:</label>
+            <input
+              type="text"
+              .value=${action.entity || ''}
+              @input=${(e) => this._updateActionField(actionType, 'entity', e.target.value)}
+              placeholder="light.living_room"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        ${action.action === 'perform-action' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Service:</label>
+            <input
+              type="text"
+              .value=${action.perform_action || ''}
+              @input=${(e) => this._updateActionField(actionType, 'perform_action', e.target.value)}
+              placeholder="light.turn_on"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Entity ID:</label>
+            <input
+              type="text"
+              .value=${action.target?.entity_id || ''}
+              @input=${(e) => this._updateActionTarget(actionType, 'entity_id', e.target.value)}
+              placeholder="light.living_room"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Data (JSON):</label>
+            <input
+              type="text"
+              .value=${JSON.stringify(action.data || {})}
+              @input=${(e) => this._updateActionData(actionType, e.target.value)}
+              placeholder='{"brightness": 255}'
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        ${action.action === 'navigate' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">Navigation Path:</label>
+            <input
+              type="text"
+              .value=${action.navigation_path || ''}
+              @input=${(e) => this._updateActionField(actionType, 'navigation_path', e.target.value)}
+              placeholder="/lovelace/dashboard"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        ${action.action === 'url' ? html`
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; font-size: 12px; margin-bottom: 4px;">URL:</label>
+            <input
+              type="text"
+              .value=${action.url_path || ''}
+              @input=${(e) => this._updateActionField(actionType, 'url_path', e.target.value)}
+              placeholder="https://www.example.com"
+              style="width: 100%; font-size: 12px;"
+            />
+          </div>
+        ` : ''}
+        
+        <div style="margin-top: 8px;">
+          <label style="display: flex; align-items: center; font-size: 12px;">
+            <input
+              type="checkbox"
+              .checked=${action.confirmation || false}
+              @change=${(e) => this._updateActionField(actionType, 'confirmation', e.target.checked)}
+              style="margin-right: 4px;"
+            />
+            Require confirmation
+          </label>
+        </div>
+      </div>
+    `;
+  }
+
+  _updateActionField(actionType, field, value) {
+    const currentAction = this._config[actionType] || { action: 'none' };
+    const updatedAction = { ...currentAction, [field]: value };
+    this._config = { ...this._config, [actionType]: updatedAction };
+    this._fireConfigChanged();
+  }
+
+  _updateActionTarget(actionType, field, value) {
+    const currentAction = this._config[actionType] || { action: 'none' };
+    const currentTarget = currentAction.target || {};
+    const updatedTarget = { ...currentTarget, [field]: value };
+    const updatedAction = { ...currentAction, target: updatedTarget };
+    this._config = { ...this._config, [actionType]: updatedAction };
+    this._fireConfigChanged();
+  }
+
+  _updateActionData(actionType, jsonString) {
+    try {
+      const data = jsonString.trim() ? JSON.parse(jsonString) : {};
+      this._updateActionField(actionType, 'data', data);
+    } catch (error) {
+      console.warn('Invalid JSON for action data:', error);
+    }
   }
 
   _kioskModeEntityChanged(ev) {
@@ -9297,6 +9588,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="url">Open URL</option>
               </select>
               <div class="help-text">Action when card is tapped</div>
+              ${this._renderActionConfig('tap_action')}
             </div>
           </div>
           
@@ -9312,6 +9604,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="url">Open URL</option>
               </select>
               <div class="help-text">Action when card is held (0.5+ seconds)</div>
+              ${this._renderActionConfig('hold_action')}
             </div>
           </div>
           
@@ -9327,6 +9620,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="url">Open URL</option>
               </select>
               <div class="help-text">Action when card is double-tapped</div>
+              ${this._renderActionConfig('double_tap_action')}
             </div>
           </div>
         </div>
