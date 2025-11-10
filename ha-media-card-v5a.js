@@ -6625,7 +6625,33 @@ class MediaCardV5aEditor extends LitElement {
 
   // Event handlers
   _mediaPathChanged(ev) {
-    this._config = { ...this._config, media_path: ev.target.value };
+    const newPath = ev.target.value;
+    const mediaSourceType = this._config.media_source_type || 'single_media';
+    
+    // Update both legacy media_path and nested structure
+    if (mediaSourceType === 'single_media') {
+      this._config = { 
+        ...this._config, 
+        media_path: newPath,
+        single_media: {
+          ...this._config.single_media,
+          path: newPath
+        }
+      };
+    } else if (mediaSourceType === 'folder') {
+      this._config = { 
+        ...this._config, 
+        media_path: newPath,
+        folder: {
+          ...this._config.folder,
+          path: newPath
+        }
+      };
+    } else {
+      // Fallback to legacy
+      this._config = { ...this._config, media_path: newPath };
+    }
+    
     this._fireConfigChanged();
   }
 
@@ -7776,8 +7802,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     const hasSubfolders = itemsToCheck.some(item => item.can_expand);
     
-    // Add "Up to Parent" button if we're not at root level
-    if (currentPath && currentPath !== '' && currentPath !== 'media-source://media_source') {
+    // Add "Up to Parent" button if we're not at root level (empty string = root)
+    if (currentPath && currentPath !== '') {
       this._log('Adding parent navigation button for current path:', currentPath);
       const parentButton = document.createElement('div');
       parentButton.style.cssText = `
@@ -7800,10 +7826,31 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       parentButton.onclick = async () => {
         this._log('Navigating to parent from:', currentPath);
         try {
-          // Calculate parent path
-          const pathParts = currentPath.split('/');
-          pathParts.pop(); // Remove current folder
-          const parentPath = pathParts.join('/');
+          // Calculate parent path properly handling media-source:// protocol
+          let parentPath = '';
+          
+          if (currentPath.includes('://')) {
+            // Handle media-source:// URIs
+            const protocolEnd = currentPath.indexOf('://') + 3;
+            const pathAfterProtocol = currentPath.substring(protocolEnd);
+            
+            if (pathAfterProtocol.includes('/')) {
+              // Has path segments after protocol - go up one level
+              const segments = pathAfterProtocol.split('/');
+              segments.pop();
+              const parentAfterProtocol = segments.join('/');
+              parentPath = currentPath.substring(0, protocolEnd) + parentAfterProtocol;
+            } else {
+              // At top level after protocol (e.g., media-source://media_source)
+              // Go to just the protocol (e.g., media-source://)
+              parentPath = currentPath.substring(0, protocolEnd).replace(':///', '://');
+            }
+          } else {
+            // Regular filesystem path
+            const pathParts = currentPath.split('/');
+            pathParts.pop();
+            parentPath = pathParts.join('/');
+          }
           
           this._log('Parent path:', parentPath);
           
@@ -8414,6 +8461,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     .media-path-row input {
       flex: 1;
       margin: 0;
+      cursor: text;
+      user-select: text;
     }
     
     .section {
@@ -8747,7 +8796,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div class="media-path-row">
               <input
                 type="text"
-                .value=${this._config.media_path || ''}
+                .value=${(() => {
+                  // Show the actual path from current config structure
+                  const mediaSourceType = this._config.media_source_type || 'single_media';
+                  if (mediaSourceType === 'single_media') {
+                    return this._config.single_media?.path || this._config.media_path || '';
+                  } else if (mediaSourceType === 'folder') {
+                    return this._config.folder?.path || this._config.media_path || '';
+                  } else if (mediaSourceType === 'media_index') {
+                    return this._config.media_index?.entity_id || '';
+                  }
+                  return this._config.media_path || '';
+                })()}
                 @input=${this._mediaPathChanged}
                 placeholder="media-source://media_source/local/folder/file.mp4"
               />
