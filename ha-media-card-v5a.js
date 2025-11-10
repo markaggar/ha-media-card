@@ -7776,6 +7776,70 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     const hasSubfolders = itemsToCheck.some(item => item.can_expand);
     
+    // Add "Up to Parent" button if we're not at root level
+    if (currentPath && currentPath !== '' && currentPath !== 'media-source://media_source') {
+      this._log('Adding parent navigation button for current path:', currentPath);
+      const parentButton = document.createElement('div');
+      parentButton.style.cssText = `
+        padding: 12px 16px !important;
+        border: 2px solid var(--primary-color, #007bff) !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        background: var(--primary-color, #007bff) !important;
+        color: white !important;
+        margin-bottom: 12px !important;
+        pointer-events: auto !important;
+        font-weight: 500 !important;
+      `;
+      
+      parentButton.innerHTML = '<span style="font-size: 24px;">⬆️</span><span>Up to Parent Folder</span>';
+      
+      parentButton.onclick = async () => {
+        this._log('Navigating to parent from:', currentPath);
+        try {
+          // Calculate parent path
+          const pathParts = currentPath.split('/');
+          pathParts.pop(); // Remove current folder
+          const parentPath = pathParts.join('/');
+          
+          this._log('Parent path:', parentPath);
+          
+          // Fetch parent content
+          const parentContent = await this._fetchMediaContents(this.hass, parentPath);
+          container.innerHTML = '';
+          this._addMediaFilesToBrowser(container, parentContent, dialog, parentPath);
+        } catch (error) {
+          this._log('Error navigating to parent:', error);
+          // If parent navigation fails, try going to root
+          try {
+            const rootContent = await this._fetchMediaContents(this.hass, '');
+            container.innerHTML = '';
+            this._addMediaFilesToBrowser(container, rootContent, dialog, '');
+          } catch (rootError) {
+            this._log('Error navigating to root:', rootError);
+          }
+        }
+        return false;
+      };
+
+      parentButton.onmouseenter = () => {
+        parentButton.style.background = 'var(--primary-color-dark, #0056b3)';
+        parentButton.style.transform = 'translateY(-1px)';
+        parentButton.style.boxShadow = '0 2px 8px rgba(0, 123, 255, 0.3)';
+      };
+
+      parentButton.onmouseleave = () => {
+        parentButton.style.background = 'var(--primary-color, #007bff)';
+        parentButton.style.transform = 'translateY(0)';
+        parentButton.style.boxShadow = 'none';
+      };
+      
+      container.appendChild(parentButton);
+    }
+    
     // If we're in a folder (not root) with media files OR subfolders, add special folder options at the top
     if ((currentPath && currentPath !== '') && (hasMediaFiles || hasSubfolders)) {
       this._log('Adding folder options for path:', currentPath);
@@ -8308,6 +8372,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       font-size: 14px;
       width: 100%;
       box-sizing: border-box;
+    }
+    
+    input::placeholder {
+      color: var(--secondary-text-color);
+      opacity: 0.6;
     }
     
     input:focus, select:focus {
