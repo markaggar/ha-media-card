@@ -683,6 +683,22 @@ IMG_{{ now().strftime('%Y%m%d_%H%M%S') }}
 - Mixed timestamp formats in the same folder work correctly
 - The card extracts timestamps automatically—no configuration needed
 
+### 📋 **Known Limitations**
+
+#### Media Index with Local Folders
+Media Index **cannot be used with local HA folders** (e.g., `/config/www/local/`) due to path format mismatch. Media Card uses `media-source://` URIs while Media Index requires filesystem paths. 
+
+**Workaround:** Use folder-based scanning for local content:
+```yaml
+media_source_type: folder
+folder:
+  path: media-source://media_source/local/
+  mode: sequential
+  recursive: true
+```
+
+Media Index works correctly with network shares (`/mnt/...`, `/media/...`) and will support Synology Photos. See [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for details.
+
 ## 🛣️ Supported Path Format
 
 ### Media Source URLs
