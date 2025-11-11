@@ -3070,7 +3070,7 @@ class MediaCardV5a extends LitElement {
   }
 
   static getConfigElement() {
-    return document.createElement('ha-media-card-editor');
+    return document.createElement('media-card-editor');
   }
 
   static getStubConfig() {
@@ -9794,13 +9794,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 }
 
 // Register the custom elements
-customElements.define('ha-media-card', MediaCardV5a);
-customElements.define('ha-media-card-editor', MediaCardV5aEditor);
+customElements.define('media-card', MediaCardV5a);
+customElements.define('media-card-editor', MediaCardV5aEditor);
 
 // Register with Home Assistant
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'ha-media-card',
+  type: 'media-card',
   name: 'Media Card',
   description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
   preview: true,
@@ -9808,7 +9808,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  HA-MEDIA-CARD  %c  v5.0.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.0.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
