@@ -2979,18 +2979,12 @@ class MediaCardV5a extends LitElement {
     isLoading: { state: true }
   };
 
-  // Unified image click handler - prioritize fullscreen over zoom
+  // Unified image click handler - zoom if enabled
   _handleImageClick(e) {
     // If user configured tap_action, don't intercept
     if (this.config.tap_action) return;
     
-    // Priority 1: Fullscreen (if enabled)
-    if (this.config.enable_fullscreen_on_click === true) {
-      this._openModal(e);
-      return;
-    }
-    
-    // Priority 2: Zoom (if enabled)
+    // Image zoom (if enabled)
     if (this.config.enable_image_zoom === true) {
       this._handleImageZoomClick(e);
       return;
@@ -3001,13 +2995,7 @@ class MediaCardV5a extends LitElement {
     // If user configured tap_action, don't intercept
     if (this.config.tap_action) return;
     
-    // Priority 1: Fullscreen (if enabled)
-    if (this.config.enable_fullscreen_on_click === true) {
-      this._openModal(e);
-      return;
-    }
-    
-    // Priority 2: Zoom (if enabled)
+    // Image zoom (if enabled)
     if (this.config.enable_image_zoom === true) {
       this._handleImageZoomTouchEnd(e);
       return;
@@ -5429,36 +5417,36 @@ class MediaCardV5a extends LitElement {
   _handleFullscreenButtonClick(e) {
     e.stopPropagation();
     
-    // Don't open fullscreen for videos - they have native controls
+    // Detect if current media is video
     const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
                     MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
     
-    if (isVideo) return;
+    // Get the media element (image or video)
+    const mediaElement = isVideo 
+      ? this.shadowRoot.querySelector('.media-container video')
+      : this.shadowRoot.querySelector('.media-container img');
     
-    // Get the currently displayed image
-    const img = this.shadowRoot.querySelector('.media-container img');
-    if (!img) return;
+    if (!mediaElement) return;
     
-    // Pause slideshow by default (to examine image), unless advance_in_fullscreen is enabled
-    const shouldPause = this.config.advance_in_fullscreen !== true;
+    // Always pause slideshow when entering fullscreen (for examination)
     this._fullscreenWasPaused = this._isPaused;
     
-    if (shouldPause && !this._isPaused) {
+    if (!this._isPaused) {
       this._setPauseState(true);
     }
     
-    // Request fullscreen
-    const requestFullscreen = img.requestFullscreen || 
-                             img.webkitRequestFullscreen || 
-                             img.msRequestFullscreen;
+    // Request fullscreen on the media element
+    const requestFullscreen = mediaElement.requestFullscreen || 
+                             mediaElement.webkitRequestFullscreen || 
+                             mediaElement.msRequestFullscreen;
     
     if (requestFullscreen) {
-      requestFullscreen.call(img);
+      requestFullscreen.call(mediaElement);
       
-      // Exit handler to resume slideshow if needed
+      // Exit handler to resume slideshow if it was running
       const exitFullscreenHandler = () => {
         if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
-          if (shouldPause && !this._fullscreenWasPaused && this._isPaused) {
+          if (!this._fullscreenWasPaused && this._isPaused) {
             this._setPauseState(false);
           }
           document.removeEventListener('fullscreenchange', exitFullscreenHandler);
@@ -5593,137 +5581,6 @@ class MediaCardV5a extends LitElement {
   // GALLERY-CARD PATTERN: Modal overlay for image viewing (lines 238-268, 908-961)
   // V4 CODE REUSE: Based on gallery-card's proven modal implementation
   // Direct fullscreen on image click (simplified UX)
-  _openModal(e) {
-    // Don't open fullscreen for videos - they have native controls
-    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
-                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
-    
-    // Check config - default to false (disabled)
-    if (this.config.enable_fullscreen_on_click !== true) {
-      return;
-    }
-    
-    e.stopPropagation();
-    
-    // Pause slideshow by default (to examine image), unless advance_in_fullscreen is enabled
-    const shouldPause = this.config.advance_in_fullscreen !== true;
-    this._fullscreenWasPaused = this._isPaused;
-    
-    if (shouldPause && !this._isPaused) {
-      this._setPauseState(true);
-    }
-    
-    // Go straight to fullscreen
-    const img = e.target.closest('img');
-    if (!img) return;
-    
-    const requestFullscreen = img.requestFullscreen || img.webkitRequestFullscreen || img.msRequestFullscreen;
-    
-    if (requestFullscreen) {
-      requestFullscreen.call(img);
-      
-      // Add fullscreen change listener to resume slideshow when exiting
-      const exitFullscreenHandler = () => {
-        if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
-          // User exited fullscreen - resume slideshow if it was running before
-          if (shouldPause && !this._fullscreenWasPaused && this._isPaused) {
-            this._setPauseState(false);
-          }
-          document.removeEventListener('fullscreenchange', exitFullscreenHandler);
-          document.removeEventListener('webkitfullscreenchange', exitFullscreenHandler);
-          document.removeEventListener('MSFullscreenChange', exitFullscreenHandler);
-          this._log('🔍 Exited fullscreen - slideshow resumed');
-        }
-      };
-      
-      document.addEventListener('fullscreenchange', exitFullscreenHandler);
-      document.addEventListener('webkitfullscreenchange', exitFullscreenHandler);
-      document.addEventListener('MSFullscreenChange', exitFullscreenHandler);
-      
-      const mode = shouldPause ? 'paused for examination' : 'auto-advancing';
-      this._log(`🔍 Entering fullscreen (${mode}) - ESC or tap to exit`);
-    }
-  }
-  
-  _closeModal(e) {
-    // Not needed anymore - fullscreen API handles exit
-  }
-  
-  // Not needed anymore - going straight to fullscreen
-  _handleModalImageClick(e) {
-    e.stopPropagation(); // Don't close modal
-    
-    // Check if zoom is enabled (default to false)
-    if (this.config.enable_zoom !== true) {
-      return;
-    }
-    
-    // Request fullscreen on the image element
-    const img = e.target;
-    const requestFullscreen = img.requestFullscreen || img.webkitRequestFullscreen || img.msRequestFullscreen;
-    
-    if (requestFullscreen) {
-      requestFullscreen.call(img);
-      
-      // Add fullscreen change listener to exit modal when exiting fullscreen
-      const exitFullscreenHandler = () => {
-        if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
-          // User exited fullscreen - close modal and resume slideshow
-          this._closeModal();
-          document.removeEventListener('fullscreenchange', exitFullscreenHandler);
-          document.removeEventListener('webkitfullscreenchange', exitFullscreenHandler);
-          document.removeEventListener('MSFullscreenChange', exitFullscreenHandler);
-        }
-      };
-      
-      document.addEventListener('fullscreenchange', exitFullscreenHandler);
-      document.addEventListener('webkitfullscreenchange', exitFullscreenHandler);
-      document.addEventListener('MSFullscreenChange', exitFullscreenHandler);
-      
-      this._log('🔍 Entering fullscreen zoom - ESC or pinch to exit');
-    }
-  }
-  
-  // GALLERY-CARD PATTERN: Touch navigation in modal (lines 299-331)
-  _handleModalTouchStart(e) {
-    if (!this.config.media_source_type || this.config.media_source_type === 'single_media') {
-      return; // No navigation for single media
-    }
-    
-    this._modalTouchStartX = e.touches[0].clientX;
-    this._modalTouchStartY = e.touches[0].clientY;
-  }
-  
-  _handleModalTouchMove(e) {
-    if (!this._modalTouchStartX || !this._modalTouchStartY) {
-      return;
-    }
-    
-    if (!this.config.media_source_type || this.config.media_source_type === 'single_media') {
-      return; // No navigation for single media
-    }
-    
-    const xDiff = this._modalTouchStartX - e.touches[0].clientX;
-    const yDiff = this._modalTouchStartY - e.touches[0].clientY;
-    
-    // Horizontal swipe detection
-    if (Math.abs(xDiff) > Math.abs(yDiff)) {
-      if (xDiff > 50) {
-        // Left swipe - next
-        this._loadNext();
-        e.preventDefault();
-      } else if (xDiff < -50) {
-        // Right swipe - previous
-        this._loadPrevious();
-        e.preventDefault();
-      }
-    }
-    
-    // Reset values
-    this._modalTouchStartX = null;
-    this._modalTouchStartY = null;
-  }
-  
   // V4: Tap Action Handlers
   _hasAnyAction() {
     return this.config.tap_action || this.config.double_tap_action || this.config.hold_action;
@@ -6862,7 +6719,7 @@ class MediaCardV5a extends LitElement {
               alt="${this.currentMedia.title || 'Media'}"
               @error=${this._onMediaError}
               @load=${this._onMediaLoaded}
-              style="width: 100%; height: auto; display: block; ${this.config.enable_fullscreen_on_click || this.config.enable_image_zoom ? 'cursor: pointer;' : ''}"
+              style="width: 100%; height: auto; display: block; ${this.config.enable_image_zoom ? 'cursor: pointer;' : ''}"
             />
           </div>
         `}
