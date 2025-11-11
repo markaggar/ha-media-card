@@ -4751,20 +4751,20 @@ class MediaCardV5a extends LitElement {
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
           </button>
         ` : ''}
-        ${showMediaIndexButtons && enableInfo ? html`
-          <button
-            class="action-btn info-btn ${isInfoActive ? 'active' : ''}"
-            @click=${this._handleInfoClick}
-            title="Show Info">
-            <ha-icon icon="mdi:information-outline"></ha-icon>
-          </button>
-        ` : ''}
         ${enableFullscreen ? html`
           <button
             class="action-btn fullscreen-btn"
             @click=${this._handleFullscreenButtonClick}
             title="Fullscreen">
             <ha-icon icon="mdi:fullscreen"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && enableInfo ? html`
+          <button
+            class="action-btn info-btn ${isInfoActive ? 'active' : ''}"
+            @click=${this._handleInfoClick}
+            title="Show Info">
+            <ha-icon icon="mdi:information-outline"></ha-icon>
           </button>
         ` : ''}
         ${showMediaIndexButtons && enableFavorite ? html`
@@ -5442,20 +5442,44 @@ class MediaCardV5a extends LitElement {
       this._setPauseState(true);
     }
     
+    // Create exit button
+    const exitButton = document.createElement('button');
+    exitButton.className = 'fullscreen-exit-btn';
+    exitButton.innerHTML = '<ha-icon icon="mdi:close"></ha-icon>';
+    exitButton.onclick = () => {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      } else if (document.msExitFullscreen) {
+        document.msExitFullscreen();
+      }
+    };
+    
     // Request fullscreen on the media element
     const requestFullscreen = mediaElement.requestFullscreen || 
                              mediaElement.webkitRequestFullscreen || 
                              mediaElement.msRequestFullscreen;
     
     if (requestFullscreen) {
-      requestFullscreen.call(mediaElement);
+      requestFullscreen.call(mediaElement).then(() => {
+        // Add exit button after entering fullscreen
+        document.body.appendChild(exitButton);
+      });
       
-      // Exit handler to resume slideshow if it was running
+      // Exit handler to resume slideshow if it was running and remove exit button
       const exitFullscreenHandler = () => {
         if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+          // Remove exit button
+          if (exitButton.parentNode) {
+            exitButton.parentNode.removeChild(exitButton);
+          }
+          
+          // Resume slideshow if needed
           if (!this._fullscreenWasPaused && this._isPaused) {
             this._setPauseState(false);
           }
+          
           document.removeEventListener('fullscreenchange', exitFullscreenHandler);
           document.removeEventListener('webkitfullscreenchange', exitFullscreenHandler);
           document.removeEventListener('MSFullscreenChange', exitFullscreenHandler);
@@ -6271,18 +6295,49 @@ class MediaCardV5a extends LitElement {
     /* V4: Kiosk Exit Hint (line 1346-1361) */
     .kiosk-exit-hint {
       position: absolute;
-      top: 12px;
-      right: 12px;
-      background: rgba(0, 0, 0, 0.6);
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
       color: white;
-      padding: 6px 10px;
-      border-radius: 4px;
-      font-size: 11px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
       pointer-events: none;
       z-index: 12;
-      opacity: 0.7;
+      opacity: 0.9;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
+      text-align: center;
+    }
+
+    /* Fullscreen Exit Button */
+    .fullscreen-exit-btn {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 9999;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      transition: background 0.2s;
+    }
+
+    .fullscreen-exit-btn:hover {
+      background: rgba(0, 0, 0, 0.85);
+    }
+
+    .fullscreen-exit-btn ha-icon {
+      --mdc-icon-size: 24px;
     }
 
     @keyframes fadeIn {
@@ -6853,13 +6908,29 @@ class MediaCardV5aEditor extends LitElement {
 
     // Detect mode from v4 configuration
     if (config.is_folder) {
+      // V5 uses 'folder' as media_source_type, with folder-specific config
+      result.media_source_type = 'folder';
+      
+      // Create folder config object from v4 settings
+      result.folder = {
+        path: config.media_path || config.folder_path || '/media',
+        mode: config.folder_mode || (config.random_mode ? 'random' : 'sequential'),
+        recursive: config.recursive !== false, // Default true
+        use_media_index_for_discovery: config.subfolder_queue?.enabled ? true : undefined
+      };
+      
+      // Preserve subfolder_queue settings if they exist
       if (config.subfolder_queue?.enabled) {
-        result.media_source_type = 'subfolder_queue';
-      } else {
-        result.media_source_type = 'simple_folder';
+        result.folder.subfolder_queue = config.subfolder_queue;
       }
     } else {
       result.media_source_type = 'single_media';
+      // CRITICAL: Populate single_media.path from media_path for single media mode
+      if (config.media_path) {
+        result.single_media = {
+          path: config.media_path
+        };
+      }
     }
 
     // Migrate Media Index detection
@@ -8998,11 +9069,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         </div>
 
         <!-- Media Index Integration (Available for both Single Media and Folder modes) -->
-        <div style="background: #f0f7ff; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #d0e7ff;">
+        <div style="background: var(--primary-background-color, #fafafa); padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--divider-color, #e0e0e0);">
           <div style="margin-bottom: 12px;">
             <strong>🚀 Media Index Integration (Optional)</strong>
           </div>
-          <p style="margin: 4px 0 16px 0; font-size: 13px; color: #666;">
+          <p style="margin: 4px 0 16px 0; font-size: 13px; color: var(--secondary-text-color, #666);">
             Enable EXIF metadata display (date, location, camera info) and action buttons (favorite, delete, edit). 
             ${isFolderMode ? 'Also provides faster database-backed queries for folder scanning. ' : ''}
             Download via HACS or <a href="https://github.com/markaggar/ha-media-index" target="_blank" style="color: var(--primary-color, #007bff);">GitHub</a>
@@ -9023,7 +9094,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 >${entity.friendly_name}</option>
               `)}
             </select>
-            <div style="font-size: 12px; color: #666; margin-top: 4px;">
+            <div style="font-size: 12px; color: var(--secondary-text-color, #666); margin-top: 4px;">
               ${hasMediaIndex 
                 ? `✅ Metadata and action buttons enabled${isFolderMode ? ' + database queries for folder scanning' : ''}` 
                 : '❌ Metadata and action buttons disabled'}
@@ -9041,7 +9112,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 />
                 <span>Use Media Index for file discovery</span>
               </label>
-              <div style="font-size: 12px; color: #666; margin-top: 4px; margin-left: 24px;">
+              <div style="font-size: 12px; color: var(--secondary-text-color, #666); margin-top: 4px; margin-left: 24px;">
                 ${folderConfig.use_media_index_for_discovery !== false
                   ? '🚀 Using database queries for fast random selection'
                   : '📁 Using filesystem scanning (slower but includes unindexed files)'}
@@ -9605,6 +9676,23 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
+        <!-- Fullscreen Button (always available) -->
+        <div class="section">
+          <div class="section-title">🖼️ Fullscreen</div>
+          
+          <div class="config-row">
+            <label>Enable Fullscreen Button</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.action_buttons?.enable_fullscreen === true}
+                @change=${this._actionButtonsEnableFullscreenChanged}
+              />
+              <div class="help-text">Show fullscreen button to automatically pause and initiate full screen mode (see Kiosk mode for automatic full screen options)</div>
+            </div>
+          </div>
+        </div>
+
         ${hasMediaIndex ? html`
           <div class="section">
             <div class="section-title">⭐ Action Buttons</div>
@@ -9656,18 +9744,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableEditChanged}
                 />
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
-              </div>
-            </div>
-            
-            <div class="config-row">
-              <label>Enable Fullscreen Button</label>
-              <div>
-                <input
-                  type="checkbox"
-                  .checked=${this._config.action_buttons?.enable_fullscreen === true}
-                  @change=${this._actionButtonsEnableFullscreenChanged}
-                />
-                <div class="help-text">Show fullscreen icon button (alternative to clicking on image)</div>
               </div>
             </div>
             
