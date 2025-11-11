@@ -7,6 +7,31 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 <img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
+## 🚀 What's New in v5.0 - Major Architecture Overhaul
+
+v5.0 represents a **complete architectural refactor** with improved code organization, enhanced features, and 100% backward compatibility.
+
+### 🏗️ **Core Improvements**
+
+- **🔄 Provider Architecture**: Modular design with clean separation of media sources (Single Media, Folder, Media Index)
+- **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
+- **📱 Kiosk Mode Auto-Enable**: Automatically activate/deactivate kiosk mode based on entity state (perfect for wall-mounted tablets)
+- **🖼️ Enhanced Thumbnails**: Delete and edit confirmation dialogs now show proper image previews
+- **🎭 Fullscreen Button**: Dedicated action button for fullscreen viewing of both images and videos
+- **⚙️ Improved Configuration**: Cleaner, more intuitive config structure with GUI editor enhancements
+- **🐛 Bug Fixes**: Resolved numerous edge cases including pause/resume timing, reconnection handling, and state management
+
+### 🔧 **Technical Enhancements**
+
+- **Code Organization**: Refactored from monolithic to modular provider pattern (~10,000 lines reorganized)
+- **Better Error Handling**: Comprehensive error states with user-friendly messages and retry logic
+- **Performance Optimizations**: Smarter queue management and reduced redundant operations
+- **Enhanced Logging**: Detailed diagnostics for troubleshooting (enable with `enable_debug_logging: true`)
+
+### 📦 **Backward Compatibility**
+
+All v4 configurations continue to work without modification. The v5 refactor maintains the same external behavior while improving internal code quality.
+
 ## 🚀 What's New in v4.0 - Media Index Integration
 
 ### ⚡ **Lightning-Fast Performance** 
@@ -113,6 +138,10 @@ media_type: image
 media_path: media-source://media_source/local/cameras/front_door.jpg
 ```
 ## ⚙️ Configuration Options
+
+### 🔄 v5.0 Migration Note
+
+**Upgrading from v4?** Good news - all v4 configurations work without changes! The v5 refactor maintains complete backward compatibility while improving code organization and fixing several edge cases. Simply update your resource URL and refresh your browser.
 
 ### Basic Configuration
 
