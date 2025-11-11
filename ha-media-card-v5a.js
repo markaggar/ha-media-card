@@ -3218,6 +3218,15 @@ class MediaCardV5a extends LitElement {
   updated(changedProperties) {
     super.updated(changedProperties);
     
+    // NEW: Setup kiosk monitoring when hass becomes available
+    // This handles the case where connectedCallback runs before hass is ready
+    if (changedProperties.has('hass') && this.hass && 
+        this.config.kiosk_mode_auto_enable && this._isKioskModeConfigured() &&
+        !this._kioskStateSubscription) {
+      this._log('🖼️ Hass available - setting up kiosk mode monitoring');
+      this._setupKioskModeMonitoring();
+    }
+    
     if (changedProperties.has('mediaUrl')) {
       // Wait for next frame to ensure video element is rendered
       requestAnimationFrame(() => {
@@ -3273,11 +3282,117 @@ class MediaCardV5a extends LitElement {
     }
   }
 
+  // V4 → V5a Config Migration
+  _migrateV4ConfigToV5a(v4Config) {
+    this._log('🔄 Starting V4 → V5a config migration');
+    
+    const v5aConfig = { ...v4Config };
+    
+    // 1. Detect media source type and create folder/single_media structure
+    if (v4Config.is_folder === true) {
+      v5aConfig.media_source_type = 'folder';
+      
+      // Extract path from media-source:// URI
+      let path = v4Config.media_path || '';
+      if (path.startsWith('media-source://media_source')) {
+        path = path.replace('media-source://media_source', '');
+      }
+      
+      v5aConfig.folder = {
+        path: path,
+        mode: v4Config.folder_mode || 'random', // random, sequential, shuffle
+        recursive: true, // V4 always recursive with subfolder_queue
+        use_media_index_for_discovery: v4Config.media_index?.enabled === true,
+        priority_new_files: v4Config.subfolder_queue?.priority_folder_patterns?.length > 0,
+        new_files_threshold_seconds: 86400, // Default 1 day
+        scan_depth: v4Config.subfolder_queue?.scan_depth || 5,
+        estimated_total_photos: v4Config.subfolder_queue?.estimated_total_photos || 100
+      };
+      
+      // Remove old V4 properties
+      delete v5aConfig.media_path;
+      delete v5aConfig.is_folder;
+      delete v5aConfig.folder_mode;
+      delete v5aConfig.subfolder_queue;
+    } else {
+      // Single media file
+      v5aConfig.media_source_type = 'single_media';
+      
+      let path = v4Config.media_path || '';
+      if (path.startsWith('media-source://media_source')) {
+        path = path.replace('media-source://media_source', '');
+      }
+      
+      v5aConfig.single_media = {
+        path: path
+      };
+      
+      delete v5aConfig.media_path;
+      delete v5aConfig.is_folder;
+    }
+    
+    // 2. Migrate auto-advance timing
+    if (v4Config.auto_refresh_seconds !== undefined) {
+      v5aConfig.auto_advance_seconds = v4Config.auto_refresh_seconds;
+      delete v5aConfig.auto_refresh_seconds;
+    }
+    
+    // 3. Migrate slideshow behavior (V5a is always smart)
+    delete v5aConfig.slideshow_behavior;
+    
+    // 4. Migrate media_index config structure
+    if (v4Config.media_index?.enabled === true && v4Config.media_index?.entity_id) {
+      v5aConfig.media_index = {
+        entity_id: v4Config.media_index.entity_id
+      };
+      // prefetch_offset removed in V5a
+    }
+    
+    // 5. Keep all other V4 options that are compatible
+    // These work in both V4 and V5a:
+    // - video_autoplay, video_muted, video_loop, video_max_duration
+    // - aspect_mode (viewport-fit, viewport-fill, smart-scale)
+    // - metadata (show_filename, position, show_location, show_folder, etc.)
+    // - action_buttons (position, enable_favorite, enable_delete, enable_edit)
+    // - enable_navigation_zones, show_position_indicator, show_dots_indicator
+    // - enable_keyboard_navigation
+    // - enable_image_zoom, zoom_level
+    // - slideshow_window
+    // - hide_video_controls_display
+    // - debug_mode
+    // - kiosk_mode_entity, kiosk_mode_exit_action, kiosk_mode_auto_enable
+    // - tap_action, double_tap_action, hold_action
+    
+    // 6. Map auto_advance_mode (V4's slideshow continuation behavior)
+    if (v4Config.auto_advance_mode) {
+      v5aConfig.auto_advance_mode = v4Config.auto_advance_mode; // reset | continue
+    }
+    
+    // 7. Remove V4-specific properties that don't exist in V5a
+    delete v5aConfig.debug_queue_mode; // V5a doesn't have queue debug mode
+    
+    this._log('✅ Migration complete:', {
+      media_source_type: v5aConfig.media_source_type,
+      folder: v5aConfig.folder,
+      single_media: v5aConfig.single_media,
+      auto_advance_seconds: v5aConfig.auto_advance_seconds
+    });
+    
+    return v5aConfig;
+  }
+
   setConfig(config) {
     if (!config) {
       throw new Error('Invalid configuration');
     }
     this._log('📝 setConfig called with:', config);
+    
+    // MIGRATION: Detect V4 config and convert to V5a format
+    if (!config.media_source_type && config.media_path) {
+      this._log('🔄 Detected V4 config - migrating to V5a format');
+      config = this._migrateV4ConfigToV5a(config);
+      this._log('✅ V4 config migrated:', config);
+    }
     
     // V5: Clear auto-advance timer when reconfiguring (prevents duplicate timers)
     if (this._refreshInterval) {
@@ -4613,12 +4728,13 @@ class MediaCardV5a extends LitElement {
     const enableDelete = config.enable_delete !== false;
     const enableEdit = config.enable_edit !== false;
     const enableInfo = config.enable_info !== false;
+    const enableFullscreen = config.enable_fullscreen === true;
     
     // Don't render anything if all are disabled
-    if (!enablePause && !showMediaIndexButtons) {
+    if (!enablePause && !showMediaIndexButtons && !enableFullscreen) {
       return html``;
     }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo) {
+    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen) {
       return html``;
     }
 
@@ -4643,6 +4759,14 @@ class MediaCardV5a extends LitElement {
             @click=${this._handleInfoClick}
             title="Show Info">
             <ha-icon icon="mdi:information-outline"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableFullscreen ? html`
+          <button
+            class="action-btn fullscreen-btn"
+            @click=${this._handleFullscreenButtonClick}
+            title="Fullscreen">
+            <ha-icon icon="mdi:fullscreen"></ha-icon>
           </button>
         ` : ''}
         ${showMediaIndexButtons && enableFavorite ? html`
@@ -5106,8 +5230,10 @@ class MediaCardV5a extends LitElement {
     // V4 PATTERN: Capture path at button click time to prevent wrong file deletion
     // if slideshow auto-advances while confirmation dialog is open
     const targetPath = this._currentMediaPath;
-    const thumbnailUrl = this.mediaUrl;
     const filename = this._currentMetadata?.filename || targetPath.split('/').pop();
+    
+    // Get actual thumbnail from media browser
+    const thumbnailUrl = await this._getMediaThumbnail(targetPath);
     
     this._showDeleteConfirmation(targetPath, thumbnailUrl, filename);
   }
@@ -5124,6 +5250,48 @@ class MediaCardV5a extends LitElement {
     
     // Already a filesystem path
     return mediaSourceUri;
+  }
+  
+  // Get thumbnail URL from media browser (same as used in file picker)
+  async _getMediaThumbnail(filePath) {
+    this._log('🖼️ Getting thumbnail for:', filePath);
+    
+    try {
+      // Convert filesystem path to media_content_id
+      const mediaContentId = filePath.startsWith('media-source://') 
+        ? filePath 
+        : `media-source://media_source${filePath}`;
+      
+      this._log('📞 Calling media_source/resolve_media for:', mediaContentId);
+      
+      // Use same thumbnail resolution logic as media browser
+      const response = await this.hass.callWS({
+        type: "media_source/resolve_media",
+        media_content_id: mediaContentId,
+        expires: 3600
+      });
+      
+      this._log('📦 Got response:', response);
+      
+      if (response?.url) {
+        // Add thumbnail size parameter if it's an image
+        if (/\.(jpg|jpeg|png|gif|webp)$/i.test(filePath)) {
+          const thumbUrl = `${response.url}&width=300`;
+          this._log('✅ Returning thumbnail URL:', thumbUrl);
+          return thumbUrl;
+        }
+        this._log('✅ Returning media URL:', response.url);
+        return response.url;
+      }
+      
+      this._log('⚠️ No URL in response');
+    } catch (err) {
+      this._log('❌ Failed to get thumbnail:', err);
+    }
+    
+    // Return null instead of fallback - let dialog handle it
+    this._log('⚠️ Returning null - no thumbnail available');
+    return null;
   }
   
   async _showDeleteConfirmation(targetPath, thumbnailUrl, filename) {
@@ -5148,7 +5316,7 @@ class MediaCardV5a extends LitElement {
         <h3>Delete Media?</h3>
         ${!isVideo ? `
         <div class="delete-thumbnail">
-          <img src="${thumbnailUrl}" alt="Preview">
+          ${thumbnailUrl ? `<img src="${thumbnailUrl}" alt="Preview">` : '<div style="padding: 40px; opacity: 0.5;">Loading preview...</div>'}
         </div>
         ` : ''}
         <p><strong>File:</strong> ${filename}</p>
@@ -5250,10 +5418,59 @@ class MediaCardV5a extends LitElement {
     // V4 PATTERN: Capture path at button click time to prevent wrong file being marked
     // if slideshow auto-advances while confirmation dialog is open
     const targetPath = this._currentMediaPath;
-    const thumbnailUrl = this.mediaUrl;
     const filename = this._currentMetadata?.filename || targetPath.split('/').pop();
     
+    // Get actual thumbnail from media browser
+    const thumbnailUrl = await this._getMediaThumbnail(targetPath);
+    
     this._showEditConfirmation(targetPath, thumbnailUrl, filename);
+  }
+  
+  _handleFullscreenButtonClick(e) {
+    e.stopPropagation();
+    
+    // Don't open fullscreen for videos - they have native controls
+    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
+                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
+    
+    if (isVideo) return;
+    
+    // Get the currently displayed image
+    const img = this.shadowRoot.querySelector('.media-container img');
+    if (!img) return;
+    
+    // Pause slideshow by default (to examine image), unless advance_in_fullscreen is enabled
+    const shouldPause = this.config.advance_in_fullscreen !== true;
+    this._fullscreenWasPaused = this._isPaused;
+    
+    if (shouldPause && !this._isPaused) {
+      this._setPauseState(true);
+    }
+    
+    // Request fullscreen
+    const requestFullscreen = img.requestFullscreen || 
+                             img.webkitRequestFullscreen || 
+                             img.msRequestFullscreen;
+    
+    if (requestFullscreen) {
+      requestFullscreen.call(img);
+      
+      // Exit handler to resume slideshow if needed
+      const exitFullscreenHandler = () => {
+        if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+          if (shouldPause && !this._fullscreenWasPaused && this._isPaused) {
+            this._setPauseState(false);
+          }
+          document.removeEventListener('fullscreenchange', exitFullscreenHandler);
+          document.removeEventListener('webkitfullscreenchange', exitFullscreenHandler);
+          document.removeEventListener('MSFullscreenChange', exitFullscreenHandler);
+        }
+      };
+      
+      document.addEventListener('fullscreenchange', exitFullscreenHandler);
+      document.addEventListener('webkitfullscreenchange', exitFullscreenHandler);
+      document.addEventListener('MSFullscreenChange', exitFullscreenHandler);
+    }
   }
   
   async _showEditConfirmation(targetPath, thumbnailUrl, filename) {
@@ -6270,8 +6487,9 @@ class MediaCardV5a extends LitElement {
 
     .delete-thumbnail {
       width: 100%;
+      max-width: 300px;
       max-height: 200px;
-      margin: 0 0 16px;
+      margin: 0 auto 16px;
       border-radius: 4px;
       overflow: hidden;
       background: rgba(0, 0, 0, 0.3);
@@ -6283,6 +6501,8 @@ class MediaCardV5a extends LitElement {
     .delete-thumbnail img {
       max-width: 100%;
       max-height: 200px;
+      width: auto;
+      height: auto;
       object-fit: contain;
     }
 
@@ -7548,6 +7768,17 @@ class MediaCardV5aEditor extends LitElement {
       action_buttons: {
         ...this._config.action_buttons,
         enable_edit: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableFullscreenChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_fullscreen: ev.target.checked
       }
     };
     this._fireConfigChanged();
@@ -9555,6 +9786,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableEditChanged}
                 />
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Enable Fullscreen Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_fullscreen === true}
+                  @change=${this._actionButtonsEnableFullscreenChanged}
+                />
+                <div class="help-text">Show fullscreen icon button (alternative to clicking on image)</div>
               </div>
             </div>
             
