@@ -5,6 +5,161 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2025-01-23
+
+### 🏗️ Major Architecture Refactor
+
+**Provider Pattern Implementation** - Complete reorganization from monolithic to modular architecture with clean separation of concerns.
+
+#### Core Architecture Changes
+
+**Media Provider System**
+- **`SingleMediaProvider`**: Handles individual file display with auto-refresh
+- **`FolderProvider`**: Manages random, latest, and sequential folder modes
+- **`MediaIndexProvider`**: Database-backed selection with enhanced metadata
+- **`SequentialMediaIndexProvider`**: Sequential playback with Media Index integration
+- **`SubfolderQueue`**: Hierarchical scanning system for nested folder structures
+
+**Unified Provider Interface**
+- Consistent `getNextItem()` / `getPreviousItem()` API across all providers
+- Standardized configuration object structure
+- Shared reconnection and error handling logic
+- Common state management patterns
+
+**Code Organization**
+- Refactored ~10,000 lines from single file to logical provider modules
+- Separated concerns: media selection, navigation, UI, state management
+- Eliminated code duplication across provider types
+- Improved maintainability and testability
+
+### ✨ New Features
+
+#### Image Zoom
+- **Click to Zoom**: Click any point on an image to zoom in (1.5x-5x configurable)
+- **Click to Reset**: Click again anywhere to return to normal view
+- **Center on Point**: Zoom centers on clicked location for precise inspection
+- **Configuration**: `zoom_enabled` (default: true), `zoom_level` (default: 2.0)
+
+#### Kiosk Mode Auto-Enable
+- **Entity-Based Activation**: Automatically enter/exit kiosk mode based on entity state
+- **Wall-Mounted Tablet Optimization**: Perfect for permanent display setups
+- **Time-Based Automation**: Combine with HA automations for scheduled kiosk mode
+- **Motion Detection Exit**: Automatically exit kiosk when presence detected
+
+#### Enhanced Thumbnails
+- **Delete Confirmation**: Proper image preview in delete confirmation dialog
+- **Edit Confirmation**: Show thumbnail when editing media
+- **Faster Loading**: Optimized thumbnail generation and caching
+
+#### Fullscreen Button
+- **Dedicated Control**: Separate button for fullscreen viewing (not just kiosk mode)
+- **Image & Video Support**: Works with both media types
+- **Easy Access**: Top-right button placement for quick activation
+- **Browser Fullscreen API**: Native fullscreen without kiosk mode integration
+
+### 🔧 Technical Improvements
+
+#### Logging System
+- **Conditional Compilation**: Debug logs only active when `debug_mode: true`
+- **Localhost Exception**: Automatic debug enable on `localhost` for development
+- **Provider-Specific Logs**: Each provider has namespaced logging (`[MediaIndexProvider]`, etc.)
+- **Silent Production**: Zero console spam in production (only card loaded + real errors)
+- **Debug Queue Mode**: Visual overlay with queue statistics (`debug_queue_mode: true`)
+
+#### Error Handling
+- **Comprehensive Error States**: User-friendly messages for all failure scenarios
+- **Retry Logic**: Automatic retry with exponential backoff for transient failures
+- **Synology Detection**: Special handling for Synology NAS media sources
+- **Graceful Degradation**: Fallback behaviors when features unavailable
+
+#### State Management
+- **Centralized State**: Single source of truth for card state
+- **Provider State Isolation**: Each provider manages own internal state independently
+- **History Management**: Consistent navigation history across provider switches
+- **Reconnection System**: Automatic recovery from network interruptions
+
+#### Performance Optimizations
+- **Smarter Queue Management**: Reduced redundant folder scans
+- **Efficient Probability Calculations**: Optimized random selection algorithms
+- **Lazy Provider Initialization**: Providers only created when needed
+- **Memory Management**: Proper cleanup on provider switches
+
+### 🐛 Bug Fixes
+
+#### Critical Fixes
+- **Kiosk Cleanup Error**: Fixed `TypeError: _kioskStateSubscription is not a function`
+  - Added type guards before calling subscription cleanup
+  - Prevents errors when `disconnectedCallback` called before subscription exists
+  
+- **Custom Element Registration**: Added guards to prevent re-registration errors
+  - Checks `customElements.get()` before `.define()`
+  - Prevents "name already used" errors on card reload
+  - Duplicate check before `window.customCards.push()`
+
+#### Pause/Resume Timing
+- **Video Pause Detection**: Improved detection of manual vs automatic pauses
+- **Slideshow Timing**: Better coordination between auto-refresh and pause state
+- **Resume Behavior**: Consistent resume timing after manual pause
+
+#### Navigation
+- **History Consistency**: Fixed edge cases in navigation history management
+- **Boundary Handling**: Improved first/last file detection and behavior
+- **Provider Switching**: Smooth navigation when changing providers
+
+#### Reconnection
+- **Media Index Reconnect**: Better detection of Media Index availability changes
+- **Folder Rescan**: Improved folder refresh after network interruptions
+- **State Preservation**: Maintain position/history across reconnection attempts
+
+### 🔄 Breaking Changes
+
+**None** - Complete backward compatibility maintained.
+
+All v4 configurations work without modification. The v5 refactor is an internal improvement with identical external API.
+
+### 📈 Migration Guide
+
+**From v4 to v5**: No changes required. Drop-in replacement.
+
+**Optional New Features**:
+```yaml
+# Image zoom (new in v5)
+zoom_enabled: true
+zoom_level: 2.0
+
+# Fullscreen button (new in v5)
+show_fullscreen_button: true
+
+# Enhanced debug logging
+debug_mode: true  # Now includes provider-specific logs
+debug_queue_mode: true  # Visual queue inspector
+```
+
+### 📝 Documentation Refactor
+
+**New Documentation Structure**:
+- `docs/guides/features.md` - Comprehensive feature documentation (benefit-focused)
+- `docs/guides/installation.md` - Detailed installation guide (HACS + manual)
+- `docs/guides/configuration.md` - Complete configuration reference with all options
+- `docs/guides/examples.md` - Real-world configurations by use case
+- `docs/guides/troubleshooting.md` - Solutions to common issues
+
+**README Improvements**:
+- Rewritten as benefit-focused landing page (not release notes)
+- Removed version-specific language (v5/v4 sections)
+- Added quick start guide with common examples
+- Links to detailed documentation files
+- Professional open-source project structure
+
+**Developer Documentation**:
+- `dev-docs/v5-architecture-spec.md` - Provider pattern architecture
+- `dev-docs/v5-implementation-plan.md` - Phase-by-phase development plan
+- `dev-docs/phase-1a-code-map.md` - V4→V5 code reuse mapping
+
+### 🙏 Acknowledgments
+
+v5 refactor focused on code quality and maintainability while preserving all existing functionality. The provider pattern enables easier feature additions and better testing going forward.
+
 ## [4.1.0] - 2025-11-03
 
 ### Added - User Experience Enhancements

@@ -1,651 +1,327 @@
-![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
+![Version](https://img.shields.io/github/v/release/markaggar/ha-media-card?style=for-the-badge)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
+# HA Media Card 🎬
 
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
+<img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
-# HA Media Card# HA Media Card 🎬
+## 🚀 What's New in v5.0 - Major Architecture Overhaul
 
+v5.0 represents a **complete architectural refactor** with improved code organization, enhanced features, and 100% backward compatibility.
 
+### 🏗️ **Core Improvements**
 
-A powerful custom Lovelace card for displaying images and videos in your Home Assistant dashboard. Perfect for security camera feeds, family photo slideshows, dashcam footage, or any media from your Home Assistant media folders.A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
-
-
-
-<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" /><img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
-
-
-
-## ✨ Key Features## 🚀 What's New in v5.0 - Major Architecture Overhaul
-
-
-
-**Smart Media Display**v5.0 represents a **complete architectural refactor** with improved code organization, enhanced features, and 100% backward compatibility.
-
-- 📂 **Folder Modes**: Random, Latest, or Sequential display from folders
-
-- 🎬 **Mixed Media**: Display images and videos together seamlessly### 🏗️ **Core Improvements**
-
-- 🔄 **Auto-Refresh**: Configurable intervals for dynamic content
-
-- 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)- **🔄 Provider Architecture**: Modular design with clean separation of media sources (Single Media, Folder, Media Index)
-
+- **🔄 Provider Architecture**: Modular design with clean separation of media sources (Single Media, Folder, Media Index)
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
+- **📱 Kiosk Mode Auto-Enable**: Automatically activate/deactivate kiosk mode based on entity state (perfect for wall-mounted tablets)
+- **🖼️ Enhanced Thumbnails**: Delete and edit confirmation dialogs now show proper image previews
+- **🎭 Fullscreen Button**: Dedicated action button for fullscreen viewing of both images and videos
+- **⚙️ Improved Configuration**: Cleaner, more intuitive config structure with GUI editor enhancements
+- **🐛 Bug Fixes**: Resolved numerous edge cases including pause/resume timing, reconnection handling, and state management
 
-**Rich Metadata & Information**- **📱 Kiosk Mode Auto-Enable**: Automatically activate/deactivate kiosk mode based on entity state (perfect for wall-mounted tablets)
+### 🔧 **Technical Enhancements**
 
-- 📍 **Location Data**: Show where photos were taken (with Media Index)- **🖼️ Enhanced Thumbnails**: Delete and edit confirmation dialogs now show proper image previews
-
-- 📅 **Date Display**: EXIF date extraction and timestamp display- **🎭 Fullscreen Button**: Dedicated action button for fullscreen viewing of both images and videos
-
-- 📁 **Folder Context**: See source folder and filename- **⚙️ Improved Configuration**: Cleaner, more intuitive config structure with GUI editor enhancements
-
-- 🎯 **Position Tracking**: Know where you are in your collection ("3 of 15")- **🐛 Bug Fixes**: Resolved numerous edge cases including pause/resume timing, reconnection handling, and state management
-
-
-
-**Intelligent Navigation**### 🔧 **Technical Enhancements**
-
-- 🖱️ **Precision Controls**: Small clickable zones for Previous/Next (avoids conflicts)
-
-- ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more- **Code Organization**: Refactored from monolithic to modular provider pattern (~10,000 lines reorganized)
-
-- 👆 **Interactive Actions**: Tap, hold, and double-tap customization- **Better Error Handling**: Comprehensive error states with user-friendly messages and retry logic
-
-- ⏸️ **Pause/Resume**: Control slideshow with dedicated button- **Performance Optimizations**: Smarter queue management and reduced redundant operations
-
+- **Code Organization**: Refactored from monolithic to modular provider pattern (~10,000 lines reorganized)
+- **Better Error Handling**: Comprehensive error states with user-friendly messages and retry logic
+- **Performance Optimizations**: Smarter queue management and reduced redundant operations
 - **Enhanced Logging**: Detailed diagnostics for troubleshooting (enable with `enable_debug_logging: true`)
 
-**Advanced Capabilities**
+### 📦 **Backward Compatibility**
 
-- 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently### 📦 **Backward Compatibility**
+All v4 configurations continue to work without modification. The v5 refactor maintains the same external behavior while improving internal code quality.
 
-- 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
-
-- 🎥 **Video Auto-Advance**: Slideshow continues when videos finish playingAll v4 configurations continue to work without modification. The v5 refactor maintains the same external behavior while improving internal code quality.
-
-- 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
-
-- 🖥️ **Kiosk Mode**: Fullscreen display with configurable exit gestures## 🚀 What's New in v4.0 - Media Index Integration
-
-- 🔍 **Image Zoom**: Click to zoom into photos, click again to reset
+## 🚀 What's New in v4.0 - Media Index Integration
 
 ### ⚡ **Lightning-Fast Performance** 
-
-**Professional Features***(Requires Media Index)*
-
-- 📊 **Statistical Fairness**: Equal representation across all folders regardless of discovery orderNo more waiting for folder scans! The [Media Index integration](https://github.com/markaggar/ha-media-index) pre-indexes your entire media collection for instant slideshow startup.
-
-- 🎭 **Fullscreen Mode**: Dedicated button for immersive viewing
-
-- 🐛 **Debug Tools**: Visual queue inspector and detailed console logging### 📍 **Rich Metadata Display**
-
-- 💾 **Reconnection System**: Automatic recovery from network issues*(Requires Media Index)*
-
-- 🎨 **Theme Integration**: Seamlessly matches your Home Assistant theme- **GPS Locations**: Automatic geocoding shows where photos were taken ("Paris, France" vs coordinates)
-
-- **Real Photo Dates**: EXIF creation dates from camera metadata, not file timestamps
-
-## 🚀 Quick Start- **Star Ratings**: Display favorite ratings extracted from photo metadata
-
-
-
-### Installation### ⭐ **Interactive Media Controls** 
-
 *(Requires Media Index)*
+No more waiting for folder scans! The [Media Index integration](https://github.com/markaggar/ha-media-index) pre-indexes your entire media collection for instant slideshow startup.
 
-**Via HACS (Recommended)**- **Favorite Button**: Star/unstar photos with visual feedback
+### 📍 **Rich Metadata Display**
+*(Requires Media Index)*
+- **GPS Locations**: Automatic geocoding shows where photos were taken ("Paris, France" vs coordinates)
+- **Real Photo Dates**: EXIF creation dates from camera metadata, not file timestamps
+- **Star Ratings**: Display favorite ratings extracted from photo metadata
 
+### ⭐ **Interactive Media Controls** 
+*(Requires Media Index)*
+- **Favorite Button**: Star/unstar photos with visual feedback
 - **Edit Workflow**: Mark photos for editing (moves to _Edit folder), then restore the files to their original locations when done editing with the Media Index restore service.
+- **Safe Delete**: Move unwanted files to junk folder with confirmation
 
-1. Open HACS → Frontend → Custom repositories- **Safe Delete**: Move unwanted files to junk folder with confirmation
+### 🎲 **True Database Randomization**
+*(Requires Media Index)*
+SQL-powered random selection eliminates filesystem bias for genuinely random slideshows across your entire collection.
 
-2. Add: `https://github.com/markaggar/ha-media-card` (Lovelace category)
-
-3. Search for "Media Card" and install### 🎲 **True Database Randomization**
-
-4. Restart Home Assistant*(Requires Media Index)*
-
-5. Hard refresh browser (Ctrl+Shift+R)SQL-powered random selection eliminates filesystem bias for genuinely random slideshows across your entire collection.
-
-
-
-**Manual Installation**### 📂 **About Media Index Integration**
-
+### 📂 **About Media Index Integration**
 The [Media Index](https://github.com/markaggar/ha-media-index) is a separate Home Assistant integration that:
+- Scans and indexes your media files with metadata extraction
+- Provides real-time file monitoring and geocoding services  
+- Supports multiple media libraries with independent configuration
 
-1. Download `ha-media-card.js` from [latest release](https://github.com/markaggar/ha-media-card/releases/latest)- Scans and indexes your media files with metadata extraction
-
-2. Copy to `/config/www/cards/ha-media-card.js`- Provides real-time file monitoring and geocoding services  
-
-3. Add resource in Settings → Dashboards → Resources:- Supports multiple media libraries with independent configuration
-
-   - URL: `/local/cards/ha-media-card.js`
-
-   - Type: JavaScript Module> **💡 Backwards Compatible**: All previous features continue to work without Media Index! The integration adds powerful enhancements but isn't required.
-
-4. Restart Home Assistant and hard refresh browser
+> **💡 Backwards Compatible**: All previous features continue to work without Media Index! The integration adds powerful enhancements but isn't required.
 
 ## 🔄 **Core Features** 
 
-### Basic Configuration
-
 ### 📂 **Hierarchical Folder Scanning**
+Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
 
-**Simple Photo Slideshow**Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
+### 🖼️ **Rich Metadata Display**
+See what you're viewing with automatic folder path, filename, and date information. Fully customizable positioning and toggle individual elements on/off.
 
+### ⏸️ **Smart Pause & Background Management**
+Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
 
+### 🎬 **Video Completion Detection**
+Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
 
-```yaml### 🖼️ **Rich Metadata Display**
-
-type: custom:media-cardSee what you're viewing with automatic folder path, filename, and date information. Fully customizable positioning and toggle individual elements on/off.
-
-title: "Family Photos"
-
-media_type: image### ⏸️ **Smart Pause & Background Management**
-
-media_path: media-source://media_source/local/photos/Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
-
-folder_mode: random
-
-auto_refresh_seconds: 60### 🎬 **Video Completion Detection**
-
-```Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
-
-
-
-**Latest Security Camera Snapshot**### 🎯 **Flexible Slideshow Modes**
-
+### 🎯 **Flexible Slideshow Modes**
 - **Show Latest**: Always display your most recent photo/video
+- **Show Random**: Randomized slideshow from a single folder or entire hierarchy
+- **Static**: Display a single file
 
-```yaml- **Show Random**: Randomized slideshow from a single folder or entire hierarchy
+### 🎮 **Interactive Navigation**
+Click left/right sides to browse, center-top to pause, or use keyboard arrows. Full manual control alongside automatic slideshow.
 
-type: custom:media-card- **Static**: Display a single file
+### 📁 **Visual Media Browser**
+Point-and-click file and folder selection with real image thumbnails. No more typing paths!
 
-title: "Front Door Camera"
-
-media_type: image### 🎮 **Interactive Navigation**
-
-media_path: media-source://media_source/local/security/Click left/right sides to browse, center-top to pause, or use keyboard arrows. Full manual control alongside automatic slideshow.
-
-folder_mode: latest
-
-auto_refresh_seconds: 30### 📁 **Visual Media Browser**
-
-enable_navigation_zones: truePoint-and-click file and folder selection with real image thumbnails. No more typing paths!
-
-show_metadata: true
-
-metadata_position: top-right### 🔍 **Image Zoom**
-
-show_date: trueClick/tap any image to zoom in on that spot. Click again to reset.
-
-```
+### 🔍 **Image Zoom**
+Click/tap any image to zoom in on that spot. Click again to reset.
 
 ### 🎬 **Complete Video Support**
+MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute options.
 
-**Video Player with Navigation**MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute options.
+### 👆 **Custom Actions**
+Configure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
 
+### 🖥️ **Kiosk Mode Integration**
+Seamless integration with HACS Kiosk Mode for fullscreen displays. Smart exit hints appear only when kiosk mode is active, with configurable exit gestures (tap, double-tap, hold, swipe).
 
+## 📥 Installation
 
-```yaml### 👆 **Custom Actions**
+### Install via HACS
 
-type: custom:media-cardConfigure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
 
-title: "Dashcam Footage"
+### Manual Installation
 
-media_type: video### 🖥️ **Kiosk Mode Integration**
+1. **Download the card file**:
+   Download the zip file or copy the contents of the ha-media-card.js from the repo
 
-media_path: media-source://media_source/local/dashcam/Seamless integration with HACS Kiosk Mode for fullscreen displays. Smart exit hints appear only when kiosk mode is active, with configurable exit gestures (tap, double-tap, hold, swipe).
-
-folder_mode: latest
-
-video_autoplay: true## 📥 Installation
-
-video_muted: true
-
-enable_navigation_zones: true### Install via HACS
-
-enable_keyboard_navigation: true
-
-```[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
-
-
-
-## 📚 Documentation### Manual Installation
-
-
-
-**Getting Started**1. **Download the card file**:
-
-- **[Installation Guide](docs/guides/installation.md)** - Complete setup instructions for HACS and manual installation   Download the zip file or copy the contents of the ha-media-card.js from the repo
-
-- **[Configuration Reference](docs/guides/configuration.md)** - All available options and parameters
-
-- **[Examples](docs/guides/examples.md)** - Real-world configurations for common use cases2. **Copy to your Home Assistant**:
-
+2. **Copy to your Home Assistant**:
    - Place (or create) `ha-media-card.js` in `/config/www/` or `/config/www/cards/` (and copy the repo ha-media-card.js contents to the file you just created)
 
-**Features & Advanced Usage**
-
-- **[Features Guide](docs/guides/features.md)** - Detailed explanation of all capabilities3. **Add to Dashboard resources**:
-
-- **[Troubleshooting](docs/guides/troubleshooting.md)** - Solutions to common issues   - Go to **Settings** → **Dashboards** → **Resources**
-
+3. **Add to Dashboard resources**:
+   - Go to **Settings** → **Dashboards** → **Resources**
    - Click **Add Resource**
-
-**Development**   - **URL**: `/local/ha-media-card.js?v1xxx` (or `/local/cards/ha-media-card.js?vxxx`) (if you download a new version of media card in the future, increment the version number)
-
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes   - **Resource Type**: `JavaScript Module`
-
-- **[GitHub Issues](https://github.com/markaggar/ha-media-card/issues)** - Bug reports and feature requests   - Click **Create**
-
+   - **URL**: `/local/ha-media-card.js?v1xxx` (or `/local/cards/ha-media-card.js?vxxx`) (if you download a new version of media card in the future, increment the version number)
+   - **Resource Type**: `JavaScript Module`
+   - Click **Create**
   
+4. **Refresh your browser cache (e.g. CTRL-F5, or restart the Home Assistant app on your phone).**
 
-## 🎯 Common Use Cases4. **Refresh your browser cache (e.g. CTRL-F5, or restart the Home Assistant app on your phone).**
-
-
-
-### 🏠 Home Security5. **Add the card to your dashboard**:
-
-- Display latest camera snapshots with auto-refresh   - Edit your dashboard
-
-- Navigate through motion detection captures   - Click **Add Card**
-
-- Monitor multiple camera feeds in rotation   - Search for Media Card
-
-- Interactive actions for quick camera access
+5. **Add the card to your dashboard**:
+   - Edit your dashboard
+   - Click **Add Card**
+   - Search for Media Card
 
 ## 🚀 Quick Start
 
-### 📸 Family & Photos
+YAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
 
-- Random photo slideshow with smart priority for recent photosYAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
-
-- Gallery with keyboard navigation
-
-- Kiosk mode for digital photo frame displays```yaml
-
-- Location and date metadata for contexttype: custom:media-card
-
+```yaml
+type: custom:media-card
 title: "Security Camera"
-
-### 🚗 Dashcam & Monitoringmedia_type: image
-
-- Latest dashcam clip viewer with video controlsmedia_path: media-source://media_source/local/cameras/front_door.jpg
-
-- Sequential review of footage chronologically```
-
-- Auto-advance when videos finish playing## ⚙️ Configuration Options
-
-- Integration with motion detection automations
+media_type: image
+media_path: media-source://media_source/local/cameras/front_door.jpg
+```
+## ⚙️ Configuration Options
 
 ### 🔄 v5.0 Migration Note
 
-### 🖥️ Information Displays
+**Upgrading from v4?** Good news - all v4 configurations work without changes! The v5 refactor maintains complete backward compatibility while improving code organization and fixing several edge cases. Simply update your resource URL and refresh your browser.
 
-- Weather radar image updates**Upgrading from v4?** Good news - all v4 configurations work without changes! The v5 refactor maintains complete backward compatibility while improving code organization and fixing several edge cases. Simply update your resource URL and refresh your browser.
-
-- Traffic camera feeds
-
-- Package delivery photos### Basic Configuration
-
-- Smart home status displays
+### Basic Configuration
 
 | Option | Type | Default | Description |
-
-## 🔧 Key Configuration Options|--------|------|---------|-------------|
-
+|--------|------|---------|-------------|
 | `type` | string | **Required** | `custom:media-card` |
+| `title` | string | `none` | Display title above media |
+| `media_type` | string | `image` | `image`, `video`, or `all` |
+| `media_path` | string | **Required** | Path to your media file or folder |
+| `aspect_mode` | string | `default` | `default`, `smart-scale`, `viewport-fit`, or `viewport-fill` |
+| `auto_refresh_seconds` | number | `0` | Auto-refresh interval (0 = disabled) |
+| `show_refresh_button` | boolean | `false` | Show manual refresh button |
 
-| Option | Description | Example || `title` | string | `none` | Display title above media |
+### Media Index Configuration
 
-|--------|-------------|---------|| `media_type` | string | `image` | `image`, `video`, or `all` |
-
-| `folder_mode` | Display strategy: `random`, `latest`, `sequential` | `random` || `media_path` | string | **Required** | Path to your media file or folder |
-
-| `auto_refresh_seconds` | Seconds between refreshes (0 = disabled) | `60` || `aspect_mode` | string | `default` | `default`, `smart-scale`, `viewport-fit`, or `viewport-fill` |
-
-| `enable_navigation_zones` | Clickable Previous/Next areas | `true` || `auto_refresh_seconds` | number | `0` | Auto-refresh interval (0 = disabled) |
-
-| `show_metadata` | Display file info overlay | `true` || `show_refresh_button` | boolean | `false` | Show manual refresh button |
-
-| `metadata_position` | Corner placement | `bottom-left` |
-
-| `video_autoplay` | Auto-start videos | `true` |### Media Index Configuration
-
-| `aspect_mode` | Image scaling strategy | `smart-scale` |
-
-| `subfolder_queue.enabled` | Hierarchical folder scanning | `true` || Option | Type | Default | Description |
-
-| `kiosk_mode.enabled` | Fullscreen mode integration | `true` ||--------|------|---------|-------------|
-
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `media_index` | object | `none` | Enable Media Index integration for enhanced features |
-
-See **[Configuration Reference](docs/guides/configuration.md)** for complete options.| `media_index.entity_id` | string | **Required** | Media Index sensor entity (e.g., `sensor.media_index_photos_total_files`) |
-
+| `media_index.entity_id` | string | **Required** | Media Index sensor entity (e.g., `sensor.media_index_photos_total_files`) |
 | `media_index.show_favorite_button` | boolean | `true` | Show favorite/star button on images |
-
-## 🌟 Advanced Features| `media_index.show_edit_button` | boolean | `true` | Show edit workflow button |
-
+| `media_index.show_edit_button` | boolean | `true` | Show edit workflow button |
 | `media_index.show_delete_button` | boolean | `true` | Show safe delete button |
-
-### Hierarchical Folder Scanning| `media_index.show_location` | boolean | `true` | Display geocoded location names |
-
+| `media_index.show_location` | boolean | `true` | Display geocoded location names |
 | `media_index.show_date_taken` | boolean | `true` | Show EXIF creation date vs file date |
 
-Handle large collections (10,000+ files) across nested folders:
-
 ### Folder Mode Configuration
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `folder_mode` | string | `none` | `latest`, `random`, or `none` for single file |
+| `random_count` | number | `1` | Number of random files to cycle through |
+| `slideshow_behavior` | string | `static` | `static`, `cycle`, or `smart_slideshow` - Controls slideshow advancement behavior |
+| `slideshow_window` | number | `1000` | Number of files to include in slideshow (performance protection) |
 
-```yaml| Option | Type | Default | Description |
-
-subfolder_queue:|--------|------|---------|-------------|
-
-  enabled: true| `folder_mode` | string | `none` | `latest`, `random`, or `none` for single file |
-
-  estimated_total_photos: 25000| `random_count` | number | `1` | Number of random files to cycle through |
-
-  priority_folder_patterns:| `slideshow_behavior` | string | `static` | `static`, `cycle`, or `smart_slideshow` - Controls slideshow advancement behavior |
-
-    - path: "Camera Roll"| `slideshow_window` | number | `1000` | Number of files to include in slideshow (performance protection) |
-
-      weight_multiplier: 3.0
-
-    - path: "Favorites"### Hierarchical Scanning Configuration
-
-      weight_multiplier: 2.5| Option | Type | Default | Description |
-
-```|--------|------|---------|-------------|
-
+### Hierarchical Scanning Configuration
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning for large collections |
-
-**Benefits:**| `subfolder_queue.scan_depth` | number | `2` | How many folder levels to scan (1-5). Higher values = more subfolders discovered |
-
-- No upfront scanning delay| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations across folders) |
-
-- Proportional representation across all folders| `subfolder_queue.equal_probability_mode` | boolean | `false` | Give each photo equal selection chance regardless of folder size |
-
-- Priority weighting for specific folders| `subfolder_queue.use_hierarchical_scan` | boolean | `true` | Use modern hierarchical scan (recommended). Set to `false` for legacy streaming mode |
-
-- Statistical fairness in selection| `subfolder_queue.priority_folder_patterns` | array | `[]` | List of folder patterns to prioritize with higher selection weight |
-
+| `subfolder_queue.scan_depth` | number | `2` | How many folder levels to scan (1-5). Higher values = more subfolders discovered |
+| `subfolder_queue.estimated_total_photos` | number | `null` | User estimate for total photos (critical for consistent probability calculations across folders) |
+| `subfolder_queue.equal_probability_mode` | boolean | `false` | Give each photo equal selection chance regardless of folder size |
+| `subfolder_queue.use_hierarchical_scan` | boolean | `true` | Use modern hierarchical scan (recommended). Set to `false` for legacy streaming mode |
+| `subfolder_queue.priority_folder_patterns` | array | `[]` | List of folder patterns to prioritize with higher selection weight |
 | `subfolder_queue.priority_folder_patterns[].path` | string | - | Folder path pattern to match (e.g., "/Camera Roll/", "/Favorites/") |
+| `subfolder_queue.priority_folder_patterns[].weight_multiplier` | number | `3.0` | Selection weight multiplier for matched folders (e.g., 3.0 = 3x more likely) |
 
-### Media Index Integration| `subfolder_queue.priority_folder_patterns[].weight_multiplier` | number | `3.0` | Selection weight multiplier for matched folders (e.g., 3.0 = 3x more likely) |
-
-
-
-Enhanced metadata with the **[Media Index](https://github.com/markaggar/ha-media-index)** backend integration:
 
 ### Metadata Display Configuration
-
-```yaml| Option | Type | Default | Description |
-
-media_index:|--------|------|---------|-------------|
-
-  entity_id: sensor.media_index_photos_total_files| `show_metadata` | boolean | `false` | Enable metadata overlay display |
-
-  show_location: true| `metadata_position` | string | `bottom-left` | Metadata position: `bottom-left`, `bottom-right`, `top-left`, `top-right` |
-
-  show_date_taken: true| `show_folder` | boolean | `true` | Show source folder path in metadata |
-
-  show_favorite_button: true| `show_filename` | boolean | `true` | Show filename in metadata |
-
-  show_edit_button: true| `show_date` | boolean | `true` | Show extracted date from filename in metadata |
-
-  show_delete_button: true
-
-```### Navigation Controls
-
 | Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `show_metadata` | boolean | `false` | Enable metadata overlay display |
+| `metadata_position` | string | `bottom-left` | Metadata position: `bottom-left`, `bottom-right`, `top-left`, `top-right` |
+| `show_folder` | boolean | `true` | Show source folder path in metadata |
+| `show_filename` | boolean | `true` | Show filename in metadata |
+| `show_date` | boolean | `true` | Show extracted date from filename in metadata |
 
-**Capabilities:**|--------|------|---------|-------------|
-
-- Location data (city, country) from GPS coordinates| `enable_navigation_zones` | boolean | `false` | Enable left/right click areas for navigation |
-
-- EXIF date taken extraction| `enable_keyboard_navigation` | boolean | `false` | Enable arrow key navigation |
-
-- Favorite/edit/delete buttons| `show_navigation_indicators` | boolean | `false` | Show visual navigation hints |
-
-- Database-backed fast queries| `show_file_position` | boolean | `false` | Display current file position (1 of 5) |
-
-- Filter by date, location, tags
+### Navigation Controls
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enable_navigation_zones` | boolean | `false` | Enable left/right click areas for navigation |
+| `enable_keyboard_navigation` | boolean | `false` | Enable arrow key navigation |
+| `show_navigation_indicators` | boolean | `false` | Show visual navigation hints |
+| `show_file_position` | boolean | `false` | Display current file position (1 of 5) |
 
 ### Video Options
-
-**Note:** Media Index requires network shares or filesystem paths. It cannot work with `media-source://media_source/local/` paths.| Option | Type | Default | Description |
-
+| Option | Type | Default | Description |
 |--------|------|---------|-------------|
-
-### Kiosk Mode| `video_autoplay` | boolean | `false` | Auto-start video playbook |
-
+| `video_autoplay` | boolean | `false` | Auto-start video playbook |
 | `video_loop` | boolean | `false` | Loop video continuously |
-
-Professional fullscreen displays with exit controls:| `video_muted` | boolean | `false` | Start video muted |
-
+| `video_muted` | boolean | `false` | Start video muted |
 | `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
 
-```yaml
-
-kiosk_mode:### Debug Options
-
-  enabled: true| Option | Type | Default | Description |
-
-  kiosk_entity: input_boolean.kiosk_mode|--------|------|---------|-------------|
-
-  exit_action: double_tap| `debug_mode` | boolean | `false` | Enable general card debug logging to browser console |
-
-  show_exit_hint: true| `debug_queue_mode` | boolean | `false` | Enable SubfolderQueue debug UI overlay |
-
-```| `suppress_subfolder_logging` | boolean | `false` | Suppress SubfolderQueue console log messages (keeps other debug_mode logs) |
-
-
-
-Requires **[Kiosk Mode HACS integration](https://github.com/NemesisRE/kiosk-mode)**.### Kiosk Mode Configuration
-
+### Debug Options
 | Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `debug_mode` | boolean | `false` | Enable general card debug logging to browser console |
+| `debug_queue_mode` | boolean | `false` | Enable SubfolderQueue debug UI overlay |
+| `suppress_subfolder_logging` | boolean | `false` | Suppress SubfolderQueue console log messages (keeps other debug_mode logs) |
 
-**Perfect for:**|--------|------|---------|-------------|
-
-- Wall-mounted tablets| `kiosk_mode.enabled` | boolean | `false` | Enable kiosk mode integration |
-
-- Digital photo frames| `kiosk_mode.kiosk_entity` | string | **Required** | Input boolean entity controlling kiosk state |
-
-- Security monitor displays| `kiosk_mode.exit_action` | string | `double_tap` | Exit gesture: `tap`, `double_tap`, `hold`, `swipe_down` |
-
-- Public information dashboards| `kiosk_mode.show_exit_hint` | boolean | `true` | Show exit instruction overlay |
-
-
-
-## 🎨 Panel Mode Optimization### Interactive Actions
-
+### Kiosk Mode Configuration
 | Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `kiosk_mode.enabled` | boolean | `false` | Enable kiosk mode integration |
+| `kiosk_mode.kiosk_entity` | string | **Required** | Input boolean entity controlling kiosk state |
+| `kiosk_mode.exit_action` | string | `double_tap` | Exit gesture: `tap`, `double_tap`, `hold`, `swipe_down` |
+| `kiosk_mode.show_exit_hint` | boolean | `true` | Show exit instruction overlay |
 
-Designed for Home Assistant panel views:|--------|------|---------|-------------|
-
+### Interactive Actions
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
 | `tap_action` | object | `none` | Action on single tap |
-
-```yaml| `hold_action` | object | `none` | Action on tap and hold (0.5s+) |
-
-aspect_mode: smart-scale  # Prevents scrolling on tall images| `double_tap_action` | object | `none` | Action on double tap |
-
-```
+| `hold_action` | object | `none` | Action on tap and hold (0.5s+) |
+| `double_tap_action` | object | `none` | Action on double tap |
 
 ## � **Image Aspect Ratio Modes**
 
-**Modes:**
+The `aspect_mode` configuration helps optimize image display for different layouts, especially useful in panel layouts with mixed portrait and landscape images:
 
-- `default`: Standard card layoutThe `aspect_mode` configuration helps optimize image display for different layouts, especially useful in panel layouts with mixed portrait and landscape images:
-
-- `smart-scale`: Limits height to 90% viewport (best for panels)
-
-- `viewport-fit`: Scales to fit entire viewport### **Available Modes**
-
-- `viewport-fill`: Fills viewport (may crop edges)
+### **Available Modes**
 
 | Mode | Description | Best For |
-
-## 🛠️ Browser Compatibility|------|-------------|----------|
-
+|------|-------------|----------|
 | `default` | Images scale to 100% card width, height adjusts automatically | Standard card layouts |
-
-- ✅ Chrome / Edge (recommended)| `smart-scale` | Limits image height to 90% viewport, prevents scrolling | Panel layouts with mixed orientations |
-
-- ✅ Firefox| `viewport-fit` | Scales image to fit entirely within viewport | Fullscreen panel layouts |
-
-- ✅ Safari| `viewport-fill` | Scales image to fill entire viewport (may crop) | Background/wallpaper displays |
-
-- ✅ Mobile browsers (iOS Safari, Chrome, Firefox)
+| `smart-scale` | Limits image height to 90% viewport, prevents scrolling | Panel layouts with mixed orientations |
+| `viewport-fit` | Scales image to fit entirely within viewport | Fullscreen panel layouts |
+| `viewport-fill` | Scales image to fill entire viewport (may crop) | Background/wallpaper displays |
 
 ### **Panel Layout Examples**
 
-**Requirements:**
-
-- Modern browser (2021+)#### Smart Scale (Recommended for Panels)
-
-- Home Assistant 2021.12 or newer```yaml
-
+#### Smart Scale (Recommended for Panels)
+```yaml
 type: custom:media-card
-
-## 🐛 Troubleshootingtitle: "Security Camera Feed"
-
+title: "Security Camera Feed"
 media_path: media-source://media_source/local/cameras/
-
-**Card not appearing?**folder_mode: latest
-
-- Hard refresh browser (Ctrl+Shift+R)aspect_mode: smart-scale  # Prevents scrolling on tall images
-
-- Verify file path: `/config/www/cards/ha-media-card.js`auto_refresh_seconds: 30
-
-- Check Lovelace resource: `/local/cards/ha-media-card.js````
-
-- Restart Home Assistant
+folder_mode: latest
+aspect_mode: smart-scale  # Prevents scrolling on tall images
+auto_refresh_seconds: 30
+```
 
 #### Viewport Fit (Full Panel Coverage)
-
-**No media displaying?**```yaml
-
-- Use media browser to verify pathtype: custom:media-card
-
-- Check file permissionsmedia_path: media-source://media_source/local/wallpapers/
-
-- Enable `debug_mode: true` and check console (F12)folder_mode: random
-
-- Verify folder_mode is set for foldersaspect_mode: viewport-fit  # Fits entire image in viewport
-
-hide_title: true
-
-**Navigation not working?**auto_refresh_seconds: 300
-
-- Enable `enable_navigation_zones: true````
-
-- Click card to focus for keyboard navigation
-
-- Verify multiple files exist## �📝 Configuration Examples
-
-
-
-See **[Troubleshooting Guide](docs/guides/troubleshooting.md)** for comprehensive solutions.### ⚡ **Media Index Configuration (v4.0)**
-
-
-
-## 💡 Pro Tips#### Enhanced Random Slideshow with Media Index
-
-
-
-**For Large Collections:**```yaml
-
-- Set `estimated_total_photos` to your total file counttype: custom:media-card
-
-- Use `slideshow_window: 1500` for better samplingtitle: "Photo Slideshow with Locations"
-
-- Enable `suppress_subfolder_logging` to reduce console spammedia_type: image
-
+```yaml
+type: custom:media-card
+media_path: media-source://media_source/local/wallpapers/
 folder_mode: random
+aspect_mode: viewport-fit  # Fits entire image in viewport
+hide_title: true
+auto_refresh_seconds: 300
+```
 
-**For Performance:**auto_refresh_seconds: 10
+## �📝 Configuration Examples
 
-- Compress images to 1-2MB for faster loadingmedia_index:
+### ⚡ **Media Index Configuration (v4.0)**
 
-- Use `aspect_mode: smart-scale` for mixed orientations  entity_id: sensor.media_index_photos_total_files
+#### Enhanced Random Slideshow with Media Index
 
-- Increase `auto_refresh_seconds` to reduce updates  show_favorite_button: true
-
+```yaml
+type: custom:media-card
+title: "Photo Slideshow with Locations"
+media_type: image
+folder_mode: random
+auto_refresh_seconds: 10
+media_index:
+  entity_id: sensor.media_index_photos_total_files
+  show_favorite_button: true
   show_edit_button: true
-
-**For Security Cameras:**  show_delete_button: true
-
-- Use `folder_mode: latest` for real-time monitoring  show_location: true
-
-- Set `auto_refresh_seconds: 10` for frequent updates  show_date_taken: true
-
-- Enable `show_metadata` to see timestampsshow_metadata: true
-
+  show_delete_button: true
+  show_location: true
+  show_date_taken: true
+show_metadata: true
 metadata_position: bottom-right
+```
 
-**For Photo Galleries:**```
-
-- Use `folder_mode: random` for variety
-
-- Set `random_count: 20` for larger selection pool> **💡 Note**: Requires [Media Index integration](https://github.com/markaggar/ha-media-index) to be installed and configured first.
-
-- Enable `enable_keyboard_navigation` for easy browsing
+> **💡 Note**: Requires [Media Index integration](https://github.com/markaggar/ha-media-index) to be installed and configured first.
 
 ### � **Folder Mode Examples**
 
-## 🤝 Contributing
-
 #### Show Latest File from Security Camera Folder
 
-Contributions are welcome!
-
 ```yaml
-
-- **Bug Reports**: [Open an issue](https://github.com/markaggar/ha-media-card/issues)type: custom:media-card
-
-- **Feature Requests**: [Start a discussion](https://github.com/markaggar/ha-media-card/discussions)title: "Latest Security Alert"
-
-- **Pull Requests**: Fork, develop, and submit PRsmedia_type: image
-
+type: custom:media-card
+title: "Latest Security Alert"
+media_type: image
 media_path: media-source://media_source/local/security_alerts/
-
-## 📄 Licensefolder_mode: latest
-
+folder_mode: latest
 auto_refresh_seconds: 30
-
-MIT License - see [LICENSE](LICENSE) file for details.show_refresh_button: true
-
+show_refresh_button: true
 enable_navigation_zones: true
-
-## 🙏 Acknowledgmentsshow_file_position: true
-
+show_file_position: true
 ```
 
-- Home Assistant community for feedback and testing
+#### Random Dashcam Clips
 
-- Lit Element web component framework#### Random Dashcam Clips
-
-- [Media Index integration](https://github.com/markaggar/ha-media-index) for backend support
-
-- [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) for fullscreen capabilities```yaml
-
+```yaml
 type: custom:media-card
-
----title: "Random Dashcam Footage"
-
+title: "Random Dashcam Footage"
 media_type: video
-
-**Built with ❤️ using GitHub Copilot + Claude Sonnet**media_path: media-source://media_source/local/dashcam/
-
+media_path: media-source://media_source/local/dashcam/
 folder_mode: random
-
-⭐ **Enjoying the Media Card?** Give it a star on GitHub!random_count: 5
-
+random_count: 5
 auto_refresh_seconds: 60
-
-[Report a Bug](https://github.com/markaggar/ha-media-card/issues) · [Request a Feature](https://github.com/markaggar/ha-media-card/discussions) · [View Documentation](docs/guides/)video_autoplay: true
-
+video_autoplay: true
 video_muted: true
 enable_keyboard_navigation: true
 show_navigation_indicators: true
