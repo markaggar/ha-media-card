@@ -1398,7 +1398,7 @@ class MediaIndexProvider extends MediaProvider {
           this.queue.unshift(...newItems);
           this._log('Refilled queue with', newItems.length, 'items, now', this.queue.length, 'total');
         } else {
-          console.warn('[MediaIndexProvider] ⚠️ All items were duplicates/history and retry failed - queue not refilled');
+          this._log('All items were duplicates/history and retry failed - queue not refilled');
         }
       }
     }
@@ -1435,7 +1435,7 @@ class MediaIndexProvider extends MediaProvider {
       };
     }
     
-    console.warn('[MediaIndexProvider] Queue empty, no items to return');
+    this._log('Queue empty, no items to return');
     return null;
   }
 
@@ -1582,10 +1582,12 @@ class MediaIndexProvider extends MediaProvider {
           };
         }));
         
-        console.warn(`[MediaIndexProvider] 📊 QUERY RESULT: Received ${items.length} items from database`);
-        items.slice(0, 3).forEach((item, idx) => {
-          console.warn(`[MediaIndexProvider] 📊 Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
-        });
+        this._log(`QUERY RESULT: Received ${items.length} items from database`);
+        if (this.config?.debug_mode) {
+          items.slice(0, 3).forEach((item, idx) => {
+            this._log(`Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
+          });
+        }
         
         return items;
       } else {
@@ -1888,10 +1890,12 @@ class SequentialMediaIndexProvider extends MediaProvider {
           };
         }));
         
-        console.warn(`[SequentialMediaIndexProvider] 📊 QUERY RESULT: Received ${items.length} ordered items`);
-        items.slice(0, 3).forEach((item, idx) => {
-          console.warn(`[SequentialMediaIndexProvider] 📊 Item ${idx}: path="${item.path}", ${this.orderBy}=${item[this.orderBy]}`);
-        });
+        this._log(`QUERY RESULT: Received ${items.length} ordered items`);
+        if (this.config?.debug_mode) {
+          items.slice(0, 3).forEach((item, idx) => {
+            this._log(`Item ${idx}: path="${item.path}", ${this.orderBy}=${item[this.orderBy]}`);
+          });
+        }
         
         return items;
       } else {
@@ -3587,7 +3591,7 @@ class MediaCardV5a extends LitElement {
         // V5: Setup auto-advance after successfully loading media
         this._setupAutoRefresh();
       } else {
-        console.warn('[MediaCardV5a] Provider returned null item');
+        this._log('Provider returned null item');
       }
     } catch (error) {
       console.error('[MediaCardV5a] Error loading next media:', error);
@@ -5733,7 +5737,7 @@ class MediaCardV5a extends LitElement {
   }
 
   _cleanupKioskModeMonitoring() {
-    if (this._kioskStateSubscription) {
+    if (this._kioskStateSubscription && typeof this._kioskStateSubscription === 'function') {
       this._kioskStateSubscription();
       this._kioskStateSubscription = null;
     }
@@ -9868,19 +9872,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 }
 
-// Register the custom elements
-customElements.define('media-card', MediaCardV5a);
-customElements.define('media-card-editor', MediaCardV5aEditor);
+// Register the custom elements (guard against re-registration)
+if (!customElements.get('media-card')) {
+  customElements.define('media-card', MediaCardV5a);
+}
+if (!customElements.get('media-card-editor')) {
+  customElements.define('media-card-editor', MediaCardV5aEditor);
+}
 
 // Register with Home Assistant
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'media-card',
-  name: 'Media Card',
-  description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
-  preview: true,
-  documentationURL: 'https://github.com/markaggar/ha-media-card'
-});
+if (!window.customCards.some(card => card.type === 'media-card')) {
+  window.customCards.push({
+    type: 'media-card',
+    name: 'Media Card',
+    description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
+    preview: true,
+    documentationURL: 'https://github.com/markaggar/ha-media-card'
+  });
+}
 
 console.info(
   '%c  MEDIA-CARD  %c  v5.0.0 Loaded  ',
