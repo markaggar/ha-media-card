@@ -2979,73 +2979,7 @@ class MediaCardV5a extends LitElement {
     isLoading: { state: true }
   };
 
-  // Unified image click handler - zoom if enabled
-  _handleImageClick(e) {
-    // If user configured tap_action, don't intercept
-    if (this.config.tap_action) return;
-    
-    // Image zoom (if enabled)
-    if (this.config.enable_image_zoom === true) {
-      this._handleImageZoomClick(e);
-      return;
-    }
-  }
-
-  _handleImageTouchEnd(e) {
-    // If user configured tap_action, don't intercept
-    if (this.config.tap_action) return;
-    
-    // Image zoom (if enabled)
-    if (this.config.enable_image_zoom === true) {
-      this._handleImageZoomTouchEnd(e);
-      return;
-    }
-  }
-
   // V4: Image Zoom Helpers
-  _handleImageZoomClick(e) {
-    // Only for images and when enabled
-    if (this.currentMedia?.media_content_type !== 'image') return;
-    if (this.config.enable_image_zoom !== true) return;
-
-    // If user configured tap_action, don't intercept
-    if (this.config.tap_action) return;
-
-    // Determine click point as percent within image container
-    const container = e.currentTarget;
-    const img = container.querySelector('img');
-    if (!img) return;
-
-    // Toggle zoom state
-    if (this._isImageZoomed) {
-      this._resetZoom(img);
-      return;
-    }
-
-    const rect = img.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-
-    // Use configured zoom level with bounds (default 2.5 if not set)
-    const configuredLevel = this.config.zoom_level || 2.5;
-    const level = Math.max(1.5, Math.min(5.0, configuredLevel));
-    this._zoomToPoint(img, x, y, level);
-  }
-
-  _handleImageZoomTouchEnd(e) {
-    // Treat touch end as click for simplicity
-    if (e.changedTouches && e.changedTouches.length) {
-      const touch = e.changedTouches[0];
-      // Synthesize a click-like event object
-      const synthetic = {
-        currentTarget: e.currentTarget,
-        clientX: touch.clientX,
-        clientY: touch.clientY,
-      };
-      this._handleImageZoomClick(synthetic);
-    }
-  }
-
   _zoomToPoint(img, xPercent, yPercent, level) {
     this._isImageZoomed = true;
     this._zoomOriginX = xPercent;
@@ -3085,7 +3019,6 @@ class MediaCardV5a extends LitElement {
       auto_advance_duration: 5,
       show_metadata: true,
       enable_navigation_zones: true,
-      enable_image_zoom: true,
       title: 'Media Slideshow'
     };
   }
@@ -5442,11 +5375,32 @@ class MediaCardV5a extends LitElement {
       this._setPauseState(true);
     }
     
-    // Create exit button
+    // Create exit button with inline styles
     const exitButton = document.createElement('button');
-    exitButton.className = 'fullscreen-exit-btn';
-    exitButton.innerHTML = '<ha-icon icon="mdi:close"></ha-icon>';
-    exitButton.onclick = () => {
+    exitButton.style.cssText = `
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      border: none;
+      border-radius: 50%;
+      width: 48px;
+      height: 48px;
+      color: white;
+      font-size: 24px;
+      cursor: pointer;
+      z-index: 10000;
+      backdrop-filter: blur(4px);
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    `;
+    exitButton.innerHTML = '✕';
+    exitButton.onmouseover = () => exitButton.style.background = 'rgba(0, 0, 0, 0.85)';
+    exitButton.onmouseout = () => exitButton.style.background = 'rgba(0, 0, 0, 0.7)';
+    exitButton.onclick = (e) => {
+      e.stopPropagation();
       if (document.exitFullscreen) {
         document.exitFullscreen();
       } else if (document.webkitExitFullscreen) {
@@ -5456,23 +5410,61 @@ class MediaCardV5a extends LitElement {
       }
     };
     
-    // Request fullscreen on the media element
-    const requestFullscreen = mediaElement.requestFullscreen || 
-                             mediaElement.webkitRequestFullscreen || 
-                             mediaElement.msRequestFullscreen;
+    // Wrap the media element in a container for fullscreen
+    const fullscreenContainer = document.createElement('div');
+    fullscreenContainer.style.cssText = `
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: black;
+    `;
+    
+    // Store original location to restore later
+    const parent = mediaElement.parentNode;
+    const nextSibling = mediaElement.nextSibling;
+    
+    // Move media element into container temporarily
+    fullscreenContainer.appendChild(mediaElement);
+    fullscreenContainer.appendChild(exitButton);
+    document.body.appendChild(fullscreenContainer);
+    
+    // Request fullscreen on the container
+    const requestFullscreen = fullscreenContainer.requestFullscreen || 
+                             fullscreenContainer.webkitRequestFullscreen || 
+                             fullscreenContainer.msRequestFullscreen;
     
     if (requestFullscreen) {
-      requestFullscreen.call(mediaElement).then(() => {
-        // Add exit button after entering fullscreen
-        document.body.appendChild(exitButton);
+      requestFullscreen.call(fullscreenContainer).then(() => {
+        console.log('Fullscreen entered, exit button added');
+      }).catch(err => {
+        console.error('Fullscreen request failed:', err);
+        // Restore media element on failure
+        if (nextSibling) {
+          parent.insertBefore(mediaElement, nextSibling);
+        } else {
+          parent.appendChild(mediaElement);
+        }
+        if (fullscreenContainer.parentNode) {
+          document.body.removeChild(fullscreenContainer);
+        }
       });
       
-      // Exit handler to resume slideshow if it was running and remove exit button
+      // Exit handler to cleanup and resume slideshow
       const exitFullscreenHandler = () => {
         if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
-          // Remove exit button
-          if (exitButton.parentNode) {
-            exitButton.parentNode.removeChild(exitButton);
+          // Restore media element to original location
+          if (nextSibling) {
+            parent.insertBefore(mediaElement, nextSibling);
+          } else {
+            parent.appendChild(mediaElement);
+          }
+          
+          // Remove fullscreen container
+          if (fullscreenContainer.parentNode) {
+            document.body.removeChild(fullscreenContainer);
           }
           
           // Resume slideshow if needed
@@ -5618,14 +5610,6 @@ class MediaCardV5a extends LitElement {
   }
   
   _handleTap(e) {
-    // V4 CODE: Check for kiosk mode exit first (line 5326-5348)
-    if (this._shouldHandleKioskExit('tap')) {
-      e.preventDefault();
-      e.stopPropagation();
-      this._handleKioskExit();
-      return;
-    }
-    
     if (!this.config.tap_action) return;
     
     // Prevent default to avoid navigation zone clicks
@@ -5644,20 +5628,6 @@ class MediaCardV5a extends LitElement {
   }
   
   _handleDoubleTap(e) {
-    // V4 CODE: Check for kiosk mode exit first (line 5350-5376)
-    if (this._shouldHandleKioskExit('double_tap')) {
-      // Clear single tap timer if double tap occurs
-      if (this._tapTimeout) {
-        clearTimeout(this._tapTimeout);
-        this._tapTimeout = null;
-      }
-      
-      e.preventDefault();
-      e.stopPropagation();
-      this._handleKioskExit();
-      return;
-    }
-    
     if (!this.config.double_tap_action) return;
     
     // Prevent default and stop single tap
@@ -5673,18 +5643,6 @@ class MediaCardV5a extends LitElement {
   }
   
   _handlePointerDown(e) {
-    // V4 CODE: Check for kiosk mode exit (hold action) (line 5379-5403)
-    if (this._shouldHandleKioskExit('hold')) {
-      // Start hold timer (500ms like standard HA cards)
-      this._holdTimeout = setTimeout(() => {
-        this._handleKioskExit();
-        this._holdTriggered = true;
-      }, 500);
-      
-      this._holdTriggered = false;
-      return;
-    }
-    
     if (!this.config.hold_action) return;
     
     // Start hold timer (500ms like standard HA cards)
@@ -5819,6 +5777,12 @@ class MediaCardV5a extends LitElement {
     if (!action) return;
     
     switch (action.action) {
+      case 'zoom':
+        this._performZoomAction();
+        break;
+      case 'toggle-kiosk':
+        this._performToggleKiosk();
+        break;
       case 'more-info':
         this._showMoreInfo(action);
         break;
@@ -5900,8 +5864,11 @@ class MediaCardV5a extends LitElement {
       return;
     }
     
-    // Prepare service data
-    const serviceData = action.service_data || action.data || {};
+    // Prepare service data with template variable support
+    let serviceData = action.service_data || action.data || {};
+    
+    // Process templates: replace {{media_path}} with current media path
+    serviceData = this._processServiceDataTemplates(serviceData);
     
     // Add target if specified
     if (action.target) {
@@ -5913,6 +5880,35 @@ class MediaCardV5a extends LitElement {
     } catch (error) {
       console.error('Failed to call service:', error);
     }
+  }
+
+  _processServiceDataTemplates(data) {
+    // Deep clone to avoid mutating original config
+    const processed = JSON.parse(JSON.stringify(data));
+    
+    // Get current media path
+    const mediaPath = this.currentMedia?.media_content_id || 
+                      this.currentMedia?.title || 
+                      this._currentMediaPath || 
+                      this.mediaUrl || '';
+    
+    // Recursively process all string values
+    const processValue = (obj) => {
+      if (typeof obj === 'string') {
+        return obj.replace(/\{\{media_path\}\}/g, mediaPath);
+      } else if (Array.isArray(obj)) {
+        return obj.map(processValue);
+      } else if (obj && typeof obj === 'object') {
+        const result = {};
+        for (const [key, value] of Object.entries(obj)) {
+          result[key] = processValue(value);
+        }
+        return result;
+      }
+      return obj;
+    };
+    
+    return processValue(processed);
   }
   
   _performNavigation(action) {
@@ -5941,6 +5937,33 @@ class MediaCardV5a extends LitElement {
   
   _performAssist(action) {
     alert('Voice assistant is not supported in custom cards. Please use the Home Assistant mobile app or a voice assistant device.');
+  }
+
+  _performZoomAction() {
+    // Only zoom images
+    if (this.currentMedia?.media_content_type !== 'image') return;
+
+    const img = this.shadowRoot.querySelector('.media-container img');
+    if (!img) return;
+
+    // Toggle zoom state
+    if (this._isImageZoomed) {
+      this._resetZoom(img);
+      return;
+    }
+
+    // Zoom to center with configured level (default 2.5)
+    const level = Math.max(1.5, Math.min(5.0, this.config.zoom_level || 2.5));
+    this._zoomToPoint(img, 50, 50, level);
+  }
+
+  _performToggleKiosk() {
+    if (!this.config.kiosk_mode_entity || !this._hass) return;
+
+    // Toggle the kiosk entity
+    this._hass.callService('input_boolean', 'toggle', {
+      entity_id: this.config.kiosk_mode_entity
+    });
   }
 
   static styles = css`
@@ -6778,18 +6801,13 @@ class MediaCardV5a extends LitElement {
           </video>
           ${this._renderVideoInfo()}
         ` : html`
-          <div class="zoomable-container"
-               @click=${(e) => this._handleImageClick(e)}
-               @touchend=${(e) => this._handleImageTouchEnd(e)}
-          >
-            <img 
-              src="${this.mediaUrl}" 
-              alt="${this.currentMedia.title || 'Media'}"
-              @error=${this._onMediaError}
-              @load=${this._onMediaLoaded}
-              style="width: 100%; height: auto; display: block;"
-            />
-          </div>
+          <img 
+            src="${this.mediaUrl}" 
+            alt="${this.currentMedia.title || 'Media'}"
+            @error=${this._onMediaError}
+            @load=${this._onMediaLoaded}
+            style="width: 100%; height: auto; display: block;"
+          />
         `}
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
@@ -6816,13 +6834,13 @@ class MediaCardV5a extends LitElement {
     return html`
       <div class="navigation-zones">
         <div class="nav-zone nav-zone-left"
-             @click=${this._loadPrevious}
+             @click=${(e) => { e.stopPropagation(); this._loadPrevious(); }}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Previous">
         </div>
         <div class="nav-zone nav-zone-right"  
-             @click=${this._loadNext}
+             @click=${(e) => { e.stopPropagation(); this._loadNext(); }}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Next">
@@ -6857,9 +6875,18 @@ class MediaCardV5a extends LitElement {
       return html``;
     }
 
-    const exitAction = this.config.kiosk_mode_exit_action || 'tap';
-    const actionText = exitAction === 'hold' ? 'Hold' : 
-                      exitAction === 'double_tap' ? 'Double-tap' : 'Tap';
+    // Detect which gesture has toggle-kiosk action
+    let actionText = null;
+    if (this.config.tap_action?.action === 'toggle-kiosk') {
+      actionText = 'Tap';
+    } else if (this.config.hold_action?.action === 'toggle-kiosk') {
+      actionText = 'Hold';
+    } else if (this.config.double_tap_action?.action === 'toggle-kiosk') {
+      actionText = 'Double-tap';
+    }
+
+    // Only show hint if a toggle-kiosk action is configured
+    if (!actionText) return html``;
     
     return html`
       <div class="kiosk-exit-hint">
@@ -6936,6 +6963,20 @@ class MediaCardV5aEditor extends LitElement {
     // Migrate Media Index detection
     if (config.media_index?.entity_id) {
       result.use_media_index = true;
+    }
+
+    // Migrate kiosk_mode_exit_action to new interaction system
+    if (config.kiosk_mode_exit_action && !result.tap_action && !result.hold_action && !result.double_tap_action) {
+      const exitAction = config.kiosk_mode_exit_action;
+      if (exitAction === 'tap') {
+        result.tap_action = { action: 'toggle-kiosk' };
+      } else if (exitAction === 'hold') {
+        result.hold_action = { action: 'toggle-kiosk' };
+      } else if (exitAction === 'double_tap') {
+        result.double_tap_action = { action: 'toggle-kiosk' };
+      }
+      // Remove old config key
+      delete result.kiosk_mode_exit_action;
     }
 
     // Preserve other settings
@@ -7557,17 +7598,6 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
-  _imageZoomChanged(ev) {
-    this._config = { ...this._config, enable_image_zoom: ev.target.checked };
-    this._fireConfigChanged();
-  }
-
-  _zoomLevelChanged(ev) {
-    const level = parseFloat(ev.target.value) || 2.0;
-    this._config = { ...this._config, zoom_level: level };
-    this._fireConfigChanged();
-  }
-
   _navigationZonesChanged(ev) {
     this._config = { ...this._config, enable_navigation_zones: ev.target.checked };
     this._fireConfigChanged();
@@ -7869,12 +7899,12 @@ class MediaCardV5aEditor extends LitElement {
           </div>
         ` : ''}
         
-        ${action.action === 'perform-action' ? html`
+        ${action.action === 'call-service' || action.action === 'perform-action' ? html`
           <div style="margin-bottom: 8px;">
             <label style="display: block; font-size: 12px; margin-bottom: 4px;">Service:</label>
             <input
               type="text"
-              .value=${action.perform_action || ''}
+              .value=${action.perform_action || action.service || ''}
               @input=${(e) => this._updateActionField(actionType, 'perform_action', e.target.value)}
               placeholder="light.turn_on"
               style="width: 100%; font-size: 12px;"
@@ -7892,13 +7922,16 @@ class MediaCardV5aEditor extends LitElement {
           </div>
           <div style="margin-bottom: 8px;">
             <label style="display: block; font-size: 12px; margin-bottom: 4px;">Data (JSON):</label>
-            <input
-              type="text"
-              .value=${JSON.stringify(action.data || {})}
+            <textarea
+              rows="3"
+              .value=${JSON.stringify(action.data || {}, null, 2)}
               @input=${(e) => this._updateActionData(actionType, e.target.value)}
               placeholder='{"brightness": 255}'
-              style="width: 100%; font-size: 12px;"
-            />
+              style="width: 100%; font-size: 12px; font-family: monospace; resize: vertical;"
+            ></textarea>
+            <div style="font-size: 11px; color: var(--secondary-text-color); margin-top: 4px;">
+              Use <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{media_path}}</code> to insert current media file path
+            </div>
           </div>
         ` : ''}
         
@@ -7999,6 +8032,20 @@ class MediaCardV5aEditor extends LitElement {
     this._config = {
       ...this._config,
       kiosk_mode_auto_enable: ev.target.checked
+    };
+    this._fireConfigChanged();
+  }
+
+  _hasZoomAction() {
+    return this._config.tap_action?.action === 'zoom' ||
+           this._config.hold_action?.action === 'zoom' ||
+           this._config.double_tap_action?.action === 'zoom';
+  }
+
+  _zoomLevelChanged(ev) {
+    this._config = {
+      ...this._config,
+      zoom_level: parseFloat(ev.target.value)
     };
     this._fireConfigChanged();
   }
@@ -9475,35 +9522,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show manual refresh button on the card</div>
             </div>
           </div>
-          
-          <div class="config-row">
-            <label>Enable Image Zoom</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.enable_image_zoom || false}
-                @change=${this._imageZoomChanged}
-              />
-              <div class="help-text">Click/tap on images to zoom in at that point</div>
-            </div>
-          </div>
-          
-          ${this._config.enable_image_zoom ? html`
-            <div class="config-row">
-              <label>Zoom Level</label>
-              <div>
-                <input
-                  type="number"
-                  min="1.5"
-                  max="5.0"
-                  step="0.5"
-                  .value=${this._config.zoom_level || 2.0}
-                  @change=${this._zoomLevelChanged}
-                />
-                <div class="help-text">How much to zoom when clicked (1.5x to 5.0x)</div>
-              </div>
-            </div>
-          ` : ''}
         </div>
 
         ${mediaSourceType === 'folder' ? html`
@@ -9770,9 +9788,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <select @change=${this._tapActionChanged} .value=${this._config.tap_action?.action || 'none'}>
                 <option value="none">No Action</option>
+                <option value="zoom">🔍 Zoom Image</option>
+                <option value="toggle-kiosk">🖥️ Toggle Kiosk Mode</option>
                 <option value="more-info">More Info</option>
                 <option value="toggle">Toggle Entity</option>
-                <option value="perform-action">Call Service</option>
+                <option value="call-service">Call Service</option>
                 <option value="navigate">Navigate</option>
                 <option value="url">Open URL</option>
               </select>
@@ -9786,9 +9806,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <select @change=${this._holdActionChanged} .value=${this._config.hold_action?.action || 'none'}>
                 <option value="none">No Action</option>
+                <option value="zoom">🔍 Zoom Image</option>
+                <option value="toggle-kiosk">🖥️ Toggle Kiosk Mode</option>
                 <option value="more-info">More Info</option>
                 <option value="toggle">Toggle Entity</option>
-                <option value="perform-action">Call Service</option>
+                <option value="call-service">Call Service</option>
                 <option value="navigate">Navigate</option>
                 <option value="url">Open URL</option>
               </select>
@@ -9802,9 +9824,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <select @change=${this._doubleTapActionChanged} .value=${this._config.double_tap_action?.action || 'none'}>
                 <option value="none">No Action</option>
+                <option value="zoom">🔍 Zoom Image</option>
+                <option value="toggle-kiosk">🖥️ Toggle Kiosk Mode</option>
                 <option value="more-info">More Info</option>
                 <option value="toggle">Toggle Entity</option>
-                <option value="perform-action">Call Service</option>
+                <option value="call-service">Call Service</option>
                 <option value="navigate">Navigate</option>
                 <option value="url">Open URL</option>
               </select>
@@ -9812,6 +9836,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               ${this._renderActionConfig('double_tap_action')}
             </div>
           </div>
+
+          <!-- Zoom Level (only show if zoom action configured) -->
+          ${this._hasZoomAction() ? html`
+            <div class="config-row">
+              <label>Zoom Level</label>
+              <div>
+                <input
+                  type="range"
+                  min="1.5"
+                  max="5"
+                  step="0.1"
+                  .value=${this._config.zoom_level || 2.5}
+                  @input=${this._zoomLevelChanged}
+                  style="width: 100%;"
+                />
+                <div class="help-text">Zoom magnification: ${(this._config.zoom_level || 2.5).toFixed(1)}x</div>
+              </div>
+            </div>
+          ` : ''}
         </div>
 
         <div class="section">
@@ -9841,18 +9884,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
-            <label>Kiosk Exit Action</label>
-            <div>
-              <select @change=${this._kioskModeExitActionChanged} .value=${this._config.kiosk_mode_exit_action || 'tap'}>
-                <option value="tap">Single Tap</option>
-                <option value="hold">Hold (0.5s)</option>
-                <option value="double_tap">Double Tap</option>
-              </select>
-              <div class="help-text">How to trigger kiosk mode exit</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
             <label>Show Exit Hint</label>
             <div>
               <input
@@ -9860,7 +9891,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 .checked=${this._config.kiosk_mode_show_indicator !== false}
                 @change=${this._kioskModeShowIndicatorChanged}
               />
-              <div class="help-text">Show subtle exit hint in corner (when kiosk entity is configured)</div>
+              <div class="help-text">Show exit instruction at bottom (detects which action has toggle-kiosk configured)</div>
             </div>
           </div>
         </div>
