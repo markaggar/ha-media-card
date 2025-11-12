@@ -314,6 +314,53 @@ double_tap_action:
 - Hold: Trigger manual snapshot
 - Double-tap: Navigate to security dashboard
 
+### Actions with Confirmation Dialogs
+
+Add confirmation prompts with template variables:
+
+```yaml
+type: custom:media-card
+title: "Photo Library"
+media_source: media_index
+media_index_entity: sensor.media_index_photos
+slideshow_interval: 10
+tap_action:
+  action: perform-action
+  perform_action: notify.mobile_app_phone
+  data:
+    message: "Photo from {{location}}"
+    data:
+      image: "{{media_path}}"
+  confirmation_message: "Send {{filename}} taken on {{date}} to your phone?"
+hold_action:
+  action: perform-action
+  perform_action: script.delete_media_file
+  data:
+    file_path: "{{media_path}}"
+  confirmation_message: "Delete {{filename}} from {{folder}}? This cannot be undone."
+double_tap_action:
+  action: perform-action
+  perform_action: script.add_to_favorites
+  data:
+    file: "{{media_path}}"
+    date: "{{date_time}}"
+    location: "{{location}}"
+  confirmation_message: "Add {{filename}} ({{city}}, {{country}}) to favorites?"
+```
+
+**What it does:**
+- Tap: Send photo to mobile device (with confirmation showing filename & date)
+- Hold: Delete current photo (with confirmation showing filename & folder)
+- Double-tap: Add to favorites (with confirmation showing location details)
+- All actions show styled confirmation dialogs with media context
+
+**Available Templates:**
+- `{{filename}}`, `{{filename_ext}}` - File names
+- `{{folder}}`, `{{folder_path}}` - Folder info
+- `{{date}}`, `{{date_time}}` - Date information
+- `{{location}}`, `{{city}}`, `{{state}}`, `{{country}}` - GPS data
+- `{{media_path}}` - Complete file path
+
 ## Panel Mode Configurations
 
 ### Fullscreen Photo Panel

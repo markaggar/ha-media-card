@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Confirmation Dialogs**: Styled confirmation dialogs for tap/hold/double-tap actions
+  - Professional UI matching card theme (replaces browser confirm())
+  - Template variable support in confirmation messages
+  - 11 template variables: `{{filename}}`, `{{filename_ext}}`, `{{folder}}`, `{{folder_path}}`, `{{media_path}}`, `{{date}}`, `{{date_time}}`, `{{location}}`, `{{city}}`, `{{state}}`, `{{country}}`
+  - Visual editor support for `confirmation_message` field with template hints
+  - Use `confirmation_message` in any action config to show styled dialog before execution
+
+### Fixed
+- **Video Autoplay**: Suppressed benign `AbortError` console warnings during rapid media navigation
+  - Errors occur when play() is interrupted by navigation (harmless)
+  - Real autoplay failures still logged for debugging
+
 ## [5.0.0] - 2025-01-23
 
 ### 🏗️ Major Architecture Refactor

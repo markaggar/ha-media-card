@@ -3139,7 +3139,11 @@ class MediaCardV5a extends LitElement {
           // Auto-play if configured
           if (this.config.video_autoplay) {
             videoElement.play().catch(err => {
-              console.warn('Video autoplay failed (user interaction may be required):', err);
+              // AbortError happens when video is removed from DOM before play() completes (rapid navigation)
+              // This is normal during fast navigation and can be safely ignored
+              if (err.name !== 'AbortError') {
+                console.warn('Video autoplay failed (user interaction may be required):', err);
+              }
             });
           }
         }
@@ -5743,8 +5747,14 @@ class MediaCardV5a extends LitElement {
     }
   }
   
-  _performAction(action) {
+  async _performAction(action) {
     if (!action) return;
+    
+    // Handle confirmation if specified
+    if (action.confirmation_message) {
+      const confirmed = await this._showConfirmationDialog(action.confirmation_message);
+      if (!confirmed) return;
+    }
     
     switch (action.action) {
       case 'zoom':
@@ -5757,11 +5767,11 @@ class MediaCardV5a extends LitElement {
         this._showMoreInfo(action);
         break;
       case 'toggle':
-        this._performToggle(action);
+        await this._performToggle(action);
         break;
       case 'call-service':
       case 'perform-action':
-        this._performServiceCall(action);
+        await this._performServiceCall(action);
         break;
       case 'navigate':
         this._performNavigation(action);
@@ -5814,16 +5824,6 @@ class MediaCardV5a extends LitElement {
     if (!action.service && !action.perform_action) {
       console.warn('No service specified for call-service action');
       return;
-    }
-    
-    // Handle confirmation if specified
-    if (action.confirmation) {
-      const confirmText = typeof action.confirmation === 'string' 
-        ? action.confirmation 
-        : 'Are you sure?';
-      if (!confirm(confirmText)) {
-        return;
-      }
     }
     
     // Parse service
@@ -5934,6 +5934,118 @@ class MediaCardV5a extends LitElement {
     this._hass.callService('input_boolean', 'toggle', {
       entity_id: this.config.kiosk_mode_entity
     });
+  }
+
+  // V5: Confirmation dialog with template support
+  async _showConfirmationDialog(messageTemplate) {
+    return new Promise((resolve) => {
+      // Process template to replace variables
+      const message = this._processConfirmationTemplate(messageTemplate);
+      
+      // Create dialog state
+      this._confirmationDialogResolve = resolve;
+      this._confirmationDialogMessage = message;
+      
+      // Trigger re-render to show dialog
+      this.requestUpdate();
+    });
+  }
+
+  _processConfirmationTemplate(template) {
+    if (!template || typeof template !== 'string') return 'Are you sure?';
+    
+    // Get metadata from current media
+    const metadata = this.currentMedia?.metadata || this._currentMetadata || {};
+    const mediaPath = this.currentMedia?.media_content_id || this._currentMediaPath || '';
+    
+    // Extract components from path
+    const pathParts = mediaPath.split('/');
+    const filename = pathParts[pathParts.length - 1] || '';
+    const filenameWithoutExt = filename.replace(/\.[^/.]+$/, '');
+    
+    // Build folder path (everything except filename)
+    const folderPath = pathParts.slice(0, -1).join('/');
+    const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
+    
+    // Get date with fallback priority: date_taken (EXIF) -> date (filesystem)
+    let dateStr = '';
+    if (metadata.date_taken) {
+      const date = typeof metadata.date_taken === 'number'
+        ? new Date(metadata.date_taken * 1000)
+        : new Date(metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3'));
+      
+      if (!isNaN(date.getTime())) {
+        dateStr = date.toLocaleDateString();
+      }
+    } else if (metadata.date) {
+      dateStr = metadata.date.toLocaleDateString ? metadata.date.toLocaleDateString() : String(metadata.date);
+    }
+    
+    // Get date_time (date + time)
+    let dateTimeStr = '';
+    if (metadata.date_taken) {
+      const date = typeof metadata.date_taken === 'number'
+        ? new Date(metadata.date_taken * 1000)
+        : new Date(metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3'));
+      
+      if (!isNaN(date.getTime())) {
+        dateTimeStr = date.toLocaleString();
+      }
+    }
+    
+    // Get location string
+    let locationStr = '';
+    if (metadata.location) {
+      // Handle location as object {city, state, country}
+      if (typeof metadata.location === 'object') {
+        const parts = [];
+        if (metadata.location.city) parts.push(metadata.location.city);
+        if (metadata.location.state) parts.push(metadata.location.state);
+        if (metadata.location.country) parts.push(metadata.location.country);
+        locationStr = parts.join(', ');
+      } else {
+        locationStr = String(metadata.location);
+      }
+    }
+    
+    // Get city, state, country separately
+    const city = metadata.location?.city || '';
+    const state = metadata.location?.state || '';
+    const country = metadata.location?.country || '';
+    
+    // Replace all templates
+    let processed = template;
+    processed = processed.replace(/\{\{filename\}\}/g, filenameWithoutExt);
+    processed = processed.replace(/\{\{filename_ext\}\}/g, filename);
+    processed = processed.replace(/\{\{folder\}\}/g, folderName);
+    processed = processed.replace(/\{\{folder_path\}\}/g, folderPath);
+    processed = processed.replace(/\{\{media_path\}\}/g, mediaPath);
+    processed = processed.replace(/\{\{date\}\}/g, dateStr);
+    processed = processed.replace(/\{\{date_time\}\}/g, dateTimeStr);
+    processed = processed.replace(/\{\{location\}\}/g, locationStr);
+    processed = processed.replace(/\{\{city\}\}/g, city);
+    processed = processed.replace(/\{\{state\}\}/g, state);
+    processed = processed.replace(/\{\{country\}\}/g, country);
+    
+    return processed;
+  }
+
+  _handleConfirmationConfirm() {
+    if (this._confirmationDialogResolve) {
+      this._confirmationDialogResolve(true);
+      this._confirmationDialogResolve = null;
+      this._confirmationDialogMessage = null;
+      this.requestUpdate();
+    }
+  }
+
+  _handleConfirmationCancel() {
+    if (this._confirmationDialogResolve) {
+      this._confirmationDialogResolve(false);
+      this._confirmationDialogResolve = null;
+      this._confirmationDialogMessage = null;
+      this.requestUpdate();
+    }
   }
 
   static styles = css`
@@ -6656,6 +6768,73 @@ class MediaCardV5a extends LitElement {
       color: var(--primary-text-color);
       border-bottom: 1px solid var(--divider-color);
     }
+    
+    /* Confirmation dialog styles */
+    .confirmation-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    }
+    
+    .confirmation-dialog {
+      background: var(--card-background-color, #fff);
+      border-radius: 8px;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+      padding: 24px;
+      max-width: 400px;
+      min-width: 300px;
+      margin: 16px;
+    }
+    
+    .confirmation-message {
+      color: var(--primary-text-color);
+      font-size: 16px;
+      line-height: 1.5;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    
+    .confirmation-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+    }
+    
+    .confirmation-buttons button {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    .confirm-button {
+      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color, #fff);
+    }
+    
+    .confirm-button:hover {
+      background: var(--dark-primary-color, #0288d1);
+    }
+    
+    .cancel-button {
+      background: var(--divider-color, #e0e0e0);
+      color: var(--primary-text-color);
+    }
+    
+    .cancel-button:hover {
+      background: var(--secondary-text-color, #757575);
+      color: var(--text-primary-color, #fff);
+    }
   `;
 
   render() {
@@ -6690,6 +6869,17 @@ class MediaCardV5a extends LitElement {
           ${this._renderKioskIndicator()}
           ${this._renderControls()}
         </div>
+        ${this._confirmationDialogMessage ? html`
+          <div class="confirmation-backdrop" @click=${this._handleConfirmationCancel}>
+            <div class="confirmation-dialog" @click=${(e) => e.stopPropagation()}>
+              <div class="confirmation-message">${this._confirmationDialogMessage}</div>
+              <div class="confirmation-buttons">
+                <button class="confirm-button" @click=${this._handleConfirmationConfirm}>Confirm</button>
+                <button class="cancel-button" @click=${this._handleConfirmationCancel}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        ` : ''}
       </ha-card>
     `;
   }
@@ -7934,15 +8124,20 @@ class MediaCardV5aEditor extends LitElement {
         ` : ''}
         
         <div style="margin-top: 8px;">
-          <label style="display: flex; align-items: center; font-size: 12px;">
-            <input
-              type="checkbox"
-              .checked=${action.confirmation || false}
-              @change=${(e) => this._updateActionField(actionType, 'confirmation', e.target.checked)}
-              style="margin-right: 4px;"
-            />
-            Require confirmation
-          </label>
+          <label style="display: block; font-size: 12px; margin-bottom: 4px;">Confirmation Message (optional):</label>
+          <textarea
+            rows="2"
+            .value=${action.confirmation_message || ''}
+            @input=${(e) => this._updateActionField(actionType, 'confirmation_message', e.target.value)}
+            placeholder="Are you sure?"
+            style="width: 100%; font-size: 12px; resize: vertical;"
+          ></textarea>
+          <div style="font-size: 11px; color: var(--secondary-text-color); margin-top: 4px;">
+            Supported templates: <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{filename}}</code>, 
+            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{date}}</code>, 
+            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{location}}</code>, 
+            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{folder}}</code>
+          </div>
         </div>
       </div>
     `;

@@ -243,10 +243,17 @@ Make your media cards respond to user interaction:
 - Toggle entities
 - Perform automations
 
+**Confirmation Dialogs**
+- Add styled confirmation dialogs to any action
+- Template support for context-aware messages
+- Show media details (filename, date, location) in prompts
+- Professional UI matching card theme
+
 **Example Uses**
 - Tap camera snapshot to open full camera view
-- Hold to trigger camera snapshot service
+- Hold to trigger camera snapshot service with confirmation
 - Double-tap to navigate to security dashboard
+- Confirm before deleting or sharing media with templates
 
 ## Media Index Integration
 

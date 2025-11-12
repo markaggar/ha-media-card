@@ -210,6 +210,7 @@ When `auto_refresh_seconds > 0` and a video finishes playing:
 tap_action:
   action: more-info           # Action type
   entity: camera.front_door   # Target entity (if applicable)
+  confirmation_message: "Show camera details?"  # Optional confirmation
 
 hold_action:
   action: perform-action      # Call a service
@@ -218,6 +219,7 @@ hold_action:
     entity_id: camera.front_door
   data:
     filename: "/config/www/snapshots/manual.jpg"
+  confirmation_message: "Save snapshot of {{filename}}?"  # Supports templates
 
 double_tap_action:
   action: navigate           # Navigate to dashboard
@@ -232,6 +234,30 @@ double_tap_action:
 - `perform-action`: Call Home Assistant service
 - `toggle`: Toggle entity state
 - `url`: Open URL
+
+### Confirmation Dialogs
+
+Add `confirmation_message` to any action to show a styled confirmation dialog before executing:
+
+```yaml
+tap_action:
+  action: perform-action
+  perform_action: notify.mobile_app
+  data:
+    message: "Photo from {{location}}"
+  confirmation_message: "Send {{filename}} from {{folder}} ({{date}}) to phone?"
+```
+
+**Template Variables:**
+- `{{filename}}` - Filename without extension
+- `{{filename_ext}}` - Filename with extension
+- `{{folder}}` - Folder name
+- `{{folder_path}}` - Full folder path
+- `{{media_path}}` - Complete media path
+- `{{date}}` - Formatted date (from EXIF or file)
+- `{{date_time}}` - Date and time
+- `{{location}}` - "City, State, Country" (from GPS)
+- `{{city}}`, `{{state}}`, `{{country}}` - Individual location components
 
 ## Kiosk Mode Configuration
 
