@@ -15,7 +15,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 - 🎬 **Mixed Media**: Display images and videos together seamlessly###
   
-- **Media Modes** - Single Media and Folder modes
+- 🎯 **Media Modes** - Single Media and Folder modes
 
 - 📂 **Multiple Folder Modes**: Sequential or Random selection of media from folders with optional file system recursion
 
@@ -33,13 +33,13 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 **Metadata Visibility & Management with Media Index**
 
-- **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
+- ❤️ **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
 
-- **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
+- ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
 
-- **Metadata Panel Button**: Popup shows full image metadata, including date/time, location and camera information
+- 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location and camera information
 
-- **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
+- 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 
 
 **Intelligent Navigation**
@@ -51,11 +51,11 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
 
 **Advanced Capabilities**
-- Point-and-click file and folder selection with real image thumbnails. No more typing paths!
+- 🖱️ **Point-and-click file and folder selection** with real image thumbnails. No more typing paths!
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
 - 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently with near immediate display of images
 - 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
-- Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
+- ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
 
 ## Installation 
 
