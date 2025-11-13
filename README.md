@@ -9,46 +9,26 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 ## ✨ Key Features  
 
-**Smart Media Display** 
-
-- 🎬 **Mixed Media**: Display images and videos together seamlessly###
-  
+### **Smart Media Display** 
+- 🎬 **Mixed Media**: Display images and videos together seamlessly  
 - 🎯 **Media Modes** - Single Media and Folder modes
-
 - 📂 **Multiple Folder Modes**: Sequential or Random selection of media from folders with optional file system recursion
-
 - 🔄 **Auto-Advance/Refresh**: Configurable intervals for dynamic content
-
 - 🎥 **Video Controls**: Autoplay, loop, mute and limit video length
-
 - 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)
-
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
-
 - **📱 Kiosk Mode**: Automatically activate/deactivate kiosk mode (full screen) (perfect for wall-mounted tablets)
-
 - 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media cards)
-
-**Metadata Visibility & Management with Media Index**
-
+### **Metadata Visibility & Management with Media Index**
 - ❤️ **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
-
 - ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
-
 - 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location and camera information
-
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
-
-
-**Intelligent Navigation**
-
+### **Intelligent Navigation**
 - ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
-
-- ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more 
-
+- ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
-
-**Advanced Capabilities**
+### **Advanced Capabilities**
 - 🖱️ **Point-and-click file and folder selection** with real image thumbnails. No more typing paths!
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
 - 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently with near immediate display of images
