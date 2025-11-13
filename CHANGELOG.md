@@ -19,10 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Media Provider System**
 - **`SingleMediaProvider`**: Handles individual file display with auto-refresh
-- **`FolderProvider`**: Manages random, latest, and sequential folder modes
+- **`FolderProvider`**: Manages random, latest, and sequential folder modes with optional recursion through file system scanning
 - **`MediaIndexProvider`**: Database-backed selection with enhanced metadata
 - **`SequentialMediaIndexProvider`**: Sequential playback with Media Index integration
-- **`SubfolderQueue`**: Hierarchical scanning system for nested folder structures
 
 **Unified Provider Interface**
 - Consistent `getNextItem()` / `getPreviousItem()` API across all providers
