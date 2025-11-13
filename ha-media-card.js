@@ -897,17 +897,13 @@ class SingleMediaProvider extends MediaProvider {
 
   async getNext() {
     // Single media mode - always return same item
-    // Optional: refresh URL for camera snapshots
-    if (this.refreshSeconds > 0) {
-      await this._refreshMediaUrl();
-    }
+    // Return the base item - timestamp will be added during URL resolution if needed
     return this.currentItem;
   }
 
   async _refreshMediaUrl() {
-    // Force URL refresh by adding timestamp (useful for camera snapshots)
-    const timestamp = Date.now();
-    this.currentItem.media_content_id = this.mediaPath + (this.mediaPath.includes('?') ? '&' : '?') + `t=${timestamp}`;
+    // Deprecated - timestamp handling moved to URL resolution
+    // This method kept for compatibility but does nothing
   }
 
   serialize() {
@@ -3807,7 +3803,19 @@ class MediaCardV5a extends LitElement {
         });
         this._log('HA resolved to:', resolved.url);
         
-        this.mediaUrl = resolved.url;
+        // Add timestamp for auto-refresh (camera snapshots, etc.)
+        // BUT: Don't add timestamp if URL has authSig - it would break the signature
+        let finalUrl = resolved.url;
+        const refreshSeconds = this.config.single_media?.refresh_seconds || this.config.auto_refresh_seconds;
+        if (refreshSeconds > 0 && !resolved.url.includes('authSig=')) {
+          const timestamp = Date.now();
+          finalUrl = resolved.url + (resolved.url.includes('?') ? '&' : '?') + `t=${timestamp}`;
+          this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
+        } else if (resolved.url.includes('authSig=')) {
+          this._log('Skipping timestamp - URL has auth signature');
+        }
+        
+        this.mediaUrl = finalUrl;
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCardV5a] Failed to resolve media URL:', error);
@@ -9437,8 +9445,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
           <!-- Subfolder Queue Options (only when recursive=true and no media_index) -->
           ${folderConfig.recursive !== false && !hasMediaIndex ? html`
-            <div style="margin-left: 20px; padding: 12px; background: #f9f9f9; border-left: 3px solid #2196F3; border-radius: 4px;">
-              <div style="font-weight: 500; margin-bottom: 8px;">📂 Subfolder Scanning Options</div>
+            <div style="margin-left: 20px; padding: 12px; background: var(--secondary-background-color); border-left: 3px solid var(--primary-color); border-radius: 4px;">
+              <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">📂 Subfolder Scanning Options</div>
               
               <div class="config-row">
                 <label>Scan Depth</label>
