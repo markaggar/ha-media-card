@@ -4,293 +4,95 @@
 
 
 
-# HA Media Card# HA Media Card 🎬
+# HA Media Card 🎬
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
+<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
 
+## ✨ Key Features  
 
-A powerful custom Lovelace card for displaying images and videos in your Home Assistant dashboard. Perfect for security camera feeds, family photo slideshows, dashcam footage, or any media from your Home Assistant media folders.A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying security camera snapshots, family photos, or any media files from your Home Assistant media folders with enterprise-grade performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
+**Smart Media Display** 
 
+- 🎬 **Mixed Media**: Display images and videos together seamlessly###
+  
+- **Media Modes** - Single Media and Folder modes
 
+- 📂 **Multiple Folder Modes**: Sequential or Random selection of media from folders with optional file system recursion
 
-<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" /><img width="691" height="925" alt="image" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
+- 🔄 **Auto-Advance/Refresh**: Configurable intervals for dynamic content
 
+- 🎥 **Video Controls**: Autoplay, loop, mute and limit video length
 
-
-## ✨ Key Features## 🚀 What's New in v5.0 - Major Architecture Overhaul
-
-
-
-**Smart Media Display**v5.0 represents a **complete architectural refactor** with improved code organization, enhanced features, and 100% backward compatibility.
-
-- 📂 **Folder Modes**: Random, Latest, or Sequential display from folders
-
-- 🎬 **Mixed Media**: Display images and videos together seamlessly### 🏗️ **Core Improvements**
-
-- 🔄 **Auto-Refresh**: Configurable intervals for dynamic content
-
-- 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)- **🔄 Provider Architecture**: Modular design with clean separation of media sources (Single Media, Folder, Media Index)
+- 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)
 
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
 
-**Rich Metadata & Information**- **📱 Kiosk Mode Auto-Enable**: Automatically activate/deactivate kiosk mode based on entity state (perfect for wall-mounted tablets)
+- **📱 Kiosk Mode**: Automatically activate/deactivate kiosk mode (full screen) (perfect for wall-mounted tablets)
 
-- 📍 **Location Data**: Show where photos were taken (with Media Index)- **🖼️ Enhanced Thumbnails**: Delete and edit confirmation dialogs now show proper image previews
+- 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media cards)
 
-- 📅 **Date Display**: EXIF date extraction and timestamp display- **🎭 Fullscreen Button**: Dedicated action button for fullscreen viewing of both images and videos
+**Metadata Visibility & Management with Media Index**
 
-- 📁 **Folder Context**: See source folder and filename- **⚙️ Improved Configuration**: Cleaner, more intuitive config structure with GUI editor enhancements
+- **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
 
-- 🎯 **Position Tracking**: Know where you are in your collection ("3 of 15")- **🐛 Bug Fixes**: Resolved numerous edge cases including pause/resume timing, reconnection handling, and state management
+- **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
+
+- **Metadata Panel Button**: Popup shows full image metadata, including date/time, location and camera information
+
+- **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 
 
+**Intelligent Navigation**
 
-**Intelligent Navigation**### 🔧 **Technical Enhancements**
+- ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
 
-- 🖱️ **Precision Controls**: Small clickable zones for Previous/Next (avoids conflicts)
+- ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more 
 
-- ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more- **Code Organization**: Refactored from monolithic to modular provider pattern (~10,000 lines reorganized)
-
-- 👆 **Interactive Actions**: Tap, hold, and double-tap customization- **Better Error Handling**: Comprehensive error states with user-friendly messages and retry logic
-
-- ⏸️ **Pause/Resume**: Control slideshow with dedicated button- **Performance Optimizations**: Smarter queue management and reduced redundant operations
-
-- **Enhanced Logging**: Detailed diagnostics for troubleshooting (enable with `enable_debug_logging: true`)
+- 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
 
 **Advanced Capabilities**
-
-- 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently### 📦 **Backward Compatibility**
-
-- 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
-
-- 🎥 **Video Auto-Advance**: Slideshow continues when videos finish playingAll v4 configurations continue to work without modification. The v5 refactor maintains the same external behavior while improving internal code quality.
-
+- Point-and-click file and folder selection with real image thumbnails. No more typing paths!
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
+- 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently with near immediate display of images
+- 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
+- Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
 
-- 🖥️ **Kiosk Mode**: Fullscreen display with configurable exit gestures## 🚀 What's New in v4.0 - Media Index Integration
+## Installation 
 
-- 🔍 **Image Zoom**: Click to zoom into photos, click again to reset
+### Install via HACS
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
 
-### ⚡ **Lightning-Fast Performance** 
-
-**Professional Features***(Requires Media Index)*
-
-- 📊 **Statistical Fairness**: Equal representation across all folders regardless of discovery orderNo more waiting for folder scans! The [Media Index integration](https://github.com/markaggar/ha-media-index) pre-indexes your entire media collection for instant slideshow startup.
-
-- 🎭 **Fullscreen Mode**: Dedicated button for immersive viewing
-
-- 🐛 **Debug Tools**: Visual queue inspector and detailed console logging### 📍 **Rich Metadata Display**
-
-- 💾 **Reconnection System**: Automatic recovery from network issues*(Requires Media Index)*
-
-- 🎨 **Theme Integration**: Seamlessly matches your Home Assistant theme- **GPS Locations**: Automatic geocoding shows where photos were taken ("Paris, France" vs coordinates)
-
-- **Real Photo Dates**: EXIF creation dates from camera metadata, not file timestamps
-
-## 🚀 Quick Start- **Star Ratings**: Display favorite ratings extracted from photo metadata
-
-
-
-### Installation### ⭐ **Interactive Media Controls** 
-
-*(Requires Media Index)*
-
-**Via HACS (Recommended)**- **Favorite Button**: Star/unstar photos with visual feedback
-
-- **Edit Workflow**: Mark photos for editing (moves to _Edit folder), then restore the files to their original locations when done editing with the Media Index restore service.
-
-1. Open HACS → Frontend → Custom repositories- **Safe Delete**: Move unwanted files to junk folder with confirmation
-
-2. Add: `https://github.com/markaggar/ha-media-card` (Lovelace category)
-
-3. Search for "Media Card" and install### 🎲 **True Database Randomization**
-
-4. Restart Home Assistant*(Requires Media Index)*
-
-5. Hard refresh browser (Ctrl+Shift+R)SQL-powered random selection eliminates filesystem bias for genuinely random slideshows across your entire collection.
-
-
-
-**Manual Installation**### 📂 **About Media Index Integration**
-
-The [Media Index](https://github.com/markaggar/ha-media-index) is a separate Home Assistant integration that:
-
-1. Download `ha-media-card.js` from [latest release](https://github.com/markaggar/ha-media-card/releases/latest)- Scans and indexes your media files with metadata extraction
-
-2. Copy to `/config/www/cards/ha-media-card.js`- Provides real-time file monitoring and geocoding services  
-
-3. Add resource in Settings → Dashboards → Resources:- Supports multiple media libraries with independent configuration
-
+**Manual Installation**
+1. Download `ha-media-card.js` from [latest release](https://github.com/markaggar/ha-media-card/releases/latest)
+2. Copy to `/config/www/cards/ha-media-card.js`  
+3. Add resource in Settings → Dashboards → Resources:
    - URL: `/local/cards/ha-media-card.js`
-
-   - Type: JavaScript Module> **💡 Backwards Compatible**: All previous features continue to work without Media Index! The integration adds powerful enhancements but isn't required.
-
+   - Type: JavaScript Module>  
 4. Restart Home Assistant and hard refresh browser
 
-## 🔄 **Core Features** 
+## 📚 Documentation 
 
-### Basic Configuration
+**Getting Started**
 
-### 📂 **Hierarchical Folder Scanning**
-
-**Simple Photo Slideshow**Automatically discovers and displays photos/videos from your entire folder structure. Shows content immediately while intelligently scanning thousands of files across hundreds of folders in the background. Optional priority patterns let you feature specific folders like "Camera Roll" or "Favorites".
-
-
-
-```yaml### 🖼️ **Rich Metadata Display**
-
-type: custom:media-cardSee what you're viewing with automatic folder path, filename, and date information. Fully customizable positioning and toggle individual elements on/off.
-
-title: "Family Photos"
-
-media_type: image### ⏸️ **Smart Pause & Background Management**
-
-media_path: media-source://media_source/local/photos/Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
-
-folder_mode: random
-
-auto_refresh_seconds: 60### 🎬 **Video Completion Detection**
-
-```Videos automatically advance to the next item when finished playing—no more waiting for the refresh timer.
-
-
-
-**Latest Security Camera Snapshot**### 🎯 **Flexible Slideshow Modes**
-
-- **Show Latest**: Always display your most recent photo/video
-
-```yaml- **Show Random**: Randomized slideshow from a single folder or entire hierarchy
-
-type: custom:media-card- **Static**: Display a single file
-
-title: "Front Door Camera"
-
-media_type: image### 🎮 **Interactive Navigation**
-
-media_path: media-source://media_source/local/security/Click left/right sides to browse, center-top to pause, or use keyboard arrows. Full manual control alongside automatic slideshow.
-
-folder_mode: latest
-
-auto_refresh_seconds: 30### 📁 **Visual Media Browser**
-
-enable_navigation_zones: truePoint-and-click file and folder selection with real image thumbnails. No more typing paths!
-
-show_metadata: true
-
-metadata_position: top-right### 🔍 **Image Zoom**
-
-show_date: trueClick/tap any image to zoom in on that spot. Click again to reset.
-
-```
-
-### 🎬 **Complete Video Support**
-
-**Video Player with Navigation**MP4, WebM, OGG with full HTML5 controls. Configurable autoplay, loop, and mute options.
-
-
-
-```yaml### 👆 **Custom Actions**
-
-type: custom:media-cardConfigure tap, hold, and double-tap actions for navigation, toggles, or any Home Assistant service.
-
-title: "Dashcam Footage"
-
-media_type: video### 🖥️ **Kiosk Mode Integration**
-
-media_path: media-source://media_source/local/dashcam/Seamless integration with HACS Kiosk Mode for fullscreen displays. Smart exit hints appear only when kiosk mode is active, with configurable exit gestures (tap, double-tap, hold, swipe).
-
-folder_mode: latest
-
-video_autoplay: true## 📥 Installation
-
-video_muted: true
-
-enable_navigation_zones: true### Install via HACS
-
-enable_keyboard_navigation: true
-
-```[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=markaggar&repository=ha-media-card&category=frontend)
-
-
-
-## 📚 Documentation### Manual Installation
-
-
-
-**Getting Started**1. **Download the card file**:
-
-- **[Installation Guide](docs/guides/installation.md)** - Complete setup instructions for HACS and manual installation   Download the zip file or copy the contents of the ha-media-card.js from the repo
+- **[Installation Guide](docs/guides/installation.md)** - Complete setup instructions for HACS and manual installation   
 
 - **[Configuration Reference](docs/guides/configuration.md)** - All available options and parameters
 
-- **[Examples](docs/guides/examples.md)** - Real-world configurations for common use cases2. **Copy to your Home Assistant**:
-
-   - Place (or create) `ha-media-card.js` in `/config/www/` or `/config/www/cards/` (and copy the repo ha-media-card.js contents to the file you just created)
-
+- **[Examples](docs/guides/examples.md)** - Real-world configurations for common use cases
+   
 **Features & Advanced Usage**
 
-- **[Features Guide](docs/guides/features.md)** - Detailed explanation of all capabilities3. **Add to Dashboard resources**:
+- **[Features Guide](docs/guides/features.md)** - Detailed explanation of all capabilities
 
-- **[Troubleshooting](docs/guides/troubleshooting.md)** - Solutions to common issues   - Go to **Settings** → **Dashboards** → **Resources**
+- **[Troubleshooting](docs/guides/troubleshooting.md)** - Solutions to common issues
+   
+**Development**   
 
-   - Click **Add Resource**
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes
 
-**Development**   - **URL**: `/local/ha-media-card.js?v1xxx` (or `/local/cards/ha-media-card.js?vxxx`) (if you download a new version of media card in the future, increment the version number)
-
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes   - **Resource Type**: `JavaScript Module`
-
-- **[GitHub Issues](https://github.com/markaggar/ha-media-card/issues)** - Bug reports and feature requests   - Click **Create**
+- **[GitHub Issues](https://github.com/markaggar/ha-media-card/issues)** - Bug reports and feature requests
 
   
-
-## 🎯 Common Use Cases4. **Refresh your browser cache (e.g. CTRL-F5, or restart the Home Assistant app on your phone).**
-
-
-
-### 🏠 Home Security5. **Add the card to your dashboard**:
-
-- Display latest camera snapshots with auto-refresh   - Edit your dashboard
-
-- Navigate through motion detection captures   - Click **Add Card**
-
-- Monitor multiple camera feeds in rotation   - Search for Media Card
-
-- Interactive actions for quick camera access
-
-## 🚀 Quick Start
-
-### 📸 Family & Photos
-
-- Random photo slideshow with smart priority for recent photosYAML Configuration (but use the UI, it's way simpler, and then you can show code and copy the YAML).
-
-- Gallery with keyboard navigation
-
-- Kiosk mode for digital photo frame displays```yaml
-
-- Location and date metadata for contexttype: custom:media-card
-
-title: "Security Camera"
-
-### 🚗 Dashcam & Monitoringmedia_type: image
-
-- Latest dashcam clip viewer with video controlsmedia_path: media-source://media_source/local/cameras/front_door.jpg
-
-- Sequential review of footage chronologically```
-
-- Auto-advance when videos finish playing## ⚙️ Configuration Options
-
-- Integration with motion detection automations
-
-### 🔄 v5.0 Migration Note
-
-### 🖥️ Information Displays
-
-- Weather radar image updates**Upgrading from v4?** Good news - all v4 configurations work without changes! The v5 refactor maintains complete backward compatibility while improving code organization and fixing several edge cases. Simply update your resource URL and refresh your browser.
-
-- Traffic camera feeds
-
-- Package delivery photos### Basic Configuration
-
-- Smart home status displays
 
 | Option | Type | Default | Description |
 
