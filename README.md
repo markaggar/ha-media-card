@@ -7,8 +7,6 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 <img width="691" height="925" alt="Media Card displaying a photo with metadata" src="/docs/media-card.gif" />
 
-<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="https://github.com/user-attachments/assets/a64889ed-f0cc-4a86-bbe9-4714a787bf48" />
-
 ## ✨ Key Features  
 
 **Smart Media Display** 
@@ -92,464 +90,28 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 - **[GitHub Issues](https://github.com/markaggar/ha-media-card/issues)** - Bug reports and feature requests
 
-  
-
-
-
 **Built with ❤️ using GitHub Copilot + Claude Sonnet**
 
-⭐ **Enjoying the Media Card?** Give it a star on GitHub!random_count: 5
+⭐ **Enjoying the Media Card?** Give it a star on GitHub!
 
-[Report a Bug](https://github.com/markaggar/ha-media-card/issues) · [Request a Feature](https://github.com/markaggar/ha-media-card/discussions) · [View Documentation](docs/guides/)video_autoplay: true
+[Report a Bug](https://github.com/markaggar/ha-media-card/issues) · [Request a Feature](https://github.com/markaggar/ha-media-card/discussions) · [View Documentation](docs/guides/)
 
+## 📋 **Special Considerations**
 
-#### Family Photo Gallery with Navigation
-
-```yaml
-type: custom:media-card
-title: "Family Memories"
-media_type: image
-media_path: media-source://media_source/local/photos/family/
-folder_mode: random
-random_count: 10
-auto_refresh_seconds: 300  # 5 minutes
-enable_navigation_zones: true
-enable_keyboard_navigation: true
-show_navigation_indicators: true
-show_file_position: true
-```
-
-### � **Hierarchical Scanning Examples**
-
-#### Large Photo Collection with Smart Discovery
-
-```yaml
-type: custom:media-card
-title: "Photo Collection (25,000+ photos)"
-media_type: image
-media_path: media-source://media_source/local/photos/
-folder_mode: random
-slideshow_window: 1000        # Probability target for SubfolderQueue mode
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 25000  # Critical for consistent probabilities
-auto_refresh_seconds: 60
-```
-
-#### Camera Roll Priority Configuration
-
-```yaml
-type: custom:media-card
-title: "Recent Photos with Camera Roll Priority"
-media_type: image
-media_path: media-source://media_source/local/photos/
-folder_mode: random
-slideshow_window: 1000        # Probability target for sampling
-subfolder_queue:
-  enabled: true
-  priority_folder_patterns:
-    - path: "Camera Roll"      # Recent photos get 3x weight
-      weight_multiplier: 3.0
-    - path: "Screenshots"      # Screenshots get 2x weight  
-      weight_multiplier: 2.0
-auto_refresh_seconds: 30
-```
-
-### 🖼️ **Metadata Display Examples**
-
-#### Professional Photo Display with Full Metadata
-
-```yaml
-type: custom:media-card
-title: "Photo Gallery with Info"
-media_type: image
-media_path: media-source://media_source/local/photos/
-folder_mode: random
-show_metadata: true
-metadata_position: "bottom-left"    # Bottom-left corner
-show_folder: true                   # Show source folder
-show_filename: true                 # Show clean filename  
-show_date: true                     # Show extracted date
-auto_refresh_seconds: 120
-```
-
-#### Security Camera with Top-Right Metadata
-
-```yaml
-type: custom:media-card
-title: "Security Feed"
-media_type: image
-media_path: media-source://media_source/local/security/
-folder_mode: latest
-show_metadata: true
-metadata_position: "top-right"      # Pause button auto-moves for this
-show_folder: true
-show_filename: false                # Don't show filename for security
-show_date: true                     # Show timestamp
-auto_refresh_seconds: 10
-```
-
-### 🚀 **Smart Slideshow Examples**
-
-#### Smart Slideshow with New Content Priority
-
-```yaml
-type: custom:media-card
-title: "Security Camera Smart Slideshow"
-media_type: image
-media_path: media-source://media_source/local/security/
-folder_mode: latest
-slideshow_behavior: smart_slideshow  # 🆕 Interrupts for new content
-slideshow_window: 500  # Process last 500 files for performance
-auto_refresh_seconds: 10
-enable_navigation_zones: true
-show_file_position: true
-```
-
-#### Video Gallery with Completion Auto-Advance
-
-```yaml
-type: custom:media-card
-title: "Dashcam Highlights"
-media_type: video
-media_path: media-source://media_source/local/dashcam/
-folder_mode: latest
-slideshow_behavior: cycle  # 🆕 Round-robin through content
-slideshow_window: 1000
-auto_refresh_seconds: 30  # Videos advance immediately when done
-video_autoplay: true
-video_muted: true
-enable_navigation_zones: true
-```
-
-#### Large Folder Performance Optimized
-
-```yaml
-type: custom:media-card
-title: "Photo Archive (1000+ files)"
-media_type: image
-media_path: media-source://media_source/local/photos/archive/
-folder_mode: random
-slideshow_behavior: static  # 🆕 Stay on current until manual change
-slideshow_window: 2000  # Handle large folders efficiently
-auto_refresh_seconds: 120
-enable_navigation_zones: true
-enable_keyboard_navigation: true
-```
-
-### 🎯 **Complete Configuration (All New Features)**
-
-#### Professional Photo Display with Everything Enabled
-
-```yaml
-type: custom:media-card
-title: "Complete Photo Gallery"
-media_type: all                      # Show both images and videos
-media_path: media-source://media_source/local/photos/
-folder_mode: random
-
-# � Slideshow Configuration
-slideshow_window: 1000               # Number of items for probability sampling
-
-# �📂 Hierarchical Scanning - For Large Collections
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 15000      # 🎯 Critical for consistent probabilities
-  priority_folder_patterns:
-    - path: "Camera Roll"            # Recent photos get priority
-      weight_multiplier: 3.0
-    - path: "Favorites"              # Favorites get extra weight
-      weight_multiplier: 2.5
-
-# 🖼️ Rich Metadata Display 
-show_metadata: true
-metadata_position: "bottom-left"     # Professional placement
-show_folder: true                    # Show source folder path
-show_filename: true                  # Show clean filename
-show_date: true                      # Show extracted date
-
-# 🎬 Smart Slideshow
-slideshow_behavior: smart_slideshow  # Prioritize new content
-slideshow_window: 1500              # Handle large datasets
-auto_refresh_seconds: 90            # 90-second intervals
-
-# 🎮 Navigation & Controls
-enable_navigation_zones: true       # Left/right click navigation
-enable_keyboard_navigation: true    # Arrow key support
-show_navigation_indicators: true    # Visual navigation hints  
-show_file_position: true           # "5 of 40" position display
-
-# 🎥 Video Settings (with pause-aware slideshow)
-video_autoplay: true               # Auto-start videos
-video_muted: true                  # Start muted
-video_loop: false                  # Don't loop videos
-
-# 👆 Interactive Actions
-tap_action:
-  action: more-info               # Tap for details
-hold_action:
-  action: navigate               # Hold to navigate
-  navigation_path: "/dashboard"
-```
-
-**Why This Configuration Works:**
-- ✅ **`estimated_total_photos: 15000`** - Ensures consistent probability calculations across all folders
-- ✅ **`slideshow_window: 1000`** - Probability target for sampling (not a hard limit)
-- ✅ **Priority patterns** - Recent photos (Camera Roll) get 3x more visibility
-- ✅ **Smart metadata** - Professional info display without UI conflicts
-- ✅ **Video-aware pausing** - Slideshow respects manual video pauses
-
-### 📸 **Single File Examples**
-
-#### Security Camera Snapshot
-
-```yaml
-type: custom:media-card
-title: "Front Door Camera"
-media_type: image
-media_path: media-source://media_source/local/cameras/front_door.jpg
-auto_refresh_seconds: 30
-show_refresh_button: true
-```
-
-#### Dashcam Video
-
-```yaml
-type: custom:media-card
-title: "Latest Dashcam Footage"
-media_type: video
-media_path: media-source://media_source/local/dashcam/latest.mp4
-video_autoplay: true
-video_muted: true
-video_loop: true
-hide_video_controls_display: true
-```
-
-### 👆 **Interactive Media Card**
-
-```yaml
-type: custom:media-card
-title: "Front Door Camera"
-media_type: image
-media_path: media-source://media_source/local/cameras/front_door.jpg
-auto_refresh_seconds: 30
-tap_action:
-  action: more-info
-  entity: camera.front_door
-hold_action:
-  action: perform-action
-  perform_action: camera.snapshot
-  target:
-    entity_id: camera.front_door
-  data:
-    filename: "/config/www/local/snapshots/manual_{{ now().strftime('%Y%m%d_%H%M%S') }}.jpg"
-double_tap_action:
-  action: navigate
-  navigation_path: /lovelace/security
-```
-
-## ⚙️ **Configuration Parameter Guide**
-
-### 📊 **Key Parameters for Large Collections**
-
-| Parameter | Small Collections (<1K files) | Medium Collections (1K-10K files) | Large Collections (10K+ files) | Purpose |
-|-----------|----------------------------|-----------------------------------|-------------------------------|---------|
-| `estimated_total_photos` | Optional | **Recommended** | **Critical** | Ensures consistent probability calculations |
-| `slideshow_window` | 500-1000 | 1000-1500 | 1500-2000+ | Probability target for sampling |
-
-### 🎯 **Why `estimated_total_photos` is Critical**
-
-```yaml
-# ❌ Without estimate - probability drift during scanning
-subfolder_queue:
-  enabled: true
-  # Missing estimated_total_photos causes inconsistent folder representation
-
-# ✅ With estimate - consistent statistical fairness  
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 25000  # Prevents early folder bias
-```
-
-**The Problem:** Without `estimated_total_photos`, early folders get over-represented because the total count grows during discovery.
-
-**The Solution:** Setting this value locks probability calculations, ensuring true statistical fairness across all folders.
-
-### 📈 **Recommended Values by Collection Size**
-
-#### Small Collection (< 1,000 photos)
-```yaml
-slideshow_window: 500           # Probability target
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 500   # Conservative estimate
-```
-
-#### Medium Collection (1,000 - 10,000 photos)  
-```yaml
-slideshow_window: 1000          # Probability target
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 5000  # Reasonable estimate
-```
-
-#### Large Collection (10,000+ photos)
-```yaml
-slideshow_window: 1500          # Probability target
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 25000 # Critical for fairness
-```
-
-## 📅 **Filename Conventions for "Show Latest" Mode**
-
-For the **Show Latest** folder mode to work correctly, your files should include timestamps in their names as the Media Browser in Home Assistant does not expose file creation times. The card can automatically detect and sort by various timestamp formats:
-
-### ✅ **Supported Filename Formats**
-
-#### **Recommended Formats (for camera snapshots)**
-- `entity_snapshot_YYYYMMDD_HHMMSS.jpg` → `driveway_snapshot_20250922_143045.jpg`
-- `IMG_YYYYMMDD_HHMMSS.jpg` → `IMG_20250922_143045.jpg`
-- `VID_YYYYMMDD_HHMMSS.mp4` → `VID_20250922_143045.mp4`
-
-#### **ISO DateTime Formats**
-- `YYYY-MM-DD_HH-MM-SS.jpg` → `2025-09-22_14-30-45.jpg`
-- `YYYY-MM-DDTHH:MM:SS.jpg` → `2025-09-22T14:30:45.jpg`
-
-#### **Date-Only Formats**
-- `YYYY-MM-DD.jpg` → `2025-09-22.jpg`
-- `YYYYMMDD.jpg` → `20250922.jpg`
-
-#### **Unix Timestamps**
-- `1695386245_snapshot.jpg` (10-digit seconds)
-- `1695386245123_snapshot.jpg` (13-digit milliseconds)
-
-### 🛠️ **Home Assistant Integration Examples**
-
-#### Camera Snapshot Automation
-
-```yaml
-automation:
-  - alias: "Motion Detection Snapshot"
-    trigger:
-      platform: state
-      entity_id: binary_sensor.driveway_motion
-      to: "on"
-    action:
-      service: camera.snapshot
-      target:
-        entity_id: camera.driveway
-      data:
-        filename: >-
-          /config/www/local/motion/driveway_snapshot_{{ now().strftime('%Y%m%d_%H%M%S') }}.jpg
-```
-
-#### Doorbell Ring Snapshot
-```yaml
-automation:
-  - alias: "Doorbell Ring Capture"
-    trigger:
-      platform: state
-      entity_id: binary_sensor.doorbell_ring
-      to: "on"
-    action:
-      service: camera.snapshot
-      target:
-        entity_id: camera.front_door
-      data:
-        filename: >-
-          /config/www/local/doorbell/visitor_{{ now().strftime('%Y-%m-%dT%H:%M:%S') }}.jpg
-```
-
-### 📋 **Jinja2 Templates for Filenames**
-
-Use these templates in your Home Assistant automations to create properly timestamped filenames:
-
-```jinja2
-# Basic timestamp
-{{ now().strftime('%Y%m%d_%H%M%S') }}
-
-# With entity name
-{{ trigger.to_state.name|lower|replace(' ', '_') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}
-
-# With area name
-{{ area_name(trigger.entity_id)|lower|replace(' ', '_') }}_{{ now().strftime('%Y-%m-%d_%H-%M-%S') }}
-
-# Camera-style format
-IMG_{{ now().strftime('%Y%m%d_%H%M%S') }}
-
-# ISO format
-{{ now().strftime('%Y-%m-%dT%H:%M:%S') }}
-```
-
-### ⚠️ **Important Notes**
-- Files **without** timestamps will be sorted alphabetically
-- Files **with** timestamps are always prioritized over files without
-- Mixed timestamp formats in the same folder work correctly
-- The card extracts timestamps automatically—no configuration needed
-
-### 📋 **Known Limitations**
-
-#### Media Index with Local Folders
-Media Index **cannot be used with local HA folders** (e.g., `/config/www/local/`) due to path format mismatch. Media Card uses `media-source://` URIs while Media Index requires filesystem paths. 
-
-**Workaround:** Use folder-based scanning for local content:
-```yaml
-media_source_type: folder
-folder:
-  path: media-source://media_source/local/
-  mode: sequential
-  recursive: true
-```
-
-Media Index works correctly with network shares (`/mnt/...`, `/media/...`) and will support Synology Photos. See [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for details.
-
-## 🛣️ Supported Path Format
-
-### Media Source URLs
-```yaml
-media_path: media-source://media_source/local/folder/file.mp4
-media_path: media-source://media_source/camera/snapshot.jpg
-```
-
-## 🎯 Example Use Cases
-
-### 🏠 **Home Security**
-- Display latest camera snapshots
-- Monitor dashcam clips
-- Security system alerts - actionable notification pointing to media card with latest video clip
-
-### 📱 **Smart Home Dashboard**
-- Weather radar images
-- Traffic camera feeds (mp4 or jpg)
-- Package delivery photos
-
-### 👨‍👩‍👧‍👦 **Family & Entertainment**
-- Photo of the day
-- Kids' latest artwork
-- Pet monitoring cameras
-
-## �️ Kiosk Mode Integration
+### �️ Kiosk Mode Integration
 
 The Media Card includes seamless integration with the popular [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) HACS integration for full-screen dashboard experiences. When kiosk mode is enabled, the media card provides visual hints and exit controls for a professional display setup.
 
-### 🎯 **Key Features**
+#### 🛠️ **Setup Requirements**
 
-- **Smart Exit Hints**: Visual indicator appears when kiosk mode is active
-- **Configurable Exit Gestures**: Support for tap, double-tap, hold, and swipe actions
-- **State-Aware Display**: Exit hint only shows when your kiosk mode boolean is enabled
-- **Elegant Positioning**: Non-intrusive bottom-center placement with fade effects
-
-### 🛠️ **Setup Requirements**
-
-#### 1. Install Kiosk Mode
+##### 1. Install Kiosk Mode
 Install the [Kiosk Mode integration](https://github.com/NemesisRE/kiosk-mode) via HACS:
 
 ```
 HACS → Frontend → Search "Kiosk Mode" → Install
 ```
 
-#### 2. Create Kiosk Mode Boolean
+##### 2. Create Kiosk Mode Boolean
 Add an input boolean to control kiosk mode state:
 
 ```yaml
@@ -560,7 +122,7 @@ input_boolean:
     icon: mdi:fullscreen
 ```
 
-#### 3. Configure Kiosk Mode
+##### 3. Configure Kiosk Mode
 Add kiosk mode configuration to your dashboard view:
 
 ```yaml
@@ -570,7 +132,7 @@ kiosk_mode:
   hide_sidebar: '{{ is_state("input_boolean.kiosk_mode", "on") }}'
 ```
 
-### ⚙️ **Media Card Configuration**
+###### ⚙️ **Media Card Configuration**
 
 Add kiosk mode settings to your media card:
 
@@ -583,150 +145,26 @@ folder_mode: random
 auto_refresh_seconds: 30
 
 # Kiosk Mode Integration
-kiosk_mode:
-  enabled: true
-  kiosk_entity: input_boolean.kiosk_mode
-  exit_action: double_tap
-  show_exit_hint: true
+kiosk_mode_entity: input_boolean.kiosk_mode
+double_tap_action:
+  action: toggle-kiosk
+kiosk_mode_auto_enable: true
+kiosk_mode_show_indicator: true
 ```
+### Media Index with Local Folders
+Media Index **cannot be used with local HA folders** (e.g., `/config/www/local/`) due to path format mismatch. Media Card uses `media-source://` URIs while Media Index requires filesystem paths. 
 
-### 📋 **Configuration Options**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `kiosk_mode.enabled` | boolean | `false` | Enable kiosk mode integration |
-| `kiosk_mode.kiosk_entity` | string | **Required** | Input boolean entity controlling kiosk state |
-| `kiosk_mode.exit_action` | string | `double_tap` | Exit gesture: `tap`, `double_tap`, `hold`, `swipe_down` |
-| `kiosk_mode.show_exit_hint` | boolean | `true` | Show exit instruction overlay |
-
-### 🎨 **Complete Example Configurations**
-
-#### Photo Slideshow Kiosk
-
+**Workaround:** Use folder-based scanning for local content:
 ```yaml
-type: custom:media-card
-title: "Family Photo Kiosk"
-media_type: image
-media_path: media-source://media_source/local/photos/family/
-folder_mode: random
-auto_refresh_seconds: 60
-aspect_mode: viewport-fit
-show_metadata: true
-metadata_position: bottom-right
-
-# Kiosk Integration
-kiosk_mode:
-  enabled: true
-  kiosk_entity: input_boolean.kiosk_mode
-  exit_action: double_tap
-  show_exit_hint: true
-
-# Enhanced Navigation
-enable_navigation_zones: true
-show_navigation_indicators: false  # Hide for clean kiosk look
+media_source_type: folder
+folder:
+  path: media-source://media_source/local/
+  mode: sequential
+  recursive: true
 ```
+Media Index works correctly with network shares (`/mnt/...`, `/media/...`) and will support Synology Photos. See [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for details.
 
-#### Security Monitor Kiosk
-
-```yaml
-type: custom:media-card
-title: "Security Feed"
-media_type: image
-media_path: media-source://media_source/local/security/
-folder_mode: latest
-auto_refresh_seconds: 10
-aspect_mode: viewport-fill
-
-# Kiosk Integration
-kiosk_mode:
-  enabled: true
-  kiosk_entity: input_boolean.security_kiosk
-  exit_action: hold
-  show_exit_hint: true
-
-# Metadata for Context
-show_metadata: true
-metadata_position: top-left
-show_folder: false
-show_filename: true
-show_date: true
-```
-
-### 🎮 **Exit Actions**
-
-Configure how users can exit kiosk mode:
-
-| Action | Description | Best For |
-|--------|-------------|----------|
-| `tap` | Single tap anywhere | Touch screens, quick access |
-| `double_tap` | Double tap gesture | Prevents accidental exits |
-| `hold` | Tap and hold (1 second) | Secure environments |
-| `swipe_down` | Swipe down from top | Mobile/tablet interfaces |
-
-### 💡 **Pro Tips**
-
-#### Automation Integration
-Automatically enable kiosk mode based on time or presence:
-
-```yaml
-automation:
-  - alias: "Enable Evening Kiosk Mode"
-    trigger:
-      platform: time
-      at: "18:00:00"
-    action:
-      service: input_boolean.turn_on
-      target:
-        entity_id: input_boolean.kiosk_mode
-
-  - alias: "Disable Kiosk Mode on Motion"
-    trigger:
-      platform: state
-      entity_id: binary_sensor.living_room_motion
-      to: "on"
-    action:
-      service: input_boolean.turn_off
-      target:
-        entity_id: input_boolean.kiosk_mode
-```
-
-#### Multiple Display Support
-Use different boolean entities for multiple kiosk displays:
-
-```yaml
-input_boolean:
-  living_room_kiosk:
-    name: "Living Room Kiosk"
-  bedroom_kiosk:
-    name: "Bedroom Kiosk"
-  security_kiosk:
-    name: "Security Monitor Kiosk"
-```
-
-## �🔧 Advanced Configuration
-
-### Auto-Refresh for Security Cameras
-```yaml
-type: custom:media-card
-title: "Live Camera Feed"
-media_type: image
-media_path: media-source://media_source/local/cameras/live_feed.jpg
-auto_refresh_seconds: 5  # Update every 5 seconds
-show_refresh_button: true
-```
-
-### Silent Background Video
-```yaml
-type: custom:media-card
-media_type: video
-media_path: media-source://media_source/local/videos/background.mp4
-video_autoplay: true
-video_loop: true
-video_muted: true
-hide_video_controls_display: true
-```
-
-## HA Media Path config
+### HA Media Path config
 Home Assistant media path setup can be quite confusing.  You need to have something similar to following in configuration.yaml
 
 ```
@@ -742,7 +180,7 @@ homeassistant:
 
 When browsing, this provides a 'My Media' folder, which has media, camera and local folders.
 
-### Referring to files outside of Media Card
+#### Referring to files outside of Media Card
 If you want to use the camera.snapshot action to save an image you will display later with Media card, your path can be:
 
 /config/www/local/filename1.jpg (you can create a folder between the '/local/' and the filename).
@@ -765,15 +203,15 @@ If you want to upload this image to an AI service such as Google Gemini via the 
 ```
 Note: For video - the media_content_type is video/mp4
 
-## 🎮 **Navigation & Keyboard Shortcuts**
+### 🎮 **Navigation & Keyboard Shortcuts**
 
-### **Mouse/Touch Navigation** 🆕 v2.0 Precision Controls
+#### **Mouse/Touch Navigation** 
 - **Previous Button**: Small rectangular zone on the left side (80px × 120px)
 - **Next Button**: Small rectangular zone on the right side (80px × 120px)  
 - **Pause/Resume**: Top-right corner button (60px × 60px)
 - **Main Action Area**: Large center region for tap/hold actions (avoids video controls)
 
-### **Keyboard Controls**
+#### **Keyboard Controls**
 
 **⚠️ Important**: Click on the card first to focus it, then use these keys:
 
@@ -787,7 +225,7 @@ Note: For video - the media_content_type is video/mp4
 
 > **💡 Tip**: You'll see a subtle outline around the card when it's focused and ready for keyboard input.
 
-### **Visual Indicators**
+#### **Visual Indicators**
 - **Navigation Zones**: Subtle overlay hints showing clickable areas
 - **File Position**: Display current position (e.g., "3 of 12")
 - **Loading States**: Visual feedback during file changes
@@ -831,26 +269,6 @@ Note: For video - the media_content_type is video/mp4
 2. **Check resource URL** - Verify the JavaScript file is loaded correctly
 3. **Console errors** - Look for JavaScript errors in browser console
 4. **HACS installation** - Ensure proper installation through HACS or manual setup
-
-### 🆕 v2.0 Features Not Working?
-
-#### Smart Slideshow Issues
-1. **Check slideshow_behavior** - Must be set to `smart_slideshow` for new content prioritization
-2. **Slideshow window size** - Large folders may need `slideshow_window` adjustment (default: 1000)
-3. **New content detection** - Requires folder refresh interval (`auto_refresh_seconds > 0`)
-4. **Console debugging** - Check browser console for slideshow behavior logs
-
-#### Video Completion Auto-Advance
-1. **Video format support** - MP4, WebM, OGG formats supported for completion detection
-2. **Auto-refresh enabled** - Requires `auto_refresh_seconds > 0` for advancement
-3. **Browser compatibility** - Modern browsers required for video event handling
-4. **Background tab behavior** - Auto-advance pauses when tab is inactive (performance feature)
-
-#### Precision Navigation Controls
-1. **Navigation zones enabled** - Set `enable_navigation_zones: true`
-2. **Hover indicators** - Look for button symbols when hovering over navigation areas
-3. **Video controls conflict** - Navigation automatically avoids video control areas
-4. **Touch device testing** - Test with mouse/touch to verify button responsiveness
 
 ## 🤝 Contributing
 
