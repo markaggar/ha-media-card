@@ -7,18 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Confirmation Dialogs**: Styled confirmation dialogs for tap/hold/double-tap actions
-  - Professional UI matching card theme (replaces browser confirm())
-  - Template variable support in confirmation messages
-  - 11 template variables: `{{filename}}`, `{{filename_ext}}`, `{{folder}}`, `{{folder_path}}`, `{{media_path}}`, `{{date}}`, `{{date_time}}`, `{{location}}`, `{{city}}`, `{{state}}`, `{{country}}`
-  - Visual editor support for `confirmation_message` field with template hints
-  - Use `confirmation_message` in any action config to show styled dialog before execution
 
-### Fixed
-- **Video Autoplay**: Suppressed benign `AbortError` console warnings during rapid media navigation
-  - Errors occur when play() is interrupted by navigation (harmless)
-  - Real autoplay failures still logged for debugging
 
 ## [5.0.0] - 2025-01-23
 
@@ -47,19 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Eliminated code duplication across provider types
 - Improved maintainability and testability
 
-### ✨ New Features
+**Confirmation Dialogs and Template variables**: Styled confirmation dialogs for tap/hold/double-tap actions
+  - Template variable support in confirmation messages
+  - 11 template variables: `{{filename}}`, `{{filename_ext}}`, `{{folder}}`, `{{folder_path}}`, `{{media_path}}`, `{{date}}`, `{{date_time}}`, `{{location}}`, `{{city}}`, `{{state}}`, `{{country}}`
+  - Visual editor support for `confirmation_message` field with template hints
+  - Use `confirmation_message` in any action config to show styled dialog before execution
 
-#### Image Zoom
-- **Click to Zoom**: Click any point on an image to zoom in (1.5x-5x configurable)
-- **Click to Reset**: Click again anywhere to return to normal view
-- **Center on Point**: Zoom centers on clicked location for precise inspection
-- **Configuration**: `zoom_enabled` (default: true), `zoom_level` (default: 2.0)
+### Fixed
+- **Video Autoplay**: Suppressed benign `AbortError` console warnings during rapid media navigation
+  - Errors occur when play() is interrupted by navigation (harmless)
+  - Real autoplay failures still logged for debugging
+
+### ✨ New Features
 
 #### Kiosk Mode Auto-Enable
 - **Entity-Based Activation**: Automatically enter/exit kiosk mode based on entity state
-- **Wall-Mounted Tablet Optimization**: Perfect for permanent display setups
-- **Time-Based Automation**: Combine with HA automations for scheduled kiosk mode
-- **Motion Detection Exit**: Automatically exit kiosk when presence detected
 
 #### Enhanced Thumbnails
 - **Delete Confirmation**: Proper image preview in delete confirmation dialog
