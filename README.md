@@ -5,7 +5,7 @@
 # HA Media Card 🎬
 A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
-<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="/docs/media-card.gif" />
+<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
 
 ## ✨ Key Features  
 
@@ -45,7 +45,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 2. Copy to `/config/www/cards/ha-media-card.js`  
 3. Add resource in Settings → Dashboards → Resources:
    - URL: `/local/cards/ha-media-card.js`
-   - Type: JavaScript Module>  
+   - Type: JavaScript Module  
 4. Restart Home Assistant and hard refresh browser
 
 ## 📚 Documentation 
