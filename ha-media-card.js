@@ -2140,8 +2140,19 @@ class SubfolderQueue {
 
       const folderName = basePath.split('/').pop() || 'root';
       
-      const allFiles = folderContents.children.filter(child => child.media_class === 'image' || child.media_class === 'video');
-      let files = allFiles.filter(file => this.card._isMediaFile(file.media_content_id || file.title || ''));
+      // Filter files - some media sources (like Synology) don't set media_class, so check by extension too
+      const allFiles = folderContents.children.filter(child => {
+        // Skip if it's explicitly a folder
+        if (child.can_expand) return false;
+        
+        // Include if media_class indicates media
+        if (child.media_class === 'image' || child.media_class === 'video') return true;
+        
+        // Otherwise check by file extension
+        return this.card._isMediaFile(child.media_content_id || child.title || '');
+      });
+      
+      let files = allFiles;
       
       // Filter by configured media_type (image/video/all)
       const configuredMediaType = this.card.config.media_type || 'all';
