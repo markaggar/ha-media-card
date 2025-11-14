@@ -169,7 +169,7 @@ For enhanced metadata features (location data, EXIF info, favorites), you can in
 3. Wait for initial scan to complete
 4. Use `media_index:` configuration in media card
 
-**Note:** Media Index requires network shares or filesystem paths - it cannot work with `media-source://media_source/local/` paths.
+See [Known Limitations](../KNOWN_LIMITATIONS.md#media-index-path-requirements) for important Media Index path requirements.
 
 ## Next Steps
 
