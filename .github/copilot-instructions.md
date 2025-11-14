@@ -63,12 +63,6 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 - Handle errors gracefully with user feedback
 - Add comments for complex logic
 
-**Code Style**:
-- Use Lit `html` and `css` tagged templates
-- Prefix private methods with underscore `_methodName()`
-- Use async/await for asynchronous operations
-- Handle errors gracefully with user feedback
-- Add comments for complex logic
 
 **Template Variables Available**:
 For confirmation dialogs and service data:
