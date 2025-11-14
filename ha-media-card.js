@@ -9310,22 +9310,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
-            <label>Max Height (pixels)</label>
-            <div>
-              <input
-                type="number"
-                min="100"
-                max="5000"
-                step="50"
-                .value=${this._config.max_height_pixels || ''}
-                @input=${this._maxHeightChanged}
-                placeholder="Auto (no limit)"
-              />
-              <div class="help-text">Maximum height in pixels (overrides aspect mode)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
             <label>Refresh Button</label>
             <div>
               <input
