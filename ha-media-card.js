@@ -248,6 +248,8 @@ class VideoManager {
     }
     this.pausedByVideo = false;
   }
+}
+
 /**
  * MediaProvider - Base class for all media providers
  * All providers must implement: initialize(), getNext(), getPrevious()
