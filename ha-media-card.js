@@ -1962,8 +1962,9 @@ class SubfolderQueue {
         // Include if media_class indicates media
         if (child.media_class === 'image' || child.media_class === 'video') return true;
         
-        // Otherwise check by file extension
-        return this.card._isMediaFile(child.media_content_id || child.title || '');
+        // Otherwise check by file extension (prefer title for Immich compatibility)
+        const pathForExtCheck = child.title || child.media_content_id || '';
+        return this.card._isMediaFile(pathForExtCheck);
       });
       
       let files = allFiles;
