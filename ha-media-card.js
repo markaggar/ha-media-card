@@ -403,17 +403,22 @@ class MediaProvider {
   /**
    * V4: Extract date from filename patterns (shared helper)
    * Moved from SingleMediaProvider to base class for reuse
+   * Enhanced to extract time components when present
    */
   static extractDateFromFilename(filename) {
     if (!filename) return null;
     
-    // Common date patterns in filenames
+    // Common date+time patterns in filenames
     const patterns = [
-      // YYYY-MM-DD format
+      // YYYYMMDD_HHMMSS format (e.g., 20250920_211023)
+      /(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/,
+      // YYYY-MM-DD_HH-MM-SS format
+      /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
+      // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format
+      // YYYYMMDD format (date only)
       /(\d{4})(\d{2})(\d{2})/,
-      // DD-MM-YYYY format
+      // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
     
@@ -421,13 +426,32 @@ class MediaProvider {
       const match = filename.match(pattern);
       if (match) {
         try {
-          if (match[1].length === 4) {
-            // YYYY-MM-DD or YYYYMMDD
-            return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+          let year, month, day, hour = 0, minute = 0, second = 0;
+          
+          if (match.length > 6) {
+            // Date + time pattern matched
+            if (match[1].length === 4) {
+              // YYYY-MM-DD format with time
+              year = parseInt(match[1]);
+              month = parseInt(match[2]) - 1;
+              day = parseInt(match[3]);
+              hour = parseInt(match[4]);
+              minute = parseInt(match[5]);
+              second = parseInt(match[6]);
+            }
+          } else if (match[1].length === 4) {
+            // YYYY-MM-DD or YYYYMMDD (date only)
+            year = parseInt(match[1]);
+            month = parseInt(match[2]) - 1;
+            day = parseInt(match[3]);
           } else {
-            // DD-MM-YYYY
-            return new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+            // DD-MM-YYYY (date only)
+            day = parseInt(match[1]);
+            month = parseInt(match[2]) - 1;
+            year = parseInt(match[3]);
           }
+          
+          return new Date(year, month, day, hour, minute, second);
         } catch (e) {
           // Invalid date, continue to next pattern
         }
