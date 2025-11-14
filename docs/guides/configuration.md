@@ -10,13 +10,22 @@ Complete guide to all configuration options for the Media Card.
 ```yaml
 type: custom:media-card
 media_source_type: single_media
-media_type: image
 single_media:
-  path: media-source://media_source/local/photo.jpg
-  refresh_seconds: 60  # Optional auto-refresh
+  path: >-
+    media-source://media_source/local/ai_image_notifications/driveway_dogwalk_capture.mp4
+  refresh_seconds: 60
+media_type: video
+title: Latest Dogwalk
+auto_refresh_seconds: 60
+video_autoplay: true
+video_muted: true
+hide_video_controls_display: true
+aspect_mode: smart-scale
+action_buttons:
+  enable_fullscreen: true
 ```
 
-**Folder Mode (slideshow)**:
+**Folder Mode (random slideshow)**:
 ```yaml
 type: custom:media-card
 media_source_type: folder
@@ -25,8 +34,22 @@ folder:
   path: media-source://media_source/local/photos/
   mode: random      # random, sequential, or subfolder_queue
   recursive: true   # Include subfolders
-auto_refresh_seconds: 60
+auto_advance_duration: 60
 ```
+
+**Folder Mode (sequential slide show)**
+```yaml
+type: custom:media-card
+media_source_type: folder
+folder:
+  path: media-source://media_source/media/photo/OneDrive
+  mode: sequential
+  recursive: true
+  sequential:
+    order_by: date_taken
+    order_direction: desc
+media_type: all
+auto_advance_duration: 5
 
 ## Core Configuration
 
@@ -39,7 +62,7 @@ auto_refresh_seconds: 60
 | `single_media.path` | string | Required for single | Path to single media file |
 | `single_media.refresh_seconds` | number | `0` | Auto-refresh interval for single media |
 | `folder.path` | string | Required for folder | Path to folder (media-source:// URI) |
-| `folder.mode` | string | `random` | Display mode: `random`, `sequential`, or `subfolder_queue` |
+| `folder.mode` | string | `random` | Display mode: `random`, `sequential` |
 | `folder.recursive` | boolean | `false` | Include subfolders in scan |
 
 ### Display Options
@@ -100,45 +123,16 @@ Supported formats:
 - `YYYYMMDD.jpg`
 - Unix timestamps (10 or 13 digits)
 
-### Sequential Mode Options
-
-Displays files in order from newest to oldest. Uses same timestamp detection as Latest mode.
-
-## Slideshow Behavior
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `slideshow_behavior` | string | `smart_slideshow` | Slideshow mode: `smart_slideshow`, `cycle`, or `static` |
-| `slideshow_window` | number | `1000` | Number of items for probability sampling |
-
-### Slideshow Behavior Modes
-
-**`smart_slideshow`** (Default)
-- Prioritizes new content as it arrives
-- Interrupts current display when fresh media appears
-- Best for: Security monitoring, live feeds
-
-**`cycle`**
-- Round-robin through media collection
-- No repeats until all items shown
-- Best for: Photo galleries, diverse content
-
-**`static`**
-- Display media until manual navigation
-- Auto-refresh updates current file in place
-- Best for: Featured content, specific monitoring
-
-## Hierarchical Scanning (SubfolderQueue)
-
-For large nested folder structures, use `folder.mode: subfolder_queue`:
+## Hierarchical Scanning (Folder with file system scanning)
 
 ```yaml
 media_source_type: folder
 folder:
   path: media-source://media_source/local/photos/
-  mode: subfolder_queue
+  mode: random
   recursive: true
   scan_depth: 3  # Optional: limit depth (null = unlimited)
+  estimated_total_photos: 200000
   priority_folders:
     - pattern: "/DCIM/"
       weight: 3.0
@@ -148,50 +142,10 @@ folder:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `folder.mode` | string | - | Set to `subfolder_queue` for hierarchical scanning |
+| `folder.mode` | string | random | random or sequential |
 | `folder.recursive` | boolean | `false` | Enable recursive subfolder scanning |
 | `folder.scan_depth` | number | `null` | Maximum depth (null = unlimited) |
 | `folder.priority_folders` | array | `[]` | Folders to prioritize with weight multipliers |
-
-### Priority Folder Patterns
-
-```yaml
-subfolder_queue:
-  priority_folder_patterns:
-    - path: "Camera Roll"      # Folder name or path pattern
-      weight_multiplier: 3.0   # 3x selection probability
-    - path: "Favorites"
-      weight_multiplier: 2.5
-```
-
-### Recommended Values by Collection Size
-
-#### Small Collection (< 1,000 files)
-
-```yaml
-slideshow_window: 500
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 500
-```
-
-#### Medium Collection (1,000 - 10,000 files)
-
-```yaml
-slideshow_window: 1000
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 5000
-```
-
-#### Large Collection (10,000+ files)
-
-```yaml
-slideshow_window: 1500
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 25000
-```
 
 ### Why `estimated_total_photos` is Critical
 
@@ -321,8 +275,9 @@ tap_action:
 |--------|------|---------|-------------|
 | `kiosk_mode.enabled` | boolean | `false` | Enable kiosk mode integration |
 | `kiosk_mode.kiosk_entity` | string | **Required** | Input boolean entity controlling kiosk state |
-| `kiosk_mode.exit_action` | string | `double_tap` | Exit gesture: `tap`, `double_tap`, `hold`, `swipe_down` |
 | `kiosk_mode.show_exit_hint` | boolean | `true` | Show exit instruction overlay |
+
+Set the appropriate action (tap/double-tap/hold) to Kiosk Mode toggle to exit kiosk mode using an action.
 
 ### Prerequisites
 
@@ -456,57 +411,43 @@ data:
 
 ## Complete Configuration Example
 
-Professional photo display with all features enabled:
+Automatice photo display using media index with most common features enabled:
 
 ```yaml
 type: custom:media-card
-title: "Photo Gallery"
+media_source_type: folder
+folder:
+  path: media-source://media_source/media/photo/OneDrive
+  mode: random
+  recursive: true
+  priority_new_files: true
+  new_files_threshold_seconds: 3600
 media_type: all
-media_path: media-source://media_source/local/photos/
-folder_mode: random
-
-# Slideshow Configuration
-slideshow_window: 1000
-slideshow_behavior: smart_slideshow
-auto_refresh_seconds: 90
-
-# Hierarchical Scanning
-subfolder_queue:
-  enabled: true
-  estimated_total_photos: 15000
-  priority_folder_patterns:
-    - path: "Camera Roll"
-      weight_multiplier: 3.0
-    - path: "Favorites"
-      weight_multiplier: 2.5
-
-# Rich Metadata Display
+auto_advance_duration: 5
 show_metadata: true
-metadata_position: bottom-left
-show_folder: true
-show_filename: true
-show_date: true
-
-# Navigation & Controls
 enable_navigation_zones: true
-enable_keyboard_navigation: true
-show_navigation_indicators: true
-show_file_position: true
-
-# Video Settings
+title: ""
+media_index:
+  entity_id: sensor.media_index_media_photo_onedrive_total_files
+media_path: ""
 video_autoplay: true
 video_muted: true
-video_loop: false
-
-# Interactive Actions
-tap_action:
-  action: more-info
-hold_action:
-  action: navigate
-  navigation_path: /dashboard
-
-# Aspect Ratio
+hide_video_controls_display: true
 aspect_mode: smart-scale
+show_position_indicator: false
+show_dots_indicator: false
+metadata:
+  show_root_folder: true
+  show_filename: false
+  position: bottom-right
+action_buttons:
+  enable_fullscreen: true
+  position: top-left
+tap_action:
+  action: zoom
+double_tap_action:
+  action: toggle-kiosk
+kiosk_mode_entity: input_boolean.kiosk_mode
 ```
 
 ---
