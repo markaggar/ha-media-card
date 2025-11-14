@@ -28,10 +28,47 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 - Consistent state management across sources
 
 **Provider Types**:
-1. **SingleMediaProvider** - Display single image/video with optional auto-refresh
-2. **MediaIndexProvider** - Integration with media-index backend for metadata-rich slideshows
-3. **SubfolderProvider** - Hierarchical folder scanning with subfolder queue
-4. **SimpleFolderProvider** - Flat folder listing
+1. **MediaProvider** (Base Class)
+- Purpose: Abstract base class that defines the interface all providers must implement
+- Key Methods:
+  - initialize() - Setup and load initial data
+  - getNext() - Get next media item
+  - getPrevious() - Get previous media item
+  - pause() / resume() - Control provider activity
+2. **SingleMediaProvider**
+- Extends: MediaProvider
+- Purpose: Display a single image/video with optional auto-refresh
+- Configuration: single_media.path or media_path (single file)
+- Features:
+  - Optional refresh interval
+  - Metadata extraction from path and EXIF data
+  - Supports single static media display
+3. **FolderProvider**
+- Extends: MediaProvider
+- Purpose: Handle folder-based media sources with SubfolderQueue integration
+- Features:
+  - Wraps SubfolderQueue for hierarchical folder scanning
+  - V4 compatibility layer (cardAdapter for legacy methods)
+  - Supports both simple folder and complex hierarchical structures
+  - Currently focused on random mode with subfolder queue
+4. **MediaIndexProvider**
+- Extends: MediaProvider
+- Purpose: Database-backed random selection using Media Index integration
+- Features:
+  - Queue-based system (default 100 items)
+  - Tracks excluded files (_Junk/_Edit folders)
+  - Priority for new files with exhaustion detection
+  - Optimized service calls to avoid wasteful queries
+  - Works with media_index sensors
+5. **SequentialMediaIndexProvider**
+- Extends: MediaProvider
+- Purpose: Sequential/ordered media playback using Media Index database
+- Features:
+  - Configurable ordering (by date_taken, date_modified, etc.)
+  - Cursor-based pagination for large collections
+  - Direction control (ascending/descending)
+  - Recursive folder support
+  - Tracks progress through collection with "reached end" flag
 
 **Key Features**:
 - Metadata display (EXIF, GPS, dates, locations)
