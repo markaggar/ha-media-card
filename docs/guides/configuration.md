@@ -50,6 +50,7 @@ folder:
     order_direction: desc
 media_type: all
 auto_advance_duration: 5
+```
 
 ## Core Configuration
 
