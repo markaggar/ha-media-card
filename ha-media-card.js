@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.0.0
+ * Media Card v5.0.1
  */
 
 // Import Lit from CDN for standalone usage
