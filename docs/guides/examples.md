@@ -11,9 +11,12 @@ Display the most recent image from a security camera folder:
 ```yaml
 type: custom:media-card
 title: "Front Door Camera"
+media_source_type: folder
 media_type: image
-media_path: media-source://media_source/local/security/front_door/
-folder_mode: latest
+folder:
+  path: media-source://media_source/local/security/front_door/
+  mode: sequential  # Shows newest first when sorted by date
+  recursive: false
 auto_refresh_seconds: 30
 show_refresh_button: true
 enable_navigation_zones: true
@@ -37,9 +40,12 @@ Combined view of multiple camera feeds:
 ```yaml
 type: custom:media-card
 title: "Security Monitor"
+media_source_type: folder
 media_type: image
-media_path: media-source://media_source/local/security/
-folder_mode: latest
+folder:
+  path: media-source://media_source/local/security/
+  mode: random
+  recursive: true
 slideshow_behavior: smart_slideshow
 slideshow_window: 500
 auto_refresh_seconds: 10
@@ -66,9 +72,12 @@ Latest dashcam footage with video playback:
 ```yaml
 type: custom:media-card
 title: "Dashcam - Latest Footage"
+media_source_type: folder
 media_type: video
-media_path: media-source://media_source/local/dashcam/
-folder_mode: latest
+folder:
+  path: media-source://media_source/local/dashcam/
+  mode: sequential
+  recursive: false
 auto_refresh_seconds: 60
 video_autoplay: true
 video_muted: true
@@ -91,10 +100,13 @@ Rotating family photo display:
 ```yaml
 type: custom:media-card
 title: "Family Memories"
+media_source_type: folder
 media_type: image
-media_path: media-source://media_source/local/photos/family/
-folder_mode: random
-random_count: 10
+folder:
+  path: media-source://media_source/local/photos/family/
+  mode: random
+  recursive: true
+  random_count: 10
 auto_refresh_seconds: 180  # 3 minutes per photo
 enable_navigation_zones: true
 enable_keyboard_navigation: true

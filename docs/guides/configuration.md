@@ -6,12 +6,26 @@ Complete guide to all configuration options for the Media Card.
 
 ### Basic Configuration
 
+**Single Media (one file)**:
 ```yaml
 type: custom:media-card
-media_type: image              # image, video, or all
-media_path: media-source://... # Path to media file or folder
-folder_mode: random            # random, latest, or sequential
-auto_refresh_seconds: 60       # Auto-refresh interval (0 = disabled)
+media_source_type: single_media
+media_type: image
+single_media:
+  path: media-source://media_source/local/photo.jpg
+  refresh_seconds: 60  # Optional auto-refresh
+```
+
+**Folder Mode (slideshow)**:
+```yaml
+type: custom:media-card
+media_source_type: folder
+media_type: image
+folder:
+  path: media-source://media_source/local/photos/
+  mode: random      # random, sequential, or subfolder_queue
+  recursive: true   # Include subfolders
+auto_refresh_seconds: 60
 ```
 
 ## Core Configuration
@@ -20,9 +34,13 @@ auto_refresh_seconds: 60       # Auto-refresh interval (0 = disabled)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `media_source_type` | string | **Required** | Source type: `single_media` or `folder` |
 | `media_type` | string | `image` | Media type filter: `image`, `video`, or `all` |
-| `media_path` | string | **Required** | Path to media file or folder (media-source:// URI) |
-| `folder_mode` | string | `null` | Display mode: `random`, `latest`, `sequential`, or `null` (single file) |
+| `single_media.path` | string | Required for single | Path to single media file |
+| `single_media.refresh_seconds` | number | `0` | Auto-refresh interval for single media |
+| `folder.path` | string | Required for folder | Path to folder (media-source:// URI) |
+| `folder.mode` | string | `random` | Display mode: `random`, `sequential`, or `subfolder_queue` |
+| `folder.recursive` | boolean | `false` | Include subfolders in scan |
 
 ### Display Options
 
@@ -43,12 +61,35 @@ auto_refresh_seconds: 60       # Auto-refresh interval (0 = disabled)
 
 ### Random Mode Options
 
+Use `folder.mode: random` for random file selection:
+
+```yaml
+media_source_type: folder
+folder:
+  path: media-source://media_source/local/photos/
+  mode: random
+  random_count: 10  # Optional: queue size
+slideshow_window: 1000  # Optional: probability sampling window
+```
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `random_count` | number | `5` | Number of random files to select |
+| `folder.random_count` | number | `5` | Number of random files to select |
 | `slideshow_window` | number | `1000` | Probability target for sampling (not a hard limit) |
 
-### Latest Mode Options
+### Sequential Mode Options
+
+Use `folder.mode: sequential` for ordered playback:
+
+```yaml
+media_source_type: folder
+folder:
+  path: media-source://media_source/local/photos/
+  mode: sequential
+  sequential:
+    order_by: filename
+    order_direction: asc
+```
 
 **Filename Requirements**: Files must have timestamps in names for proper sorting.
 
@@ -89,13 +130,28 @@ Displays files in order from newest to oldest. Uses same timestamp detection as 
 
 ## Hierarchical Scanning (SubfolderQueue)
 
-For large nested folder structures:
+For large nested folder structures, use `folder.mode: subfolder_queue`:
+
+```yaml
+media_source_type: folder
+folder:
+  path: media-source://media_source/local/photos/
+  mode: subfolder_queue
+  recursive: true
+  scan_depth: 3  # Optional: limit depth (null = unlimited)
+  priority_folders:
+    - pattern: "/DCIM/"
+      weight: 3.0
+    - pattern: "/Favorites/"
+      weight: 2.0
+```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `subfolder_queue.enabled` | boolean | `false` | Enable hierarchical folder scanning |
-| `subfolder_queue.estimated_total_photos` | number | `null` | **Critical**: Estimated total files for consistent probability |
-| `subfolder_queue.priority_folder_patterns` | array | `[]` | Folders to prioritize with weight multipliers |
+| `folder.mode` | string | - | Set to `subfolder_queue` for hierarchical scanning |
+| `folder.recursive` | boolean | `false` | Enable recursive subfolder scanning |
+| `folder.scan_depth` | number | `null` | Maximum depth (null = unlimited) |
+| `folder.priority_folders` | array | `[]` | Folders to prioritize with weight multipliers |
 
 ### Priority Folder Patterns
 
