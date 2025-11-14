@@ -5,7 +5,7 @@
 # HA Media Card 🎬
 A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
-It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - EXIF metadata extraction, favoriting, editing and deleting photos.
+It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, favoriting, editing and deleting photos.
 
 <img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
 
