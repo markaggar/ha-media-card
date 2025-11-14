@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.0.1
+ * Media Card v5.0.2
  */
 
 // Import Lit from CDN for standalone usage
@@ -9726,7 +9726,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.0.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.0.2 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
