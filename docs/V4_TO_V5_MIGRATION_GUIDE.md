@@ -268,8 +268,7 @@ function migrateV4toV5(v4Config) {
 
 ### 1. Type Name Change
 - **V4**: `type: custom:ha-media-card`
-- **V5**: `type: custom:ha-media-card-v5a` (during beta)
-- **Future**: Will become `custom:ha-media-card` in v5.0 final
+- **V5**: `type: custom:ha-media-card`
 
 ### 2. Required Config Structure
 V5 requires `media_source_type` to be explicitly set (or auto-detected from legacy config)
@@ -386,8 +385,3 @@ If migration fails or config doesn't work:
 - Type name reverts to `custom:ha-media-card`
 - V4 configs auto-migrate silently
 - No user action required
-
-**v5.1**:
-- Migration warnings removed (assumed complete)
-- V4 format detection deprecated
-- All users expected on V5 format
