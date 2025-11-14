@@ -1,6 +1,6 @@
 # Release Notes - v5.0.0
 
-**Release Date:** TBD  
+**Release Date:** 2025-11-13  
 **Branch:** feature/v5-rebuild  
 **Status:** In Development
 
