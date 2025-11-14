@@ -153,7 +153,6 @@ When bugs are reported or features seem broken:
 
 **V4 is the reference implementation** - if something worked in V4 and doesn't in V5, it's a regression.
 
-**V4 is the reference implementation** - if something worked in V4 and doesn't in V5, it's a regression.
 
 ---
 
