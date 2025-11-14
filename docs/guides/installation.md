@@ -152,7 +152,7 @@ If you see media displayed (or a message about no files found), the card is work
 3. Test with a simple single-file path first
 4. Check browser console (F12) for error messages
 
-### HACS Shows "Reposit ory not found"
+### HACS Shows "Repository not found"
 
 **Solution:**
 1. Verify repository URL: `https://github.com/markaggar/ha-media-card`
