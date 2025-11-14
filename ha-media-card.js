@@ -38,94 +38,6 @@ const MediaUtils = {
  */
 
 /**
- * ReconnectionManager - Preserve queue state across disconnections
- * Copied from V4 (lines 12-13, 4945-4981, 643-666)
- * 
- * Uses global window.Map to survive card disconnections when navigating
- * between views in Home Assistant
- */
-class ReconnectionManager {
-  constructor() {
-    // Copy from V4 lines 12-13 - Global Map initialization
-    if (!window.mediaCardSubfolderQueues) {
-      window.mediaCardSubfolderQueues = new Map();
-    }
-    this.globalQueues = window.mediaCardSubfolderQueues;
-  }
-
-  /**
-   * Preserve queue state when card disconnects
-   * Copy from V4 lines 4952-4981
-   */
-  preserveQueue(cardId, queueData) {
-    this.globalQueues.set(cardId, {
-      ...queueData,
-      timestamp: Date.now()  // NEW - add timestamp for cleanup (V4 doesn't have this)
-    });
-  }
-
-  /**
-   * Restore queue state when card reconnects
-   * Copy from V4 lines 643-666
-   */
-  restoreQueue(cardId) {
-    if (this.globalQueues.has(cardId)) {
-      const preserved = this.globalQueues.get(cardId);
-      
-      // NEW - check timestamp validity (V4 doesn't validate age)
-      if (this._isValid(preserved)) {
-        // Copy from V4 line 656 - delete after successful restore
-        this.globalQueues.delete(cardId);
-        return preserved;
-      } else {
-        // Expired - clean up
-        this.globalQueues.delete(cardId);
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Clean up old queues to prevent memory leaks
-   * NEW - V4 has no cleanup mechanism
-   */
-  cleanup() {
-    const now = Date.now();
-    const maxAge = 30 * 60 * 1000; // 30 minutes
-    
-    for (const [key, data] of this.globalQueues) {
-      if (data.timestamp && (now - data.timestamp) > maxAge) {
-        this.globalQueues.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Validate preserved queue is not too old
-   * NEW - V4 doesn't validate timestamp
-   */
-  _isValid(preserved) {
-    if (!preserved.timestamp) return true; // Backward compat - accept old data without timestamp
-    const maxAge = 30 * 60 * 1000; // 30 minutes
-    return (Date.now() - preserved.timestamp) < maxAge;
-  }
-
-  /**
-   * Get count of preserved queues
-   */
-  getPreservedCount() {
-    return this.globalQueues.size;
-  }
-
-  /**
-   * Get all preserved queue IDs
-   */
-  getPreservedIds() {
-    return Array.from(this.globalQueues.keys());
-  }
-}
-
-/**
  * VisibilityManager - Handle card visibility and pause/resume
  * Copied from V4 (lines 5080-5156, 1632-1665)
  * 
@@ -336,159 +248,6 @@ class VideoManager {
     }
     this.pausedByVideo = false;
   }
-}
-
-/**
- * MediaQueue - Unified queue management for all providers
- * Based on SubfolderQueue pattern from V4 (lines 6658-6750)
- */
-class MediaQueue {
-  constructor(config = {}) {
-    this.items = [];              // Queue of media items to show
-    this.shownItems = new Set();  // Blacklist of already shown items
-    this.currentIndex = 0;        // For sequential modes
-    
-    // Copy from V4 lines 1611-1680 - Auto-advance timer
-    this.autoRefreshSeconds = config.auto_refresh_seconds || 0;
-    this.refreshInterval = null;
-    this.isPaused = false;
-    this.isBackgroundPaused = false;
-    this.loggedPausedState = false;
-  }
-
-  /**
-   * Add single item to queue if not already present
-   */
-  add(item) {
-    if (!this.items.find(i => i.media_content_id === item.media_content_id)) {
-      this.items.push(item);
-    }
-  }
-
-  /**
-   * Add multiple items to queue
-   */
-  addBatch(items) {
-    items.forEach(item => this.add(item));
-  }
-
-  /**
-   * Get next unshown item from queue
-   * Returns null if all items shown or queue empty
-   */
-  getNext() {
-    // Find first unshown item
-    for (let i = 0; i < this.items.length; i++) {
-      const item = this.items[i];
-      if (!this.shownItems.has(item.media_content_id)) {
-        this.shownItems.add(item.media_content_id);
-        return item;
-      }
-    }
-    return null; // All items shown or queue empty
-  }
-
-  /**
-   * Check if queue is empty
-   */
-  isEmpty() {
-    return this.items.length === 0;
-  }
-
-  /**
-   * Check if queue needs refilling
-   */
-  needsRefill() {
-    const unshownCount = this.items.filter(
-      item => !this.shownItems.has(item.media_content_id)
-    ).length;
-    return unshownCount < 10; // Refill when less than 10 unshown items
-  }
-
-  /**
-   * Clear the shown items blacklist
-   */
-  clearShownItems() {
-    this.shownItems.clear();
-  }
-
-  /**
-   * Setup auto-advance timer
-   * Copy from V4 lines 1611-1680
-   */
-  setupAutoAdvance(advanceCallback, isDiscoveryCallback = null) {
-    // Clear any existing interval FIRST to prevent multiple timers
-    // Copy from V4 lines 1613-1617
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
-      this.refreshInterval = null;
-    }
-
-    // Don't set up auto-refresh if paused or not visible
-    if (this.isPaused || this.isBackgroundPaused) {
-      return;
-    }
-
-    // Set up auto-advance if enabled
-    if (this.autoRefreshSeconds > 0 && advanceCallback) {
-      this.refreshInterval = setInterval(() => {
-        // Check both pause states before running
-        if (!this.isPaused && !this.isBackgroundPaused) {
-          // Skip if discovery is actively in progress AND queue is empty
-          if (isDiscoveryCallback && isDiscoveryCallback()) {
-            // Only block if queue is empty - if we have items, continue while scanning in background
-            if (this.items.length === 0) {
-              return;
-            }
-          }
-          
-          // Trigger advance
-          advanceCallback();
-        }
-      }, this.autoRefreshSeconds * 1000);
-    }
-  }
-
-  /**
-   * Stop auto-advance timer
-   */
-  stopAutoAdvance() {
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
-      this.refreshInterval = null;
-    }
-  }
-
-  /**
-   * Set pause state
-   * Copy from V4 pause/resume patterns
-   */
-  setPauseState(isPaused, isBackgroundPaused = false) {
-    this.isPaused = isPaused;
-    this.isBackgroundPaused = isBackgroundPaused;
-  }
-
-  /**
-   * Serialize queue state for reconnection
-   */
-  serialize() {
-    return {
-      items: this.items,
-      shownItems: Array.from(this.shownItems),
-      currentIndex: this.currentIndex
-    };
-  }
-
-  /**
-   * Restore queue state from serialized data
-   */
-  deserialize(data) {
-    this.items = data.items || [];
-    this.shownItems = new Set(data.shownItems || []);
-    this.currentIndex = data.currentIndex || 0;
-  }
-}
-
 /**
  * MediaProvider - Base class for all media providers
  * All providers must implement: initialize(), getNext(), getPrevious()
@@ -1980,7 +1739,6 @@ class SubfolderQueue {
     }
     
     // V5: cardAdapter is not a DOM element, skip DOM check
-    const cardBackgroundPaused = this.card._backgroundPaused;
     
     if (!this._lastStatusLog || (Date.now() - this._lastStatusLog) > 5000) {
       this._log('🔍 Status: Background paused =', !!this.card._backgroundPaused);
@@ -4407,11 +4165,9 @@ class MediaCardV5a extends LitElement {
     // Show date with fallback priority: date_taken (EXIF) -> created_time (file metadata) -> date (filesystem)
     if (this.config.metadata.show_date) {
       let date = null;
-      let dateSource = null;
       
       // Priority 1: EXIF date_taken if available (from media_index)
       if (metadata.date_taken) {
-        dateSource = 'date_taken';
         
         // Backend returns date_taken as Unix timestamp (number)
         if (typeof metadata.date_taken === 'number') {
@@ -4427,7 +4183,6 @@ class MediaCardV5a extends LitElement {
       
       // Priority 2: File created_time if no EXIF date (from media_index file metadata)
       if (!date && metadata.created_time) {
-        dateSource = 'created_time';
         
         // created_time is ISO string like "2019-09-24T18:51:12"
         if (typeof metadata.created_time === 'string') {
@@ -4441,7 +4196,6 @@ class MediaCardV5a extends LitElement {
       
       // Priority 3: Filesystem date as last fallback
       if (!date && metadata.date) {
-        dateSource = 'filesystem';
         date = metadata.date;
       }
       
