@@ -5700,12 +5700,18 @@ class MediaCardV5a extends LitElement {
       display: block;
     }
     
-    /* Custom max height override */
+    /* Custom max height override with aspect ratio preservation */
     :host img {
       max-height: var(--media-max-height, none);
+      width: auto;
+      height: auto;
+      object-fit: contain;
     }
     :host video {
       max-height: var(--media-max-height, 400px);
+      width: auto;
+      height: auto;
+      object-fit: contain;
     }
 
     /* V4: Image Zoom Styles */
