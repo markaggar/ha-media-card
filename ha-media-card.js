@@ -2942,6 +2942,13 @@ class MediaCardV5a extends LitElement {
       this.removeAttribute('data-aspect-mode');
     }
     
+    // Set custom max height if configured
+    if (config.max_height_pixels && config.max_height_pixels > 0) {
+      this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
+    } else {
+      this.style.removeProperty('--media-max-height');
+    }
+    
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
@@ -5692,6 +5699,14 @@ class MediaCardV5a extends LitElement {
       margin: 0 auto;
       display: block;
     }
+    
+    /* Custom max height override */
+    :host img {
+      max-height: var(--media-max-height, none);
+    }
+    :host video {
+      max-height: var(--media-max-height, 400px);
+    }
 
     /* V4: Image Zoom Styles */
     :host([data-media-type="image"]) .zoomable-container {
@@ -7298,6 +7313,17 @@ class MediaCardV5aEditor extends LitElement {
 
   _aspectModeChanged(ev) {
     this._config = { ...this._config, aspect_mode: ev.target.value };
+    this._fireConfigChanged();
+  }
+
+  _maxHeightChanged(ev) {
+    const value = parseInt(ev.target.value);
+    if (value > 0) {
+      this._config = { ...this._config, max_height_pixels: value };
+    } else {
+      const { max_height_pixels, ...rest } = this._config;
+      this._config = rest;
+    }
     this._fireConfigChanged();
   }
 
@@ -9264,6 +9290,38 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
               </select>
               <div class="help-text">How images should be scaled</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Max Height (pixels)</label>
+            <div>
+              <input
+                type="number"
+                min="100"
+                max="5000"
+                step="50"
+                .value=${this._config.max_height_pixels || ''}
+                @input=${this._maxHeightChanged}
+                placeholder="Auto (no limit)"
+              />
+              <div class="help-text">Maximum height in pixels (overrides aspect mode)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Max Height (pixels)</label>
+            <div>
+              <input
+                type="number"
+                min="100"
+                max="5000"
+                step="50"
+                .value=${this._config.max_height_pixels || ''}
+                @input=${this._maxHeightChanged}
+                placeholder="Auto (no limit)"
+              />
+              <div class="help-text">Maximum height in pixels (overrides aspect mode)</div>
             </div>
           </div>
           
