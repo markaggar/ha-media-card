@@ -3,20 +3,37 @@
 ## Basic Image Card
 ```yaml
 type: custom:media-card
+media_source_type: single_media
 media_type: image
-media_path: /local/images/sunset.jpg
+single_media:
+  path: /local/images/sunset.jpg
 title: "Beautiful Sunset"
 ```
 
 ## Video Card with Options
 ```yaml
 type: custom:media-card
+media_source_type: single_media
 media_type: video
-media_path: /local/videos/family-vacation.mp4
+single_media:
+  path: /local/videos/family-vacation.mp4
 title: "Family Vacation Highlights"
 video_autoplay: false
 video_loop: true
 video_muted: false
+```
+
+## Folder Slideshow (Random Mode)
+```yaml
+type: custom:media-card
+media_source_type: folder
+media_type: image
+folder:
+  path: media-source://media_source/local/photos/
+  mode: random
+  recursive: true
+auto_refresh_seconds: 60
+title: "Family Photos"
 ```
 
 ## Multiple Cards in a Grid
@@ -25,25 +42,35 @@ type: grid
 columns: 2
 cards:
   - type: custom:media-card
+    media_source_type: folder
     media_type: image
-    media_path: /local/photos/garden.jpg
+    folder:
+      path: media-source://media_source/local/photos/garden/
+      mode: random
     title: "Garden Photos"
     
   - type: custom:media-card
+    media_source_type: single_media
     media_type: video
-    media_path: /local/videos/pets.mp4
+    single_media:
+      path: /local/videos/pets.mp4
     title: "Pet Moments"
     video_loop: true
     video_muted: true
 
   - type: custom:media-card
+    media_source_type: single_media
     media_type: image
-    media_path: /local/images/vacation.png
+    single_media:
+      path: /local/images/vacation.png
+      refresh_seconds: 300
     title: "Vacation 2025"
     
   - type: custom:media-card
+    media_source_type: single_media
     media_type: video
-    media_path: /local/videos/events.mp4
+    single_media:
+      path: /local/videos/events.mp4
     title: "Special Events"
     video_autoplay: false
 ```
