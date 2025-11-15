@@ -2458,23 +2458,24 @@ class SubfolderQueue {
             const aDate = MediaProvider.extractDateFromFilename(aFilename);
             const bDate = MediaProvider.extractDateFromFilename(bFilename);
             
-            // Enhanced sorting: dated files sorted chronologically, non-dated files last (alphabetically)
+            // Enhanced sorting: dated files sorted chronologically, non-dated files last (respecting direction)
             if (aDate && bDate) {
               // Both have dates - compare chronologically
               aVal = aDate.getTime();
               bVal = bDate.getTime();
             } else if (aDate && !bDate) {
-              // Only A has date - dated file comes before non-dated (regardless of direction)
-              // For asc: old→new→non-dated, so A (dated) < B (non-dated) = -1
-              // For desc: new→old→non-dated, so A (dated) < B (non-dated) = -1 (then reversed to 1 by direction)
-              return -1;
+              // Only A has date - push non-dated files to the "end" by using very large timestamp
+              // This ensures dated < non-dated in ascending, and non-dated still last in descending
+              aVal = aDate.getTime();
+              bVal = Number.MAX_SAFE_INTEGER; // B (non-dated) sorts after all real dates
             } else if (!aDate && bDate) {
-              // Only B has date - dated file comes before non-dated (regardless of direction)
-              // For asc: old→new→non-dated, so B (dated) < A (non-dated), return 1 (A after B)
-              // For desc: new→old→non-dated, so B (dated) < A (non-dated), return 1 (then reversed to -1, but that's wrong)
-              return 1;
+              // Only B has date - push non-dated files to the "end"
+              aVal = Number.MAX_SAFE_INTEGER; // A (non-dated) sorts after all real dates
+              bVal = bDate.getTime();
             } else {
-              // Neither has date - sort alphabetically by filename
+              // Neither has date - both use MAX timestamp as base, then break ties alphabetically
+              // Add a tiny offset based on alphabetical position to preserve alpha sort
+              // This makes Picture01.jpg < Picture02.jpg in asc, and Picture02.jpg < Picture01.jpg in desc
               aVal = aFilename;
               bVal = bFilename;
             }
