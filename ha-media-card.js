@@ -8684,9 +8684,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       // Try Home Assistant thumbnail API
       if (!thumbnailUrl) {
         try {
+          // For Immich media sources, replace /thumbnail/ with /fullsize/ to get authenticated URLs
+          // Immich integration doesn't properly auth thumbnail endpoints
+          let resolveId = item.media_content_id;
+          if (resolveId && resolveId.includes('media-source://immich') && resolveId.includes('/thumbnail/')) {
+            resolveId = resolveId.replace('/thumbnail/', '/fullsize/');
+            if (shouldLog) this._log('🔧 Immich thumbnail → fullsize:', resolveId);
+          }
+          
           const thumbnailResponse = await this.hass.callWS({
             type: "media_source/resolve_media",
-            media_content_id: item.media_content_id,
+            media_content_id: resolveId,
             expires: 3600
           });
           
