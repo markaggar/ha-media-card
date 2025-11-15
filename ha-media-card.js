@@ -3418,23 +3418,45 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
-    // If /media/ path, convert to media-source://
+    // If /media/ path, convert to media-source:// and validate existence
     if (mediaId.startsWith('/media/')) {
       const mediaSourceId = 'media-source://media_source' + mediaId;
       this._log('Converting /media/ to media-source://', mediaSourceId);
+      
       try {
+        // Validate file exists by attempting to resolve it
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
           media_content_id: mediaSourceId,
           expires: (60 * 60 * 3)
         });
-        this._log('Resolved to:', resolved.url);
+        this._log('✅ File exists and resolved to:', resolved.url);
         this.mediaUrl = resolved.url;
         this.requestUpdate();
       } catch (error) {
-        console.error('[MediaCardV5a] Failed to resolve media URL:', error);
+        // File doesn't exist or can't be accessed - skip to next
+        console.warn('[MediaCardV5a] File not found or inaccessible, skipping to next:', mediaId, error.message);
+        
+        // Track file as missing to avoid re-querying from media_index
+        if (this.provider?.mediaIndexProvider) {
+          this.provider.mediaIndexProvider.excludedFiles.add(mediaId);
+          this._log('Added to excluded files set:', mediaId);
+        }
+        
+        // Remove the bad item from history
+        if (this.history.length > 0 && this.history[this.history.length - 1].media_content_id === mediaId) {
+          this._log('Removing invalid item from history');
+          this.history.pop();
+          this.historyIndex = this.history.length - 1;
+        }
+        
+        // Clear the current media to avoid showing broken state
         this.mediaUrl = '';
-        this.requestUpdate();
+        
+        // Recursively skip to next item without adding to history
+        this._log('⏭️ Skipping to next item due to missing file');
+        await this.next(); // Get next item (will validate recursively)
+        return;
       }
       return;
     }
