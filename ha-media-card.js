@@ -11,8 +11,15 @@ const MediaUtils = {
     if (!filePath) return null;
     
     let cleanPath = filePath;
-    if (filePath.includes('?')) {
-      cleanPath = filePath.split('?')[0];
+    
+    // Strip Immich pipe-delimited MIME type suffix (e.g., "file.jpg|image/jpeg" -> "file.jpg")
+    if (cleanPath.includes('|')) {
+      cleanPath = cleanPath.split('|')[0];
+    }
+    
+    // Strip query parameters
+    if (cleanPath.includes('?')) {
+      cleanPath = cleanPath.split('?')[0];
     }
     
     const fileName = cleanPath.split('/').pop() || cleanPath;
@@ -25,7 +32,7 @@ const MediaUtils = {
     
     if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic'].includes(extension)) {
       return 'image';
     }
     
@@ -1024,7 +1031,7 @@ class MediaIndexProvider extends MediaProvider {
         // V4: Use database path for media_content_id (service calls need this)
         // URL resolution happens separately in card's _resolveMediaUrl()
         media_content_id: item.path,
-        media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend (V4 pattern)
@@ -1342,7 +1349,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       return {
         // V4: Use database path for media_content_id (service calls need this)
         media_content_id: item.path,
-        media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend
@@ -2011,17 +2018,11 @@ class SubfolderQueue {
       const configuredMediaType = this.card.config.media_type || 'all';
       if (configuredMediaType !== 'all') {
         files = files.filter(file => {
-          // Use title for Immich compatibility (title = clean filename, media_content_id has pipe suffix)
+          // Use title for Immich compatibility (title = clean filename)
           const filePath = file.title || file.media_content_id || '';
-          // Strip Immich pipe suffix if present (e.g., "file.jpg|image/jpeg" -> "file.jpg")
-          const cleanPath = filePath.includes('|') ? filePath.split('|')[0] : filePath;
+          const fileType = MediaUtils.detectFileType(filePath);
           
-          const isVideo = cleanPath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
-          const isImage = cleanPath.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|heic)$/i);
-          
-          if (configuredMediaType === 'video') return isVideo;
-          if (configuredMediaType === 'image') return isImage;
-          return true;
+          return fileType === configuredMediaType;
         });
       }
       
@@ -2186,9 +2187,9 @@ class SubfolderQueue {
     
     // Fallback: detect from file extension if still not set
     if (!file.media_content_type) {
-      const filePath = file.media_content_id || file.title || '';
-      const isVideo = filePath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
-      file.media_content_type = isVideo ? 'video' : 'image';
+      const filePath = file.title || file.media_content_id || '';
+      const fileType = MediaUtils.detectFileType(filePath);
+      file.media_content_type = fileType || 'image';
     }
 
     this.queue.push(file);
