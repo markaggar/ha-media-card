@@ -2011,9 +2011,13 @@ class SubfolderQueue {
       const configuredMediaType = this.card.config.media_type || 'all';
       if (configuredMediaType !== 'all') {
         files = files.filter(file => {
-          const filePath = file.media_content_id || file.title || '';
-          const isVideo = filePath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
-          const isImage = filePath.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i);
+          // Use title for Immich compatibility (title = clean filename, media_content_id has pipe suffix)
+          const filePath = file.title || file.media_content_id || '';
+          // Strip Immich pipe suffix if present (e.g., "file.jpg|image/jpeg" -> "file.jpg")
+          const cleanPath = filePath.includes('|') ? filePath.split('|')[0] : filePath;
+          
+          const isVideo = cleanPath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
+          const isImage = cleanPath.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|heic)$/i);
           
           if (configuredMediaType === 'video') return isVideo;
           if (configuredMediaType === 'image') return isImage;
