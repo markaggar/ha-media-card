@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.0.2
+ * Media Card v5.1.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -6992,19 +6992,10 @@ class MediaCardV5aEditor extends LitElement {
         media_index: this._config.media_index // Preserve media_index for metadata/actions
       };
     } else if (newMode === 'folder') {
-      // Get path from media_index entity if available
+      // Get path from existing config only (do NOT auto-populate from media_index)
+      // Media Index uses filesystem paths (/media/photo) which are incompatible with
+      // media-source URIs (media-source://media_source/local/)
       let folderPath = this._config.media_path || null;
-      const mediaIndexEntityId = this._config.media_index?.entity_id;
-      
-      if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
-        const entity = this.hass.states[mediaIndexEntityId];
-        folderPath = entity.attributes?.media_folder || 
-                     entity.attributes?.folder_path || 
-                     entity.attributes?.base_path || null;
-        if (folderPath) {
-          this._log('📁 Auto-populated folder path from media_index:', folderPath);
-        }
-      }
       
       this._config = { 
         type: this._config.type, // Preserve card type
@@ -9836,7 +9827,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.0.2 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.1.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
