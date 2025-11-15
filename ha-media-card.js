@@ -2457,8 +2457,25 @@ class SubfolderQueue {
             const bFilename = MediaProvider.extractFilename(b.media_content_id);
             const aDate = MediaProvider.extractDateFromFilename(aFilename);
             const bDate = MediaProvider.extractDateFromFilename(bFilename);
-            aVal = aDate ? aDate.getTime() : aFilename;
-            bVal = bDate ? bDate.getTime() : bFilename;
+            
+            // Enhanced sorting: files with dates first, then alphabetical for non-dated files
+            if (aDate && bDate) {
+              // Both have dates - compare chronologically
+              aVal = aDate.getTime();
+              bVal = bDate.getTime();
+            } else if (aDate && !bDate) {
+              // Only A has date - A comes first (dates before non-dates)
+              // Return negative for asc (A before B), positive for desc (B before A)
+              return direction === 'asc' ? -1 : 1;
+            } else if (!aDate && bDate) {
+              // Only B has date - B comes first (dates before non-dates)
+              // Return positive for asc (B before A), negative for desc (A before B)
+              return direction === 'asc' ? 1 : -1;
+            } else {
+              // Neither has date - sort alphabetically by filename
+              aVal = aFilename;
+              bVal = bFilename;
+            }
           }
           break;
         default:
