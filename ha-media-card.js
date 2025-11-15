@@ -642,8 +642,8 @@ class FolderProvider extends MediaProvider {
       }
     }
     
-    // RANDOM MODE - Random selection with weighted folders
-    if (mode === 'random' && recursive) {
+    // RANDOM MODE - Random selection
+    if (mode === 'random') {
       // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
       if (useMediaIndex) {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
@@ -662,7 +662,7 @@ class FolderProvider extends MediaProvider {
       
       // Use SubfolderQueue (filesystem scanning) if media_index disabled or failed
       if (!this.mediaIndexProvider) {
-        this.cardAdapter._log('Using SubfolderQueue for filesystem scanning');
+        this.cardAdapter._log('Using SubfolderQueue for filesystem scanning (recursive:', recursive, ')');
         
         // V5 RECONNECTION: Check if card has existing SubfolderQueue from reconnection
         if (this.card && this.card._existingSubfolderQueue) {
@@ -676,6 +676,22 @@ class FolderProvider extends MediaProvider {
           return true;
         }
         
+        // Set scan_depth based on recursive setting
+        // recursive: false = scan_depth: 0 (only base folder)
+        // recursive: true = scan_depth: null (unlimited depth, or config value)
+        const adaptedConfig = this._adaptConfigForV4();
+        if (!recursive) {
+          adaptedConfig.subfolder_queue.enabled = true; // Still use queue, but limit depth
+          adaptedConfig.subfolder_queue.scan_depth = 0; // Only scan base folder
+          this.cardAdapter._log('Non-recursive mode: scan_depth = 0 (base folder only)');
+        } else {
+          adaptedConfig.subfolder_queue.enabled = true;
+          adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
+          this.cardAdapter._log('Recursive mode: scan_depth =', adaptedConfig.subfolder_queue.scan_depth || 'unlimited');
+        }
+        
+        // Update cardAdapter config
+        this.cardAdapter.config = adaptedConfig;
         this.cardAdapter._log('Adapted config for SubfolderQueue:', this.cardAdapter.config);
         
         // Create SubfolderQueue instance with V4-compatible card adapter
