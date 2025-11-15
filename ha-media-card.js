@@ -6992,10 +6992,23 @@ class MediaCardV5aEditor extends LitElement {
         media_index: this._config.media_index // Preserve media_index for metadata/actions
       };
     } else if (newMode === 'folder') {
-      // Get path from existing config only (do NOT auto-populate from media_index)
-      // Media Index uses filesystem paths (/media/photo) which are incompatible with
-      // media-source URIs (media-source://media_source/local/)
+      // Get path from media_index entity if available and convert to media-source format
       let folderPath = this._config.media_path || null;
+      const mediaIndexEntityId = this._config.media_index?.entity_id;
+      
+      if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
+        const entity = this.hass.states[mediaIndexEntityId];
+        const filesystemPath = entity.attributes?.media_path || 
+                               entity.attributes?.folder_path || 
+                               entity.attributes?.base_path || null;
+        
+        if (filesystemPath) {
+          // Convert filesystem path to media-source URI
+          // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
+          folderPath = `media-source://media_source${filesystemPath}`;
+          this._log('📁 Auto-populated folder path from media_index:', filesystemPath, '→', folderPath);
+        }
+      }
       
       this._config = { 
         type: this._config.type, // Preserve card type
