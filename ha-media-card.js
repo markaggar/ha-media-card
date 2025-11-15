@@ -1106,6 +1106,8 @@ class MediaIndexProvider extends MediaProvider {
         service_data: {
           count: count,
           folder: folderFilter,
+          // V5: Pass recursive parameter (backend support pending)
+          recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
