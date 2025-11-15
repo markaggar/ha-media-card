@@ -2584,6 +2584,7 @@ class MediaCardV5a extends LitElement {
     this.history = [];            // Navigation trail (what user has seen)
     this.historyIndex = -1;       // Current position in history (-1 = at end)
     this.shownItems = new Set();  // Prevent duplicate display until aged out
+    this._maxQueueSize = 0;       // Track highest queue size seen (for position indicator)
     
     this.currentMedia = null;
     this.mediaUrl = '';
@@ -4329,14 +4330,24 @@ class MediaCardV5a extends LitElement {
       return html``;
     }
 
-    // Get total count from provider queue (not history which grows unbounded)
-    const totalCount = this.provider?.subfolderQueue?.queue?.length || 0;
+    // Get current queue size and track the maximum seen
+    const currentQueueSize = this.provider?.subfolderQueue?.queue?.length || 0;
+    if (currentQueueSize > this._maxQueueSize) {
+      this._maxQueueSize = currentQueueSize;
+    }
+    
+    // Use max queue size for stable "Y" display (prevents confusing fluctuations)
+    const totalCount = this._maxQueueSize;
     if (totalCount <= 1) {
       return html``;
     }
 
     // Current position in history (historyIndex === -1 means at end/latest)
-    const currentIndex = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+    let rawPosition = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+    
+    // When cycling through queue, wrap position back to 1 instead of exceeding totalCount
+    // Use modulo to handle cycling: position 20 in queue of 10 becomes position 10 (1-indexed: displayed as "10 of 10")
+    const currentIndex = rawPosition % totalCount;
 
     // Show position indicator if enabled
     let positionIndicator = html``;
