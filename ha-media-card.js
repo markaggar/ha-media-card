@@ -145,14 +145,8 @@ class MediaProvider {
     
     const metadata = {};
     
-    // Extract filename and clean it up
-    const pathParts = mediaPath.split('/');
-    let filename = pathParts[pathParts.length - 1];
-    
-    // Strip Immich's pipe-delimited MIME type suffix (e.g., "file.jpg|image/jpeg" -> "file.jpg")
-    if (filename.includes('|')) {
-      filename = filename.split('|')[0];
-    }
+    // Use extractFilename helper to get clean filename (handles Immich pipe suffix)
+    let filename = MediaProvider.extractFilename(mediaPath);
     
     // Decode URL encoding (%20 -> space, etc.)
     try {
@@ -164,6 +158,7 @@ class MediaProvider {
     metadata.filename = filename;
     
     // Extract folder path (parent directory/directories)
+    const pathParts = mediaPath.split('/');
     if (pathParts.length > 1) {
       // Find where the actual media path starts (skip /media/ prefix)
       let folderStart = 0;
