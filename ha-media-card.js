@@ -2432,7 +2432,68 @@ class SubfolderQueue {
     this._log('_sortQueue - orderBy:', orderBy, 'direction:', direction, 'priorityNewFiles:', priorityNewFiles);
     this._log('Full sequential config:', this.card.config.folder?.sequential);
     
-    // Standard sort comparator function
+    // For date-based sorting, use two-pass approach: dated files first, then non-dated
+    if (orderBy === 'date_taken' || orderBy === 'modified_time') {
+      const datedFiles = [];
+      const nonDatedFiles = [];
+      
+      // Separate files into dated and non-dated groups
+      for (const item of this.queue) {
+        let hasDate = false;
+        
+        // Check EXIF data first
+        if (item.metadata?.date_taken) {
+          hasDate = true;
+        } else {
+          // Check filename
+          const filename = MediaProvider.extractFilename(item.media_content_id);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          hasDate = !!dateFromFilename;
+        }
+        
+        if (hasDate) {
+          datedFiles.push(item);
+        } else {
+          nonDatedFiles.push(item);
+        }
+      }
+      
+      // Sort dated files chronologically
+      datedFiles.sort((a, b) => {
+        let aVal, bVal;
+        
+        if (a.metadata?.date_taken && b.metadata?.date_taken) {
+          aVal = new Date(a.metadata.date_taken).getTime();
+          bVal = new Date(b.metadata.date_taken).getTime();
+        } else {
+          const aFilename = MediaProvider.extractFilename(a.media_content_id);
+          const bFilename = MediaProvider.extractFilename(b.media_content_id);
+          const aDate = MediaProvider.extractDateFromFilename(aFilename);
+          const bDate = MediaProvider.extractDateFromFilename(bFilename);
+          aVal = aDate ? aDate.getTime() : 0;
+          bVal = bDate ? bDate.getTime() : 0;
+        }
+        
+        const comparison = aVal - bVal;
+        return direction === 'asc' ? comparison : -comparison;
+      });
+      
+      // Sort non-dated files alphabetically
+      nonDatedFiles.sort((a, b) => {
+        const aFilename = MediaProvider.extractFilename(a.media_content_id);
+        const bFilename = MediaProvider.extractFilename(b.media_content_id);
+        const comparison = aFilename.localeCompare(bFilename);
+        return direction === 'asc' ? comparison : -comparison;
+      });
+      
+      // Combine: dated files first, then non-dated files
+      this.queue = [...datedFiles, ...nonDatedFiles];
+      
+      this._log('✅ Two-pass sort complete:', datedFiles.length, 'dated files,', nonDatedFiles.length, 'non-dated files');
+      return; // Skip the standard comparator below
+    }
+    
+    // Standard sort comparator function for non-date sorting
     const compareItems = (a, b) => {
       let aVal, bVal;
       
@@ -2445,54 +2506,12 @@ class SubfolderQueue {
           aVal = a.media_content_id;
           bVal = b.media_content_id;
           break;
-        case 'date_taken':
-        case 'modified_time':
-          // Use EXIF data if available from enrichment
-          if (a.metadata?.date_taken && b.metadata?.date_taken) {
-            aVal = new Date(a.metadata.date_taken).getTime();
-            bVal = new Date(b.metadata.date_taken).getTime();
-          } else {
-            // Fallback: filename-based date extraction
-            const aFilename = MediaProvider.extractFilename(a.media_content_id);
-            const bFilename = MediaProvider.extractFilename(b.media_content_id);
-            const aDate = MediaProvider.extractDateFromFilename(aFilename);
-            const bDate = MediaProvider.extractDateFromFilename(bFilename);
-            
-            // Enhanced sorting: dated files sorted chronologically, non-dated files last (respecting direction)
-            if (aDate && bDate) {
-              // Both have dates - compare chronologically
-              aVal = aDate.getTime();
-              bVal = bDate.getTime();
-            } else if (aDate && !bDate) {
-              // Only A has date - push non-dated files to the "end" by using very large timestamp
-              // This ensures dated < non-dated in ascending, and non-dated still last in descending
-              aVal = aDate.getTime();
-              bVal = Number.MAX_SAFE_INTEGER; // B (non-dated) sorts after all real dates
-            } else if (!aDate && bDate) {
-              // Only B has date - push non-dated files to the "end"
-              aVal = Number.MAX_SAFE_INTEGER; // A (non-dated) sorts after all real dates
-              bVal = bDate.getTime();
-            } else {
-              // Neither has date - both use MAX timestamp as base, then break ties alphabetically
-              // Add a tiny offset based on alphabetical position to preserve alpha sort
-              // This makes Picture01.jpg < Picture02.jpg in asc, and Picture02.jpg < Picture01.jpg in desc
-              aVal = aFilename;
-              bVal = bFilename;
-            }
-          }
-          break;
         default:
           aVal = a.media_content_id;
           bVal = b.media_content_id;
       }
       
-      let comparison;
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        comparison = aVal - bVal;
-      } else {
-        comparison = String(aVal).localeCompare(String(bVal));
-      }
-      
+      const comparison = String(aVal).localeCompare(String(bVal));
       return direction === 'asc' ? comparison : -comparison;
     };
     
