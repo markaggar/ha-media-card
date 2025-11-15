@@ -149,6 +149,11 @@ class MediaProvider {
     const pathParts = mediaPath.split('/');
     let filename = pathParts[pathParts.length - 1];
     
+    // Strip Immich's pipe-delimited MIME type suffix (e.g., "file.jpg|image/jpeg" -> "file.jpg")
+    if (filename.includes('|')) {
+      filename = filename.split('|')[0];
+    }
+    
     // Decode URL encoding (%20 -> space, etc.)
     try {
       filename = decodeURIComponent(filename);
