@@ -145,8 +145,23 @@ class MediaProvider {
     
     const metadata = {};
     
-    // Use extractFilename helper to get clean filename (handles Immich pipe suffix)
-    let filename = MediaProvider.extractFilename(mediaPath);
+    // Normalize Immich pipe-delimited paths to slash-delimited
+    // Immich uses: media-source://immich/uuid|albums|uuid|uuid|filename.jpg|image/jpeg
+    // We need: media-source://immich/uuid/albums/uuid/uuid/filename.jpg
+    let normalizedPath = mediaPath;
+    if (normalizedPath.includes('|')) {
+      // Replace all pipes with slashes, except keep the final |mime/type for later removal
+      const lastPipeIndex = normalizedPath.lastIndexOf('|');
+      const pathBeforeLastPipe = normalizedPath.substring(0, lastPipeIndex);
+      const mimeType = normalizedPath.substring(lastPipeIndex);
+      
+      // Replace pipes in path with slashes
+      normalizedPath = pathBeforeLastPipe.replace(/\|/g, '/');
+      // Don't append mime type back - we don't need it
+    }
+    
+    // Use extractFilename helper to get clean filename (now from normalized path)
+    let filename = MediaProvider.extractFilename(normalizedPath);
     
     // Decode URL encoding (%20 -> space, etc.)
     try {
@@ -158,14 +173,7 @@ class MediaProvider {
     metadata.filename = filename;
     
     // Extract folder path (parent directory/directories)
-    // Strip Immich pipe suffix from mediaPath before splitting to avoid including it in folder path
-    let cleanPath = mediaPath;
-    if (cleanPath.includes('|')) {
-      // Remove everything after the last pipe (MIME type suffix)
-      cleanPath = cleanPath.substring(0, cleanPath.lastIndexOf('|'));
-    }
-    
-    const pathParts = cleanPath.split('/');
+    const pathParts = normalizedPath.split('/');
     if (pathParts.length > 1) {
       // Find where the actual media path starts (skip /media/ prefix)
       let folderStart = 0;
