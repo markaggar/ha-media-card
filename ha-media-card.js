@@ -158,7 +158,14 @@ class MediaProvider {
     metadata.filename = filename;
     
     // Extract folder path (parent directory/directories)
-    const pathParts = mediaPath.split('/');
+    // Strip Immich pipe suffix from mediaPath before splitting to avoid including it in folder path
+    let cleanPath = mediaPath;
+    if (cleanPath.includes('|')) {
+      // Remove everything after the last pipe (MIME type suffix)
+      cleanPath = cleanPath.substring(0, cleanPath.lastIndexOf('|'));
+    }
+    
+    const pathParts = cleanPath.split('/');
     if (pathParts.length > 1) {
       // Find where the actual media path starts (skip /media/ prefix)
       let folderStart = 0;
