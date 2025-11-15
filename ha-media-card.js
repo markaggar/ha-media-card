@@ -2458,19 +2458,21 @@ class SubfolderQueue {
             const aDate = MediaProvider.extractDateFromFilename(aFilename);
             const bDate = MediaProvider.extractDateFromFilename(bFilename);
             
-            // Enhanced sorting: files with dates first, then alphabetical for non-dated files
+            // Enhanced sorting: dated files sorted chronologically, non-dated files last (alphabetically)
             if (aDate && bDate) {
               // Both have dates - compare chronologically
               aVal = aDate.getTime();
               bVal = bDate.getTime();
             } else if (aDate && !bDate) {
-              // Only A has date - A comes first (dates before non-dates)
-              // Return negative for asc (A before B), positive for desc (B before A)
-              return direction === 'asc' ? -1 : 1;
+              // Only A has date - dated file comes before non-dated (regardless of direction)
+              // For asc: old→new→non-dated, so A (dated) < B (non-dated) = -1
+              // For desc: new→old→non-dated, so A (dated) < B (non-dated) = -1 (then reversed to 1 by direction)
+              return -1;
             } else if (!aDate && bDate) {
-              // Only B has date - B comes first (dates before non-dates)
-              // Return positive for asc (B before A), negative for desc (A before B)
-              return direction === 'asc' ? 1 : -1;
+              // Only B has date - dated file comes before non-dated (regardless of direction)
+              // For asc: old→new→non-dated, so B (dated) < A (non-dated), return 1 (A after B)
+              // For desc: new→old→non-dated, so B (dated) < A (non-dated), return 1 (then reversed to -1, but that's wrong)
+              return 1;
             } else {
               // Neither has date - sort alphabetically by filename
               aVal = aFilename;
