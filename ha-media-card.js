@@ -106,7 +106,14 @@ class MediaProvider {
    */
   static extractFilename(path) {
     if (!path) return '';
-    return path.split('/').pop() || path;
+    let filename = path.split('/').pop() || path;
+    
+    // Strip Immich's pipe-delimited MIME type suffix (e.g., "file.jpg|image/jpeg" -> "file.jpg")
+    if (filename.includes('|')) {
+      filename = filename.split('|')[0];
+    }
+    
+    return filename;
   }
 
   /**
