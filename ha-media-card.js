@@ -157,14 +157,21 @@ class MediaProvider {
     // We need: media-source://immich/uuid/albums/uuid/uuid/filename.jpg
     let normalizedPath = mediaPath;
     if (normalizedPath.includes('|')) {
-      // Replace all pipes with slashes, except keep the final |mime/type for later removal
+      // Only strip the last segment if it looks like a MIME type (contains '/')
       const lastPipeIndex = normalizedPath.lastIndexOf('|');
-      const pathBeforeLastPipe = normalizedPath.substring(0, lastPipeIndex);
-      const mimeType = normalizedPath.substring(lastPipeIndex);
-      
-      // Replace pipes in path with slashes
-      normalizedPath = pathBeforeLastPipe.replace(/\|/g, '/');
-      // Don't append mime type back - we don't need it
+      if (lastPipeIndex !== -1) {
+        const afterLastPipe = normalizedPath.substring(lastPipeIndex + 1);
+        if (afterLastPipe.includes('/')) {
+          // It's a MIME type, strip it
+          normalizedPath = normalizedPath.substring(0, lastPipeIndex).replace(/\|/g, '/');
+        } else {
+          // No MIME type, just replace all pipes
+          normalizedPath = normalizedPath.replace(/\|/g, '/');
+        }
+      } else {
+        // No pipes at all
+        // normalizedPath stays as-is
+      }
     }
     
     // Use extractFilename helper to get clean filename (now from normalized path)
@@ -705,22 +712,18 @@ class FolderProvider extends MediaProvider {
           return true;
         }
         
-        // Set scan_depth based on recursive setting
+        // Set scan_depth based on recursive setting in existing config
         // recursive: false = scan_depth: 0 (only base folder)
         // recursive: true = scan_depth: null (unlimited depth, or config value)
-        const adaptedConfig = this._adaptConfigForV4();
         if (!recursive) {
-          adaptedConfig.subfolder_queue.enabled = true; // Still use queue, but limit depth
-          adaptedConfig.subfolder_queue.scan_depth = 0; // Only scan base folder
+          this.cardAdapter.config.subfolder_queue.enabled = true; // Still use queue, but limit depth
+          this.cardAdapter.config.subfolder_queue.scan_depth = 0; // Only scan base folder
           this.cardAdapter._log('Non-recursive mode: scan_depth = 0 (base folder only)');
         } else {
-          adaptedConfig.subfolder_queue.enabled = true;
-          adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
-          this.cardAdapter._log('Recursive mode: scan_depth =', adaptedConfig.subfolder_queue.scan_depth || 'unlimited');
+          this.cardAdapter.config.subfolder_queue.enabled = true;
+          this.cardAdapter.config.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
+          this.cardAdapter._log('Recursive mode: scan_depth =', this.cardAdapter.config.subfolder_queue.scan_depth || 'unlimited');
         }
-        
-        // Update cardAdapter config
-        this.cardAdapter.config = adaptedConfig;
         this.cardAdapter._log('Adapted config for SubfolderQueue:', this.cardAdapter.config);
         
         // Create SubfolderQueue instance with V4-compatible card adapter
@@ -2024,7 +2027,14 @@ class SubfolderQueue {
           const filePath = file.title || file.media_content_id || '';
           const fileType = MediaUtils.detectFileType(filePath);
           
-          return fileType === configuredMediaType;
+          // If fileType is known, use it; otherwise, fall back to media_class
+          if (fileType) {
+            return fileType === configuredMediaType;
+          } else if (file.media_class) {
+            return file.media_class === configuredMediaType;
+          }
+          // If neither, exclude
+          return false;
         });
       }
       
@@ -3503,6 +3513,10 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
+    // Track recursion depth to prevent infinite loops
+    if (!this._validationDepth) this._validationDepth = 0;
+    const MAX_VALIDATION_ATTEMPTS = 10;
+    
     // If /media/ path, convert to media-source:// and validate existence
     if (mediaId.startsWith('/media/')) {
       const mediaSourceId = 'media-source://media_source' + mediaId;
@@ -3516,6 +3530,7 @@ class MediaCardV5a extends LitElement {
           expires: (60 * 60 * 3)
         });
         this._log('✅ File exists and resolved to:', resolved.url);
+        this._validationDepth = 0; // Reset on success
         this.mediaUrl = resolved.url;
         this.requestUpdate();
       } catch (error) {
@@ -3538,11 +3553,20 @@ class MediaCardV5a extends LitElement {
         // Clear the current media to avoid showing broken state
         this.mediaUrl = '';
         
+        // Check recursion depth before recursive call
+        this._validationDepth = (this._validationDepth || 0) + 1;
+        if (this._validationDepth >= MAX_VALIDATION_ATTEMPTS) {
+          console.error('[MediaCardV5a] Too many consecutive missing files, stopping validation');
+          this._validationDepth = 0;
+          return;
+        }
+        
         // Recursively skip to next item without adding to history
-        this._log('⏭️ Skipping to next item due to missing file');
+        this._log('⏭️ Skipping to next item due to missing file (depth:', this._validationDepth, ')');
         await this.next(); // Get next item (will validate recursively)
         return;
       }
+      this._validationDepth = 0; // Reset on error path
       return;
     }
 
@@ -4430,8 +4454,8 @@ class MediaCardV5a extends LitElement {
     let rawPosition = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
     
     // When cycling through queue, wrap position back to 1 instead of exceeding totalCount
-    // Use modulo to handle cycling: position 20 in queue of 10 becomes position 10 (1-indexed: displayed as "10 of 10")
-    const currentIndex = rawPosition % totalCount;
+    // Ensure currentIndex stays within bounds [0, totalCount-1]
+    const currentIndex = totalCount > 0 ? rawPosition % totalCount : 0;
 
     // Show position indicator if enabled
     let positionIndicator = html``;
@@ -5819,17 +5843,14 @@ class MediaCardV5a extends LitElement {
     }
     
     /* Custom max height override with aspect ratio preservation */
-    :host img {
+    /* Only apply when NOT in special aspect modes to avoid conflicts */
+    :host(:not([data-aspect-mode="viewport-fit"]):not([data-aspect-mode="viewport-fill"]):not([data-aspect-mode="smart-scale"])) img {
       max-height: var(--media-max-height, none);
-      width: auto;
-      height: auto;
-      object-fit: contain;
+      /* Keep width: 100% from default mode */
     }
-    :host video {
+    :host(:not([data-aspect-mode="viewport-fit"]):not([data-aspect-mode="viewport-fill"]):not([data-aspect-mode="smart-scale"])) video {
       max-height: var(--media-max-height, none);
-      width: auto;
-      height: auto;
-      object-fit: contain;
+      /* Keep width: 100% from default mode */
     }
 
     /* V4: Image Zoom Styles */
@@ -7446,7 +7467,8 @@ class MediaCardV5aEditor extends LitElement {
 
   _maxHeightChanged(ev) {
     const value = parseInt(ev.target.value);
-    if (value > 0) {
+    // Only store positive integers; everything else removes the property
+    if (!isNaN(value) && value > 0) {
       this._config = { ...this._config, max_height_pixels: value };
     } else {
       const { max_height_pixels, ...rest } = this._config;
