@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.1.0
+ * Media Card v5.2.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -3460,7 +3460,7 @@ class MediaCardV5a extends LitElement {
       this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
     } else {
       this._log('🔄 Auto-advance disabled or not configured:', {
-        advanceSeconds,
+        refreshSeconds,
         hasHass: !!this.hass
       });
     }
@@ -10131,7 +10131,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.1.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.2.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
