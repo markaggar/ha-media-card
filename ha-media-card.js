@@ -4363,10 +4363,10 @@ class MediaCardV5a extends LitElement {
   _formatFolderForDisplay(fullFolderPath, showRoot) {
     if (!fullFolderPath) return '';
     
-    // Extract the scan path prefix from config.media_path or config.single_media.path
+    // Extract the scan path prefix from config (folder.path takes precedence over legacy media_path)
     // e.g., "media-source://media_source/media/Photo/OneDrive" -> "/media/Photo/OneDrive"
     let scanPrefix = '';
-    const mediaPath = this.config?.single_media?.path || this.config?.media_path;
+    const mediaPath = this.config?.folder?.path || this.config?.single_media?.path || this.config?.media_path;
     if (mediaPath) {
       const match = mediaPath.match(/media-source:\/\/media_source(\/.+)/);
       if (match) {
