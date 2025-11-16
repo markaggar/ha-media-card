@@ -4905,11 +4905,33 @@ class MediaCardV5a extends LitElement {
     this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
   }
   
-  // Handle refresh button click - load next media
-  _handleRefreshClick(e) {
+  // Handle refresh button click - reload current media
+  async _handleRefreshClick(e) {
     e.stopPropagation();
-    this._log('🔄 Refresh button clicked - loading next media');
-    this._loadNext();
+    this._log('🔄 Refresh button clicked - reloading current media');
+    
+    // Get the current media content ID
+    const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+    
+    if (!currentMediaId) {
+      this._log('⚠️ No current media to refresh');
+      return;
+    }
+    
+    try {
+      // Re-resolve the media URL to get a fresh authSig
+      this._log('🔄 Re-resolving media URL:', currentMediaId);
+      await this._resolveMediaUrl(currentMediaId);
+      
+      // Force reload by updating the img/video src
+      this._mediaLoadedLogged = false; // Allow load success log again
+      this.requestUpdate();
+      
+      this._log('✅ Media refreshed successfully');
+    } catch (error) {
+      console.error('Failed to refresh media:', error);
+      this._log('❌ Media refresh failed:', error.message);
+    }
   }
   
   // Handle info button click - toggle overlay and fetch full metadata
