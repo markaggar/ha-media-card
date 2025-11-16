@@ -3428,17 +3428,28 @@ class MediaCardV5a extends LitElement {
     // Folder/slideshow: prefer auto_advance_seconds, fallback to auto_refresh_seconds
     let refreshSeconds = 0;
     let isSingleMediaMode = false;
+    let isRefreshMode = false; // True if reloading current, false if advancing
     
     if (this.provider instanceof SingleMediaProvider) {
       refreshSeconds = this.config?.auto_refresh_seconds || 0;
       isSingleMediaMode = true;
+      isRefreshMode = true; // Single media always reloads current
     } else {
-      // In folder mode: auto_advance takes priority, but allow auto_refresh as fallback
-      refreshSeconds = this.config?.auto_advance_seconds || this.config?.auto_refresh_seconds || 0;
+      // In folder mode: auto_advance takes priority
+      const autoAdvance = this.config?.auto_advance_seconds || 0;
+      const autoRefresh = this.config?.auto_refresh_seconds || 0;
+      
+      if (autoAdvance > 0) {
+        refreshSeconds = autoAdvance;
+        isRefreshMode = false; // Advance to next
+      } else if (autoRefresh > 0) {
+        refreshSeconds = autoRefresh;
+        isRefreshMode = true; // Reload current
+      }
     }
     
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
-      const modeLabel = isSingleMediaMode ? 'single-media refresh' : 'auto-advance';
+      const modeLabel = isRefreshMode ? 'auto-refresh (reload current)' : 'auto-advance (next media)';
       this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds`);
       
       this._refreshInterval = setInterval(async () => {
@@ -3447,12 +3458,23 @@ class MediaCardV5a extends LitElement {
           // V4 CODE REUSE: Check if we should wait for video to complete
           // Based on V4 lines 3259-3302
           if (await this._shouldWaitForVideoCompletion()) {
-            this._log('🔄 Auto-advance skipped - waiting for video to complete');
+            this._log('🔄 Auto-timer skipped - waiting for video to complete');
             return;
           }
           
-          this._log(`🔄 ${modeLabel} timer triggered - loading next`);
-          this._loadNext();
+          if (isRefreshMode) {
+            // Reload current media (for single_media or folder with auto_refresh only)
+            this._log('🔄 Auto-refresh timer triggered - reloading current media');
+            const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+            if (currentMediaId) {
+              await this._resolveMediaUrl(currentMediaId);
+              this.requestUpdate();
+            }
+          } else {
+            // Advance to next media (folder mode with auto_advance)
+            this._log('🔄 Auto-advance timer triggered - loading next media');
+            this._loadNext();
+          }
         } else {
           this._log(`🔄 ${modeLabel} skipped - isPaused:`, this._isPaused, 'backgroundPaused:', this._backgroundPaused);
         }
