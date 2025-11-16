@@ -9131,8 +9131,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ...this._config,
           media_source_type: 'single_media',
           single_media: {
-            path: mediaContentId,
-            refresh_seconds: 0
+            path: mediaContentId
           }
         };
       }
