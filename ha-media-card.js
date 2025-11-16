@@ -3424,10 +3424,22 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
-    // V5: Get auto-advance seconds from config (NOT auto_refresh_seconds)
-    const advanceSeconds = this.config?.auto_advance_seconds;
-    if (advanceSeconds && advanceSeconds > 0 && this.hass) {
-      this._log(`🔄 Setting up auto-advance every ${advanceSeconds} seconds`);
+    // V5: Get refresh/advance seconds based on mode
+    // Single media: use single_media.refresh_seconds
+    // Folder/slideshow: use auto_advance_seconds
+    let refreshSeconds = 0;
+    let isSingleMediaMode = false;
+    
+    if (this.provider instanceof SingleMediaProvider) {
+      refreshSeconds = this.config?.single_media?.refresh_seconds || 0;
+      isSingleMediaMode = true;
+    } else {
+      refreshSeconds = this.config?.auto_advance_seconds || 0;
+    }
+    
+    if (refreshSeconds && refreshSeconds > 0 && this.hass) {
+      const modeLabel = isSingleMediaMode ? 'single-media refresh' : 'auto-advance';
+      this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds`);
       
       this._refreshInterval = setInterval(async () => {
         // Check pause states before advancing
@@ -3439,14 +3451,14 @@ class MediaCardV5a extends LitElement {
             return;
           }
           
-          this._log('🔄 Auto-advance timer triggered - loading next');
+          this._log(`🔄 ${modeLabel} timer triggered - loading next`);
           this._loadNext();
         } else {
-          this._log('🔄 Auto-advance skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
+          this._log(`🔄 ${modeLabel} skipped - isPaused:`, this._isPaused, 'backgroundPaused:', this._backgroundPaused);
         }
-      }, advanceSeconds * 1000);
+      }, refreshSeconds * 1000);
       
-      this._log('✅ Auto-advance interval started with ID:', this._refreshInterval);
+      this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
     } else {
       this._log('🔄 Auto-advance disabled or not configured:', {
         advanceSeconds,
