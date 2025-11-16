@@ -1313,6 +1313,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       this.lastSeenValue = null;
       this.reachedEnd = false;
       this.hasMore = true;
+      this.excludedFiles.clear(); // Clear excluded files when looping back
       
       const items = await this._queryOrderedFiles();
       if (items && items.length > 0) {
