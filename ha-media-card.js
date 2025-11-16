@@ -5237,6 +5237,20 @@ class MediaCardV5a extends LitElement {
     const parent = mediaElement.parentNode;
     const nextSibling = mediaElement.nextSibling;
     
+    // Store original styles to restore later
+    const originalMaxHeight = mediaElement.style.maxHeight;
+    const originalMaxWidth = mediaElement.style.maxWidth;
+    const originalWidth = mediaElement.style.width;
+    const originalHeight = mediaElement.style.height;
+    const originalObjectFit = mediaElement.style.objectFit;
+    
+    // Override styles for fullscreen display - remove max-height constraint
+    mediaElement.style.maxHeight = '100vh';
+    mediaElement.style.maxWidth = '100vw';
+    mediaElement.style.width = 'auto';
+    mediaElement.style.height = 'auto';
+    mediaElement.style.objectFit = 'contain';
+    
     // Move media element into container temporarily
     fullscreenContainer.appendChild(mediaElement);
     fullscreenContainer.appendChild(exitButton);
@@ -5252,6 +5266,12 @@ class MediaCardV5a extends LitElement {
         this._log('Fullscreen entered, exit button added');
       }).catch(err => {
         console.error('Fullscreen request failed:', err);
+        // Restore original styles on failure
+        mediaElement.style.maxHeight = originalMaxHeight;
+        mediaElement.style.maxWidth = originalMaxWidth;
+        mediaElement.style.width = originalWidth;
+        mediaElement.style.height = originalHeight;
+        mediaElement.style.objectFit = originalObjectFit;
         // Restore media element on failure
         if (nextSibling) {
           parent.insertBefore(mediaElement, nextSibling);
@@ -5266,6 +5286,13 @@ class MediaCardV5a extends LitElement {
       // Exit handler to cleanup and resume slideshow
       const exitFullscreenHandler = () => {
         if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+          // Restore original styles
+          mediaElement.style.maxHeight = originalMaxHeight;
+          mediaElement.style.maxWidth = originalMaxWidth;
+          mediaElement.style.width = originalWidth;
+          mediaElement.style.height = originalHeight;
+          mediaElement.style.objectFit = originalObjectFit;
+          
           // Restore media element to original location
           if (nextSibling) {
             parent.insertBefore(mediaElement, nextSibling);
