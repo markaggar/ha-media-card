@@ -3078,6 +3078,9 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
+    // Reset max queue size when initializing new provider
+    this._maxQueueSize = 0;
+
     // Auto-detect media source type if not set
     let type = this.config.media_source_type;
     if (!type) {
@@ -3542,11 +3545,17 @@ class MediaCardV5a extends LitElement {
           this._log('Added to excluded files set:', mediaId);
         }
         
-        // Remove the bad item from history
-        if (this.history.length > 0 && this.history[this.history.length - 1].media_content_id === mediaId) {
-          this._log('Removing invalid item from history');
-          this.history.pop();
-          this.historyIndex = this.history.length - 1;
+        // Remove the bad item from history at the current position
+        if (this.history.length > 0) {
+          const idx = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+          if (this.history[idx]?.media_content_id === mediaId) {
+            this._log('Removing invalid item from history at index', idx);
+            this.history.splice(idx, 1);
+            // Adjust historyIndex if needed
+            if (this.historyIndex > idx || this.historyIndex === this.history.length) {
+              this.historyIndex = this.history.length - 1;
+            }
+          }
         }
         
         // Clear the current media to avoid showing broken state
