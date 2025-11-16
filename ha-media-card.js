@@ -474,7 +474,6 @@ class SingleMediaProvider extends MediaProvider {
   constructor(config, hass) {
     super(config, hass);
     this.mediaPath = config.single_media?.path || config.media_path;
-    this.refreshSeconds = config.single_media?.refresh_seconds || 0;
     this.currentItem = null;
   }
 
@@ -3425,13 +3424,13 @@ class MediaCardV5a extends LitElement {
     }
 
     // V5: Get refresh/advance seconds based on mode
-    // Single media: use single_media.refresh_seconds
+    // Single media: use auto_refresh_seconds (top-level)
     // Folder/slideshow: use auto_advance_seconds
     let refreshSeconds = 0;
     let isSingleMediaMode = false;
     
     if (this.provider instanceof SingleMediaProvider) {
-      refreshSeconds = this.config?.single_media?.refresh_seconds || 0;
+      refreshSeconds = this.config?.auto_refresh_seconds || 0;
       isSingleMediaMode = true;
     } else {
       refreshSeconds = this.config?.auto_advance_seconds || 0;
@@ -3489,7 +3488,7 @@ class MediaCardV5a extends LitElement {
     
     // For auto-refresh: only add if refresh configured
     // For manual refresh: always add (forceAdd = true)
-    const refreshSeconds = this.config.single_media?.refresh_seconds || this.config.auto_refresh_seconds;
+    const refreshSeconds = this.config.auto_refresh_seconds || 0;
     const shouldAdd = forceAdd || (refreshSeconds > 0);
     
     if (!shouldAdd) return url;
@@ -7244,9 +7243,9 @@ class MediaCardV5aEditor extends LitElement {
         type: this._config.type, // Preserve card type
         media_source_type: 'single_media',
         single_media: {
-          path: this._config.media_path || null,
-          refresh_seconds: this._config.auto_refresh_seconds || 0
+          path: this._config.media_path || null
         },
+        auto_refresh_seconds: this._config.auto_refresh_seconds || 0,
         // Preserve common settings
         media_type: this._config.media_type,
         display: this._config.display,
