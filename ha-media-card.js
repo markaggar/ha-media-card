@@ -1109,7 +1109,6 @@ class MediaIndexProvider extends MediaProvider {
         service_data: {
           count: count,
           folder: folderFilter,
-          // V5: Pass recursive parameter (backend support pending)
           recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
@@ -7053,7 +7052,8 @@ class MediaCardV5aEditor extends LitElement {
         if (filesystemPath) {
           // Convert filesystem path to media-source URI
           // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
-          folderPath = `media-source://media_source${filesystemPath}`;
+          const normalizedPath = filesystemPath.startsWith('/') ? filesystemPath : '/' + filesystemPath;
+          folderPath = `media-source://media_source${normalizedPath}`;
           this._log('📁 Auto-populated folder path from media_index:', filesystemPath, '→', folderPath);
         }
       }
@@ -9496,7 +9496,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @input=${this._maxHeightChanged}
                 placeholder="Auto (no limit)"
               />
-              <div class="help-text">Maximum height in pixels (overrides aspect mode)</div>
+              <div class="help-text">Maximum height in pixels (applies in default mode only)</div>
             </div>
           </div>
           
