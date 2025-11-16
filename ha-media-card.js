@@ -159,18 +159,13 @@ class MediaProvider {
     if (normalizedPath.includes('|')) {
       // Only strip the last segment if it looks like a MIME type (contains '/')
       const lastPipeIndex = normalizedPath.lastIndexOf('|');
-      if (lastPipeIndex !== -1) {
-        const afterLastPipe = normalizedPath.substring(lastPipeIndex + 1);
-        if (afterLastPipe.includes('/')) {
-          // It's a MIME type, strip it
-          normalizedPath = normalizedPath.substring(0, lastPipeIndex).replace(/\|/g, '/');
-        } else {
-          // No MIME type, just replace all pipes
-          normalizedPath = normalizedPath.replace(/\|/g, '/');
-        }
+      const afterLastPipe = normalizedPath.substring(lastPipeIndex + 1);
+      if (afterLastPipe.includes('/')) {
+        // It's a MIME type, strip it
+        normalizedPath = normalizedPath.substring(0, lastPipeIndex).replace(/\|/g, '/');
       } else {
-        // No pipes at all
-        // normalizedPath stays as-is
+        // No MIME type, just replace all pipes
+        normalizedPath = normalizedPath.replace(/\|/g, '/');
       }
     }
     
@@ -2991,8 +2986,9 @@ class MediaCardV5a extends LitElement {
       const height = parseInt(config.max_height_pixels);
       if (isNaN(height) || height <= 0) {
         // Invalid value - remove it
+        const originalValue = config.max_height_pixels;
         delete config.max_height_pixels;
-        this._log('⚠️ Removed invalid max_height_pixels:', config.max_height_pixels);
+        this._log('⚠️ Removed invalid max_height_pixels:', originalValue);
       } else if (height < 100 || height > 5000) {
         // Out of range - clamp to valid range
         config.max_height_pixels = Math.max(100, Math.min(5000, height));
@@ -3592,8 +3588,6 @@ class MediaCardV5a extends LitElement {
         await this.next(); // Get next item (will validate recursively)
         return;
       }
-      this._validationDepth = 0; // Reset on error path
-      return;
     }
 
     // Fallback: use as-is
