@@ -1294,6 +1294,8 @@ class SequentialMediaIndexProvider extends MediaProvider {
   }
 
   async getNext() {
+    this._log(`getNext() called - queue.length: ${this.queue.length}, hasMore: ${this.hasMore}, reachedEnd: ${this.reachedEnd}`);
+    
     // Refill queue if running low (and more items available)
     if (this.queue.length < 10 && this.hasMore && !this.reachedEnd) {
       this._log('Queue low, refilling...');
@@ -1307,9 +1309,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
       }
     }
     
-    // If queue is empty and we've reached the end, loop back to start
-    if (this.queue.length === 0 && this.reachedEnd) {
-      this._log('🔄 Reached end of sequence, looping back to start...');
+    // If queue is empty and hasMore is false, we've reached the end
+    // (hasMore=false means last query returned fewer items than requested)
+    if (this.queue.length === 0 && !this.hasMore) {
+      this._log('🔄 Reached end of sequence (queue empty, hasMore=false), looping back to start...');
       this.lastSeenValue = null;
       this.reachedEnd = false;
       this.hasMore = true;
