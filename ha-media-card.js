@@ -3549,6 +3549,7 @@ class MediaCardV5a extends LitElement {
         this._validationDepth = 0; // Reset on success
         this.mediaUrl = resolved.url;
         this.requestUpdate();
+        return; // Success - don't fall through to fallback
       } catch (error) {
         // File doesn't exist or can't be accessed - skip to next
         console.warn('[MediaCardV5a] File not found or inaccessible, skipping to next:', mediaId, error.message);
