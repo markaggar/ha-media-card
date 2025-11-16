@@ -3480,6 +3480,7 @@ class MediaCardV5a extends LitElement {
     if (mediaId.startsWith('http')) {
       this._log('Using direct HTTP URL');
       this.mediaUrl = mediaId;
+      this.requestUpdate();
       return;
     }
 
@@ -3509,9 +3510,11 @@ class MediaCardV5a extends LitElement {
         }
         
         this.mediaUrl = finalUrl;
+        this.requestUpdate();
       } catch (error) {
         console.error('[MediaCardV5a] Failed to resolve media URL:', error);
         this.mediaUrl = '';
+        this.requestUpdate();
       }
       return;
     }
@@ -3535,6 +3538,7 @@ class MediaCardV5a extends LitElement {
         this._log('✅ File exists and resolved to:', resolved.url);
         this._validationDepth = 0; // Reset on success
         this.mediaUrl = resolved.url;
+        this.requestUpdate();
       } catch (error) {
         // File doesn't exist or can't be accessed - skip to next
         console.warn('[MediaCardV5a] File not found or inaccessible, skipping to next:', mediaId, error.message);
@@ -3581,6 +3585,7 @@ class MediaCardV5a extends LitElement {
     // Fallback: use as-is
     this._log('Using media ID as-is (fallback)');
     this.mediaUrl = mediaId;
+    this.requestUpdate();
   }
 
   // V4 CODE REUSE: Helper to resolve a media path parameter (for dialogs, etc)
