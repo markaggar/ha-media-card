@@ -4196,7 +4196,10 @@ class MediaCardV5a extends LitElement {
         metadata.folder,
         this.config.metadata.show_root_folder
       );
-      parts.push(`📁 ${folderDisplay}`);
+      // Only show folder icon if we have a folder name to display
+      if (folderDisplay && folderDisplay.trim()) {
+        parts.push(`📁 ${folderDisplay}`);
+      }
     }
     
     if (this.config.metadata.show_filename && metadata.filename) {
