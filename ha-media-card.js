@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.0.1
+ * Media Card v5.1.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -11,8 +11,15 @@ const MediaUtils = {
     if (!filePath) return null;
     
     let cleanPath = filePath;
-    if (filePath.includes('?')) {
-      cleanPath = filePath.split('?')[0];
+    
+    // Strip Immich pipe-delimited MIME type suffix (e.g., "file.jpg|image/jpeg" -> "file.jpg")
+    if (cleanPath.includes('|')) {
+      cleanPath = cleanPath.split('|')[0];
+    }
+    
+    // Strip query parameters
+    if (cleanPath.includes('?')) {
+      cleanPath = cleanPath.split('?')[0];
     }
     
     const fileName = cleanPath.split('/').pop() || cleanPath;
@@ -25,7 +32,7 @@ const MediaUtils = {
     
     if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic'].includes(extension)) {
       return 'image';
     }
     
@@ -38,221 +45,11 @@ const MediaUtils = {
  */
 
 /**
- * VisibilityManager - Handle card visibility and pause/resume
- * Copied from V4 (lines 5080-5156, 1632-1665)
- * 
- * Tracks both card visibility (IntersectionObserver) and page visibility
- * (document.visibilityState) to pause activity when card not visible
- */
-class VisibilityManager {
-  constructor(card) {
-    this.card = card;
-    
-    // Copy from V4 lines 5080-5087 - Dual visibility tracking
-    this.isCardVisible = true;      // IntersectionObserver - is card in viewport?
-    this.isPageVisible = true;      // visibilitychange - is tab active?
-    this.isBackgroundPaused = false; // Combined pause state
-    this.isEditMode = false;         // NEW - track edit mode (V4 doesn't have this)
-  }
-
-  /**
-   * Handle visibility changes for both card and page
-   * Copy from V4 lines 5117-5156
-   */
-  handleVisibilityChange(isCardVisible, isPageVisible) {
-    this.isCardVisible = isCardVisible;
-    this.isPageVisible = isPageVisible;
-    
-    // Copy from V4 line 5119 - Calculate combined visibility
-    const shouldBeActive = this.isCardVisible && this.isPageVisible;
-    
-    // Copy from V4 lines 5123-5155 - Resume or pause based on visibility
-    if (shouldBeActive && this.isBackgroundPaused) {
-      this._resume();
-    } else if (!shouldBeActive && !this.isBackgroundPaused) {
-      this._pause();
-    }
-  }
-
-  /**
-   * Resume all activity when card becomes visible
-   * Copy from V4 lines 5123-5143
-   */
-  _resume() {
-    this.isBackgroundPaused = false;
-    
-    // Callback to card to resume all activity
-    if (this.card.resumeAllActivity) {
-      this.card.resumeAllActivity();
-    }
-  }
-
-  /**
-   * Pause all activity when card becomes hidden
-   * Copy from V4 lines 5145-5154
-   */
-  _pause() {
-    this.isBackgroundPaused = true;
-    
-    // Callback to card to pause all activity
-    if (this.card.pauseAllActivity) {
-      this.card.pauseAllActivity();
-    }
-  }
-
-  /**
-   * Enter edit mode - destroy preview queues
-   * NEW - V4 doesn't have explicit edit mode detection
-   */
-  onEditModeEnter() {
-    this.isEditMode = true;
-    if (this.card.destroyPreviewQueues) {
-      this.card.destroyPreviewQueues();
-    }
-  }
-
-  /**
-   * Exit edit mode - reinitialize card
-   * NEW - V4 doesn't have explicit edit mode detection
-   */
-  onEditModeExit() {
-    this.isEditMode = false;
-    if (this.card.reinitialize) {
-      this.card.reinitialize();
-    }
-  }
-
-  /**
-   * Check if activity should be paused
-   * Copy from V4 lines 1632-1665 - Used by timers to check before running
-   */
-  shouldPauseActivity() {
-    return this.isBackgroundPaused || this.isEditMode;
-  }
-
-  /**
-   * Get current visibility state for debugging
-   */
-  getState() {
-    return {
-      isCardVisible: this.isCardVisible,
-      isPageVisible: this.isPageVisible,
-      isBackgroundPaused: this.isBackgroundPaused,
-      isEditMode: this.isEditMode,
-      shouldBeActive: this.isCardVisible && this.isPageVisible
-    };
-  }
-}
-
 /**
  * VideoManager - Handle video playback and auto-advance
  * Copied from V4 (lines 4400-4453)
  * 
  * Manages video pause/resume events and auto-advance on video end
- */
-class VideoManager {
-  constructor(config) {
-    this.maxDuration = config.video?.max_duration_seconds || 0;
-    this.advanceOnEnd = config.video?.advance_on_end !== false;
-    this.loop = config.video?.loop === true;
-    
-    // Copy from V4 lines 88-90 - Pause tracking
-    this.pausedByVideo = false;
-    this.currentTimer = null;
-    this.isConnected = true; // Track connection state
-  }
-
-  /**
-   * Handle video start event
-   * Copy from V4 lines 4400-4413
-   */
-  onVideoStart(videoElement, advanceCallback, resumeCallback) {
-    // Resume slideshow if it was paused by video pause
-    // Copy from V4 lines 4406-4410
-    if (this.pausedByVideo && resumeCallback) {
-      resumeCallback();
-      this.pausedByVideo = false;
-    }
-
-    // Set up max duration timer if configured
-    // NEW - V4 doesn't have this in onVideoStart, but it's logical placement
-    if (this.maxDuration > 0 && advanceCallback) {
-      this.currentTimer = setTimeout(() => {
-        advanceCallback();
-      }, this.maxDuration * 1000);
-    }
-
-    // Set up end event listener
-    // Copy from V4 pattern - advance on video end
-    if (this.advanceOnEnd && !this.loop && videoElement && advanceCallback) {
-      videoElement.addEventListener('ended', () => {
-        this.onVideoEnd(advanceCallback);
-      }, { once: true });
-    }
-  }
-
-  /**
-   * Handle video pause event
-   * Copy from V4 lines 4415-4430
-   */
-  onVideoPause(pauseCallback) {
-    // CRITICAL: Ignore pause events when disconnected
-    // Copy from V4 lines 4417-4421
-    if (!this.isConnected) {
-      return;
-    }
-
-    // Pause slideshow when user manually pauses video
-    // Copy from V4 lines 4424-4428
-    if (!this.pausedByVideo && pauseCallback) {
-      this.pausedByVideo = true;
-      pauseCallback();
-    }
-  }
-
-  /**
-   * Handle video ended event
-   * Copy from V4 lines 4432-4453
-   */
-  onVideoEnd(advanceCallback) {
-    // Clear max duration timer
-    if (this.currentTimer) {
-      clearTimeout(this.currentTimer);
-      this.currentTimer = null;
-    }
-
-    // Advance to next video with delay
-    // Copy from V4 lines 4441-4451 - setTimeout delay pattern
-    if (this.advanceOnEnd && !this.loop && advanceCallback) {
-      setTimeout(() => {
-        advanceCallback();
-      }, 100); // Small delay to ensure video ended event is fully processed
-    }
-  }
-
-  /**
-   * Set connection state
-   * Copy from V4 line 4417 logic - prevents pause events after disconnect
-   */
-  setConnectionState(isConnected) {
-    this.isConnected = isConnected;
-  }
-
-  /**
-   * Clean up timers
-   */
-  cleanup() {
-    if (this.currentTimer) {
-      clearTimeout(this.currentTimer);
-      this.currentTimer = null;
-    }
-    this.pausedByVideo = false;
-  }
-}
-
-/**
- * MediaProvider - Base class for all media providers
- * All providers must implement: initialize(), getNext(), getPrevious()
  */
 class MediaProvider {
   constructor(config, hass) {
@@ -316,7 +113,14 @@ class MediaProvider {
    */
   static extractFilename(path) {
     if (!path) return '';
-    return path.split('/').pop() || path;
+    let filename = path.split('/').pop() || path;
+    
+    // Strip Immich's pipe-delimited MIME type suffix (e.g., "file.jpg|image/jpeg" -> "file.jpg")
+    if (filename.includes('|')) {
+      filename = filename.split('|')[0];
+    }
+    
+    return filename;
   }
 
   /**
@@ -348,9 +152,25 @@ class MediaProvider {
     
     const metadata = {};
     
-    // Extract filename and clean it up
-    const pathParts = mediaPath.split('/');
-    let filename = pathParts[pathParts.length - 1];
+    // Normalize Immich pipe-delimited paths to slash-delimited
+    // Immich uses: media-source://immich/uuid|albums|uuid|uuid|filename.jpg|image/jpeg
+    // We need: media-source://immich/uuid/albums/uuid/uuid/filename.jpg
+    let normalizedPath = mediaPath;
+    if (normalizedPath.includes('|')) {
+      // Only strip the last segment if it looks like a MIME type (contains '/')
+      const lastPipeIndex = normalizedPath.lastIndexOf('|');
+      const afterLastPipe = normalizedPath.substring(lastPipeIndex + 1);
+      if (afterLastPipe.includes('/')) {
+        // It's a MIME type, strip it
+        normalizedPath = normalizedPath.substring(0, lastPipeIndex).replace(/\|/g, '/');
+      } else {
+        // No MIME type, just replace all pipes
+        normalizedPath = normalizedPath.replace(/\|/g, '/');
+      }
+    }
+    
+    // Use extractFilename helper to get clean filename (now from normalized path)
+    let filename = MediaProvider.extractFilename(normalizedPath);
     
     // Decode URL encoding (%20 -> space, etc.)
     try {
@@ -362,6 +182,7 @@ class MediaProvider {
     metadata.filename = filename;
     
     // Extract folder path (parent directory/directories)
+    const pathParts = normalizedPath.split('/');
     if (pathParts.length > 1) {
       // Find where the actual media path starts (skip /media/ prefix)
       let folderStart = 0;
@@ -821,8 +642,21 @@ class FolderProvider extends MediaProvider {
         
         // V5: Enable recursive scanning for sequential filesystem mode
         const adaptedConfig = this._adaptConfigForV4();
-        adaptedConfig.subfolder_queue.enabled = recursive; // Use config recursive setting
-        adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null; // Use config or unlimited
+        adaptedConfig.subfolder_queue.enabled = true; // Always use queue for sequential
+        
+        // Detect if this is Immich or other integration (not filesystem through media_source)
+        const folderPath = this.config.folder?.path || '';
+        const isImmich = folderPath.startsWith('media-source://immich');
+        
+        // Immich and similar integrations: Don't restrict scan_depth (let media browser handle it)
+        // Filesystem paths (including media-source://media_source/...): Respect recursive setting
+        if (isImmich) {
+          // Immich albums - don't restrict depth, let media browser handle album hierarchy
+          adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
+        } else {
+          // Filesystem paths (direct /media/ or via media_source) - respect recursive setting
+          adaptedConfig.subfolder_queue.scan_depth = recursive ? (this.config.folder?.scan_depth || null) : 0;
+        }
         
         // Use slideshow_window as scan limit (performance control)
         adaptedConfig.slideshow_window = this.config.slideshow_window || 1000;
@@ -852,8 +686,8 @@ class FolderProvider extends MediaProvider {
       }
     }
     
-    // RANDOM MODE - Random selection with weighted folders
-    if (mode === 'random' && recursive) {
+    // RANDOM MODE - Random selection
+    if (mode === 'random') {
       // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
       if (useMediaIndex) {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
@@ -872,7 +706,7 @@ class FolderProvider extends MediaProvider {
       
       // Use SubfolderQueue (filesystem scanning) if media_index disabled or failed
       if (!this.mediaIndexProvider) {
-        this.cardAdapter._log('Using SubfolderQueue for filesystem scanning');
+        this.cardAdapter._log('Using SubfolderQueue for filesystem scanning (recursive:', recursive, ')');
         
         // V5 RECONNECTION: Check if card has existing SubfolderQueue from reconnection
         if (this.card && this.card._existingSubfolderQueue) {
@@ -886,6 +720,22 @@ class FolderProvider extends MediaProvider {
           return true;
         }
         
+        // Set scan_depth based on recursive setting in existing config
+        // recursive: false = scan_depth: 0 (only base folder)
+        // recursive: true = scan_depth: null (unlimited depth, or config value)
+        // Defensive: ensure subfolder_queue exists
+        if (!this.cardAdapter.config.subfolder_queue) {
+          this.cardAdapter.config.subfolder_queue = {};
+        }
+        if (!recursive) {
+          this.cardAdapter.config.subfolder_queue.enabled = true; // Still use queue, but limit depth
+          this.cardAdapter.config.subfolder_queue.scan_depth = 0; // Only scan base folder
+          this.cardAdapter._log('Non-recursive mode: scan_depth = 0 (base folder only)');
+        } else {
+          this.cardAdapter.config.subfolder_queue.enabled = true;
+          this.cardAdapter.config.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
+          this.cardAdapter._log('Recursive mode: scan_depth =', this.cardAdapter.config.subfolder_queue.scan_depth || 'unlimited');
+        }
         this.cardAdapter._log('Adapted config for SubfolderQueue:', this.cardAdapter.config);
         
         // Create SubfolderQueue instance with V4-compatible card adapter
@@ -1196,7 +1046,7 @@ class MediaIndexProvider extends MediaProvider {
         // V4: Use database path for media_content_id (service calls need this)
         // URL resolution happens separately in card's _resolveMediaUrl()
         media_content_id: item.path,
-        media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend (V4 pattern)
@@ -1271,6 +1121,7 @@ class MediaIndexProvider extends MediaProvider {
         service_data: {
           count: count,
           folder: folderFilter,
+          recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
@@ -1455,6 +1306,8 @@ class SequentialMediaIndexProvider extends MediaProvider {
   }
 
   async getNext() {
+    this._log(`getNext() called - queue.length: ${this.queue.length}, hasMore: ${this.hasMore}, reachedEnd: ${this.reachedEnd}`);
+    
     // Refill queue if running low (and more items available)
     if (this.queue.length < 10 && this.hasMore && !this.reachedEnd) {
       this._log('Queue low, refilling...');
@@ -1468,12 +1321,14 @@ class SequentialMediaIndexProvider extends MediaProvider {
       }
     }
     
-    // If queue is empty and we've reached the end, loop back to start
-    if (this.queue.length === 0 && this.reachedEnd) {
-      this._log('🔄 Reached end of sequence, looping back to start...');
+    // If queue is empty and hasMore is false, we've reached the end
+    // (hasMore=false means last query returned fewer items than requested)
+    if (this.queue.length === 0 && !this.hasMore) {
+      this._log('🔄 Reached end of sequence (queue empty, hasMore=false), looping back to start...');
       this.lastSeenValue = null;
       this.reachedEnd = false;
       this.hasMore = true;
+      this.excludedFiles.clear(); // Clear excluded files when looping back
       
       const items = await this._queryOrderedFiles();
       if (items && items.length > 0) {
@@ -1514,7 +1369,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       return {
         // V4: Use database path for media_content_id (service calls need this)
         media_content_id: item.path,
-        media_content_type: item.path.match(/\.(mp4|webm|ogg|mov|m4v)$/i) ? 'video' : 'image',
+        media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend
@@ -1552,12 +1407,21 @@ class SequentialMediaIndexProvider extends MediaProvider {
       let folderFilter = null;
       if (this.config.folder?.path) {
         let path = this.config.folder.path;
-        // Remove media-source://media_source prefix if present
-        if (path.startsWith('media-source://media_source')) {
+        
+        // Skip Immich and other integration paths - media_index only works with filesystem paths
+        if (path.startsWith('media-source://immich')) {
+          this._log('⚠️ Immich path detected - media_index incompatible, skipping folder filter');
+          // Don't set folderFilter - will query all media_index files
+        } else if (path.startsWith('media-source://media_source')) {
+          // Remove media-source://media_source prefix for filesystem paths
           path = path.replace('media-source://media_source', '');
+          folderFilter = path;
+          this._log('🔍 Filtering by folder:', folderFilter);
+        } else {
+          // Direct filesystem path
+          folderFilter = path;
+          this._log('🔍 Filtering by folder:', folderFilter);
         }
-        folderFilter = path;
-        this._log('🔍 Filtering by folder:', folderFilter);
       }
       
       // Build service data
@@ -2172,8 +2036,9 @@ class SubfolderQueue {
         // Include if media_class indicates media
         if (child.media_class === 'image' || child.media_class === 'video') return true;
         
-        // Otherwise check by file extension
-        return this.card._isMediaFile(child.media_content_id || child.title || '');
+        // Otherwise check by file extension (prefer title for Immich compatibility)
+        const pathForExtCheck = child.title || child.media_content_id || '';
+        return this.card._isMediaFile(pathForExtCheck);
       });
       
       let files = allFiles;
@@ -2182,13 +2047,18 @@ class SubfolderQueue {
       const configuredMediaType = this.card.config.media_type || 'all';
       if (configuredMediaType !== 'all') {
         files = files.filter(file => {
-          const filePath = file.media_content_id || file.title || '';
-          const isVideo = filePath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
-          const isImage = filePath.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i);
+          // Use title for Immich compatibility (title = clean filename)
+          const filePath = file.title || file.media_content_id || '';
+          const fileType = MediaUtils.detectFileType(filePath);
           
-          if (configuredMediaType === 'video') return isVideo;
-          if (configuredMediaType === 'image') return isImage;
-          return true;
+          // If fileType is known, use it; otherwise, fall back to media_class
+          if (fileType) {
+            return fileType === configuredMediaType;
+          } else if (file.media_class) {
+            return file.media_class === configuredMediaType;
+          }
+          // If neither, exclude
+          return false;
         });
       }
       
@@ -2353,9 +2223,9 @@ class SubfolderQueue {
     
     // Fallback: detect from file extension if still not set
     if (!file.media_content_type) {
-      const filePath = file.media_content_id || file.title || '';
-      const isVideo = filePath.match(/\.(mp4|webm|ogg|mov|m4v)$/i);
-      file.media_content_type = isVideo ? 'video' : 'image';
+      const filePath = file.title || file.media_content_id || '';
+      const fileType = MediaUtils.detectFileType(filePath);
+      file.media_content_type = fileType || 'image';
     }
 
     this.queue.push(file);
@@ -2556,6 +2426,14 @@ class SubfolderQueue {
     
     if (folderMode === 'sequential') {
       // Sequential mode: collect available items, add to queue, then sort entire queue
+      
+      // In sequential mode with loop-back, clear shownItems BEFORE collecting
+      // so we can re-collect all files for the next loop
+      if (clearShownItemsAfter) {
+        this._log('♻️ Clearing shownItems BEFORE collecting (sequential loop-back)');
+        this.shownItems.clear();
+      }
+      
       const availableFiles = [];
       
       for (const folder of this.discoveredFolders) {
@@ -2573,12 +2451,6 @@ class SubfolderQueue {
       }
       
       this._log('🔍 Available files for refill:', availableFiles.length);
-      
-      // NOW clear shownItems AFTER collecting available files
-      if (clearShownItemsAfter) {
-        this._log('♻️ Clearing shownItems now (after collecting available files)');
-        this.shownItems.clear();
-      }
       
       // Sort available files first, then add to queue
       // This preserves queue order without re-sorting already-queued items
@@ -2641,7 +2513,68 @@ class SubfolderQueue {
     this._log('_sortQueue - orderBy:', orderBy, 'direction:', direction, 'priorityNewFiles:', priorityNewFiles);
     this._log('Full sequential config:', this.card.config.folder?.sequential);
     
-    // Standard sort comparator function
+    // For date-based sorting, use two-pass approach: dated files first, then non-dated
+    if (orderBy === 'date_taken' || orderBy === 'modified_time') {
+      const datedFiles = [];
+      const nonDatedFiles = [];
+      
+      // Separate files into dated and non-dated groups
+      for (const item of this.queue) {
+        let hasDate = false;
+        
+        // Check EXIF data first
+        if (item.metadata?.date_taken) {
+          hasDate = true;
+        } else {
+          // Check filename
+          const filename = MediaProvider.extractFilename(item.media_content_id);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          hasDate = !!dateFromFilename;
+        }
+        
+        if (hasDate) {
+          datedFiles.push(item);
+        } else {
+          nonDatedFiles.push(item);
+        }
+      }
+      
+      // Sort dated files chronologically
+      datedFiles.sort((a, b) => {
+        let aVal, bVal;
+        
+        if (a.metadata?.date_taken && b.metadata?.date_taken) {
+          aVal = new Date(a.metadata.date_taken).getTime();
+          bVal = new Date(b.metadata.date_taken).getTime();
+        } else {
+          const aFilename = MediaProvider.extractFilename(a.media_content_id);
+          const bFilename = MediaProvider.extractFilename(b.media_content_id);
+          const aDate = MediaProvider.extractDateFromFilename(aFilename);
+          const bDate = MediaProvider.extractDateFromFilename(bFilename);
+          aVal = aDate ? aDate.getTime() : 0;
+          bVal = bDate ? bDate.getTime() : 0;
+        }
+        
+        const comparison = aVal - bVal;
+        return direction === 'asc' ? comparison : -comparison;
+      });
+      
+      // Sort non-dated files alphabetically
+      nonDatedFiles.sort((a, b) => {
+        const aFilename = MediaProvider.extractFilename(a.media_content_id);
+        const bFilename = MediaProvider.extractFilename(b.media_content_id);
+        const comparison = aFilename.localeCompare(bFilename);
+        return direction === 'asc' ? comparison : -comparison;
+      });
+      
+      // Combine: dated files first, then non-dated files
+      this.queue = [...datedFiles, ...nonDatedFiles];
+      
+      this._log('✅ Two-pass sort complete:', datedFiles.length, 'dated files,', nonDatedFiles.length, 'non-dated files');
+      return; // Skip the standard comparator below
+    }
+    
+    // Standard sort comparator function for non-date sorting
     const compareItems = (a, b) => {
       let aVal, bVal;
       
@@ -2654,34 +2587,12 @@ class SubfolderQueue {
           aVal = a.media_content_id;
           bVal = b.media_content_id;
           break;
-        case 'date_taken':
-        case 'modified_time':
-          // Use EXIF data if available from enrichment
-          if (a.metadata?.date_taken && b.metadata?.date_taken) {
-            aVal = new Date(a.metadata.date_taken).getTime();
-            bVal = new Date(b.metadata.date_taken).getTime();
-          } else {
-            // Fallback: filename-based date extraction
-            const aFilename = MediaProvider.extractFilename(a.media_content_id);
-            const bFilename = MediaProvider.extractFilename(b.media_content_id);
-            const aDate = MediaProvider.extractDateFromFilename(aFilename);
-            const bDate = MediaProvider.extractDateFromFilename(bFilename);
-            aVal = aDate ? aDate.getTime() : aFilename;
-            bVal = bDate ? bDate.getTime() : bFilename;
-          }
-          break;
         default:
           aVal = a.media_content_id;
           bVal = b.media_content_id;
       }
       
-      let comparison;
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        comparison = aVal - bVal;
-      } else {
-        comparison = String(aVal).localeCompare(String(bVal));
-      }
-      
+      const comparison = String(aVal).localeCompare(String(bVal));
       return direction === 'asc' ? comparison : -comparison;
     };
     
@@ -2793,6 +2704,7 @@ class MediaCardV5a extends LitElement {
     this.history = [];            // Navigation trail (what user has seen)
     this.historyIndex = -1;       // Current position in history (-1 = at end)
     this.shownItems = new Set();  // Prevent duplicate display until aged out
+    this._maxQueueSize = 0;       // Track highest queue size seen (for position indicator)
     
     this.currentMedia = null;
     this.mediaUrl = '';
@@ -3097,6 +3009,21 @@ class MediaCardV5a extends LitElement {
       this._refreshInterval = null;
     }
     
+    // V5: Validate and clamp max_height_pixels if present
+    if (config.max_height_pixels !== undefined) {
+      const height = parseInt(config.max_height_pixels);
+      if (isNaN(height) || height <= 0) {
+        // Invalid value - remove it
+        const originalValue = config.max_height_pixels;
+        delete config.max_height_pixels;
+        this._log('⚠️ Removed invalid max_height_pixels:', originalValue);
+      } else if (height < 100 || height > 5000) {
+        // Out of range - clamp to valid range
+        config.max_height_pixels = Math.max(100, Math.min(5000, height));
+        this._log('⚠️ Clamped max_height_pixels to valid range (100-5000):', config.max_height_pixels);
+      }
+    }
+    
     // V5: Reset provider to force reinitialization with new config
     if (this.provider) {
       this._log('🧹 Clearing existing provider before reconfiguration');
@@ -3152,6 +3079,13 @@ class MediaCardV5a extends LitElement {
       this.removeAttribute('data-aspect-mode');
     }
     
+    // Set custom max height if configured
+    if (config.max_height_pixels && config.max_height_pixels > 0) {
+      this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
+    } else {
+      this.style.removeProperty('--media-max-height');
+    }
+    
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
@@ -3185,6 +3119,9 @@ class MediaCardV5a extends LitElement {
       this._log('Cannot initialize - missing config or hass');
       return;
     }
+
+    // Reset max queue size when initializing new provider
+    this._maxQueueSize = 0;
 
     // Auto-detect media source type if not set
     let type = this.config.media_source_type;
@@ -3372,10 +3309,10 @@ class MediaCardV5a extends LitElement {
         this.currentMedia = item;
         this._log('Set currentMedia:', this.currentMedia);
         
-        // V4: Set current path for action buttons
-        // media_content_id should be the database path, not a media-source:// URL
-        this._currentMediaPath = item.media_content_id;
-        this._currentMetadata = item.metadata;
+        // V5: Store metadata in pending state until image loads
+        // This prevents metadata/counters from flashing before the new image appears
+        this._pendingMediaPath = item.media_content_id;
+        this._pendingMetadata = item.metadata;
         
         // V5: Clear cached full metadata when media changes
         this._fullMetadata = null;
@@ -3620,25 +3557,66 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
-    // If /media/ path, convert to media-source://
+    // Track recursion depth to prevent infinite loops
+    if (!this._validationDepth) this._validationDepth = 0;
+    const MAX_VALIDATION_ATTEMPTS = 10;
+    
+    // If /media/ path, convert to media-source:// and validate existence
     if (mediaId.startsWith('/media/')) {
       const mediaSourceId = 'media-source://media_source' + mediaId;
       this._log('Converting /media/ to media-source://', mediaSourceId);
+      
       try {
+        // Validate file exists by attempting to resolve it
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
           media_content_id: mediaSourceId,
           expires: (60 * 60 * 3)
         });
-        this._log('Resolved to:', resolved.url);
+        this._log('✅ File exists and resolved to:', resolved.url);
+        this._validationDepth = 0; // Reset on success
         this.mediaUrl = resolved.url;
         this.requestUpdate();
+        return; // Success - don't fall through to fallback
       } catch (error) {
-        console.error('[MediaCardV5a] Failed to resolve media URL:', error);
+        // File doesn't exist or can't be accessed - skip to next
+        console.warn('[MediaCardV5a] File not found or inaccessible, skipping to next:', mediaId, error.message);
+        
+        // Track file as missing to avoid re-querying from media_index
+        if (this.provider?.mediaIndexProvider) {
+          this.provider.mediaIndexProvider.excludedFiles.add(mediaId);
+          this._log('Added to excluded files set:', mediaId);
+        }
+        
+        // Remove the bad item from history at the current position
+        if (this.history.length > 0) {
+          const idx = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+          if (this.history[idx]?.media_content_id === mediaId) {
+            this._log('Removing invalid item from history at index', idx);
+            this.history.splice(idx, 1);
+            // Adjust historyIndex if needed
+            if (this.historyIndex > idx || this.historyIndex === this.history.length) {
+              this.historyIndex = this.history.length - 1;
+            }
+          }
+        }
+        
+        // Clear the current media to avoid showing broken state
         this.mediaUrl = '';
-        this.requestUpdate();
+        
+        // Check recursion depth before recursive call
+        this._validationDepth = (this._validationDepth || 0) + 1;
+        if (this._validationDepth >= MAX_VALIDATION_ATTEMPTS) {
+          console.error('[MediaCardV5a] Too many consecutive missing files, stopping validation');
+          this._validationDepth = 0;
+          return;
+        }
+        
+        // Recursively skip to next item without adding to history
+        this._log('⏭️ Skipping to next item due to missing file (depth:', this._validationDepth, ')');
+        await this.next(); // Get next item (will validate recursively)
+        return;
       }
-      return;
     }
 
     // Fallback: use as-is
@@ -3724,6 +3702,17 @@ class MediaCardV5a extends LitElement {
     if (isSynologyUrl) {
       errorMessage = 'Synology DSM authentication expired - try refreshing';
       console.warn('[MediaCardV5a] Synology DSM URL authentication may have expired:', this.mediaUrl);
+    }
+    
+    // Apply pending metadata even on error to avoid stale metadata from previous media
+    if (this._pendingMetadata !== null) {
+      this._currentMetadata = this._pendingMetadata;
+      this._pendingMetadata = null;
+      this._log('Applied pending metadata on error to clear stale data');
+    }
+    if (this._pendingMediaPath !== null) {
+      this._currentMediaPath = this._pendingMediaPath;
+      this._pendingMediaPath = null;
     }
     
     // Check if we've already tried to retry this URL
@@ -4157,6 +4146,21 @@ class MediaCardV5a extends LitElement {
     if (this._retryAttempts.has(this.mediaUrl)) {
       this._retryAttempts.delete(this.mediaUrl);
     }
+    
+    // V5: Apply pending metadata now that image has loaded
+    // This synchronizes metadata/counter updates with the new image appearing
+    if (this._pendingMetadata !== null) {
+      this._currentMetadata = this._pendingMetadata;
+      this._pendingMetadata = null;
+      this._log('✅ Applied pending metadata on image load');
+    }
+    if (this._pendingMediaPath !== null) {
+      this._currentMediaPath = this._pendingMediaPath;
+      this._pendingMediaPath = null;
+    }
+    
+    // Trigger re-render to show updated metadata/counters
+    this.requestUpdate();
   }
   
   // V4: Metadata display methods
@@ -4509,14 +4513,48 @@ class MediaCardV5a extends LitElement {
       return html``;
     }
 
-    // Get total count from provider queue (not history which grows unbounded)
-    const totalCount = this.provider?.subfolderQueue?.queue?.length || 0;
+    // Get current queue size from appropriate provider and track the maximum seen
+    let currentQueueSize = 0;
+    
+    // Check different provider types for queue size
+    if (this.provider?.subfolderQueue?.queue?.length) {
+      // FolderProvider with SubfolderQueue
+      currentQueueSize = this.provider.subfolderQueue.queue.length;
+    } else if (this.provider?.queue?.length) {
+      // MediaIndexProvider or SequentialMediaIndexProvider
+      currentQueueSize = this.provider.queue.length;
+    } else if (this.provider?.mediaIndexProvider?.queue?.length) {
+      // FolderProvider wrapping MediaIndexProvider
+      currentQueueSize = this.provider.mediaIndexProvider.queue.length;
+    } else if (this.provider?.sequentialProvider?.queue?.length) {
+      // FolderProvider wrapping SequentialMediaIndexProvider
+      currentQueueSize = this.provider.sequentialProvider.queue.length;
+    }
+    
+    // Track maximum queue size, but allow it to decrease if queue shrinks significantly
+    // (e.g., due to filtering or folder changes)
+    if (currentQueueSize > this._maxQueueSize) {
+      this._maxQueueSize = currentQueueSize;
+    } else if (currentQueueSize > 0 && this._maxQueueSize > currentQueueSize * 2) {
+      // If queue is less than half of recorded max, reset to current size
+      // This handles filtering/folder changes while avoiding flicker during normal operation
+      this._maxQueueSize = currentQueueSize;
+      this._log('Reset _maxQueueSize to', currentQueueSize, '(queue shrunk significantly)');
+    }
+    
+    // Use max queue size for stable "Y" display (prevents confusing fluctuations)
+    const totalCount = this._maxQueueSize;
     if (totalCount <= 1) {
       return html``;
     }
 
     // Current position in history (historyIndex === -1 means at end/latest)
-    const currentIndex = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+    let rawPosition = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+    
+    // When cycling through queue, wrap position back to 1 instead of exceeding totalCount
+    // Ensure currentIndex stays within bounds [0, totalCount-1]
+    // Note: totalCount is always > 1 here due to early return on line 4508
+    const currentIndex = rawPosition % totalCount;
 
     // Show position indicator if enabled
     let positionIndicator = html``;
@@ -5199,6 +5237,20 @@ class MediaCardV5a extends LitElement {
     const parent = mediaElement.parentNode;
     const nextSibling = mediaElement.nextSibling;
     
+    // Store original styles to restore later
+    const originalMaxHeight = mediaElement.style.maxHeight;
+    const originalMaxWidth = mediaElement.style.maxWidth;
+    const originalWidth = mediaElement.style.width;
+    const originalHeight = mediaElement.style.height;
+    const originalObjectFit = mediaElement.style.objectFit;
+    
+    // Override styles for fullscreen display - remove max-height constraint
+    mediaElement.style.maxHeight = '100vh';
+    mediaElement.style.maxWidth = '100vw';
+    mediaElement.style.width = 'auto';
+    mediaElement.style.height = 'auto';
+    mediaElement.style.objectFit = 'contain';
+    
     // Move media element into container temporarily
     fullscreenContainer.appendChild(mediaElement);
     fullscreenContainer.appendChild(exitButton);
@@ -5214,6 +5266,12 @@ class MediaCardV5a extends LitElement {
         this._log('Fullscreen entered, exit button added');
       }).catch(err => {
         console.error('Fullscreen request failed:', err);
+        // Restore original styles on failure
+        mediaElement.style.maxHeight = originalMaxHeight;
+        mediaElement.style.maxWidth = originalMaxWidth;
+        mediaElement.style.width = originalWidth;
+        mediaElement.style.height = originalHeight;
+        mediaElement.style.objectFit = originalObjectFit;
         // Restore media element on failure
         if (nextSibling) {
           parent.insertBefore(mediaElement, nextSibling);
@@ -5228,6 +5286,13 @@ class MediaCardV5a extends LitElement {
       // Exit handler to cleanup and resume slideshow
       const exitFullscreenHandler = () => {
         if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+          // Restore original styles
+          mediaElement.style.maxHeight = originalMaxHeight;
+          mediaElement.style.maxWidth = originalMaxWidth;
+          mediaElement.style.width = originalWidth;
+          mediaElement.style.height = originalHeight;
+          mediaElement.style.objectFit = originalObjectFit;
+          
           // Restore media element to original location
           if (nextSibling) {
             parent.insertBefore(mediaElement, nextSibling);
@@ -5901,6 +5966,37 @@ class MediaCardV5a extends LitElement {
       object-fit: contain;
       margin: 0 auto;
       display: block;
+    }
+    
+    /* Custom max height override with aspect ratio preservation */
+    /* Only apply in default mode (no aspect-mode attribute set) */
+    :host(:not([data-aspect-mode])) img {
+      max-height: var(--media-max-height, none);
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+    :host(:not([data-aspect-mode])) video {
+      max-height: var(--media-max-height, none);
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+    
+    /* Remove max-height constraint in fullscreen mode */
+    :fullscreen img,
+    :fullscreen video,
+    :-webkit-full-screen img,
+    :-webkit-full-screen video,
+    :-moz-full-screen img,
+    :-moz-full-screen video,
+    :-ms-fullscreen img,
+    :-ms-fullscreen video {
+      max-height: 100vh !important;
+      max-width: 100vw !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain;
     }
 
     /* V4: Image Zoom Styles */
@@ -7070,17 +7166,22 @@ class MediaCardV5aEditor extends LitElement {
         media_index: this._config.media_index // Preserve media_index for metadata/actions
       };
     } else if (newMode === 'folder') {
-      // Get path from media_index entity if available
+      // Get path from media_index entity if available and convert to media-source format
       let folderPath = this._config.media_path || null;
       const mediaIndexEntityId = this._config.media_index?.entity_id;
       
       if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
         const entity = this.hass.states[mediaIndexEntityId];
-        folderPath = entity.attributes?.media_folder || 
-                     entity.attributes?.folder_path || 
-                     entity.attributes?.base_path || null;
-        if (folderPath) {
-          this._log('📁 Auto-populated folder path from media_index:', folderPath);
+        const filesystemPath = entity.attributes?.media_path || 
+                               entity.attributes?.folder_path || 
+                               entity.attributes?.base_path || null;
+        
+        if (filesystemPath) {
+          // Convert filesystem path to media-source URI
+          // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
+          const normalizedPath = filesystemPath.startsWith('/') ? filesystemPath : '/' + filesystemPath;
+          folderPath = `media-source://media_source${normalizedPath}`;
+          this._log('📁 Auto-populated folder path from media_index:', filesystemPath, '→', folderPath);
         }
       }
       
@@ -7315,12 +7416,17 @@ class MediaCardV5aEditor extends LitElement {
         if (mediaFolder) {
           this._log('Auto-populating path from media_index entity:', mediaFolder);
           
+          // Convert filesystem path to media-source URI format
+          const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
+          const folderPath = `media-source://media_source${normalizedPath}`;
+          this._log('Converted path:', mediaFolder, '→', folderPath);
+          
           // For folder mode: set folder.path
           if (this._config.media_source_type === 'folder') {
-            this._log('Setting folder.path to:', mediaFolder);
+            this._log('Setting folder.path to:', folderPath);
             this._config.folder = {
               ...this._config.folder,
-              path: mediaFolder
+              path: folderPath
             };
             this._log('Updated folder config:', this._config.folder);
           } else if (this._config.media_source_type === 'single_media') {
@@ -7508,6 +7614,18 @@ class MediaCardV5aEditor extends LitElement {
 
   _aspectModeChanged(ev) {
     this._config = { ...this._config, aspect_mode: ev.target.value };
+    this._fireConfigChanged();
+  }
+
+  _maxHeightChanged(ev) {
+    const value = parseInt(ev.target.value);
+    // Only store positive integers; everything else removes the property
+    if (!isNaN(value) && value > 0) {
+      this._config = { ...this._config, max_height_pixels: value };
+    } else {
+      const { max_height_pixels, ...rest } = this._config;
+      this._config = rest;
+    }
     this._fireConfigChanged();
   }
 
@@ -8723,35 +8841,56 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     if (shouldLog) {
       this._thumbnailDebugCount++;
       this._log('🔍 Creating thumbnail for item:', item.title || item.media_content_id);
+      this._log('  📋 Item details:', JSON.stringify({
+        media_content_id: item.media_content_id,
+        thumbnail: item.thumbnail,
+        thumbnail_url: item.thumbnail_url,
+        can_play: item.can_play,
+        can_expand: item.can_expand
+      }, null, 2));
     }
 
     try {
       let thumbnailUrl = null;
       
+      // Check if this is an Immich source
+      const isImmich = item.media_content_id && item.media_content_id.includes('media-source://immich');
+      
       // Try multiple approaches for getting the thumbnail
-      if (item.thumbnail) {
+      // Skip item.thumbnail for Immich - those URLs lack authentication
+      if (item.thumbnail && !isImmich) {
         thumbnailUrl = item.thumbnail;
         if (shouldLog) this._log('✅ Using provided thumbnail:', thumbnailUrl);
-      } else if (item.thumbnail_url) {
+      } else if (item.thumbnail_url && !isImmich) {
         thumbnailUrl = item.thumbnail_url;
         if (shouldLog) this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
       }
       
-      // Try Home Assistant thumbnail API
+      // Try Home Assistant thumbnail API (or for Immich, always use this)
       if (!thumbnailUrl) {
         try {
+          // For Immich media sources, replace /thumbnail/ with /fullsize/ to get authenticated URLs
+          // Immich integration doesn't properly auth thumbnail endpoints
+          let resolveId = item.media_content_id;
+          if (shouldLog) this._log('  📍 Original media_content_id:', resolveId);
+          
+          if (resolveId && resolveId.includes('media-source://immich') && resolveId.includes('/thumbnail/')) {
+            resolveId = resolveId.replace('/thumbnail/', '/fullsize/');
+            if (shouldLog) this._log('  🔧 Immich thumbnail → fullsize:', resolveId);
+          }
+          
           const thumbnailResponse = await this.hass.callWS({
             type: "media_source/resolve_media",
-            media_content_id: item.media_content_id,
+            media_content_id: resolveId,
             expires: 3600
           });
           
           if (thumbnailResponse && thumbnailResponse.url) {
             thumbnailUrl = thumbnailResponse.url;
-            if (shouldLog) this._log('✅ Got thumbnail from resolve_media API:', thumbnailUrl);
+            if (shouldLog) this._log('  ✅ Got thumbnail from resolve_media API:', thumbnailUrl);
           }
         } catch (error) {
-          if (shouldLog) this._log('❌ Thumbnail resolve_media API failed:', error);
+          if (shouldLog) this._log('  ❌ Thumbnail resolve_media API failed:', error);
         }
       }
       
@@ -9478,6 +9617,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
+            <label>Max Height (pixels)</label>
+            <div>
+              <input
+                type="number"
+                min="100"
+                max="5000"
+                step="50"
+                .value=${this._config.max_height_pixels || ''}
+                @input=${this._maxHeightChanged}
+                placeholder="Auto (no limit)"
+              />
+              <div class="help-text">Maximum height in pixels (100-5000, applies in default mode)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Refresh Button</label>
             <div>
               <input
@@ -9887,7 +10042,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.0.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.1.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

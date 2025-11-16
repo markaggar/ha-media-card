@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2025-11-15
+
+### Added
+- **Max Height Control**: New `max_height_pixels` configuration option to set custom media container height (preserves aspect ratio)
+- **Non-Recursive Scanning**: Media Index backend support for `recursive` parameter in `get_random_items` service
+- **File Validation**: Media Index items verified for existence before rendering
+
+### Fixed
+- **Immich Integration**: Complete compatibility with Home Assistant's Immich media source
+  - Thumbnail 401 authentication errors resolved (use fullsize URLs with authSig tokens)
+  - Filename extraction from pipe-delimited format (`filename.jpg|image/jpeg`)
+  - Media type filtering broken by pipe suffix in filenames
+  - Folder path extraction from pipe-separated structure
+  - Centralized file type detection with HEIC support
+- **Sequential Mode**: Fixed slideshow stopping when looping back in non-recursive mode
+  - Excluded files (marked for editing/deletion) now cleared when restarting sequence
+  - Loop-back now triggers correctly when small folder has fewer items than queue size
+  - Slideshow continues indefinitely even after marking files for editing
+- **Metadata Display**: Metadata and position counters now update in sync with image changes (no premature flash)
+- **Sequential Sorting**: Files without datetime stamps appear last in both sort directions, with alphabetical sub-sorting matching the chosen direction
+- **Position Indicator**: Enhanced accuracy and stability across all provider types
+  - Now resets when queue shrinks significantly (handles filtering/folder changes)
+  - Prevents incorrect "5 of 20" displays when only 5 items remain
+- **Path Conversion**: Auto-convert filesystem paths to media-source URIs when switching between modes
+  - Ensures paths always have leading slash for valid media-source:// URIs
+- **Configuration Validation**: Max height pixels now clamped to valid range (100-5000) even when set via YAML
+- **Code Quality**: Addressed all automated code review suggestions (recursion protection, input validation, null handling, CSS specificity, queue size tracking, path normalization)
+
+### Changed
+- Media Index `get_random_items` service now supports recursive parameter (default: true for backward compatibility)
 
 
 ## [5.0.0] - 2025-11-13
