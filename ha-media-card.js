@@ -642,8 +642,9 @@ class FolderProvider extends MediaProvider {
         
         // V5: Enable recursive scanning for sequential filesystem mode
         const adaptedConfig = this._adaptConfigForV4();
-        adaptedConfig.subfolder_queue.enabled = recursive; // Use config recursive setting
-        adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null; // Use config or unlimited
+        adaptedConfig.subfolder_queue.enabled = true; // Always use queue for sequential
+        // For non-recursive: scan_depth=0 (base folder only), for recursive: use config or unlimited
+        adaptedConfig.subfolder_queue.scan_depth = recursive ? (this.config.folder?.scan_depth || null) : 0;
         
         // Use slideshow_window as scan limit (performance control)
         adaptedConfig.slideshow_window = this.config.slideshow_window || 1000;
@@ -2400,6 +2401,14 @@ class SubfolderQueue {
     
     if (folderMode === 'sequential') {
       // Sequential mode: collect available items, add to queue, then sort entire queue
+      
+      // In sequential mode with loop-back, clear shownItems BEFORE collecting
+      // so we can re-collect all files for the next loop
+      if (clearShownItemsAfter) {
+        this._log('♻️ Clearing shownItems BEFORE collecting (sequential loop-back)');
+        this.shownItems.clear();
+      }
+      
       const availableFiles = [];
       
       for (const folder of this.discoveredFolders) {
@@ -2417,12 +2426,6 @@ class SubfolderQueue {
       }
       
       this._log('🔍 Available files for refill:', availableFiles.length);
-      
-      // NOW clear shownItems AFTER collecting available files
-      if (clearShownItemsAfter) {
-        this._log('♻️ Clearing shownItems now (after collecting available files)');
-        this.shownItems.clear();
-      }
       
       // Sort available files first, then add to queue
       // This preserves queue order without re-sorting already-queued items
