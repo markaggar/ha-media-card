@@ -8667,29 +8667,42 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     if (shouldLog) {
       this._thumbnailDebugCount++;
       this._log('🔍 Creating thumbnail for item:', item.title || item.media_content_id);
+      this._log('  📋 Item details:', JSON.stringify({
+        media_content_id: item.media_content_id,
+        thumbnail: item.thumbnail,
+        thumbnail_url: item.thumbnail_url,
+        can_play: item.can_play,
+        can_expand: item.can_expand
+      }, null, 2));
     }
 
     try {
       let thumbnailUrl = null;
       
+      // Check if this is an Immich source
+      const isImmich = item.media_content_id && item.media_content_id.includes('media-source://immich');
+      
       // Try multiple approaches for getting the thumbnail
-      if (item.thumbnail) {
+      // Skip item.thumbnail for Immich - those URLs lack authentication
+      if (item.thumbnail && !isImmich) {
         thumbnailUrl = item.thumbnail;
         if (shouldLog) this._log('✅ Using provided thumbnail:', thumbnailUrl);
-      } else if (item.thumbnail_url) {
+      } else if (item.thumbnail_url && !isImmich) {
         thumbnailUrl = item.thumbnail_url;
         if (shouldLog) this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
       }
       
-      // Try Home Assistant thumbnail API
+      // Try Home Assistant thumbnail API (or for Immich, always use this)
       if (!thumbnailUrl) {
         try {
           // For Immich media sources, replace /thumbnail/ with /fullsize/ to get authenticated URLs
           // Immich integration doesn't properly auth thumbnail endpoints
           let resolveId = item.media_content_id;
+          if (shouldLog) this._log('  📍 Original media_content_id:', resolveId);
+          
           if (resolveId && resolveId.includes('media-source://immich') && resolveId.includes('/thumbnail/')) {
             resolveId = resolveId.replace('/thumbnail/', '/fullsize/');
-            if (shouldLog) this._log('🔧 Immich thumbnail → fullsize:', resolveId);
+            if (shouldLog) this._log('  🔧 Immich thumbnail → fullsize:', resolveId);
           }
           
           const thumbnailResponse = await this.hass.callWS({
@@ -8700,10 +8713,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           
           if (thumbnailResponse && thumbnailResponse.url) {
             thumbnailUrl = thumbnailResponse.url;
-            if (shouldLog) this._log('✅ Got thumbnail from resolve_media API:', thumbnailUrl);
+            if (shouldLog) this._log('  ✅ Got thumbnail from resolve_media API:', thumbnailUrl);
           }
         } catch (error) {
-          if (shouldLog) this._log('❌ Thumbnail resolve_media API failed:', error);
+          if (shouldLog) this._log('  ❌ Thumbnail resolve_media API failed:', error);
         }
       }
       
