@@ -3469,6 +3469,12 @@ class MediaCardV5a extends LitElement {
   _addCacheBustingTimestamp(url, forceAdd = false) {
     if (!url) return url;
     
+    // CRITICAL: Never add timestamp to signed URLs (breaks signature validation)
+    if (url.includes('authSig=')) {
+      this._log('Skipping cache-busting timestamp - URL has authSig');
+      return url;
+    }
+    
     // For auto-refresh: only add if refresh configured
     // For manual refresh: always add (forceAdd = true)
     const refreshSeconds = this.config.single_media?.refresh_seconds || this.config.auto_refresh_seconds;
@@ -3477,15 +3483,8 @@ class MediaCardV5a extends LitElement {
     if (!shouldAdd) return url;
     
     const timestamp = Date.now();
-    
-    // If URL has authSig, append timestamp after it (won't break signature)
-    // Otherwise, add as normal query parameter
-    if (url.includes('authSig=')) {
-      return `${url}&t=${timestamp}`;
-    } else {
-      const separator = url.includes('?') ? '&' : '?';
-      return `${url}${separator}t=${timestamp}`;
-    }
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}t=${timestamp}`;
   }
   
   // V5: Refresh metadata from media_index (for action button updates)
