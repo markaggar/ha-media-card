@@ -3271,10 +3271,10 @@ class MediaCardV5a extends LitElement {
         this.currentMedia = item;
         this._log('Set currentMedia:', this.currentMedia);
         
-        // V4: Set current path for action buttons
-        // media_content_id should be the database path, not a media-source:// URL
-        this._currentMediaPath = item.media_content_id;
-        this._currentMetadata = item.metadata;
+        // V5: Store metadata in pending state until image loads
+        // This prevents metadata/counters from flashing before the new image appears
+        this._pendingMediaPath = item.media_content_id;
+        this._pendingMetadata = item.metadata;
         
         // V5: Clear cached full metadata when media changes
         this._fullMetadata = null;
@@ -4098,6 +4098,21 @@ class MediaCardV5a extends LitElement {
     if (this._retryAttempts.has(this.mediaUrl)) {
       this._retryAttempts.delete(this.mediaUrl);
     }
+    
+    // V5: Apply pending metadata now that image has loaded
+    // This synchronizes metadata/counter updates with the new image appearing
+    if (this._pendingMetadata !== null) {
+      this._currentMetadata = this._pendingMetadata;
+      this._pendingMetadata = null;
+      this._log('✅ Applied pending metadata on image load');
+    }
+    if (this._pendingMediaPath !== null) {
+      this._currentMediaPath = this._pendingMediaPath;
+      this._pendingMediaPath = null;
+    }
+    
+    // Trigger re-render to show updated metadata/counters
+    this.requestUpdate();
   }
   
   // V4: Metadata display methods
