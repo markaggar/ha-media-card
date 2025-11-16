@@ -9944,6 +9944,19 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show fullscreen button to automatically pause and initiate full screen mode (see Kiosk mode for automatic full screen options)</div>
             </div>
           </div>
+          
+          <div class="config-row">
+            <label>Button Position</label>
+            <div>
+              <select @change=${this._actionButtonsPositionChanged}>
+                <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
+                <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
+                <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
+                <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+              </select>
+              <div class="help-text">Corner position for action buttons (fullscreen, pause, refresh, etc.)</div>
+            </div>
+          </div>
         </div>
 
         ${hasMediaIndex ? html`
@@ -9997,19 +10010,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableEditChanged}
                 />
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
-              </div>
-            </div>
-            
-            <div class="config-row">
-              <label>Button Position</label>
-              <div>
-                <select @change=${this._actionButtonsPositionChanged}>
-                  <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
-                  <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
-                  <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
-                  <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
-                </select>
-                <div class="help-text">Corner position for action buttons</div>
               </div>
             </div>
           </div>
