@@ -5843,14 +5843,14 @@ class MediaCardV5a extends LitElement {
     }
     
     /* Custom max height override with aspect ratio preservation */
-    /* Only apply when NOT in special aspect modes to avoid conflicts */
-    :host(:not([data-aspect-mode="viewport-fit"]):not([data-aspect-mode="viewport-fill"]):not([data-aspect-mode="smart-scale"])) img {
+    /* Only apply in default mode (no aspect-mode attribute set) */
+    :host(:not([data-aspect-mode])) img {
       max-height: var(--media-max-height, none);
       width: auto;
       height: auto;
       object-fit: contain;
     }
-    :host(:not([data-aspect-mode="viewport-fit"]):not([data-aspect-mode="viewport-fill"]):not([data-aspect-mode="smart-scale"])) video {
+    :host(:not([data-aspect-mode])) video {
       max-height: var(--media-max-height, none);
       width: auto;
       height: auto;
