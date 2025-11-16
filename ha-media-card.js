@@ -2986,6 +2986,20 @@ class MediaCardV5a extends LitElement {
       this._refreshInterval = null;
     }
     
+    // V5: Validate and clamp max_height_pixels if present
+    if (config.max_height_pixels !== undefined) {
+      const height = parseInt(config.max_height_pixels);
+      if (isNaN(height) || height <= 0) {
+        // Invalid value - remove it
+        delete config.max_height_pixels;
+        this._log('⚠️ Removed invalid max_height_pixels:', config.max_height_pixels);
+      } else if (height < 100 || height > 5000) {
+        // Out of range - clamp to valid range
+        config.max_height_pixels = Math.max(100, Math.min(5000, height));
+        this._log('⚠️ Clamped max_height_pixels to valid range (100-5000):', config.max_height_pixels);
+      }
+    }
+    
     // V5: Reset provider to force reinitialization with new config
     if (this.provider) {
       this._log('🧹 Clearing existing provider before reconfiguration');
@@ -4483,8 +4497,15 @@ class MediaCardV5a extends LitElement {
       currentQueueSize = this.provider.sequentialProvider.queue.length;
     }
     
+    // Track maximum queue size, but allow it to decrease if queue shrinks significantly
+    // (e.g., due to filtering or folder changes)
     if (currentQueueSize > this._maxQueueSize) {
       this._maxQueueSize = currentQueueSize;
+    } else if (currentQueueSize > 0 && this._maxQueueSize > currentQueueSize * 2) {
+      // If queue is less than half of recorded max, reset to current size
+      // This handles filtering/folder changes while avoiding flicker during normal operation
+      this._maxQueueSize = currentQueueSize;
+      this._log('Reset _maxQueueSize to', currentQueueSize, '(queue shrunk significantly)');
     }
     
     // Use max queue size for stable "Y" display (prevents confusing fluctuations)
@@ -9524,7 +9545,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @input=${this._maxHeightChanged}
                 placeholder="Auto (no limit)"
               />
-              <div class="help-text">Maximum height in pixels (applies in default mode only)</div>
+              <div class="help-text">Maximum height in pixels (100-5000, applies in default mode)</div>
             </div>
           </div>
           

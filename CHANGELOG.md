@@ -27,9 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Slideshow continues indefinitely even after marking files for editing
 - **Metadata Display**: Metadata and position counters now update in sync with image changes (no premature flash)
 - **Sequential Sorting**: Files without datetime stamps appear last in both sort directions, with alphabetical sub-sorting matching the chosen direction
-- **Position Indicator**: Enhanced accuracy and stability across all provider types (SubfolderQueue, MediaIndexProvider, SequentialMediaIndexProvider)
+- **Position Indicator**: Enhanced accuracy and stability across all provider types
+  - Now resets when queue shrinks significantly (handles filtering/folder changes)
+  - Prevents incorrect "5 of 20" displays when only 5 items remain
 - **Path Conversion**: Auto-convert filesystem paths to media-source URIs when switching between modes
-- **Code Quality**: Addressed 8 automated code review suggestions (recursion protection, input validation, null handling, CSS specificity)
+  - Ensures paths always have leading slash for valid media-source:// URIs
+- **Configuration Validation**: Max height pixels now clamped to valid range (100-5000) even when set via YAML
+- **Code Quality**: Addressed all automated code review suggestions (recursion protection, input validation, null handling, CSS specificity, queue size tracking, path normalization)
 
 ### Changed
 - Media Index `get_random_items` service now supports recursive parameter (default: true for backward compatibility)
