@@ -26,7 +26,8 @@
 **Height Control** - Added `max_height_pixels` configuration option for custom media container height.
 
 ### Improvements
-- Override aspect mode with pixel-based height limit
+
+- Pixel-based height limit (applies in default aspect mode)
 - Preserves aspect ratio while constraining vertical space
 - Visual editor support with inline help text
 

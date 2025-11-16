@@ -723,6 +723,10 @@ class FolderProvider extends MediaProvider {
         // Set scan_depth based on recursive setting in existing config
         // recursive: false = scan_depth: 0 (only base folder)
         // recursive: true = scan_depth: null (unlimited depth, or config value)
+        // Defensive: ensure subfolder_queue exists
+        if (!this.cardAdapter.config.subfolder_queue) {
+          this.cardAdapter.config.subfolder_queue = {};
+        }
         if (!recursive) {
           this.cardAdapter.config.subfolder_queue.enabled = true; // Still use queue, but limit depth
           this.cardAdapter.config.subfolder_queue.scan_depth = 0; // Only scan base folder
@@ -3700,6 +3704,17 @@ class MediaCardV5a extends LitElement {
       console.warn('[MediaCardV5a] Synology DSM URL authentication may have expired:', this.mediaUrl);
     }
     
+    // Apply pending metadata even on error to avoid stale metadata from previous media
+    if (this._pendingMetadata !== null) {
+      this._currentMetadata = this._pendingMetadata;
+      this._pendingMetadata = null;
+      this._log('Applied pending metadata on error to clear stale data');
+    }
+    if (this._pendingMediaPath !== null) {
+      this._currentMediaPath = this._pendingMediaPath;
+      this._pendingMediaPath = null;
+    }
+    
     // Check if we've already tried to retry this URL
     const currentUrl = this.mediaUrl || 'unknown';
     const retryCount = this._retryAttempts.get(currentUrl) || 0;
@@ -4538,7 +4553,8 @@ class MediaCardV5a extends LitElement {
     
     // When cycling through queue, wrap position back to 1 instead of exceeding totalCount
     // Ensure currentIndex stays within bounds [0, totalCount-1]
-    const currentIndex = totalCount > 0 ? rawPosition % totalCount : 0;
+    // Note: totalCount is always > 1 here due to early return on line 4508
+    const currentIndex = rawPosition % totalCount;
 
     // Show position indicator if enabled
     let positionIndicator = html``;
