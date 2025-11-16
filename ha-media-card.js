@@ -643,8 +643,20 @@ class FolderProvider extends MediaProvider {
         // V5: Enable recursive scanning for sequential filesystem mode
         const adaptedConfig = this._adaptConfigForV4();
         adaptedConfig.subfolder_queue.enabled = true; // Always use queue for sequential
-        // For non-recursive: scan_depth=0 (base folder only), for recursive: use config or unlimited
-        adaptedConfig.subfolder_queue.scan_depth = recursive ? (this.config.folder?.scan_depth || null) : 0;
+        
+        // Detect if this is a media-source URI (Immich, etc.) vs filesystem path
+        const folderPath = this.config.folder?.path || '';
+        const isMediaSource = folderPath.startsWith('media-source://');
+        
+        // For filesystem paths: scan_depth=0 (base folder only) when non-recursive
+        // For media-source URIs: let SubfolderQueue handle naturally (no depth limit)
+        if (isMediaSource) {
+          // Media sources (Immich, etc.) - don't restrict depth, let media browser handle it
+          adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
+        } else {
+          // Filesystem paths - respect recursive setting with scan_depth
+          adaptedConfig.subfolder_queue.scan_depth = recursive ? (this.config.folder?.scan_depth || null) : 0;
+        }
         
         // Use slideshow_window as scan limit (performance control)
         adaptedConfig.slideshow_window = this.config.slideshow_window || 1000;
