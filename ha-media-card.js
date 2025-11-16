@@ -4384,11 +4384,16 @@ class MediaCardV5a extends LitElement {
       });
     }
     
+    // Normalize folder path to absolute if it's relative
+    let absoluteFolderPath = fullFolderPath;
+    if (!absoluteFolderPath.startsWith('/')) {
+      absoluteFolderPath = '/media/' + absoluteFolderPath;
+    }
+    
     // Remove the scan prefix from the folder path
-    // e.g., "/media/Photo/OneDrive/Mark-Pictures/Camera" -> "Mark-Pictures/Camera"
-    let relativePath = fullFolderPath;
-    if (scanPrefix && fullFolderPath.startsWith(scanPrefix)) {
-      relativePath = fullFolderPath.substring(scanPrefix.length);
+    let relativePath = absoluteFolderPath;
+    if (scanPrefix && absoluteFolderPath.startsWith(scanPrefix)) {
+      relativePath = absoluteFolderPath.substring(scanPrefix.length);
     }
     
     // Clean up path (remove leading/trailing slashes)
