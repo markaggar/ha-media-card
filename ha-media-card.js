@@ -7333,12 +7333,17 @@ class MediaCardV5aEditor extends LitElement {
         if (mediaFolder) {
           this._log('Auto-populating path from media_index entity:', mediaFolder);
           
+          // Convert filesystem path to media-source URI format
+          const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
+          const folderPath = `media-source://media_source${normalizedPath}`;
+          this._log('Converted path:', mediaFolder, '→', folderPath);
+          
           // For folder mode: set folder.path
           if (this._config.media_source_type === 'folder') {
-            this._log('Setting folder.path to:', mediaFolder);
+            this._log('Setting folder.path to:', folderPath);
             this._config.folder = {
               ...this._config.folder,
-              path: mediaFolder
+              path: folderPath
             };
             this._log('Updated folder config:', this._config.folder);
           } else if (this._config.media_source_type === 'single_media') {
