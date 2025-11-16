@@ -4438,8 +4438,24 @@ class MediaCardV5a extends LitElement {
       return html``;
     }
 
-    // Get current queue size and track the maximum seen
-    const currentQueueSize = this.provider?.subfolderQueue?.queue?.length || 0;
+    // Get current queue size from appropriate provider and track the maximum seen
+    let currentQueueSize = 0;
+    
+    // Check different provider types for queue size
+    if (this.provider?.subfolderQueue?.queue?.length) {
+      // FolderProvider with SubfolderQueue
+      currentQueueSize = this.provider.subfolderQueue.queue.length;
+    } else if (this.provider?.queue?.length) {
+      // MediaIndexProvider or SequentialMediaIndexProvider
+      currentQueueSize = this.provider.queue.length;
+    } else if (this.provider?.mediaIndexProvider?.queue?.length) {
+      // FolderProvider wrapping MediaIndexProvider
+      currentQueueSize = this.provider.mediaIndexProvider.queue.length;
+    } else if (this.provider?.sequentialProvider?.queue?.length) {
+      // FolderProvider wrapping SequentialMediaIndexProvider
+      currentQueueSize = this.provider.sequentialProvider.queue.length;
+    }
+    
     if (currentQueueSize > this._maxQueueSize) {
       this._maxQueueSize = currentQueueSize;
     }
