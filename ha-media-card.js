@@ -644,17 +644,17 @@ class FolderProvider extends MediaProvider {
         const adaptedConfig = this._adaptConfigForV4();
         adaptedConfig.subfolder_queue.enabled = true; // Always use queue for sequential
         
-        // Detect if this is a media-source URI (Immich, etc.) vs filesystem path
+        // Detect if this is Immich or other integration (not filesystem through media_source)
         const folderPath = this.config.folder?.path || '';
-        const isMediaSource = folderPath.startsWith('media-source://');
+        const isImmich = folderPath.startsWith('media-source://immich');
         
-        // For filesystem paths: scan_depth=0 (base folder only) when non-recursive
-        // For media-source URIs: let SubfolderQueue handle naturally (no depth limit)
-        if (isMediaSource) {
-          // Media sources (Immich, etc.) - don't restrict depth, let media browser handle it
+        // Immich and similar integrations: Don't restrict scan_depth (let media browser handle it)
+        // Filesystem paths (including media-source://media_source/...): Respect recursive setting
+        if (isImmich) {
+          // Immich albums - don't restrict depth, let media browser handle album hierarchy
           adaptedConfig.subfolder_queue.scan_depth = this.config.folder?.scan_depth || null;
         } else {
-          // Filesystem paths - respect recursive setting with scan_depth
+          // Filesystem paths (direct /media/ or via media_source) - respect recursive setting
           adaptedConfig.subfolder_queue.scan_depth = recursive ? (this.config.folder?.scan_depth || null) : 0;
         }
         
