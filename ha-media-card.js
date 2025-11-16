@@ -3465,6 +3465,29 @@ class MediaCardV5a extends LitElement {
     return await MediaProvider.extractMetadataWithExif(mediaPath, this.config, this.hass);
   }
   
+  // Add cache-busting timestamp to URL (forces browser to bypass cache)
+  _addCacheBustingTimestamp(url, forceAdd = false) {
+    if (!url) return url;
+    
+    // For auto-refresh: only add if refresh configured
+    // For manual refresh: always add (forceAdd = true)
+    const refreshSeconds = this.config.single_media?.refresh_seconds || this.config.auto_refresh_seconds;
+    const shouldAdd = forceAdd || (refreshSeconds > 0);
+    
+    if (!shouldAdd) return url;
+    
+    const timestamp = Date.now();
+    
+    // If URL has authSig, append timestamp after it (won't break signature)
+    // Otherwise, add as normal query parameter
+    if (url.includes('authSig=')) {
+      return `${url}&t=${timestamp}`;
+    } else {
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}t=${timestamp}`;
+    }
+  }
+  
   // V5: Refresh metadata from media_index (for action button updates)
   async _refreshMetadata() {
     if (!MediaProvider.isMediaIndexActive(this.config) || !this._currentMediaPath || !this.hass) {
@@ -3531,15 +3554,9 @@ class MediaCardV5a extends LitElement {
         this._log('HA resolved to:', resolved.url);
         
         // Add timestamp for auto-refresh (camera snapshots, etc.)
-        // BUT: Don't add timestamp if URL has authSig - it would break the signature
-        let finalUrl = resolved.url;
-        const refreshSeconds = this.config.single_media?.refresh_seconds || this.config.auto_refresh_seconds;
-        if (refreshSeconds > 0 && !resolved.url.includes('authSig=')) {
-          const timestamp = Date.now();
-          finalUrl = resolved.url + (resolved.url.includes('?') ? '&' : '?') + `t=${timestamp}`;
+        const finalUrl = this._addCacheBustingTimestamp(resolved.url);
+        if (finalUrl !== resolved.url) {
           this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
-        } else if (resolved.url.includes('authSig=')) {
-          this._log('Skipping timestamp - URL has auth signature');
         }
         
         this.mediaUrl = finalUrl;
@@ -4920,16 +4937,11 @@ class MediaCardV5a extends LitElement {
       
       // Add cache-busting timestamp to force browser reload
       // (in case file content changed but authSig didn't)
-      if (this.mediaUrl && !this.mediaUrl.includes('authSig=')) {
-        const timestamp = Date.now();
-        this.mediaUrl = this.mediaUrl + (this.mediaUrl.includes('?') ? '&' : '?') + `t=${timestamp}`;
-        this._log('Added cache-busting timestamp:', this.mediaUrl);
-      } else if (this.mediaUrl && this.mediaUrl.includes('authSig=')) {
-        // For signed URLs, append timestamp after authSig (won't break signature)
-        const timestamp = Date.now();
-        this.mediaUrl = this.mediaUrl + `&t=${timestamp}`;
-        this._log('Added cache-busting timestamp to signed URL');
+      const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
+      if (timestampedUrl !== this.mediaUrl) {
+        this._log('Added cache-busting timestamp:', timestampedUrl);
       }
+      this.mediaUrl = timestampedUrl;
       
       // Force reload by updating the img/video src
       this._mediaLoadedLogged = false; // Allow load success log again
