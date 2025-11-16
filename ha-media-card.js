@@ -3424,8 +3424,8 @@ class MediaCardV5a extends LitElement {
     }
 
     // V5: Get refresh/advance seconds based on mode
-    // Single media: use auto_refresh_seconds (top-level)
-    // Folder/slideshow: use auto_advance_seconds
+    // Single media: use auto_refresh_seconds
+    // Folder/slideshow: prefer auto_advance_seconds, fallback to auto_refresh_seconds
     let refreshSeconds = 0;
     let isSingleMediaMode = false;
     
@@ -3433,7 +3433,8 @@ class MediaCardV5a extends LitElement {
       refreshSeconds = this.config?.auto_refresh_seconds || 0;
       isSingleMediaMode = true;
     } else {
-      refreshSeconds = this.config?.auto_advance_seconds || 0;
+      // In folder mode: auto_advance takes priority, but allow auto_refresh as fallback
+      refreshSeconds = this.config?.auto_advance_seconds || this.config?.auto_refresh_seconds || 0;
     }
     
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
@@ -9585,21 +9586,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <!-- Single Media Mode Options -->
         ${mediaSourceType === 'single_media' ? html`
-          <div class="config-row">
-            <label>Refresh Interval</label>
-            <div>
-              <input
-                type="number"
-                .value=${this._config.auto_refresh_seconds || ''}
-                @input=${this._autoRefreshChanged}
-                placeholder="0"
-                min="0"
-                max="3600"
-                step="1"
-              />
-              <div class="help-text">Refresh image/video every N seconds (0 = disabled, useful for cameras)</div>
-            </div>
-          </div>
+          <!-- Single media settings moved to common sections -->
         ` : ''}
 
         <!-- Folder Mode Options -->
@@ -9730,6 +9717,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._refreshButtonChanged}
               />
               <div class="help-text">Show manual refresh button on the card</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Auto-Refresh Interval</label>
+            <div>
+              <input
+                type="number"
+                .value=${this._config.auto_refresh_seconds || ''}
+                @input=${this._autoRefreshChanged}
+                placeholder="0"
+                min="0"
+                max="3600"
+                step="1"
+              />
+              <div class="help-text">Reload current media every N seconds (0 = disabled). For single image mode (cameras) or folder mode when auto-advance is 0. Leave at 0 if auto-advance is configured.</div>
             </div>
           </div>
         </div>
