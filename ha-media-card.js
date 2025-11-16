@@ -4459,12 +4459,13 @@ class MediaCardV5a extends LitElement {
     const enableEdit = config.enable_edit !== false;
     const enableInfo = config.enable_info !== false;
     const enableFullscreen = config.enable_fullscreen === true;
+    const enableRefresh = this.config.show_refresh_button === true;
     
     // Don't render anything if all are disabled
-    if (!enablePause && !showMediaIndexButtons && !enableFullscreen) {
+    if (!enablePause && !showMediaIndexButtons && !enableFullscreen && !enableRefresh) {
       return html``;
     }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen) {
+    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen && !enableRefresh) {
       return html``;
     }
 
@@ -4481,6 +4482,14 @@ class MediaCardV5a extends LitElement {
             @click=${this._handlePauseClick}
             title="${isPaused ? 'Resume' : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableRefresh ? html`
+          <button
+            class="action-btn refresh-btn"
+            @click=${this._handleRefreshClick}
+            title="Refresh">
+            <ha-icon icon="mdi:refresh"></ha-icon>
           </button>
         ` : ''}
         ${enableFullscreen ? html`
@@ -4894,6 +4903,13 @@ class MediaCardV5a extends LitElement {
     e.stopPropagation();
     this._setPauseState(!this._isPaused);
     this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
+  }
+  
+  // Handle refresh button click - load next media
+  _handleRefreshClick(e) {
+    e.stopPropagation();
+    this._log('🔄 Refresh button clicked - loading next media');
+    this._loadNext();
   }
   
   // Handle info button click - toggle overlay and fetch full metadata
