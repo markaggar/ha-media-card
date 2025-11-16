@@ -5955,6 +5955,22 @@ class MediaCardV5a extends LitElement {
       height: auto;
       object-fit: contain;
     }
+    
+    /* Remove max-height constraint in fullscreen mode */
+    :fullscreen img,
+    :fullscreen video,
+    :-webkit-full-screen img,
+    :-webkit-full-screen video,
+    :-moz-full-screen img,
+    :-moz-full-screen video,
+    :-ms-fullscreen img,
+    :-ms-fullscreen video {
+      max-height: 100vh !important;
+      max-width: 100vw !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain;
+    }
 
     /* V4: Image Zoom Styles */
     :host([data-media-type="image"]) .zoomable-container {
