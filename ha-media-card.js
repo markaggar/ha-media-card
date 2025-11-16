@@ -3084,6 +3084,10 @@ class MediaCardV5a extends LitElement {
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
     
+    // V5: Set position indicator position attribute for CSS targeting
+    const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
+    this.setAttribute('data-position-indicator-position', positionIndicatorPosition);
+    
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
@@ -6462,8 +6466,6 @@ class MediaCardV5a extends LitElement {
     /* Copied from V4 lines 1362-1425 */
     .position-indicator {
       position: absolute;
-      bottom: 12px;
-      right: 12px;
       background: rgba(0, 0, 0, 0.7);
       color: white;
       padding: 4px 8px;
@@ -6474,6 +6476,28 @@ class MediaCardV5a extends LitElement {
       z-index: 15;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
+    }
+    
+    /* Position indicator corner positioning - bottom-right is default */
+    :host([data-position-indicator-position="bottom-right"]) .position-indicator,
+    :host(:not([data-position-indicator-position])) .position-indicator {
+      bottom: 12px;
+      right: 12px;
+    }
+    
+    :host([data-position-indicator-position="bottom-left"]) .position-indicator {
+      bottom: 12px;
+      left: 12px;
+    }
+    
+    :host([data-position-indicator-position="top-right"]) .position-indicator {
+      top: 12px;
+      right: 12px;
+    }
+    
+    :host([data-position-indicator-position="top-left"]) .position-indicator {
+      top: 12px;
+      left: 12px;
     }
 
     .dots-indicator {
@@ -7797,6 +7821,17 @@ class MediaCardV5aEditor extends LitElement {
 
   _positionIndicatorChanged(ev) {
     this._config = { ...this._config, show_position_indicator: ev.target.checked };
+    this._fireConfigChanged();
+  }
+  
+  _positionIndicatorPositionChanged(ev) {
+    this._config = { 
+      ...this._config, 
+      position_indicator: {
+        ...this._config.position_indicator,
+        position: ev.target.value
+      }
+    };
     this._fireConfigChanged();
   }
 
@@ -9914,6 +9949,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display geocoded location from EXIF data (requires media_index integration)</div>
             </div>
           </div>
+        </div>
+        
+        <!-- Overlay Positioning (consolidated section) -->
+        <div class="section">
+          <div class="section-title">📍 Overlay Positioning</div>
           
           <div class="config-row">
             <label>Metadata Position</label>
@@ -9924,7 +9964,33 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="top-left">Top Left</option>
                 <option value="top-right">Top Right</option>
               </select>
-              <div class="help-text">Where to display the metadata overlay</div>
+              <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Action Buttons Position</label>
+            <div>
+              <select @change=${this._actionButtonsPositionChanged}>
+                <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
+                <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
+                <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
+                <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+              </select>
+              <div class="help-text">Corner position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Position Indicator Corner</label>
+            <div>
+              <select @change=${this._positionIndicatorPositionChanged} .value=${this._config.position_indicator?.position || 'bottom-right'}>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="top-left">Top Left</option>
+              </select>
+              <div class="help-text">Corner position for "X of Y" counter (only shown in folder mode)</div>
             </div>
           </div>
         </div>
@@ -9942,19 +10008,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._actionButtonsEnableFullscreenChanged}
               />
               <div class="help-text">Show fullscreen button to automatically pause and initiate full screen mode (see Kiosk mode for automatic full screen options)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Button Position</label>
-            <div>
-              <select @change=${this._actionButtonsPositionChanged}>
-                <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
-                <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
-                <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
-                <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
-              </select>
-              <div class="help-text">Corner position for action buttons (fullscreen, pause, refresh, etc.)</div>
             </div>
           </div>
         </div>
