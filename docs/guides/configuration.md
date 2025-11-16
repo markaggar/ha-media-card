@@ -73,6 +73,7 @@ auto_advance_duration: 5
 | `title` | string | `null` | Card title (shown in header) |
 | `hide_title` | boolean | `false` | Hide the card title |
 | `aspect_mode` | string | `default` | Image scaling: `default`, `smart-scale`, `viewport-fit`, `viewport-fill` |
+| `max_height_pixels` | number | `null` | Maximum media height in pixels (overrides aspect mode) |
 
 ### Auto-Refresh
 
