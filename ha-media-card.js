@@ -4374,6 +4374,16 @@ class MediaCardV5a extends LitElement {
       }
     }
     
+    // Debug logging
+    if (this.config?.debug_mode) {
+      console.log('[_formatFolderForDisplay]', {
+        fullFolderPath,
+        mediaPath,
+        scanPrefix,
+        showRoot
+      });
+    }
+    
     // Remove the scan prefix from the folder path
     // e.g., "/media/Photo/OneDrive/Mark-Pictures/Camera" -> "Mark-Pictures/Camera"
     let relativePath = fullFolderPath;
@@ -4386,6 +4396,10 @@ class MediaCardV5a extends LitElement {
     
     // Split into parts
     const parts = relativePath.split('/').filter(p => p.length > 0);
+    
+    if (this.config?.debug_mode) {
+      console.log('[_formatFolderForDisplay] relativePath:', relativePath, 'parts:', parts);
+    }
     
     if (parts.length === 0) return '';
     if (parts.length === 1) return parts[0]; // Only one folder level
