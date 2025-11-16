@@ -4918,6 +4918,19 @@ class MediaCardV5a extends LitElement {
       this._log('🔄 Re-resolving media URL:', currentMediaId);
       await this._resolveMediaUrl(currentMediaId);
       
+      // Add cache-busting timestamp to force browser reload
+      // (in case file content changed but authSig didn't)
+      if (this.mediaUrl && !this.mediaUrl.includes('authSig=')) {
+        const timestamp = Date.now();
+        this.mediaUrl = this.mediaUrl + (this.mediaUrl.includes('?') ? '&' : '?') + `t=${timestamp}`;
+        this._log('Added cache-busting timestamp:', this.mediaUrl);
+      } else if (this.mediaUrl && this.mediaUrl.includes('authSig=')) {
+        // For signed URLs, append timestamp after authSig (won't break signature)
+        const timestamp = Date.now();
+        this.mediaUrl = this.mediaUrl + `&t=${timestamp}`;
+        this._log('Added cache-busting timestamp to signed URL');
+      }
+      
       // Force reload by updating the img/video src
       this._mediaLoadedLogged = false; // Allow load success log again
       this.requestUpdate();
