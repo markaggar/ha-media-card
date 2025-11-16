@@ -507,11 +507,6 @@ class SingleMediaProvider extends MediaProvider {
     return this.currentItem;
   }
 
-  async _refreshMediaUrl() {
-    // Deprecated - timestamp handling moved to URL resolution
-    // This method kept for compatibility but does nothing
-  }
-
   serialize() {
     return {
       mediaPath: this.mediaPath,
