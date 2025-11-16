@@ -5846,11 +5846,15 @@ class MediaCardV5a extends LitElement {
     /* Only apply when NOT in special aspect modes to avoid conflicts */
     :host(:not([data-aspect-mode="viewport-fit"]):not([data-aspect-mode="viewport-fill"]):not([data-aspect-mode="smart-scale"])) img {
       max-height: var(--media-max-height, none);
-      /* Keep width: 100% from default mode */
+      width: auto;
+      height: auto;
+      object-fit: contain;
     }
     :host(:not([data-aspect-mode="viewport-fit"]):not([data-aspect-mode="viewport-fill"]):not([data-aspect-mode="smart-scale"])) video {
       max-height: var(--media-max-height, none);
-      /* Keep width: 100% from default mode */
+      width: auto;
+      height: auto;
+      object-fit: contain;
     }
 
     /* V4: Image Zoom Styles */
