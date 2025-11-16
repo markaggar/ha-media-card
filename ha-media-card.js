@@ -1403,12 +1403,21 @@ class SequentialMediaIndexProvider extends MediaProvider {
       let folderFilter = null;
       if (this.config.folder?.path) {
         let path = this.config.folder.path;
-        // Remove media-source://media_source prefix if present
-        if (path.startsWith('media-source://media_source')) {
+        
+        // Skip Immich and other integration paths - media_index only works with filesystem paths
+        if (path.startsWith('media-source://immich')) {
+          this._log('⚠️ Immich path detected - media_index incompatible, skipping folder filter');
+          // Don't set folderFilter - will query all media_index files
+        } else if (path.startsWith('media-source://media_source')) {
+          // Remove media-source://media_source prefix for filesystem paths
           path = path.replace('media-source://media_source', '');
+          folderFilter = path;
+          this._log('🔍 Filtering by folder:', folderFilter);
+        } else {
+          // Direct filesystem path
+          folderFilter = path;
+          this._log('🔍 Filtering by folder:', folderFilter);
         }
-        folderFilter = path;
-        this._log('🔍 Filtering by folder:', folderFilter);
       }
       
       // Build service data
