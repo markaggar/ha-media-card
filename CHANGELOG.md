@@ -21,7 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Media type filtering broken by pipe suffix in filenames
   - Folder path extraction from pipe-separated structure
   - Centralized file type detection with HEIC support
+- **Sequential Mode**: Fixed slideshow stopping when looping back in non-recursive mode
+  - Excluded files (marked for editing/deletion) now cleared when restarting sequence
+  - Loop-back now triggers correctly when small folder has fewer items than queue size
+  - Slideshow continues indefinitely even after marking files for editing
 - **Sequential Sorting**: Files without datetime stamps appear last in both sort directions, with alphabetical sub-sorting matching the chosen direction
+- **Metadata Display**: Metadata and position counters now update in sync with image changes (no premature flash)
 - **Position Indicator**: Enhanced accuracy and stability across all provider types (SubfolderQueue, MediaIndexProvider, SequentialMediaIndexProvider)
 - **Path Conversion**: Auto-convert filesystem paths to media-source URIs when switching between modes
 - **Code Quality**: Addressed 8 automated code review suggestions (recursion protection, input validation, null handling, CSS specificity)
