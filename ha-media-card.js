@@ -3113,7 +3113,6 @@ class MediaCardV5a extends LitElement {
 
   set hass(hass) {
     const hadHass = !!this._hass;
-    const oldHass = this._hass;
     this._hass = hass;
     
     // Only log on first hass to prevent log spam
@@ -3456,12 +3455,10 @@ class MediaCardV5a extends LitElement {
     // Single media: use auto_refresh_seconds
     // Folder/slideshow: prefer auto_advance_seconds, fallback to auto_refresh_seconds
     let refreshSeconds = 0;
-    let isSingleMediaMode = false;
     let isRefreshMode = false; // True if reloading current, false if advancing
     
     if (this.provider instanceof SingleMediaProvider) {
       refreshSeconds = this.config?.auto_refresh_seconds || 0;
-      isSingleMediaMode = true;
       isRefreshMode = true; // Single media always reloads current
     } else {
       // In folder mode: auto_advance takes priority
@@ -3494,9 +3491,8 @@ class MediaCardV5a extends LitElement {
           if (isRefreshMode) {
             // Reload current media (for single_media or folder with auto_refresh only)
             this._log('🔄 Auto-refresh timer triggered - reloading current media');
-            const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
-            if (currentMediaId) {
-              await this._resolveMediaUrl(currentMediaId);
+            if (this.currentMedia) {
+              await this._resolveMediaUrl();
               this.requestUpdate();
             }
           } else {
@@ -5031,17 +5027,24 @@ class MediaCardV5a extends LitElement {
     }
     
     try {
-      // Re-resolve the media URL to get a fresh authSig
+      // Re-resolve the media URL to get a fresh authSig and cache-busting timestamp
       this._log('🔄 Re-resolving media URL:', currentMediaId);
-      await this._resolveMediaUrl(currentMediaId);
+      await this._resolveMediaUrl();
       
       // Add cache-busting timestamp to force browser reload
-      // (in case file content changed but authSig didn't)
-      const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
-      if (timestampedUrl !== this.mediaUrl) {
-        this._log('Added cache-busting timestamp:', timestampedUrl);
+      // Note: _resolveMediaUrl already adds timestamp if auto_refresh_seconds > 0,
+      // but we force it here regardless of config for manual refresh
+      if (this.config?.auto_refresh_seconds > 0) {
+        // Already has timestamp from _resolveMediaUrl, don't add duplicate
+        this._log('Cache-busting timestamp already added by _resolveMediaUrl');
+      } else {
+        // No auto-refresh configured, add timestamp now
+        const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
+        if (timestampedUrl !== this.mediaUrl) {
+          this._log('Added cache-busting timestamp:', timestampedUrl);
+          this.mediaUrl = timestampedUrl;
+        }
       }
-      this.mediaUrl = timestampedUrl;
       
       // Force reload by updating the img/video src
       this._mediaLoadedLogged = false; // Allow load success log again
