@@ -1383,7 +1383,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       };
     }
     
-    console.warn('[SequentialMediaIndexProvider] Queue empty, no items to return');
+    console.warn('[MediaCard] Sequential queue empty, no items to return');
     return null;
   }
 
@@ -2325,7 +2325,20 @@ class SubfolderQueue {
   needsRefill() {
     const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
     const historyItems = this.card?.history?.length || 0;
-    const minBuffer = Math.max(historyItems + 5, 15);
+    
+    // Calculate total files available in discovered folders
+    const totalFilesInCollection = this.discoveredFolders.reduce((sum, folder) => 
+      sum + (folder.files ? folder.files.length : 0), 0);
+    
+    // For small collections, use a smaller buffer (50% of collection or 5, whichever is larger)
+    // For large collections, use the standard buffer calculation
+    let minBuffer;
+    if (totalFilesInCollection > 0 && totalFilesInCollection < 30) {
+      minBuffer = Math.max(Math.ceil(totalFilesInCollection * 0.5), 5);
+    } else {
+      minBuffer = Math.max(historyItems + 5, 15);
+    }
+    
     return unshownCount < minBuffer;
   }
 
@@ -3049,6 +3062,9 @@ class MediaCardV5a extends LitElement {
       show_dots_indicator: true,
       enable_keyboard_navigation: true,
       auto_advance_mode: 'reset', // V4: reset | continue
+      // V5: Video defaults - autoplay and muted for better UX
+      video_autoplay: true,
+      video_muted: true,
       ...config,
       metadata: {
         show_filename: false,
@@ -3097,15 +3113,23 @@ class MediaCardV5a extends LitElement {
 
   set hass(hass) {
     const hadHass = !!this._hass;
+    const oldHass = this._hass;
     this._hass = hass;
     
-    this._log('💎 hass setter called. Had hass before:', hadHass, 'Has provider:', !!this.provider);
+    // Only log on first hass to prevent log spam
+    if (!hadHass) {
+      this._log('💎 hass setter called. Had hass before:', hadHass, 'Has provider:', !!this.provider);
+    }
     
     // Initialize provider when hass is first set
     if (hass && !this.provider) {
       this._log('💎 Triggering provider initialization');
       this._initializeProvider();
     }
+    
+    // Note: Don't call requestUpdate() here - Lit will handle it automatically
+    // since hass is a reactive property. We can't prevent the auto-update,
+    // but we can make render() cheap when paused.
   }
 
   get hass() {
@@ -3312,8 +3336,9 @@ class MediaCardV5a extends LitElement {
         this._pendingMediaPath = item.media_content_id;
         this._pendingMetadata = item.metadata;
         
-        // V5: Clear cached full metadata when media changes
+        // V5: Clear caches when media changes
         this._fullMetadata = null;
+        this._folderDisplayCache = null;
         
         await this._resolveMediaUrl();
         this.requestUpdate(); // Force re-render
@@ -3740,8 +3765,8 @@ class MediaCardV5a extends LitElement {
     }
     
     // Only log errors that aren't 404s - 404s are expected when database is out of sync
-    if (!is404) {
-      console.error('[MediaCardV5a] Media failed to load:', this.mediaUrl, e);
+    if (!is404 && this._debugMode) {
+      console.error('[MediaCard] Media failed to load:', this.mediaUrl, e);
     } else {
       this._log('📭 Media file not found (404) - likely deleted/moved:', this.mediaUrl);
     }
@@ -3961,7 +3986,9 @@ class MediaCardV5a extends LitElement {
     }
     
     // V4: For non-404 errors, or 404s in single media mode, store error state and show UI
-    console.error('[MediaCardV5a] Showing media error:', errorMessage);
+    if (this._debugMode) {
+      console.error('[MediaCard] Showing media error:', errorMessage);
+    }
     this._errorState = {
       message: errorMessage,
       timestamp: now,
@@ -3985,6 +4012,8 @@ class MediaCardV5a extends LitElement {
     this._log('Video started loading:', this.mediaUrl);
     // Reset video wait timer for new video
     this._videoWaitStartTime = null;
+    // Reset user interaction flag for new video
+    this._videoUserInteracted = false;
   }
 
   _onVideoCanPlay() {
@@ -4014,6 +4043,10 @@ class MediaCardV5a extends LitElement {
       return;
     }
     
+    // Mark that user has interacted with the video
+    this._videoUserInteracted = true;
+    this._log('🎬 User interacted with video (pause) - will play to completion');
+    
     // Only pause slideshow if video was manually paused (not ended)
     const videoElement = this.renderRoot?.querySelector('video');
     if (videoElement && !videoElement.ended && !this._isPaused) {
@@ -4023,8 +4056,21 @@ class MediaCardV5a extends LitElement {
     }
   }
 
+  // V5: Track video seeking (user interaction)
+  _onVideoSeeking() {
+    this._videoUserInteracted = true;
+    this._log('🎬 User interacted with video (seek) - will play to completion');
+  }
+  
+  // V5: Track video click (user interaction)
+  _onVideoClick() {
+    this._videoUserInteracted = true;
+    this._log('🎬 User interacted with video (click) - will play to completion');
+  }
+
   // V4 CODE REUSE: Check if we should wait for video to complete before advancing
   // Based on V4 lines 3259-3302
+  // V5 ENHANCEMENT: If user has interacted with video, ignore video_max_duration and play to end
   async _shouldWaitForVideoCompletion() {
     const videoElement = this.renderRoot?.querySelector('video');
     
@@ -4035,7 +4081,14 @@ class MediaCardV5a extends LitElement {
 
     // If video is paused, don't wait (user intentionally paused)
     if (videoElement.paused) {
+      this._log('🎬 Video is paused - not waiting');
       return false;
+    }
+
+    // V5 ENHANCEMENT: If user has interacted with video, wait indefinitely for completion
+    if (this._videoUserInteracted) {
+      this._log('🎬 User has interacted with video - waiting for full completion (ignoring video_max_duration)');
+      return true;
     }
 
     // Get configuration values
@@ -4415,6 +4468,12 @@ class MediaCardV5a extends LitElement {
   _formatFolderForDisplay(fullFolderPath, showRoot) {
     if (!fullFolderPath) return '';
     
+    // Cache key for memoization
+    const cacheKey = `${fullFolderPath}|${showRoot}`;
+    if (this._folderDisplayCache && this._folderDisplayCache.key === cacheKey) {
+      return this._folderDisplayCache.value;
+    }
+    
     // Extract the scan path prefix from config (folder.path takes precedence over legacy media_path)
     // e.g., "media-source://media_source/media/Photo/OneDrive" -> "/media/Photo/OneDrive"
     let scanPrefix = '';
@@ -4426,7 +4485,7 @@ class MediaCardV5a extends LitElement {
       }
     }
     
-    // Debug logging
+    // Debug logging (only when cache miss)
     if (this.config?.debug_mode) {
       console.log('[_formatFolderForDisplay]', {
         fullFolderPath,
@@ -4465,10 +4524,14 @@ class MediaCardV5a extends LitElement {
       // Format: "first...last"
       const first = parts[0];
       const last = parts[parts.length - 1];
-      return `${first}...${last}`;
+      const result = `${first}...${last}`;
+      this._folderDisplayCache = { key: cacheKey, value: result };
+      return result;
     } else {
       // Just show last folder
-      return parts[parts.length - 1];
+      const result = parts[parts.length - 1];
+      this._folderDisplayCache = { key: cacheKey, value: result };
+      return result;
     }
   }
   
@@ -6974,8 +7037,8 @@ class MediaCardV5a extends LitElement {
             playsinline
             crossorigin="anonymous"
             ?loop=${this.config.video_loop || false}
-            ?autoplay=${this.config.video_autoplay || false}
-            ?muted=${this.config.video_muted || false}
+            ?autoplay=${this.config.video_autoplay !== false}
+            ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
             @loadeddata=${this._onMediaLoaded}
             @error=${this._onMediaError}
@@ -6984,6 +7047,8 @@ class MediaCardV5a extends LitElement {
             @play=${this._onVideoPlay}
             @pause=${this._onVideoPause}
             @ended=${this._onVideoEnded}
+            @seeking=${this._onVideoSeeking}
+            @click=${this._onVideoClick}
             style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
           >
             <source src="${this.mediaUrl}" type="video/mp4">
