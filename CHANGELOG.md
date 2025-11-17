@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [5.2.0]
 
 ### Added
+- **Refresh Button**: New action button to manually reload current media
+  - Appears between pause and fullscreen buttons in action button group
+  - Re-resolves media URL to get fresh authentication tokens (useful for Synology/Immich signed URLs)
+  - Adds cache-busting timestamp to force browser to reload updated files
+  - Position order: pause → refresh → fullscreen → info → favorite → edit → delete
+- **Unified Auto-Refresh Configuration**: Simplified refresh/advance timing configuration
+  - Removed nested `single_media.refresh_seconds` in favor of top-level `auto_refresh_seconds`
+  - `auto_refresh_seconds` now available in both single media and folder modes
+  - In folder mode: `auto_advance_seconds` takes priority, `auto_refresh_seconds` used as fallback
+  - Enables camera snapshot reloading in folder mode without auto-advancing
 - **Consolidated Overlay Positioning**: New unified "Overlay Positioning" configuration section in editor
   - Single location to configure metadata overlay position (bottom-left, bottom-right, top-left, top-right)
   - Action buttons corner position (top-right, top-left, bottom-right, bottom-left)
@@ -36,9 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Console Output**: Cleaned up logging with consistent "[MediaCard]" prefix throughout
 
 ### Changed
+- **Cache-Busting Timestamp Logic**: Consolidated into `_addCacheBustingTimestamp()` helper method
+  - Used by both auto-refresh and manual refresh for consistency
+  - Intelligently handles signed URLs (never modifies authSig signatures)
+  - Adds timestamp parameter to force browser cache reload when file content changes
 - Optimized hass property setter to reduce logging noise (only logs on first call)
 - Video element now uses proper boolean logic for autoplay/muted attributes (`!== false` instead of `|| false`)
 - Editor UI reorganized for better clarity with consolidated overlay positioning section
+- Refresh timer configuration moved to "Image Options" section (always visible, not mode-dependent)
 
 ## [5.1.0] - 2025-11-15
 
