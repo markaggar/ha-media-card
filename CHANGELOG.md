@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Video Interaction Detection**: Videos now play to completion when user interacts with them (pause, seek, or click), ignoring `video_max_duration` timeout
+- **Video Defaults**: New card instances now default to `video_autoplay: true` and `video_muted: true` for better out-of-box UX
+- **Adaptive Buffer Sizing**: SubfolderQueue automatically adjusts buffer requirements based on collection size
+  - Small collections (< 30 files) use 50% buffer (minimum 5 items)
+  - Large collections use standard buffer calculation
+  - Prevents infinite scanning loops in small folders
+
+### Fixed
+- **Position Indicator**: Corrected CSS positioning to prevent diagonal stretching when moving between corners
+- **Performance**: Implemented folder display path memoization to eliminate repeated calculations during re-renders
+- **Debug Logging**: Error messages now respect `debug_mode` setting and only appear when explicitly enabled
+- **Console Output**: Cleaned up logging with consistent "[MediaCard]" prefix throughout
+
+### Changed
+- Optimized hass property setter to reduce logging noise (only logs on first call)
+- Video element now uses proper boolean logic for autoplay/muted attributes (`!== false` instead of `|| false`)
+
 ## [5.1.0] - 2025-11-15
 
 ### Added
