@@ -5,7 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.2.0]
+
+### Added
+- **Refresh Button**: New action button to manually reload current media
+  - Appears between pause and fullscreen buttons in action button group
+  - Re-resolves media URL to get fresh authentication tokens (useful for Synology/Immich signed URLs)
+  - Adds cache-busting timestamp to force browser to reload updated files
+  - Position order: pause → refresh → fullscreen → info → favorite → edit → delete
+- **Unified Auto-Refresh Configuration**: Simplified refresh/advance timing configuration
+  - Removed nested `single_media.refresh_seconds` in favor of top-level `auto_refresh_seconds`
+  - `auto_refresh_seconds` now available in both single media and folder modes
+  - In folder mode: `auto_advance_seconds` takes priority, `auto_refresh_seconds` used as fallback
+  - Enables camera snapshot reloading in folder mode without auto-advancing
+- **Consolidated Overlay Positioning**: New unified "Overlay Positioning" configuration section in editor
+  - Single location to configure metadata overlay position (bottom-left, bottom-right, top-left, top-right)
+  - Action buttons corner position (top-right, top-left, bottom-right, bottom-left)
+  - Position indicator corner placement (bottom-right, bottom-left, top-right, top-left)
+  - Simplifies UI configuration with clear help text for each option
+- **Video Interaction Detection**: Videos now play to completion when user interacts with them (pause, seek, or click), ignoring `video_max_duration` timeout
+- **Video Defaults**: New card instances now default to `video_autoplay: true` and `video_muted: true` for better out-of-box UX
+- **Adaptive Buffer Sizing**: SubfolderQueue automatically adjusts buffer requirements based on collection size
+  - Small collections (< 30 files) use 50% buffer (minimum 5 items)
+  - Large collections use standard buffer calculation
+  - Prevents infinite scanning loops in small folders
+- **Configurable Position Indicator Corner**: Position indicator ("X of Y" counter) can now be placed in any corner via `position_indicator.position` config
+
+### Fixed
+- **Folder Display Logic**: Fixed `show_root_folder` metadata option to properly show first and last folder names
+  - When enabled: displays "FirstFolder...LastFolder" format for nested paths
+  - When disabled: displays only the immediate parent folder name
+  - Respects configured scan prefix from `folder.path` to show relative paths correctly
+- **Auto-Refresh in Folder Mode**: Corrected behavior to reload current image instead of advancing to next
+  - Single media mode with `auto_refresh_seconds` reloads the same image (cache-busting)
+  - Folder mode distinguishes between refresh (reload current) and advance (next image)
+- **Folder Display Performance**: Implemented memoization to eliminate repeated path calculations during re-renders
+  - Cache invalidated automatically when media changes
+  - Significant performance improvement for cards with frequent re-renders
+- **Debug Logging**: Error messages now respect `debug_mode` setting and only appear when explicitly enabled
+- **Console Output**: Cleaned up logging with consistent "[MediaCard]" prefix throughout
+
+### Changed
+- **Cache-Busting Timestamp Logic**: Consolidated into `_addCacheBustingTimestamp()` helper method
+  - Used by both auto-refresh and manual refresh for consistency
+  - Intelligently handles signed URLs (never modifies authSig signatures)
+  - Adds timestamp parameter to force browser cache reload when file content changes
+- Optimized hass property setter to reduce logging noise (only logs on first call)
+- Video element now uses proper boolean logic for autoplay/muted attributes (`!== false` instead of `|| false`)
+- Editor UI reorganized for better clarity with consolidated overlay positioning section
+- Refresh timer configuration moved to "Image Options" section (always visible, not mode-dependent)
 
 ## [5.1.0] - 2025-11-15
 

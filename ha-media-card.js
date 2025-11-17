@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.1.0
+ * Media Card v5.2.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -474,7 +474,6 @@ class SingleMediaProvider extends MediaProvider {
   constructor(config, hass) {
     super(config, hass);
     this.mediaPath = config.single_media?.path || config.media_path;
-    this.refreshSeconds = config.single_media?.refresh_seconds || 0;
     this.currentItem = null;
   }
 
@@ -505,11 +504,6 @@ class SingleMediaProvider extends MediaProvider {
     // Single media mode - always return same item
     // Return the base item - timestamp will be added during URL resolution if needed
     return this.currentItem;
-  }
-
-  async _refreshMediaUrl() {
-    // Deprecated - timestamp handling moved to URL resolution
-    // This method kept for compatibility but does nothing
   }
 
   serialize() {
@@ -1389,7 +1383,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       };
     }
     
-    console.warn('[SequentialMediaIndexProvider] Queue empty, no items to return');
+    console.warn('[MediaCard] Sequential queue empty, no items to return');
     return null;
   }
 
@@ -2331,7 +2325,20 @@ class SubfolderQueue {
   needsRefill() {
     const unshownCount = this.queue.filter(item => !this.shownItems.has(item.media_content_id)).length;
     const historyItems = this.card?.history?.length || 0;
-    const minBuffer = Math.max(historyItems + 5, 15);
+    
+    // Calculate total files available in discovered folders
+    const totalFilesInCollection = this.discoveredFolders.reduce((sum, folder) => 
+      sum + (folder.files ? folder.files.length : 0), 0);
+    
+    // For small collections, use a smaller buffer (50% of collection or 5, whichever is larger)
+    // For large collections, use the standard buffer calculation
+    let minBuffer;
+    if (totalFilesInCollection > 0 && totalFilesInCollection < 30) {
+      minBuffer = Math.max(Math.ceil(totalFilesInCollection * 0.5), 5);
+    } else {
+      minBuffer = Math.max(historyItems + 5, 15);
+    }
+    
     return unshownCount < minBuffer;
   }
 
@@ -3055,6 +3062,9 @@ class MediaCardV5a extends LitElement {
       show_dots_indicator: true,
       enable_keyboard_navigation: true,
       auto_advance_mode: 'reset', // V4: reset | continue
+      // V5: Video defaults - autoplay and muted for better UX
+      video_autoplay: true,
+      video_muted: true,
       ...config,
       metadata: {
         show_filename: false,
@@ -3090,6 +3100,10 @@ class MediaCardV5a extends LitElement {
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
     
+    // V5: Set position indicator position attribute for CSS targeting
+    const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
+    this.setAttribute('data-position-indicator-position', positionIndicatorPosition);
+    
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
@@ -3101,13 +3115,20 @@ class MediaCardV5a extends LitElement {
     const hadHass = !!this._hass;
     this._hass = hass;
     
-    this._log('💎 hass setter called. Had hass before:', hadHass, 'Has provider:', !!this.provider);
+    // Only log on first hass to prevent log spam
+    if (!hadHass) {
+      this._log('💎 hass setter called. Had hass before:', hadHass, 'Has provider:', !!this.provider);
+    }
     
     // Initialize provider when hass is first set
     if (hass && !this.provider) {
       this._log('💎 Triggering provider initialization');
       this._initializeProvider();
     }
+    
+    // Note: Don't call requestUpdate() here - Lit will handle it automatically
+    // since hass is a reactive property. We can't prevent the auto-update,
+    // but we can make render() cheap when paused.
   }
 
   get hass() {
@@ -3314,8 +3335,9 @@ class MediaCardV5a extends LitElement {
         this._pendingMediaPath = item.media_content_id;
         this._pendingMetadata = item.metadata;
         
-        // V5: Clear cached full metadata when media changes
+        // V5: Clear caches when media changes
         this._fullMetadata = null;
+        this._folderDisplayCache = null;
         
         await this._resolveMediaUrl();
         this.requestUpdate(); // Force re-render
@@ -3429,10 +3451,32 @@ class MediaCardV5a extends LitElement {
       return;
     }
 
-    // V5: Get auto-advance seconds from config (NOT auto_refresh_seconds)
-    const advanceSeconds = this.config?.auto_advance_seconds;
-    if (advanceSeconds && advanceSeconds > 0 && this.hass) {
-      this._log(`🔄 Setting up auto-advance every ${advanceSeconds} seconds`);
+    // V5: Get refresh/advance seconds based on mode
+    // Single media: use auto_refresh_seconds
+    // Folder/slideshow: prefer auto_advance_seconds, fallback to auto_refresh_seconds
+    let refreshSeconds = 0;
+    let isRefreshMode = false; // True if reloading current, false if advancing
+    
+    if (this.provider instanceof SingleMediaProvider) {
+      refreshSeconds = this.config?.auto_refresh_seconds || 0;
+      isRefreshMode = true; // Single media always reloads current
+    } else {
+      // In folder mode: auto_advance takes priority
+      const autoAdvance = this.config?.auto_advance_seconds || 0;
+      const autoRefresh = this.config?.auto_refresh_seconds || 0;
+      
+      if (autoAdvance > 0) {
+        refreshSeconds = autoAdvance;
+        isRefreshMode = false; // Advance to next
+      } else if (autoRefresh > 0) {
+        refreshSeconds = autoRefresh;
+        isRefreshMode = true; // Reload current
+      }
+    }
+    
+    if (refreshSeconds && refreshSeconds > 0 && this.hass) {
+      const modeLabel = isRefreshMode ? 'auto-refresh (reload current)' : 'auto-advance (next media)';
+      this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds`);
       
       this._refreshInterval = setInterval(async () => {
         // Check pause states before advancing
@@ -3440,21 +3484,31 @@ class MediaCardV5a extends LitElement {
           // V4 CODE REUSE: Check if we should wait for video to complete
           // Based on V4 lines 3259-3302
           if (await this._shouldWaitForVideoCompletion()) {
-            this._log('🔄 Auto-advance skipped - waiting for video to complete');
+            this._log('🔄 Auto-timer skipped - waiting for video to complete');
             return;
           }
           
-          this._log('🔄 Auto-advance timer triggered - loading next');
-          this._loadNext();
+          if (isRefreshMode) {
+            // Reload current media (for single_media or folder with auto_refresh only)
+            this._log('🔄 Auto-refresh timer triggered - reloading current media');
+            if (this.currentMedia) {
+              await this._resolveMediaUrl();
+              this.requestUpdate();
+            }
+          } else {
+            // Advance to next media (folder mode with auto_advance)
+            this._log('🔄 Auto-advance timer triggered - loading next media');
+            this._loadNext();
+          }
         } else {
-          this._log('🔄 Auto-advance skipped - isPaused:', this._isPaused, 'backgroundPaused:', this._backgroundPaused);
+          this._log(`🔄 ${modeLabel} skipped - isPaused:`, this._isPaused, 'backgroundPaused:', this._backgroundPaused);
         }
-      }, advanceSeconds * 1000);
+      }, refreshSeconds * 1000);
       
-      this._log('✅ Auto-advance interval started with ID:', this._refreshInterval);
+      this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
     } else {
       this._log('🔄 Auto-advance disabled or not configured:', {
-        advanceSeconds,
+        refreshSeconds,
         hasHass: !!this.hass
       });
     }
@@ -3468,6 +3522,28 @@ class MediaCardV5a extends LitElement {
     
     // Use shared MediaProvider helper for consistent extraction across providers and card
     return await MediaProvider.extractMetadataWithExif(mediaPath, this.config, this.hass);
+  }
+  
+  // Add cache-busting timestamp to URL (forces browser to bypass cache)
+  _addCacheBustingTimestamp(url, forceAdd = false) {
+    if (!url) return url;
+    
+    // CRITICAL: Never add timestamp to signed URLs (breaks signature validation)
+    if (url.includes('authSig=')) {
+      this._log('Skipping cache-busting timestamp - URL has authSig');
+      return url;
+    }
+    
+    // For auto-refresh: only add if refresh configured
+    // For manual refresh: always add (forceAdd = true)
+    const refreshSeconds = this.config.auto_refresh_seconds || 0;
+    const shouldAdd = forceAdd || (refreshSeconds > 0);
+    
+    if (!shouldAdd) return url;
+    
+    const timestamp = Date.now();
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}t=${timestamp}`;
   }
   
   // V5: Refresh metadata from media_index (for action button updates)
@@ -3536,15 +3612,9 @@ class MediaCardV5a extends LitElement {
         this._log('HA resolved to:', resolved.url);
         
         // Add timestamp for auto-refresh (camera snapshots, etc.)
-        // BUT: Don't add timestamp if URL has authSig - it would break the signature
-        let finalUrl = resolved.url;
-        const refreshSeconds = this.config.single_media?.refresh_seconds || this.config.auto_refresh_seconds;
-        if (refreshSeconds > 0 && !resolved.url.includes('authSig=')) {
-          const timestamp = Date.now();
-          finalUrl = resolved.url + (resolved.url.includes('?') ? '&' : '?') + `t=${timestamp}`;
+        const finalUrl = this._addCacheBustingTimestamp(resolved.url);
+        if (finalUrl !== resolved.url) {
           this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
-        } else if (resolved.url.includes('authSig=')) {
-          this._log('Skipping timestamp - URL has auth signature');
         }
         
         this.mediaUrl = finalUrl;
@@ -3691,8 +3761,8 @@ class MediaCardV5a extends LitElement {
     }
     
     // Only log errors that aren't 404s - 404s are expected when database is out of sync
-    if (!is404) {
-      console.error('[MediaCardV5a] Media failed to load:', this.mediaUrl, e);
+    if (!is404 && this._debugMode) {
+      console.error('[MediaCard] Media failed to load:', this.mediaUrl, e);
     } else {
       this._log('📭 Media file not found (404) - likely deleted/moved:', this.mediaUrl);
     }
@@ -3912,7 +3982,9 @@ class MediaCardV5a extends LitElement {
     }
     
     // V4: For non-404 errors, or 404s in single media mode, store error state and show UI
-    console.error('[MediaCardV5a] Showing media error:', errorMessage);
+    if (this._debugMode) {
+      console.error('[MediaCard] Showing media error:', errorMessage);
+    }
     this._errorState = {
       message: errorMessage,
       timestamp: now,
@@ -3936,6 +4008,8 @@ class MediaCardV5a extends LitElement {
     this._log('Video started loading:', this.mediaUrl);
     // Reset video wait timer for new video
     this._videoWaitStartTime = null;
+    // Reset user interaction flag for new video
+    this._videoUserInteracted = false;
   }
 
   _onVideoCanPlay() {
@@ -3965,6 +4039,10 @@ class MediaCardV5a extends LitElement {
       return;
     }
     
+    // Mark that user has interacted with the video
+    this._videoUserInteracted = true;
+    this._log('🎬 User interacted with video (pause) - will play to completion');
+    
     // Only pause slideshow if video was manually paused (not ended)
     const videoElement = this.renderRoot?.querySelector('video');
     if (videoElement && !videoElement.ended && !this._isPaused) {
@@ -3974,8 +4052,21 @@ class MediaCardV5a extends LitElement {
     }
   }
 
+  // V5: Track video seeking (user interaction)
+  _onVideoSeeking() {
+    this._videoUserInteracted = true;
+    this._log('🎬 User interacted with video (seek) - will play to completion');
+  }
+  
+  // V5: Track video click (user interaction)
+  _onVideoClick() {
+    this._videoUserInteracted = true;
+    this._log('🎬 User interacted with video (click) - will play to completion');
+  }
+
   // V4 CODE REUSE: Check if we should wait for video to complete before advancing
   // Based on V4 lines 3259-3302
+  // V5 ENHANCEMENT: If user has interacted with video, ignore video_max_duration and play to end
   async _shouldWaitForVideoCompletion() {
     const videoElement = this.renderRoot?.querySelector('video');
     
@@ -3986,7 +4077,14 @@ class MediaCardV5a extends LitElement {
 
     // If video is paused, don't wait (user intentionally paused)
     if (videoElement.paused) {
+      this._log('🎬 Video is paused - not waiting');
       return false;
+    }
+
+    // V5 ENHANCEMENT: If user has interacted with video, wait indefinitely for completion
+    if (this._videoUserInteracted) {
+      this._log('🎬 User has interacted with video - waiting for full completion (ignoring video_max_duration)');
+      return true;
     }
 
     // Get configuration values
@@ -4196,7 +4294,10 @@ class MediaCardV5a extends LitElement {
         metadata.folder,
         this.config.metadata.show_root_folder
       );
-      parts.push(`📁 ${folderDisplay}`);
+      // Only show folder icon if we have a folder name to display
+      if (folderDisplay && folderDisplay.trim()) {
+        parts.push(`📁 ${folderDisplay}`);
+      }
     }
     
     if (this.config.metadata.show_filename && metadata.filename) {
@@ -4363,10 +4464,16 @@ class MediaCardV5a extends LitElement {
   _formatFolderForDisplay(fullFolderPath, showRoot) {
     if (!fullFolderPath) return '';
     
-    // Extract the scan path prefix from config.media_path or config.single_media.path
+    // Cache key for memoization
+    const cacheKey = `${fullFolderPath}|${showRoot}`;
+    if (this._folderDisplayCache && this._folderDisplayCache.key === cacheKey) {
+      return this._folderDisplayCache.value;
+    }
+    
+    // Extract the scan path prefix from config (folder.path takes precedence over legacy media_path)
     // e.g., "media-source://media_source/media/Photo/OneDrive" -> "/media/Photo/OneDrive"
     let scanPrefix = '';
-    const mediaPath = this.config?.single_media?.path || this.config?.media_path;
+    const mediaPath = this.config?.folder?.path || this.config?.single_media?.path || this.config?.media_path;
     if (mediaPath) {
       const match = mediaPath.match(/media-source:\/\/media_source(\/.+)/);
       if (match) {
@@ -4374,11 +4481,26 @@ class MediaCardV5a extends LitElement {
       }
     }
     
+    // Debug logging (only when cache miss)
+    if (this.config?.debug_mode) {
+      console.log('[_formatFolderForDisplay]', {
+        fullFolderPath,
+        mediaPath,
+        scanPrefix,
+        showRoot
+      });
+    }
+    
+    // Normalize folder path to absolute if it's relative
+    let absoluteFolderPath = fullFolderPath;
+    if (!absoluteFolderPath.startsWith('/')) {
+      absoluteFolderPath = '/media/' + absoluteFolderPath;
+    }
+    
     // Remove the scan prefix from the folder path
-    // e.g., "/media/Photo/OneDrive/Mark-Pictures/Camera" -> "Mark-Pictures/Camera"
-    let relativePath = fullFolderPath;
-    if (scanPrefix && fullFolderPath.startsWith(scanPrefix)) {
-      relativePath = fullFolderPath.substring(scanPrefix.length);
+    let relativePath = absoluteFolderPath;
+    if (scanPrefix && absoluteFolderPath.startsWith(scanPrefix)) {
+      relativePath = absoluteFolderPath.substring(scanPrefix.length);
     }
     
     // Clean up path (remove leading/trailing slashes)
@@ -4387,6 +4509,10 @@ class MediaCardV5a extends LitElement {
     // Split into parts
     const parts = relativePath.split('/').filter(p => p.length > 0);
     
+    if (this.config?.debug_mode) {
+      console.log('[_formatFolderForDisplay] relativePath:', relativePath, 'parts:', parts);
+    }
+    
     if (parts.length === 0) return '';
     if (parts.length === 1) return parts[0]; // Only one folder level
     
@@ -4394,10 +4520,14 @@ class MediaCardV5a extends LitElement {
       // Format: "first...last"
       const first = parts[0];
       const last = parts[parts.length - 1];
-      return `${first}...${last}`;
+      const result = `${first}...${last}`;
+      this._folderDisplayCache = { key: cacheKey, value: result };
+      return result;
     } else {
       // Just show last folder
-      return parts[parts.length - 1];
+      const result = parts[parts.length - 1];
+      this._folderDisplayCache = { key: cacheKey, value: result };
+      return result;
     }
   }
   
@@ -4437,12 +4567,13 @@ class MediaCardV5a extends LitElement {
     const enableEdit = config.enable_edit !== false;
     const enableInfo = config.enable_info !== false;
     const enableFullscreen = config.enable_fullscreen === true;
+    const enableRefresh = this.config.show_refresh_button === true;
     
     // Don't render anything if all are disabled
-    if (!enablePause && !showMediaIndexButtons && !enableFullscreen) {
+    if (!enablePause && !showMediaIndexButtons && !enableFullscreen && !enableRefresh) {
       return html``;
     }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen) {
+    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen && !enableRefresh) {
       return html``;
     }
 
@@ -4459,6 +4590,14 @@ class MediaCardV5a extends LitElement {
             @click=${this._handlePauseClick}
             title="${isPaused ? 'Resume' : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableRefresh ? html`
+          <button
+            class="action-btn refresh-btn"
+            @click=${this._handleRefreshClick}
+            title="Refresh">
+            <ha-icon icon="mdi:refresh"></ha-icon>
           </button>
         ` : ''}
         ${enableFullscreen ? html`
@@ -4872,6 +5011,50 @@ class MediaCardV5a extends LitElement {
     e.stopPropagation();
     this._setPauseState(!this._isPaused);
     this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
+  }
+  
+  // Handle refresh button click - reload current media
+  async _handleRefreshClick(e) {
+    e.stopPropagation();
+    this._log('🔄 Refresh button clicked - reloading current media');
+    
+    // Get the current media content ID
+    const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+    
+    if (!currentMediaId) {
+      this._log('⚠️ No current media to refresh');
+      return;
+    }
+    
+    try {
+      // Re-resolve the media URL to get a fresh authSig and cache-busting timestamp
+      this._log('🔄 Re-resolving media URL:', currentMediaId);
+      await this._resolveMediaUrl();
+      
+      // Add cache-busting timestamp to force browser reload
+      // Note: _resolveMediaUrl already adds timestamp if auto_refresh_seconds > 0,
+      // but we force it here regardless of config for manual refresh
+      if (this.config?.auto_refresh_seconds > 0) {
+        // Already has timestamp from _resolveMediaUrl, don't add duplicate
+        this._log('Cache-busting timestamp already added by _resolveMediaUrl');
+      } else {
+        // No auto-refresh configured, add timestamp now
+        const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
+        if (timestampedUrl !== this.mediaUrl) {
+          this._log('Added cache-busting timestamp:', timestampedUrl);
+          this.mediaUrl = timestampedUrl;
+        }
+      }
+      
+      // Force reload by updating the img/video src
+      this._mediaLoadedLogged = false; // Allow load success log again
+      this.requestUpdate();
+      
+      this._log('✅ Media refreshed successfully');
+    } catch (error) {
+      console.error('Failed to refresh media:', error);
+      this._log('❌ Media refresh failed:', error.message);
+    }
   }
   
   // Handle info button click - toggle overlay and fetch full metadata
@@ -6349,8 +6532,6 @@ class MediaCardV5a extends LitElement {
     /* Copied from V4 lines 1362-1425 */
     .position-indicator {
       position: absolute;
-      bottom: 12px;
-      right: 12px;
       background: rgba(0, 0, 0, 0.7);
       color: white;
       padding: 4px 8px;
@@ -6361,6 +6542,28 @@ class MediaCardV5a extends LitElement {
       z-index: 15;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
+    }
+    
+    /* Position indicator corner positioning - bottom-right is default */
+    :host([data-position-indicator-position="bottom-right"]) .position-indicator,
+    :host(:not([data-position-indicator-position])) .position-indicator {
+      bottom: 12px;
+      right: 12px;
+    }
+    
+    :host([data-position-indicator-position="bottom-left"]) .position-indicator {
+      bottom: 12px;
+      left: 12px;
+    }
+    
+    :host([data-position-indicator-position="top-right"]) .position-indicator {
+      top: 12px;
+      right: 12px;
+    }
+    
+    :host([data-position-indicator-position="top-left"]) .position-indicator {
+      top: 12px;
+      left: 12px;
     }
 
     .dots-indicator {
@@ -6837,8 +7040,8 @@ class MediaCardV5a extends LitElement {
             playsinline
             crossorigin="anonymous"
             ?loop=${this.config.video_loop || false}
-            ?autoplay=${this.config.video_autoplay || false}
-            ?muted=${this.config.video_muted || false}
+            ?autoplay=${this.config.video_autoplay !== false}
+            ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
             @loadeddata=${this._onMediaLoaded}
             @error=${this._onMediaError}
@@ -6847,6 +7050,8 @@ class MediaCardV5a extends LitElement {
             @play=${this._onVideoPlay}
             @pause=${this._onVideoPause}
             @ended=${this._onVideoEnded}
+            @seeking=${this._onVideoSeeking}
+            @click=${this._onVideoClick}
             style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
           >
             <source src="${this.mediaUrl}" type="video/mp4">
@@ -7153,9 +7358,9 @@ class MediaCardV5aEditor extends LitElement {
         type: this._config.type, // Preserve card type
         media_source_type: 'single_media',
         single_media: {
-          path: this._config.media_path || null,
-          refresh_seconds: this._config.auto_refresh_seconds || 0
+          path: this._config.media_path || null
         },
+        auto_refresh_seconds: this._config.auto_refresh_seconds || 0,
         // Preserve common settings
         media_type: this._config.media_type,
         display: this._config.display,
@@ -7684,6 +7889,17 @@ class MediaCardV5aEditor extends LitElement {
 
   _positionIndicatorChanged(ev) {
     this._config = { ...this._config, show_position_indicator: ev.target.checked };
+    this._fireConfigChanged();
+  }
+  
+  _positionIndicatorPositionChanged(ev) {
+    this._config = { 
+      ...this._config, 
+      position_indicator: {
+        ...this._config.position_indicator,
+        position: ev.target.value
+      }
+    };
     this._fireConfigChanged();
   }
 
@@ -9041,8 +9257,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ...this._config,
           media_source_type: 'single_media',
           single_media: {
-            path: mediaContentId,
-            refresh_seconds: 0
+            path: mediaContentId
           }
         };
       }
@@ -9496,21 +9711,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <!-- Single Media Mode Options -->
         ${mediaSourceType === 'single_media' ? html`
-          <div class="config-row">
-            <label>Refresh Interval</label>
-            <div>
-              <input
-                type="number"
-                .value=${this._config.auto_refresh_seconds || ''}
-                @input=${this._autoRefreshChanged}
-                placeholder="0"
-                min="0"
-                max="3600"
-                step="1"
-              />
-              <div class="help-text">Refresh image/video every N seconds (0 = disabled, useful for cameras)</div>
-            </div>
-          </div>
+          <!-- Single media settings moved to common sections -->
         ` : ''}
 
         <!-- Folder Mode Options -->
@@ -9641,6 +9842,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._refreshButtonChanged}
               />
               <div class="help-text">Show manual refresh button on the card</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Auto-Refresh Interval</label>
+            <div>
+              <input
+                type="number"
+                .value=${this._config.auto_refresh_seconds || ''}
+                @input=${this._autoRefreshChanged}
+                placeholder="0"
+                min="0"
+                max="3600"
+                step="1"
+              />
+              <div class="help-text">Reload current media every N seconds (0 = disabled). For single image mode (cameras) or folder mode when auto-advance is 0. Leave at 0 if auto-advance is configured.</div>
             </div>
           </div>
         </div>
@@ -9800,6 +10017,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display geocoded location from EXIF data (requires media_index integration)</div>
             </div>
           </div>
+        </div>
+        
+        <!-- Overlay Positioning (consolidated section) -->
+        <div class="section">
+          <div class="section-title">📍 Overlay Positioning</div>
           
           <div class="config-row">
             <label>Metadata Position</label>
@@ -9810,7 +10032,33 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="top-left">Top Left</option>
                 <option value="top-right">Top Right</option>
               </select>
-              <div class="help-text">Where to display the metadata overlay</div>
+              <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Action Buttons Position</label>
+            <div>
+              <select @change=${this._actionButtonsPositionChanged}>
+                <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
+                <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
+                <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
+                <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+              </select>
+              <div class="help-text">Corner position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Position Indicator Corner</label>
+            <div>
+              <select @change=${this._positionIndicatorPositionChanged} .value=${this._config.position_indicator?.position || 'bottom-right'}>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="top-left">Top Left</option>
+              </select>
+              <div class="help-text">Corner position for "X of Y" counter (only shown in folder mode)</div>
             </div>
           </div>
         </div>
@@ -9883,19 +10131,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableEditChanged}
                 />
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
-              </div>
-            </div>
-            
-            <div class="config-row">
-              <label>Button Position</label>
-              <div>
-                <select @change=${this._actionButtonsPositionChanged}>
-                  <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
-                  <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
-                  <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
-                  <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
-                </select>
-                <div class="help-text">Corner position for action buttons</div>
               </div>
             </div>
           </div>
@@ -10042,7 +10277,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.1.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.2.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
