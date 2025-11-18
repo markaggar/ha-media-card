@@ -5,9 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.2.0]
+## [5.3.0]
 
 ### Added
+- **Fixed Card Height**: New `card_height` configuration option (100-5000 pixels)
+  - Sets exact card height instead of letting content determine size
+  - Applies only in default mode (not when aspect ratio is set)
+  - Takes precedence over `max_height_pixels` when both are configured
+  - Media scales to fit within container while maintaining aspect ratio
+- **Default Zoom Level**: New `default_zoom` configuration option (1-5x)
+  - Images automatically load pre-zoomed to the specified level
+  - Works in both single media and folder modes
+  - Click image to reset zoom, works with existing zoom toggle feature
+  - Useful for camera feeds or images where you want to focus on a specific area
 - **Refresh Button**: New action button to manually reload current media
   - Appears between pause and fullscreen buttons in action button group
   - Re-resolves media URL to get fresh authentication tokens (useful for Synology/Immich signed URLs)

@@ -1,5 +1,5 @@
-/** 
- * Media Card v5.2.0
+/**
+ * Media Card v5.3.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -3030,7 +3030,22 @@ class MediaCardV5a extends LitElement {
         this._log('⚠️ Clamped max_height_pixels to valid range (100-5000):', config.max_height_pixels);
       }
     }
-    
+
+    // V5: Validate and clamp card_height if present
+    if (config.card_height !== undefined) {
+      const height = parseInt(config.card_height);
+      if (isNaN(height) || height <= 0) {
+        // Invalid value - remove it
+        const originalValue = config.card_height;
+        delete config.card_height;
+        this._log('⚠️ Removed invalid card_height:', originalValue);
+      } else if (height < 100 || height > 5000) {
+        // Out of range - clamp to valid range
+        config.card_height = Math.max(100, Math.min(5000, height));
+        this._log('⚠️ Clamped card_height to valid range (100-5000):', config.card_height);
+      }
+    }
+
     // V5: Reset provider to force reinitialization with new config
     if (this.provider) {
       this._log('🧹 Clearing existing provider before reconfiguration');
@@ -3088,14 +3103,25 @@ class MediaCardV5a extends LitElement {
     } else {
       this.removeAttribute('data-aspect-mode');
     }
-    
-    // Set custom max height if configured
-    if (config.max_height_pixels && config.max_height_pixels > 0) {
-      this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
-    } else {
+
+    // Set card height CSS variables with precedence logic
+    // card_height takes precedence over max_height_pixels when both are present
+    if (config.card_height && config.card_height > 0) {
+      this.style.setProperty('--card-height', `${config.card_height}px`);
+      this.setAttribute('data-card-height', 'true');
+      // Remove max_height if card_height is set (precedence)
       this.style.removeProperty('--media-max-height');
+    } else {
+      this.style.removeProperty('--card-height');
+      this.removeAttribute('data-card-height');
+      // Apply max_height_pixels only if card_height is not set (backward compatibility)
+      if (config.max_height_pixels && config.max_height_pixels > 0) {
+        this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
+      } else {
+        this.style.removeProperty('--media-max-height');
+      }
     }
-    
+
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
@@ -4256,9 +4282,21 @@ class MediaCardV5a extends LitElement {
       this._currentMediaPath = this._pendingMediaPath;
       this._pendingMediaPath = null;
     }
-    
+
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
+
+    // Apply default zoom AFTER render completes (images only)
+    // This ensures the inline transform style isn't lost during re-render
+    if (this.config.default_zoom && this.config.default_zoom > 1) {
+      this.updateComplete.then(() => {
+        const img = this.shadowRoot.querySelector('.media-container img');
+        if (img) {
+          const level = Math.max(1.0, Math.min(5.0, this.config.default_zoom));
+          this._zoomToPoint(img, 50, 50, level);
+        }
+      });
+    }
   }
   
   // V4: Metadata display methods
@@ -6150,16 +6188,51 @@ class MediaCardV5a extends LitElement {
       margin: 0 auto;
       display: block;
     }
-    
+
+    /* Fixed card height - only applies in default mode (no aspect-mode set) */
+    :host([data-card-height]:not([data-aspect-mode])) {
+      height: var(--card-height);
+      display: block;
+      overflow: hidden;
+    }
+
+    :host([data-card-height]:not([data-aspect-mode])) ha-card {
+      height: 100%;
+      display: block;
+    }
+
+    :host([data-card-height]:not([data-aspect-mode])) .card {
+      height: 100%;
+    }
+
+    :host([data-card-height]:not([data-aspect-mode])) .media-container {
+      height: 100%;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    :host([data-card-height]:not([data-aspect-mode])) img,
+    :host([data-card-height]:not([data-aspect-mode])) video {
+      max-height: 100%;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+
     /* Custom max height override with aspect ratio preservation */
-    /* Only apply in default mode (no aspect-mode attribute set) */
-    :host(:not([data-aspect-mode])) img {
+    /* Only apply in default mode (no aspect-mode and no card-height set) */
+    :host(:not([data-aspect-mode]):not([data-card-height])) img {
       max-height: var(--media-max-height, none);
       width: auto;
       height: auto;
       object-fit: contain;
     }
-    :host(:not([data-aspect-mode])) video {
+    :host(:not([data-aspect-mode]):not([data-card-height])) video {
       max-height: var(--media-max-height, none);
       width: auto;
       height: auto;
@@ -7061,12 +7134,11 @@ class MediaCardV5a extends LitElement {
           </video>
           ${this._renderVideoInfo()}
         ` : html`
-          <img 
-            src="${this.mediaUrl}" 
+          <img
+            src="${this.mediaUrl}"
             alt="${this.currentMedia.title || 'Media'}"
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
-            style="width: 100%; height: auto; display: block;"
           />
         `}
         ${this._renderNavigationZones()}
@@ -7834,6 +7906,18 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _cardHeightChanged(ev) {
+    const value = parseInt(ev.target.value);
+    // Only store positive integers; everything else removes the property
+    if (!isNaN(value) && value > 0) {
+      this._config = { ...this._config, card_height: value };
+    } else {
+      const { card_height, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
@@ -8347,6 +8431,18 @@ class MediaCardV5aEditor extends LitElement {
       ...this._config,
       zoom_level: parseFloat(ev.target.value)
     };
+    this._fireConfigChanged();
+  }
+
+  _defaultZoomChanged(ev) {
+    const value = parseFloat(ev.target.value);
+    // Only store valid zoom levels; everything else removes the property
+    if (!isNaN(value) && value > 1) {
+      this._config = { ...this._config, default_zoom: value };
+    } else {
+      const { default_zoom, ...rest } = this._config;
+      this._config = rest;
+    }
     this._fireConfigChanged();
   }
 
@@ -9832,7 +9928,39 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Maximum height in pixels (100-5000, applies in default mode)</div>
             </div>
           </div>
-          
+
+          <div class="config-row">
+            <label>Card Height (pixels)</label>
+            <div>
+              <input
+                type="number"
+                min="100"
+                max="5000"
+                step="50"
+                .value=${this._config.card_height || ''}
+                @input=${this._cardHeightChanged}
+                placeholder="Auto (no fixed height)"
+              />
+              <div class="help-text">Fixed card height in pixels (100-5000, applies in default mode only)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Default Zoom Level</label>
+            <div>
+              <input
+                type="number"
+                min="1"
+                max="5"
+                step="0.1"
+                .value=${this._config.default_zoom || ''}
+                @input=${this._defaultZoomChanged}
+                placeholder="No zoom"
+              />
+              <div class="help-text">Images load pre-zoomed at this level (1-5x, click image to reset)</div>
+            </div>
+          </div>
+
           <div class="config-row">
             <label>Refresh Button</label>
             <div>
@@ -10277,7 +10405,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.2.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.3.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

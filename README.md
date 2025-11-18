@@ -18,7 +18,9 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🔄 **Auto-Advance/Refresh**: Configurable intervals for dynamic content
 - 🎥 **Video Controls**: Autoplay, loop, mute and limit video length
 - 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)
+- 📐 **Fixed Card Height**: Set exact card height in pixels (100-5000) for consistent dashboard layouts
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
+- 🔍 **Default Zoom**: Load images pre-zoomed to focus on specific areas (1-5x zoom level)
 - **📱 Kiosk Mode**: Automatically activate/deactivate kiosk mode (full screen) (perfect for wall-mounted tablets)
 - 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media cards)
 ### **Metadata Visibility & Management with Media Index**
