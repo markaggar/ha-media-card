@@ -1,5 +1,5 @@
 /**
- * Media Card v5.3.0
+ * Media Card v5.3.1
  */
 
 // Import Lit from CDN for standalone usage
@@ -5421,7 +5421,7 @@ class MediaCardV5a extends LitElement {
       color: white;
       font-size: 24px;
       cursor: pointer;
-      z-index: 10000;
+      z-index: 8;
       backdrop-filter: blur(4px);
       transition: background 0.2s;
       display: flex;
@@ -5783,10 +5783,10 @@ class MediaCardV5a extends LitElement {
       padding: 16px 24px;
       border-radius: 8px;
       font-size: 14px;
-      z-index: 10000;
+      z-index: 8;
       pointer-events: none;
     `;
-    
+
     document.body.appendChild(toast);
     
     setTimeout(() => {
@@ -6136,6 +6136,7 @@ class MediaCardV5a extends LitElement {
   static styles = css`
     :host {
       display: block;
+      isolation: isolate; /* Contain z-index stacking within the card */
     }
     .card {
       position: relative;
@@ -6582,7 +6583,7 @@ class MediaCardV5a extends LitElement {
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      z-index: 9999;
+      z-index: 8;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       transition: background 0.2s;
@@ -6951,9 +6952,9 @@ class MediaCardV5a extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10000;
+      z-index: 8;
     }
-    
+
     .confirmation-dialog {
       background: var(--card-background-color, #fff);
       border-radius: 8px;
@@ -8629,7 +8630,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       display: flex !important;
       align-items: center !important;
       justify-content: center !important;
-      z-index: 2147483647 !important;
+      z-index: 8 !important;
       backdrop-filter: blur(3px) !important;
       font-family: system-ui, -apple-system, sans-serif !important;
       pointer-events: auto !important;
@@ -8700,7 +8701,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       color: white !important;
       font-size: 14px !important;
       pointer-events: auto !important;
-      z-index: 999999999 !important;
     `;
 
     // Dialog close function with proper cleanup
@@ -8886,7 +8886,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         user-select: none !important;
         position: relative !important;
         pointer-events: auto !important;
-        z-index: 999999999 !important;
       `;
 
       fileItem.onmouseenter = () => {
@@ -10405,7 +10404,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.3.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.3.1 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
