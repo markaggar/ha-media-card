@@ -872,12 +872,16 @@ class FolderProvider extends MediaProvider {
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);
             } else {
               console.warn('[FolderProvider] ⚠️ Service returned error or no metadata:', response?.response);
-              item.metadata = MediaProvider.extractMetadataFromPath(filePath);
+              // Fallback to extracting path from URI
+              const pathFromUri = mediaUri.replace('media-source://media_source', '');
+              item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
             }
           } catch (error) {
             // Fallback to path-based metadata if service call fails
             console.error('[FolderProvider] ❌ Could not fetch media_index metadata:', error);
-            item.metadata = MediaProvider.extractMetadataFromPath(filePath);
+            // Extract path from URI for metadata fallback
+            const pathFromUri = mediaUri.replace('media-source://media_source', '');
+            item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
           }
         } else {
           console.warn('[FolderProvider] ⚠️ Could not extract file path from media_content_id');
