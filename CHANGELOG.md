@@ -55,6 +55,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Editor UI reorganized for better clarity with consolidated overlay positioning section
 - Refresh timer configuration moved to "Image Options" section (always visible, not mode-dependent)
 
+### Media Index Integration Updates (v1.1.0 required)
+
+**Note**: Media Card v5.2.0 is compatible with older Media Index versions but requires Media Index v1.1.0+ for URI-based workflow features.
+
+- **Complete Media-Source URI Support**: All Media Index services now accept `media_source_uri` parameter as alternative to `file_path`
+  - `get_random_items`: Returns both `path` and `media_source_uri` in response items
+  - `get_ordered_files`: Returns both `path` and `media_source_uri` in response items
+  - `get_file_metadata`: Accepts either `file_path` OR `media_source_uri`
+  - `geocode_file`: Accepts `file_path`, `file_id`, OR `media_source_uri`
+  - `mark_favorite`: Accepts either `file_path` OR `media_source_uri`
+  - `delete_media`: Accepts either `file_path` OR `media_source_uri`
+  - `mark_for_edit`: Accepts either `file_path` OR `media_source_uri`
+- **Sensor Attribute Exposure**: `media_source_uri` configuration now exposed as sensor state attribute for verification
+- **Backward Compatibility**: All services maintain full backward compatibility with `file_path`-only usage
+
+**Configuration Example**:
+```yaml
+sensor:
+  - platform: media_index
+    name: "PhotoLibrary"
+    base_folder: "/media/Photo/PhotoLibrary"
+    media_source_uri: "media-source://media_source/media/Photo/PhotoLibrary"  # NEW
+```
+
 ## [5.1.0] - 2025-11-15
 
 ### Added
