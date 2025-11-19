@@ -827,18 +827,17 @@ class FolderProvider extends MediaProvider {
       if (item && MediaProvider.isMediaIndexActive(this.config)) {
         this.cardAdapter._log('🔍 Attempting to enrich item:', item.media_content_id);
         
-        // Extract file path - media_index expects /media/... format
-        let filePath = item.media_content_id?.replace('media-source://media_source/', '/') || '';
-        this.cardAdapter._log('📂 Extracted file path:', filePath);
+        const mediaUri = item.media_content_id;
+        this.cardAdapter._log('📂 Media URI:', mediaUri);
         
-        if (filePath) {
+        if (mediaUri) {
           try {
-            // Try to get full metadata from media_index service
+            // V5.2: Call get_file_metadata with media_source_uri (no path conversion)
             const wsCall = {
               type: 'call_service',
               domain: 'media_index',
               service: 'get_file_metadata',
-              service_data: { file_path: filePath },
+              service_data: { media_source_uri: mediaUri },
               return_response: true
             };
             
@@ -850,6 +849,9 @@ class FolderProvider extends MediaProvider {
               // Flatten EXIF data to match MediaIndexProvider format
               const serviceMetadata = response.response;
               const exif = serviceMetadata.exif || {};
+              
+              // V5.2: Use path from service response (contains filesystem path)
+              const filePath = serviceMetadata.path || '';
               
               // Merge media_index metadata with path-based metadata
               const pathMetadata = MediaProvider.extractMetadataFromPath(filePath);
@@ -4964,21 +4966,21 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     // CRITICAL: Capture current state NOW before async operations
-    const targetPath = this._currentMediaPath;
+    const targetUri = this._currentMediaPath;
     const isFavorite = this._currentMetadata?.is_favorited || false;
     const newState = !isFavorite;
     
-    console.warn(`💗 FAVORITE CAPTURE: path="${targetPath}", current_is_favorited=${isFavorite}, new_state=${newState}`);
+    console.warn(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
     console.warn(`💗 CURRENT METADATA:`, this._currentMetadata);
     
     try {
-      // V4: Call media_index service via WebSocket API
+      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_favorite',
         service_data: {
-          file_path: targetPath,
+          media_source_uri: targetUri,
           is_favorite: newState
         },
         return_response: true
@@ -5163,19 +5165,8 @@ class MediaCardV5a extends LitElement {
     this._showDeleteConfirmation(targetPath, thumbnailUrl, filename);
   }
 
-  // V5 FIX: Convert media-source URI to filesystem path for media_index services
-  _convertToFilesystemPath(mediaSourceUri) {
-    if (!mediaSourceUri) return null;
-    
-    // Strip media-source://media_source prefix if present
-    // Example: media-source://media_source/media/Photo/PhotoLibrary/file.jpg -> /media/Photo/PhotoLibrary/file.jpg
-    if (mediaSourceUri.startsWith('media-source://media_source')) {
-      return mediaSourceUri.replace('media-source://media_source', '');
-    }
-    
-    // Already a filesystem path
-    return mediaSourceUri;
-  }
+  // V5.2: _convertToFilesystemPath removed - Media Index v1.1.0+ accepts media_source_uri directly
+  // No path conversion needed anymore
   
   // Get thumbnail URL from media browser (same as used in file picker)
   async _getMediaThumbnail(filePath) {
@@ -5268,26 +5259,19 @@ class MediaCardV5a extends LitElement {
     });
   }
   
-  async _performDelete(targetPath) {
-    if (!targetPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+  async _performDelete(targetUri) {
+    if (!targetUri || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      // V5 FIX: Convert media-source URI to filesystem path
-      const filesystemPath = this._convertToFilesystemPath(targetPath);
+      this._log('🗑️ Deleting file:', targetUri);
       
-      if (!filesystemPath) {
-        throw new Error('Invalid media path');
-      }
-      
-      this._log('🗑️ Deleting file:', filesystemPath, '(from URI:', targetPath, ')');
-      
-      // V4: Call media_index service via WebSocket API
+      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'delete_media',
         service_data: {
-          file_path: filesystemPath
+          media_source_uri: targetUri
         },
         return_response: true
       };
@@ -5557,26 +5541,19 @@ class MediaCardV5a extends LitElement {
     });
   }
   
-  async _performEdit(targetPath) {
-    if (!targetPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+  async _performEdit(targetUri) {
+    if (!targetUri || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      // V5 FIX: Convert media-source URI to filesystem path
-      const filesystemPath = this._convertToFilesystemPath(targetPath);
+      this._log('✏️ Marking file for edit:', targetUri);
       
-      if (!filesystemPath) {
-        throw new Error('Invalid media path');
-      }
-      
-      this._log('✏️ Marking file for edit:', filesystemPath, '(from URI:', targetPath, ')');
-      
-      // V4: Call media_index service via WebSocket API
+      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_for_edit',
         service_data: {
-          file_path: filesystemPath,
+          media_source_uri: targetUri,
           mark_for_edit: true
         },
         return_response: true
