@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.2.0]
 
+### ⚠️ BREAKING CHANGES
+
+**Media Index v1.1.0+ Required**: This release requires Media Index integration v1.1.0 or higher for URI-based workflow. The card now uses `media_source_uri` exclusively when communicating with Media Index services.
+
+**Migration**: Update Media Index integration to v1.1.0+ and configure `media_source_uri` in your sensor setup:
+
+```yaml
+sensor:
+  - platform: media_index
+    name: "PhotoLibrary"
+    base_folder: "/media/Photo/PhotoLibrary"
+    media_source_uri: "media-source://media_source/media/Photo/PhotoLibrary"  # NEW - REQUIRED
+```
+
 ### Added
 - **Refresh Button**: New action button to manually reload current media
   - Appears between pause and fullscreen buttons in action button group
@@ -50,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Used by both auto-refresh and manual refresh for consistency
   - Intelligently handles signed URLs (never modifies authSig signatures)
   - Adds timestamp parameter to force browser cache reload when file content changes
+- **URI-Based Media Index Workflow**: Card now uses `media_source_uri` exclusively with Media Index services
+  - All service calls (`mark_favorite`, `delete_media`, `mark_for_edit`, `get_file_metadata`) use `media_source_uri` parameter
+  - Removed frontend path manipulation (`_convertToFilesystemPath()` method eliminated)
+  - Backend (Media Index) handles all URI ↔ path conversions
+  - Cleaner code architecture aligned with Home Assistant's media-source system
 - Optimized hass property setter to reduce logging noise (only logs on first call)
 - Video element now uses proper boolean logic for autoplay/muted attributes (`!== false` instead of `|| false`)
 - Editor UI reorganized for better clarity with consolidated overlay positioning section
