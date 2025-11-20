@@ -3085,6 +3085,8 @@ class MediaCardV5a extends LitElement {
     };
     
     // V4: Set debug mode from config
+    // Honor debug_mode config (YAML setting or runtime toggle via debug button)
+    // This ensures debug button respects existing debug_mode: true in config
     this._debugMode = this.config.debug_mode === true;
     
     // Set aspect ratio mode data attribute for CSS styling (from V4)
@@ -4574,12 +4576,13 @@ class MediaCardV5a extends LitElement {
     const enableInfo = config.enable_info !== false;
     const enableFullscreen = config.enable_fullscreen === true;
     const enableRefresh = this.config.show_refresh_button === true;
+    const enableDebugButton = this.config.debug_button === true;
     
     // Don't render anything if all are disabled
-    if (!enablePause && !showMediaIndexButtons && !enableFullscreen && !enableRefresh) {
+    if (!enablePause && !showMediaIndexButtons && !enableFullscreen && !enableRefresh && !enableDebugButton) {
       return html``;
     }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen && !enableRefresh) {
+    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen && !enableRefresh && !enableDebugButton) {
       return html``;
     }
 
@@ -4596,6 +4599,14 @@ class MediaCardV5a extends LitElement {
             @click=${this._handlePauseClick}
             title="${isPaused ? 'Resume' : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableDebugButton ? html`
+          <button
+            class="action-btn debug-btn ${this._debugMode ? 'active' : ''}"
+            @click=${this._handleDebugButtonClick}
+            title="${this._debugMode ? 'Disable Debug Mode' : 'Enable Debug Mode'}">
+            <ha-icon icon="${this._debugMode ? 'mdi:bug' : 'mdi:bug-outline'}"></ha-icon>
           </button>
         ` : ''}
         ${enableRefresh ? html`
@@ -5017,6 +5028,16 @@ class MediaCardV5a extends LitElement {
     e.stopPropagation();
     this._setPauseState(!this._isPaused);
     this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
+  }
+  
+  // Handle debug button click - toggle debug mode dynamically
+  _handleDebugButtonClick(e) {
+    e.stopPropagation();
+    // Toggle debug mode dynamically (doesn't modify config, only runtime state)
+    this._debugMode = !this._debugMode;
+    const status = this._debugMode ? 'ENABLED' : 'DISABLED';
+    console.log(`🐛 [MediaCard] Debug mode ${status} (button click)`);
+    this.requestUpdate();
   }
   
   // Handle refresh button click - reload current media
@@ -6373,6 +6394,17 @@ class MediaCardV5a extends LitElement {
     .pause-btn.paused:hover {
       color: var(--primary-color, #03a9f4);
       background: rgba(3, 169, 244, 0.25);
+    }
+
+    /* Debug button active state - warning color when enabled */
+    .debug-btn.active {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.15);
+    }
+
+    .debug-btn.active:hover {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.25);
     }
 
     .favorite-btn.favorited {
