@@ -8,9 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [5.3.0]
 
 ### Added
+- **Fixed Card Height**: New `card_height` configuration option (100-5000 pixels) - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev) in [PR #37](https://github.com/markaggar/ha-media-card/pull/37)*
+  - Sets exact card height instead of letting content determine size
+  - Applies only in default mode (not when aspect ratio is set)
+  - Takes precedence over `max_height_pixels` when both are configured
+  - Media scales to fit within container while maintaining aspect ratio
+  - Perfect for consistent dashboard layouts
+- **Default Zoom Level**: New `default_zoom` configuration option (1-5x) - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev) in [PR #37](https://github.com/markaggar/ha-media-card/pull/37)*
+  - Images automatically load pre-zoomed to the specified level
+  - Works in both single media and folder modes
+  - Click image to reset zoom, works with existing zoom toggle feature
+  - Useful for camera feeds or images where you want to focus on a specific area
+- **Filename Date Pattern**: Added `YYYYMMDDHHmmSS` pattern (e.g., `20250920211023`) for datetime extraction from filenames without separators
 - **Debug Button**: New YAML-only `debug_button` configuration for dynamic debug mode control
   - Action button to toggle debug logging on/off without page reload
   - Persists debug_mode state to card configuration (survives page reloads)
+  - Uses `this.config` for config-changed event to ensure proper Lovelace persistence
   - Active state shown with warning color (orange) and filled bug icon
   - Position follows `action_buttons.position` setting
   - YAML-only configuration (not exposed in visual editor)
@@ -39,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Configurable Position Indicator Corner**: Position indicator ("X of Y" counter) can now be placed in any corner via `position_indicator.position` config
 
 ### Fixed
+- **Media Index Actions**: Fixed `targetPath` undefined variable bugs in delete, edit, and favorite handlers
+  - All three functions now correctly use `targetUri` parameter
+  - Fixes "Failed to delete/edit/favorite media" errors
+- **Z-Index Layering**: Reduced z-index values for metadata overlay, position indicator, and dots indicator
+  - Metadata overlay: 11 → 5
+  - Position and dots indicators: 15 → 8
+  - Prevents card overlays from showing through Home Assistant dialogs and popups
+  - Added `isolation: isolate` to contain z-index stacking within the card
 - **Folder Display Logic**: Fixed `show_root_folder` metadata option to properly show first and last folder names
   - When enabled: displays "FirstFolder...LastFolder" format for nested paths
   - When disabled: displays only the immediate parent folder name
@@ -80,17 +101,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `delete_media`: Accepts either `file_path` OR `media_source_uri`
     - `mark_for_edit`: Accepts either `file_path` OR `media_source_uri`
   - **Response Items**: Both `get_random_items` and `get_ordered_files` return both `path` and `media_source_uri` for each item
-- **Automatic URI Conversion**: Media Index backend automatically converts URIs to filesystem paths for folder filtering
+- **Automatic URI Construction**: Media Index automatically constructs `media_source_uri` from `base_folder` if not specified
+  - Format: `media-source://media_source` + `base_folder`
+  - Example: `/media/Photo/PhotoLibrary` → `media-source://media_source/media/Photo/PhotoLibrary`
 - **Sensor Attribute Exposure**: `media_source_uri` configuration exposed as sensor state attribute for verification
 - **Full Backward Compatibility**: All services maintain complete backward compatibility with `file_path`-only usage
 
-**Configuration Example** (optional but recommended):
+**When to Configure `media_source_uri` Explicitly**:
+
+Automatic construction works for standard paths under `/media`. **You MUST configure `media_source_uri` explicitly** when using custom `media_dirs` mappings in your Home Assistant configuration:
+
+```yaml
+# configuration.yaml - Custom media_dirs example
+homeassistant:
+  media_dirs:
+    media: /media
+    camera: /config/camera
+    local: /config/www/local  # Maps media-source://media_source/local to filesystem /config/www/local
+```
+
+In this case, automatic construction would produce incorrect URIs because the filesystem path differs from the media-source URI path:
+
+```yaml
+sensor:
+  - platform: media_index
+    name: "LocalPhotos"
+    base_folder: "/config/www/local/photos"  # Filesystem path
+    media_source_uri: "media-source://media_source/local/photos"  # Must specify - URI path differs!
+```
+
+**Configuration Examples**:
+
+Standard paths (automatic construction works):
 ```yaml
 sensor:
   - platform: media_index
     name: "PhotoLibrary"
     base_folder: "/media/Photo/PhotoLibrary"
-    media_source_uri: "media-source://media_source/media/Photo/PhotoLibrary"  # Optional
+    # media_source_uri auto-constructed: media-source://media_source/media/Photo/PhotoLibrary
+```
+
+Custom media_dirs (explicit configuration required):
+```yaml
+sensor:
+  - platform: media_index
+    name: "LocalPhotos"
+    base_folder: "/config/www/local/photos"
+    media_source_uri: "media-source://media_source/local/photos"  # Required - maps to custom media_dir
 ```
 
 **Card Configuration** (works with both URI and path formats):

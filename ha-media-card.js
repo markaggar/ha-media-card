@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.2.0
+ * Media Card v5.3.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -231,6 +231,8 @@ class MediaProvider {
     
     // Common date+time patterns in filenames
     const patterns = [
+      // YYYYMMDDHHmmSS format (e.g., 20250920211023 - no separators)
+      /(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/,
       // YYYYMMDD_HHMMSS format (e.g., 20250920_211023)
       /(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/,
       // YYYY-MM-DD_HH-MM-SS format
@@ -2825,7 +2827,7 @@ class MediaCardV5a extends LitElement {
     
     // V4: Stop auto-refresh interval to prevent zombie card
     if (this._refreshInterval) {
-      this._log('🛑 Clearing auto-refresh interval:', this._refreshInterval);
+      this._log('🧹 Clearing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
@@ -3051,6 +3053,21 @@ class MediaCardV5a extends LitElement {
       }
     }
     
+    // V5.3: Validate and clamp card_height if present (PR #37 by BasicCPPDev)
+    if (config.card_height !== undefined) {
+      const height = parseInt(config.card_height);
+      if (isNaN(height) || height <= 0) {
+        // Invalid value - remove it
+        const originalValue = config.card_height;
+        delete config.card_height;
+        this._log('⚠️ Removed invalid card_height:', originalValue);
+      } else if (height < 100 || height > 5000) {
+        // Out of range - clamp to valid range
+        config.card_height = Math.max(100, Math.min(5000, height));
+        this._log('⚠️ Clamped card_height to valid range (100-5000):', config.card_height);
+      }
+    }
+    
     // V5: Reset provider to force reinitialization with new config
     if (this.provider) {
       this._log('🧹 Clearing existing provider before reconfiguration');
@@ -3111,11 +3128,22 @@ class MediaCardV5a extends LitElement {
       this.removeAttribute('data-aspect-mode');
     }
     
-    // Set custom max height if configured
-    if (config.max_height_pixels && config.max_height_pixels > 0) {
-      this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
-    } else {
+    // V5.3: Set card height CSS variables with precedence logic (PR #37 by BasicCPPDev)
+    // card_height takes precedence over max_height_pixels when both are present
+    if (config.card_height && config.card_height > 0) {
+      this.style.setProperty('--card-height', `${config.card_height}px`);
+      this.setAttribute('data-card-height', 'true');
+      // Remove max_height if card_height is set (precedence)
       this.style.removeProperty('--media-max-height');
+    } else {
+      this.style.removeProperty('--card-height');
+      this.removeAttribute('data-card-height');
+      // Apply max_height_pixels only if card_height is not set (backward compatibility)
+      if (config.max_height_pixels && config.max_height_pixels > 0) {
+        this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
+      } else {
+        this.style.removeProperty('--media-max-height');
+      }
     }
     
     // V5: Set media source type attribute for CSS targeting
@@ -4267,6 +4295,16 @@ class MediaCardV5a extends LitElement {
       this._retryAttempts.delete(this.mediaUrl);
     }
     
+    // V5.3: Apply default zoom AFTER image loads (PR #37 by BasicCPPDev)
+    // This ensures the inline transform style isn't lost during re-render
+    if (this.config.default_zoom && this.config.default_zoom > 1) {
+      const img = this.shadowRoot.querySelector('.media-container img');
+      if (img) {
+        const level = Math.max(1.0, Math.min(5.0, this.config.default_zoom));
+        this._zoomToPoint(img, 50, 50, level);
+      }
+    }
+    
     // V5: Apply pending metadata now that image has loaded
     // This synchronizes metadata/counter updates with the new image appearing
     if (this._pendingMetadata !== null) {
@@ -5021,7 +5059,7 @@ class MediaCardV5a extends LitElement {
       
       const response = await this.hass.callWS(wsCall);
       
-      console.warn(`✅ Favorite toggled for ${targetPath}: ${newState}`, response);
+      console.warn(`✅ Favorite toggled for ${targetUri}: ${newState}`, response);
       
       // Update current metadata
       if (this._currentMetadata) {
@@ -5059,17 +5097,18 @@ class MediaCardV5a extends LitElement {
     // Call setConfig to update internal state
     this.setConfig(updatedConfig);
     
-    // Fire config-changed event to persist to Lovelace
+    // Fire config-changed event with this.config (the merged/processed config)
+    // This ensures debug_mode persists correctly when Lovelace reloads the card
     const event = new CustomEvent('config-changed', {
-      detail: { config: updatedConfig },
+      detail: { config: this.config },
       bubbles: true,
       composed: true
     });
     this.dispatchEvent(event);
     
     const status = newDebugMode ? 'ENABLED' : 'DISABLED';
-    console.log(`🐛 [MediaCard] Debug mode ${status} - config persisted`);
-    console.log(`🐛 [MediaCard] Config updated:`, updatedConfig.debug_mode);
+    console.log(`🐛 [MediaCard] Debug mode ${status} - will persist across reloads`);
+    console.log(`🐛 [MediaCard] Persisted config.debug_mode:`, this.config.debug_mode);
   }
   
   // Handle refresh button click - reload current media
@@ -5337,14 +5376,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Same logic as _performEdit - prevent showing deleted files
       
-      // Add to provider's exclusion list (use captured targetPath for exclusion)
+      // Add to provider's exclusion list (use captured targetUri for exclusion)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(targetPath);
-        this._log(`📝 Added to provider exclusion list: ${targetPath}`);
+        this.provider.excludedFiles.add(targetUri);
+        this._log(`📝 Added to provider exclusion list: ${targetUri}`);
       }
       
-      // Remove from navigation history (use captured targetPath)
-      const historyIndex = this.history.findIndex(h => h.media_content_id === targetPath);
+      // Remove from navigation history (use captured targetUri)
+      const historyIndex = this.history.findIndex(h => h.media_content_id === targetUri);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
@@ -5620,14 +5659,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Copied from ha-media-card.js lines 6008-6020
       
-      // Add to provider's exclusion list to prevent reappearance (use captured targetPath)
+      // Add to provider's exclusion list to prevent reappearance (use captured targetUri)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(targetPath);
-        this._log(`📝 Added to provider exclusion list: ${targetPath}`);
+        this.provider.excludedFiles.add(targetUri);
+        this._log(`📝 Added to provider exclusion list: ${targetUri}`);
       }
       
-      // Remove from navigation history (use captured targetPath)
-      const historyIndex = this.history.findIndex(h => h.media_content_id === targetPath);
+      // Remove from navigation history (use captured targetUri)
+      const historyIndex = this.history.findIndex(h => h.media_content_id === targetUri);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
@@ -6122,6 +6161,7 @@ class MediaCardV5a extends LitElement {
   static styles = css`
     :host {
       display: block;
+      isolation: isolate; /* V5.3: Contain z-index stacking within the card (PR #37) */
     }
     .card {
       position: relative;
@@ -6175,19 +6215,67 @@ class MediaCardV5a extends LitElement {
       display: block;
     }
     
-    /* Custom max height override with aspect ratio preservation */
-    /* Only apply in default mode (no aspect-mode attribute set) */
-    :host(:not([data-aspect-mode])) img {
-      max-height: var(--media-max-height, none);
-      width: auto;
-      height: auto;
-      object-fit: contain;
+    /* V5.3: Fixed card height - only applies in default mode (PR #37 by BasicCPPDev) */
+    /* Title is excluded from height constraint - rendered outside the fixed container */
+    :host([data-card-height]:not([data-aspect-mode])) {
+      display: block;
     }
-    :host(:not([data-aspect-mode])) video {
-      max-height: var(--media-max-height, none);
+    
+    :host([data-card-height]:not([data-aspect-mode])) ha-card {
+      display: block;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) .card {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) .title {
+      flex: 0 0 auto;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) .media-container {
+      height: var(--card-height);
+      width: 100%;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) img,
+    :host([data-card-height]:not([data-aspect-mode])) video {
+      max-height: 100%;
+      max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
+      display: block;
+    }
+    
+    /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
+    :host(:not([data-aspect-mode]):not([data-card-height])) .media-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    :host(:not([data-aspect-mode]):not([data-card-height])) img {
+      max-height: var(--media-max-height, 400px);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    :host(:not([data-aspect-mode]):not([data-card-height])) video {
+      max-height: var(--media-max-height, 400px);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
     }
     
     /* Remove max-height constraint in fullscreen mode */
@@ -6315,7 +6403,7 @@ class MediaCardV5a extends LitElement {
       font-size: 0.85em;
       line-height: 1.2;
       pointer-events: none;
-      z-index: 11;
+      z-index: 5;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
@@ -6574,7 +6662,7 @@ class MediaCardV5a extends LitElement {
       font-size: 0.8em;
       font-weight: 500;
       pointer-events: none;
-      z-index: 15;
+      z-index: 8;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
     }
@@ -6609,7 +6697,7 @@ class MediaCardV5a extends LitElement {
       display: flex;
       gap: 6px;
       pointer-events: none;
-      z-index: 15;
+      z-index: 8;
       max-width: 200px;
       overflow: hidden;
     }
@@ -7101,7 +7189,6 @@ class MediaCardV5a extends LitElement {
             alt="${this.currentMedia.title || 'Media'}"
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
-            style="width: 100%; height: auto; display: block;"
           />
         `}
         ${this._renderNavigationZones()}
@@ -7869,6 +7956,19 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  // V5.3: Card height handler (PR #37 by BasicCPPDev)
+  _cardHeightChanged(ev) {
+    const value = parseInt(ev.target.value);
+    // Only store positive integers; everything else removes the property
+    if (!isNaN(value) && value > 0) {
+      this._config = { ...this._config, card_height: value };
+    } else {
+      const { card_height, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
@@ -8382,6 +8482,19 @@ class MediaCardV5aEditor extends LitElement {
       ...this._config,
       zoom_level: parseFloat(ev.target.value)
     };
+    this._fireConfigChanged();
+  }
+
+  // V5.3: Default zoom handler (PR #37 by BasicCPPDev)
+  _defaultZoomChanged(ev) {
+    const value = parseFloat(ev.target.value);
+    // Only store valid zoom levels; everything else removes the property
+    if (!isNaN(value) && value > 1) {
+      this._config = { ...this._config, default_zoom: value };
+    } else {
+      const { default_zoom, ...rest } = this._config;
+      this._config = rest;
+    }
     this._fireConfigChanged();
   }
 
@@ -9869,6 +9982,38 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
+            <label>Card Height (pixels)</label>
+            <div>
+              <input
+                type="number"
+                min="100"
+                max="5000"
+                step="50"
+                .value=${this._config.card_height || ''}
+                @input=${this._cardHeightChanged}
+                placeholder="Auto (no fixed height)"
+              />
+              <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Default Zoom Level</label>
+            <div>
+              <input
+                type="number"
+                min="1"
+                max="5"
+                step="0.1"
+                .value=${this._config.default_zoom || ''}
+                @input=${this._defaultZoomChanged}
+                placeholder="No zoom"
+              />
+              <div class="help-text">Images load pre-zoomed at this level (1-5x, click image to reset)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Refresh Button</label>
             <div>
               <input
@@ -10312,7 +10457,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.2.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.3.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
