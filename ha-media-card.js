@@ -1082,20 +1082,15 @@ class MediaIndexProvider extends MediaProvider {
     try {
       this._log('🔍 Querying media_index for', count, 'random items...');
       
-      // V4 CODE: Extract folder path from media_path config
-      // Database stores full paths like: /media/Photo/PhotoLibrary/2023/06
-      // Config might be: media-source://media_source/media/Photo/PhotoLibrary
-      // We need to extract: /media/Photo/PhotoLibrary
+      // V5.2: Pass folder path as-is - Media Index v1.1.0+ handles URI ↔ path conversion
+      // Config can be:
+      //   - media-source://media_source/local/folder (Media Index will convert to /config/www/local/folder)
+      //   - /media/Photo/PhotoLibrary (direct filesystem path)
+      // Media Index uses media_source_uri config to do the mapping
       let folderFilter = null;
       if (this.config.folder?.path) {
-        let path = this.config.folder.path;
-        // Remove media-source://media_source prefix if present
-        if (path.startsWith('media-source://media_source')) {
-          path = path.replace('media-source://media_source', '');
-        }
-        // Now path should be like: /media/Photo/PhotoLibrary
-        folderFilter = path;
-        this._log('🔍 Filtering by folder:', folderFilter);
+        folderFilter = this.config.folder.path;
+        this._log('🔍 Filtering by folder (URI or path):', folderFilter);
       }
       
       // V4 CODE: Call media_index.get_random_items service with return_response via WebSocket
@@ -1403,24 +1398,23 @@ class SequentialMediaIndexProvider extends MediaProvider {
     try {
       this._log('🔍 Querying media_index for ordered files...');
       
-      // Extract folder path from config
+      // V5.2: Pass folder path as-is - Media Index v1.1.0+ handles URI ↔ path conversion
+      // Config can be:
+      //   - media-source://media_source/local/folder (Media Index will convert using media_source_uri mapping)
+      //   - /media/Photo/PhotoLibrary (direct filesystem path)
+      //   - media-source://immich/... (skip - Immich paths not supported by Media Index)
       let folderFilter = null;
       if (this.config.folder?.path) {
         let path = this.config.folder.path;
         
-        // Skip Immich and other integration paths - media_index only works with filesystem paths
+        // Skip Immich and other integration paths - media_index only works with filesystem/media_source paths
         if (path.startsWith('media-source://immich')) {
           this._log('⚠️ Immich path detected - media_index incompatible, skipping folder filter');
           // Don't set folderFilter - will query all media_index files
-        } else if (path.startsWith('media-source://media_source')) {
-          // Remove media-source://media_source prefix for filesystem paths
-          path = path.replace('media-source://media_source', '');
-          folderFilter = path;
-          this._log('🔍 Filtering by folder:', folderFilter);
         } else {
-          // Direct filesystem path
+          // Pass path as-is - Media Index will handle conversion
           folderFilter = path;
-          this._log('🔍 Filtering by folder:', folderFilter);
+          this._log('🔍 Filtering by folder (URI or path):', folderFilter);
         }
       }
       
