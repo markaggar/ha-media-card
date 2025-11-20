@@ -4578,11 +4578,10 @@ class MediaCardV5a extends LitElement {
     const enableRefresh = this.config.show_refresh_button === true;
     const enableDebugButton = this.config.debug_button === true;
     
-    // Don't render anything if all are disabled
-    if (!enablePause && !showMediaIndexButtons && !enableFullscreen && !enableRefresh && !enableDebugButton) {
-      return html``;
-    }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen && !enableRefresh && !enableDebugButton) {
+    // Don't render anything if all buttons are disabled
+    const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo));
+    if (!anyButtonEnabled) {
       return html``;
     }
 
