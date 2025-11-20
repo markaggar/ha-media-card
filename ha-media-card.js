@@ -345,25 +345,22 @@ class MediaIndexHelper {
   static async fetchFileMetadata(hass, config, filePath) {
     if (!hass || !MediaProvider.isMediaIndexActive(config)) return null;
     
-    // V4: Strip media-source:// prefix before sending to media_index
-    // Backend expects: /media/Photo/PhotoLibrary/New/file.jpg
-    // Not: media-source://media_source/media/Photo/PhotoLibrary/New/file.jpg
-    let cleanPath = filePath;
-    if (cleanPath.startsWith('media-source://media_source')) {
-      cleanPath = cleanPath.replace('media-source://media_source', '');
-    }
-    
     try {
       // Build WebSocket call to get_file_metadata service
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_file_metadata',
-        service_data: {
-          file_path: cleanPath  // Use cleaned path
-        },
+        service_data: {},  // Will populate based on path type
         return_response: true
       };
+      
+      // V5.3 / Media Index v1.4+: Use media_source_uri when path is a URI, file_path otherwise
+      if (filePath.startsWith('media-source://')) {
+        wsCall.service_data.media_source_uri = filePath;
+      } else {
+        wsCall.service_data.file_path = filePath;
+      }
       
       // If user specified a media_index entity, add target to route to correct instance
       if (config.media_index?.entity_id) {
@@ -841,6 +838,13 @@ class FolderProvider extends MediaProvider {
               return_response: true
             };
             
+            // Add target entity_id if configured (required for multi-instance setups)
+            if (this.config.media_index?.entity_id) {
+              wsCall.target = {
+                entity_id: this.config.media_index.entity_id
+              };
+            }
+            
             this.cardAdapter._log('📡 Calling get_file_metadata with:', wsCall);
             const response = await this.hass.callWS(wsCall);
             this.cardAdapter._log('📥 Service response:', response);
@@ -956,9 +960,10 @@ class MediaIndexProvider extends MediaProvider {
     if (this.queue.length < 10) {
       this._log('Queue low, refilling...', 'current queue size:', this.queue.length);
       
-      // V5 FIX: Track paths already in queue to avoid duplicates
-      const existingPaths = new Set(this.queue.map(item => item.path));
-      this._log('Existing paths in queue:', existingPaths.size);
+      // V5 FIX: Track media_content_ids already in queue to avoid duplicates
+      // V5 URI: Now uses URIs instead of paths for deduplication
+      const existingPaths = new Set(this.queue.map(item => item.media_source_uri || item.path));
+      this._log('Existing media IDs in queue:', existingPaths.size);
       
       // V5 FIX: Also exclude paths in navigation history
       const historyPaths = new Set();
@@ -982,9 +987,11 @@ class MediaIndexProvider extends MediaProvider {
       const items = await this._queryMediaIndex(this.queueSize, shouldUsePriority ? null : false);
       if (items && items.length > 0) {
         // V5 FIX: Filter out items already in queue OR history to avoid duplicates
-        const newItems = items.filter(item => 
-          !existingPaths.has(item.path) && !historyPaths.has(item.path)
-        );
+        // V5 URI: Compare using media_source_uri when available
+        const newItems = items.filter(item => {
+          const mediaId = item.media_source_uri || item.path;
+          return !existingPaths.has(mediaId) && !historyPaths.has(mediaId);
+        });
         const filteredCount = items.length - newItems.length;
         const filteredPercent = (filteredCount / items.length) * 100;
         this._log('Filtered', filteredCount, 'duplicate/history items (', filteredPercent.toFixed(1), '%)');
@@ -1016,9 +1023,10 @@ class MediaIndexProvider extends MediaProvider {
           const nonRecentItems = await this._queryMediaIndex(this.queueSize, false); // false = disable priority
           
           if (nonRecentItems && nonRecentItems.length > 0) {
-            const additionalItems = nonRecentItems.filter(item => 
-              !existingPaths.has(item.path) && !historyPaths.has(item.path)
-            );
+            const additionalItems = nonRecentItems.filter(item => {
+              const mediaId = item.media_source_uri || item.path;
+              return !existingPaths.has(mediaId) && !historyPaths.has(mediaId);
+            });
             this._log('Retry got', additionalItems.length, 'non-recent items');
             newItems.push(...additionalItems);
           }
@@ -1042,15 +1050,21 @@ class MediaIndexProvider extends MediaProvider {
       // V4 code already includes EXIF fields in item, so we merge path-based + EXIF
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
       
+      // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
+      // Media Index v1.1.0+ provides both path and media_source_uri
+      // Fallback to path for backward compatibility
+      const mediaId = item.media_source_uri || item.path;
+      
       return {
-        // V4: Use database path for media_content_id (service calls need this)
+        // V5: Use URI for media_content_id (Media Index v1.1.0+ provides media_source_uri)
         // URL resolution happens separately in card's _resolveMediaUrl()
-        media_content_id: item.path,
+        media_content_id: mediaId,
         media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend (V4 pattern)
-          path: item.path, // V4: Store actual file path in metadata too
+          path: item.path, // V4: Store filesystem path in metadata for logging/fallback
+          media_source_uri: item.media_source_uri, // V5: Store URI for service calls
           date_taken: item.date_taken,
           created_time: item.created_time,
           location_city: item.location_city,
@@ -1183,15 +1197,16 @@ class MediaIndexProvider extends MediaProvider {
         
         // V4 CODE: Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
-          // Backend returns 'path', not 'file_path'
-          const filePath = item.path;
-          const resolvedUrl = await this._resolveMediaPath(filePath);
+          // V5 URI: Use media_source_uri for URL resolution when available
+          // Backend provides both path (filesystem) and media_source_uri (Media Index v1.1.0+)
+          const mediaId = item.media_source_uri || item.path;
+          const resolvedUrl = await this._resolveMediaPath(mediaId);
           return {
             ...item,
             url: resolvedUrl,
-            path: filePath,
-            filename: item.filename || filePath.split('/').pop(),
-            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            path: item.path, // Keep filesystem path for metadata
+            filename: item.filename || item.path.split('/').pop(),
+            folder: item.folder || item.path.substring(0, item.path.lastIndexOf('/')),
             // EXIF metadata (already present in backend response)
             date_taken: item.date_taken,
             created_time: item.created_time, // File creation time as fallback
@@ -1361,14 +1376,18 @@ class SequentialMediaIndexProvider extends MediaProvider {
       // Extract metadata using MediaProvider helper (V5 architecture)
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
       
+      // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
+      const mediaId = item.media_source_uri || item.path;
+      
       return {
-        // V4: Use database path for media_content_id (service calls need this)
-        media_content_id: item.path,
+        // V5: Use URI for media_content_id (Media Index v1.1.0+ provides media_source_uri)
+        media_content_id: mediaId,
         media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend
-          path: item.path, // V4: Store actual file path in metadata
+          path: item.path, // V4: Store filesystem path in metadata for logging/fallback
+          media_source_uri: item.media_source_uri, // V5: Store URI for service calls
           date_taken: item.date_taken,
           created_time: item.created_time,
           location_city: item.location_city,
@@ -1505,14 +1524,15 @@ class SequentialMediaIndexProvider extends MediaProvider {
         
         // Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
-          const filePath = item.path;
-          const resolvedUrl = await this._resolveMediaPath(filePath);
+          // V5 URI: Use media_source_uri for URL resolution when available
+          const mediaId = item.media_source_uri || item.path;
+          const resolvedUrl = await this._resolveMediaPath(mediaId);
           return {
             ...item,
             url: resolvedUrl,
-            path: filePath,
-            filename: item.filename || filePath.split('/').pop(),
-            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            path: item.path, // Keep filesystem path for metadata
+            filename: item.filename || item.path.split('/').pop(),
+            folder: item.folder || item.path.substring(0, item.path.lastIndexOf('/')),
             // EXIF metadata from backend
             date_taken: item.date_taken,
             created_time: item.created_time,
@@ -5026,11 +5046,30 @@ class MediaCardV5a extends LitElement {
   // Handle debug button click - toggle debug mode dynamically
   _handleDebugButtonClick(e) {
     e.stopPropagation();
-    // Toggle debug mode dynamically (doesn't modify config, only runtime state)
-    this._debugMode = !this._debugMode;
-    const status = this._debugMode ? 'ENABLED' : 'DISABLED';
-    console.log(`🐛 [MediaCard] Debug mode ${status} (button click)`);
-    this.requestUpdate();
+    
+    // Toggle debug mode and persist to config
+    const newDebugMode = !this._debugMode;
+    
+    // Update config with new debug_mode value
+    const updatedConfig = {
+      ...this.config,
+      debug_mode: newDebugMode
+    };
+    
+    // Call setConfig to update internal state
+    this.setConfig(updatedConfig);
+    
+    // Fire config-changed event to persist to Lovelace
+    const event = new CustomEvent('config-changed', {
+      detail: { config: updatedConfig },
+      bubbles: true,
+      composed: true
+    });
+    this.dispatchEvent(event);
+    
+    const status = newDebugMode ? 'ENABLED' : 'DISABLED';
+    console.log(`🐛 [MediaCard] Debug mode ${status} - config persisted`);
+    console.log(`🐛 [MediaCard] Config updated:`, updatedConfig.debug_mode);
   }
   
   // Handle refresh button click - reload current media
@@ -5088,18 +5127,13 @@ class MediaCardV5a extends LitElement {
     // Or if overlay is already open but media changed (no cached metadata)
     if (this._showInfoOverlay && this._currentMediaPath && !this._fullMetadata) {
       try {
-        // Convert media-source:// URL to database path format
-        let filePath = this._currentMediaPath;
-        if (filePath.startsWith('media-source://media_source/')) {
-          filePath = filePath.replace('media-source://media_source/', '/');
-        }
-        
+        // V5.2: Pass media_source_uri as-is to Media Index
         const wsCall = {
           type: 'call_service',
           domain: 'media_index',
           service: 'get_file_metadata',
           service_data: {
-            file_path: filePath
+            media_source_uri: this._currentMediaPath
           },
           return_response: true
         };
@@ -5131,18 +5165,13 @@ class MediaCardV5a extends LitElement {
     this._fetchingMetadata = true;
     
     try {
-      // Convert media-source:// URL to database path format
-      let filePath = this._currentMediaPath;
-      if (filePath.startsWith('media-source://media_source/')) {
-        filePath = filePath.replace('media-source://media_source/', '/');
-      }
-      
+      // V5.2: Pass media_source_uri as-is to Media Index
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_file_metadata',
         service_data: {
-          file_path: filePath
+          media_source_uri: this._currentMediaPath
         },
         return_response: true
       };

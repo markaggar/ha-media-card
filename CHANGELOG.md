@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Debug Button**: New YAML-only `debug_button` configuration for dynamic debug mode control
   - Action button to toggle debug logging on/off without page reload
-  - Honors existing `debug_mode` config state (important after cache clears)
+  - Persists debug_mode state to card configuration (survives page reloads)
   - Active state shown with warning color (orange) and filled bug icon
   - Position follows `action_buttons.position` setting
   - YAML-only configuration (not exposed in visual editor)
