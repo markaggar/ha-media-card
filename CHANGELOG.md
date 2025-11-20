@@ -5,21 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.2.0]
-
-### ⚠️ BREAKING CHANGES
-
-**Media Index v1.1.0+ Required**: This release requires Media Index integration v1.1.0 or higher for URI-based workflow. The card now uses `media_source_uri` exclusively when communicating with Media Index services.
-
-**Migration**: Update Media Index integration to v1.1.0+ and configure `media_source_uri` in your sensor setup:
-
-```yaml
-sensor:
-  - platform: media_index
-    name: "PhotoLibrary"
-    base_folder: "/media/Photo/PhotoLibrary"
-    media_source_uri: "media-source://media_source/media/Photo/PhotoLibrary"  # NEW - REQUIRED
-```
+## [5.3.0]
 
 ### Added
 - **Debug Button**: New YAML-only `debug_button` configuration for dynamic debug mode control
@@ -81,28 +67,41 @@ sensor:
 - Editor UI reorganized for better clarity with consolidated overlay positioning section
 - Refresh timer configuration moved to "Image Options" section (always visible, not mode-dependent)
 
-### Media Index Integration Updates (v1.1.0 required)
+### Media Index Integration Updates (v1.4.0 recommended)
 
-**Note**: Media Card v5.2.0 is compatible with older Media Index versions but requires Media Index v1.1.0+ for URI-based workflow features.
+**Note**: Media Card v5.3.0 works with all Media Index versions. For full URI-based workflow support, update to Media Index v1.4.0+.
 
-- **Complete Media-Source URI Support**: All Media Index services now accept `media_source_uri` parameter as alternative to `file_path`
-  - `get_random_items`: Returns both `path` and `media_source_uri` in response items
-  - `get_ordered_files`: Returns both `path` and `media_source_uri` in response items
-  - `get_file_metadata`: Accepts either `file_path` OR `media_source_uri`
-  - `geocode_file`: Accepts `file_path`, `file_id`, OR `media_source_uri`
-  - `mark_favorite`: Accepts either `file_path` OR `media_source_uri`
-  - `delete_media`: Accepts either `file_path` OR `media_source_uri`
-  - `mark_for_edit`: Accepts either `file_path` OR `media_source_uri`
-- **Sensor Attribute Exposure**: `media_source_uri` configuration now exposed as sensor state attribute for verification
-- **Backward Compatibility**: All services maintain full backward compatibility with `file_path`-only usage
+- **Complete Media-Source URI Support**: All Media Index services now support URIs throughout
+  - **Folder Filtering**: `get_random_items` and `get_ordered_files` accept `media-source://` URIs for `folder` parameter
+  - **Individual File Operations**: All services accept `media_source_uri` parameter as alternative to `file_path`
+    - `get_file_metadata`: Accepts either `file_path` OR `media_source_uri`
+    - `geocode_file`: Accepts `file_path`, `file_id`, OR `media_source_uri`
+    - `mark_favorite`: Accepts either `file_path` OR `media_source_uri`
+    - `delete_media`: Accepts either `file_path` OR `media_source_uri`
+    - `mark_for_edit`: Accepts either `file_path` OR `media_source_uri`
+  - **Response Items**: Both `get_random_items` and `get_ordered_files` return both `path` and `media_source_uri` for each item
+- **Automatic URI Conversion**: Media Index backend automatically converts URIs to filesystem paths for folder filtering
+- **Sensor Attribute Exposure**: `media_source_uri` configuration exposed as sensor state attribute for verification
+- **Full Backward Compatibility**: All services maintain complete backward compatibility with `file_path`-only usage
 
-**Configuration Example**:
+**Configuration Example** (optional but recommended):
 ```yaml
 sensor:
   - platform: media_index
     name: "PhotoLibrary"
     base_folder: "/media/Photo/PhotoLibrary"
-    media_source_uri: "media-source://media_source/media/Photo/PhotoLibrary"  # NEW
+    media_source_uri: "media-source://media_source/media/Photo/PhotoLibrary"  # Optional
+```
+
+**Card Configuration** (works with both URI and path formats):
+```yaml
+folder:
+  path: media-source://media_source/local/ai_image_notifications  # URI format
+  # OR
+  path: /config/www/local/ai_image_notifications  # Path format (legacy)
+  use_media_index_for_discovery: true
+media_index:
+  entity_id: sensor.media_index_config_www_local_total_files
 ```
 
 ## [5.1.0] - 2025-11-15
