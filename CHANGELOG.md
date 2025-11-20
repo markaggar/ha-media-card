@@ -22,6 +22,13 @@ sensor:
 ```
 
 ### Added
+- **Debug Button**: New YAML-only `debug_button` configuration for dynamic debug mode control
+  - Action button to toggle debug logging on/off without page reload
+  - Honors existing `debug_mode` config state (important after cache clears)
+  - Active state shown with warning color (orange) and filled bug icon
+  - Position follows `action_buttons.position` setting
+  - YAML-only configuration (not exposed in visual editor)
+  - Usage: `debug_button: true` in card YAML
 - **Refresh Button**: New action button to manually reload current media
   - Appears between pause and fullscreen buttons in action button group
   - Re-resolves media URL to get fresh authentication tokens (useful for Synology/Immich signed URLs)
