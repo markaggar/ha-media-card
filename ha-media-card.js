@@ -3132,7 +3132,10 @@ class MediaCardV5a extends LitElement {
     // V4: Set debug mode from config
     // Honor debug_mode config (YAML setting or runtime toggle via debug button)
     // This ensures debug button respects existing debug_mode: true in config
-    this._debugMode = this.config.debug_mode === true;
+    // Don't override if already set by debug button (runtime toggle)
+    if (this._debugMode === undefined || this._debugMode === false) {
+      this._debugMode = this.config.debug_mode === true;
+    }
     
     // Set aspect ratio mode data attribute for CSS styling (from V4)
     const aspectMode = config.aspect_mode || 'default';
@@ -3450,10 +3453,32 @@ class MediaCardV5a extends LitElement {
           this.navigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
-          const item = await this.provider.getNext();
+          let item = await this.provider.getNext();
         
           if (item) {
             this._log('Got item from provider:', item.title);
+          
+            // V5.3: Check if item already exists in navigation queue (prevent duplicates)
+            let alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
+            let attempts = 0;
+            const maxAttempts = 10; // Prevent infinite loop
+            
+            while (alreadyInQueue && attempts < maxAttempts) {
+              this._log(`⚠️ Item already in navigation queue (attempt ${attempts + 1}), getting next:`, item.media_content_id);
+              item = await this.provider.getNext();
+              if (!item) break;
+              alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
+              attempts++;
+            }
+            
+            if (!item || alreadyInQueue) {
+              // All items are duplicates or provider exhausted, wrap to beginning
+              this._log('Provider exhausted or only returning duplicates, wrapping to beginning');
+              this.navigationIndex = 0;
+              return;
+            }
+            
+            this._log('✅ Adding new item to navigation queue:', item.title);
           
             // V5: Extract metadata if not provided
             if (!item.metadata) {
@@ -3488,7 +3513,9 @@ class MediaCardV5a extends LitElement {
       this._log('Displaying navigation queue item:', item.title, 'at index', this.navigationIndex);
       
       // Add to history for tracking (providers use this for exclusion)
-      if (!this.history.includes(item)) {
+      // Check by media_content_id to avoid duplicate object references
+      const alreadyInHistory = this.history.some(h => h.media_content_id === item.media_content_id);
+      if (!alreadyInHistory) {
         this.history.push(item);
         
         // V5: Dynamic history size formula
