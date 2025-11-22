@@ -1124,6 +1124,20 @@ class MediaIndexProvider extends MediaProvider {
         'config.folder': this.config.folder
       });
       
+      // V5.3: Extract filter values from config
+      const filters = this.config.filters || {};
+      const favoritesOnly = filters.favorites === true; // Only true values, not entity refs yet
+      const dateFrom = filters.date_range?.start || null;
+      const dateTo = filters.date_range?.end || null;
+      
+      if (favoritesOnly || dateFrom || dateTo) {
+        this._log('🔍 Active filters:', {
+          favorites_only: favoritesOnly,
+          date_from: dateFrom,
+          date_to: dateTo
+        });
+      }
+      
       // V4 CODE: Build WebSocket call with optional target for multi-instance support
       const wsCall = {
         type: 'call_service',
@@ -1135,6 +1149,11 @@ class MediaIndexProvider extends MediaProvider {
           recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
+          // V5.3: Favorites filter (uses EXIF is_favorited field)
+          favorites_only: favoritesOnly || undefined,
+          // V5.3: Date range filter (uses EXIF date_taken with fallback to created_time)
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: priorityNewFiles,
