@@ -681,34 +681,33 @@ class FolderProvider extends MediaProvider {
     
     // RANDOM MODE - Random selection
     if (mode === 'random') {
-      // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
+      // V5.3: Use MediaIndexProvider when enabled - NO SILENT FALLBACK
       if (useMediaIndex) {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
         this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.mediaIndexProvider.initialize();
         
         if (!success) {
-          // V5.3: Check if filters are active - don't fallback if filters caused empty result
+          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
           const filters = this.config.filters || {};
           const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
           
           if (hasFilters) {
-            // Filters are active - don't fallback, show error instead
             console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
-            console.error('[FolderProvider] 💡 Adjust your filters or disable Media Index to use filesystem scanning');
+            console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
             throw new Error('No items match filter criteria. Try adjusting your filters.');
+          } else {
+            console.error('[FolderProvider] ❌ Media Index initialization failed');
+            console.error('[FolderProvider] 💡 Check Media Index entity exists and is populated, or set use_media_index_for_discovery: false');
+            throw new Error('Media Index initialization failed. Check entity configuration.');
           }
-          
-          console.warn('[FolderProvider] MediaIndexProvider initialization failed, falling back to SubfolderQueue');
-          // Fallback to filesystem scanning
-          this.mediaIndexProvider = null;
-        } else {
-          this.cardAdapter._log('✅ MediaIndexProvider initialized');
-          return true;
         }
+        
+        this.cardAdapter._log('✅ MediaIndexProvider initialized');
+        return true;
       }
       
-      // Use SubfolderQueue (filesystem scanning) if media_index disabled or failed
+      // Use SubfolderQueue (filesystem scanning) only when Media Index explicitly disabled
       if (!this.mediaIndexProvider) {
         this.cardAdapter._log('Using SubfolderQueue for filesystem scanning (recursive:', recursive, ')');
         
