@@ -3439,9 +3439,12 @@ class MediaCardV5a extends LitElement {
         }
       } else {
         console.error('[MediaCardV5a] Provider initialization failed');
+        this._errorState = 'Provider initialization failed';
       }
     } catch (error) {
       console.error('[MediaCardV5a] Error initializing provider:', error);
+      // V5.3: Store error message for display in card UI
+      this._errorState = error.message || 'Provider initialization failed';
     } finally {
       this.isLoading = false;
     }
@@ -7342,6 +7345,20 @@ class MediaCardV5a extends LitElement {
         <ha-card>
           <div class="card">
             <div class="loading">Loading media...</div>
+          </div>
+        </ha-card>
+      `;
+    }
+
+    // V5.3: Show error state if provider initialization failed
+    if (this._errorState) {
+      return html`
+        <ha-card>
+          <div class="card">
+            <div class="placeholder" style="color: var(--error-color, #db4437); padding: 16px;">
+              <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Configuration Error</div>
+              <div>${this._errorState}</div>
+            </div>
           </div>
         </ha-card>
       `;
