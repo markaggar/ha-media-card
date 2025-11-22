@@ -935,6 +935,71 @@ class MediaIndexProvider extends MediaProvider {
     }
   }
 
+  /**
+   * Resolve filter value - supports both direct values and entity references
+   * @param {*} configValue - Value from config (direct value or entity_id)
+   * @param {string} expectedType - Expected type: 'boolean', 'date', 'number', 'string'
+   * @returns {Promise<*>} Resolved value or null
+   */
+  async _resolveFilterValue(configValue, expectedType) {
+    if (configValue === null || configValue === undefined) {
+      return null;
+    }
+    
+    // If it's not a string, return as-is (direct value)
+    if (typeof configValue !== 'string') {
+      return configValue;
+    }
+    
+    // Check if it looks like an entity_id (contains a dot)
+    if (!configValue.includes('.')) {
+      // Direct string value (e.g., date string "2024-01-01")
+      return configValue;
+    }
+    
+    // It's an entity_id - resolve it
+    const state = this.hass?.states[configValue];
+    if (!state) {
+      this._log(`⚠️ Filter entity not found: ${configValue}`);
+      return null;
+    }
+    
+    const domain = state.entity_id.split('.')[0];
+    
+    // Resolve based on expected type and domain
+    switch (domain) {
+      case 'input_boolean':
+        return state.state === 'on';
+      
+      case 'input_datetime':
+        // Can be date-only or datetime
+        // state.state format: "2024-01-01" or "2024-01-01 12:00:00"
+        const dateValue = state.state.split(' ')[0]; // Extract date part
+        return dateValue || null;
+      
+      case 'input_number':
+        return parseFloat(state.state) || null;
+      
+      case 'input_text':
+      case 'input_select':
+        return state.state || null;
+      
+      case 'sensor':
+        // Sensors can provide various types - infer from expected type
+        if (expectedType === 'boolean') {
+          return state.state === 'on' || state.state === 'true' || state.state === '1';
+        } else if (expectedType === 'number') {
+          return parseFloat(state.state) || null;
+        } else {
+          return state.state || null;
+        }
+      
+      default:
+        this._log(`⚠️ Unsupported entity domain for filter: ${domain}`);
+        return null;
+    }
+  }
+
   async initialize() {
     this._log('Initializing...');
     
@@ -1124,11 +1189,12 @@ class MediaIndexProvider extends MediaProvider {
         'config.folder': this.config.folder
       });
       
-      // V5.3: Extract filter values from config
+      // V5.3: Extract and resolve filter values from config
+      // Supports both direct values (favorites: true) and entity references (favorites: input_boolean.show_favorites)
       const filters = this.config.filters || {};
-      const favoritesOnly = filters.favorites === true; // Only true values, not entity refs yet
-      const dateFrom = filters.date_range?.start || null;
-      const dateTo = filters.date_range?.end || null;
+      const favoritesOnly = await this._resolveFilterValue(filters.favorites, 'boolean');
+      const dateFrom = await this._resolveFilterValue(filters.date_range?.start, 'date');
+      const dateTo = await this._resolveFilterValue(filters.date_range?.end, 'date');
       
       if (favoritesOnly || dateFrom || dateTo) {
         this._log('🔍 Active filters:', {
