@@ -1170,31 +1170,41 @@ class MediaIndexProvider extends MediaProvider {
       date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
     };
     
-    // Subscribe to state changes
+    this._log('📝 Initial filter values:', this._lastFilterValues);
+    
+    // Subscribe to state changes - use subscribeEvents but filter to our entities only
     try {
-      this._entityUnsubscribe = this.hass.connection.subscribeEvents(
+      this._entityUnsubscribe = await this.hass.connection.subscribeEvents(
         async (event) => {
-          // Check if changed entity is one of our filter entities
+          // Only process state_changed events for our filter entities
           const changedEntityId = event.data?.entity_id;
           if (!changedEntityId || !this._entitySubscriptions.includes(changedEntityId)) {
-            return;
+            return; // Ignore non-filter entities
           }
           
-          this._log('🔄 Filter entity changed:', changedEntityId, '→', event.data?.new_state?.state);
+          const newState = event.data?.new_state?.state;
+          this._log('🔄 Filter entity changed:', changedEntityId, '→', newState);
           
-          // Resolve current filter values
-          const filters = this.config.filters || {};
+          // CRITICAL: Update hass.states immediately with new state from event
+          // The state_changed event arrives BEFORE hass.states is updated
+          if (event.data?.new_state) {
+            this.hass.states[changedEntityId] = event.data.new_state;
+          }
+          
+          // Resolve current filter values (now using updated hass.states)
           const currentFilters = {
             favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
             date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
             date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
           };
           
-          // Check if filter values actually changed
-          const filtersChanged = 
-            currentFilters.favorites !== this._lastFilterValues.favorites ||
-            currentFilters.date_from !== this._lastFilterValues.date_from ||
-            currentFilters.date_to !== this._lastFilterValues.date_to;
+          this._log('🔍 Resolved filter values:', currentFilters, 'vs last:', this._lastFilterValues);
+              
+              // Check if filter values actually changed
+              const filtersChanged = 
+                currentFilters.favorites !== this._lastFilterValues.favorites ||
+                currentFilters.date_from !== this._lastFilterValues.date_from ||
+                currentFilters.date_to !== this._lastFilterValues.date_to;
           
           if (filtersChanged) {
             this._log('✨ Filter values changed, reloading queue:', currentFilters);
@@ -1205,10 +1215,14 @@ class MediaIndexProvider extends MediaProvider {
             
             // Clear card history so we don't show old filtered items
             if (this.card) {
-              this._log('🗑️ Clearing card history due to filter change');
+              this._log('🗑️ Clearing card state due to filter change');
               this.card.history = [];
               this.card.historyPosition = -1;
               this.card.currentMedia = null;
+              // V5.3: Also clear navigation queue so it rebuilds from new provider queue
+              this.card.navigationQueue = [];
+              this.card.navigationIndex = -1;
+              this.card.isNavigationQueuePreloaded = false;
             }
             
             const newItems = await this._queryMediaIndex(this.queueSize);
@@ -1221,9 +1235,20 @@ class MediaIndexProvider extends MediaProvider {
               this._dispatchQueueStats();
               
               // Load first item from new queue
-              if (this.card && this.card._loadNext) {
+              if (this.card) {
                 this._log('🔄 Loading first item with new filters');
-                await this.card._loadNext();
+                // Clear error state in case it was set
+                this.card._errorState = null;
+                this.card.isLoading = true;
+                this.card.requestUpdate();
+                
+                if (this.card._loadNext) {
+                  await this.card._loadNext();
+                }
+                
+                this.card.isLoading = false;
+                this.card.requestUpdate();
+                this._log('✅ Card updated with new filtered media');
               }
             } else {
               this._log('⚠️ No items match new filter criteria');
@@ -1231,15 +1256,18 @@ class MediaIndexProvider extends MediaProvider {
               if (this.card) {
                 this.card._errorState = 'No items match filter criteria. Try adjusting your filters.';
                 this.card.currentMedia = null;
+                this.card.isLoading = false;
                 this.card.requestUpdate();
               }
             }
+          } else {
+            this._log('Filter entity changed but values are same, no reload needed');
           }
         },
         'state_changed'
       );
       
-      this._log('✅ Subscribed to entity state changes');
+      this._log('✅ Subscribed to filter entity state changes (filtering in callback)');
     } catch (error) {
       console.warn('[MediaIndexProvider] Failed to subscribe to entity changes:', error);
     }
