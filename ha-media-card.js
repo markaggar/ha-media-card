@@ -937,6 +937,58 @@ class MediaIndexProvider extends MediaProvider {
     this.recentFilesExhausted = false; // Flag: skip priority_new_files if recent cache exhausted
     this.consecutiveHighFilterCount = 0; // Counter: consecutive queries with >80% filter rate
     this.EXHAUSTION_THRESHOLD = 2; // After 2 consecutive high-filter queries, consider exhausted
+    
+    // V5.3: Entity subscription for dynamic filter updates
+    this._entitySubscriptions = []; // Track subscribed entity IDs
+    this._entityUnsubscribe = null; // Unsubscribe function
+    this._lastFilterValues = {}; // Track last known filter values for change detection
+  }
+  
+  /**
+   * Clean up subscriptions when provider is destroyed
+   */
+  dispose() {
+    if (this._entityUnsubscribe) {
+      this._log('🧹 Unsubscribing from entity state changes');
+      this._entityUnsubscribe();
+      this._entityUnsubscribe = null;
+    }
+  }
+  
+  /**
+   * V5.3: Dispatch queue statistics event for template sensor integration
+   */
+  _dispatchQueueStats() {
+    if (!this.card) return;
+    
+    const filters = this.config.filters || {};
+    const activeFilters = [];
+    
+    if (filters.favorites) activeFilters.push('favorites');
+    if (filters.date_range?.start || filters.date_range?.end) activeFilters.push('date_range');
+    
+    const stats = {
+      queue_size: this.queue.length,
+      queue_capacity: this.queueSize,
+      filters_active: activeFilters,
+      filter_config: {
+        favorites: filters.favorites || null,
+        date_from: filters.date_range?.start || null,
+        date_to: filters.date_range?.end || null
+      },
+      timestamp: new Date().toISOString()
+    };
+    
+    this._log('📊 Queue stats:', stats);
+    
+    // Dispatch custom event that can be captured by template sensors
+    const event = new CustomEvent('media-card-queue-stats', {
+      detail: stats,
+      bubbles: true,
+      composed: true
+    });
+    
+    this.card.dispatchEvent(event);
   }
 
   _log(...args) {
@@ -1053,7 +1105,113 @@ class MediaIndexProvider extends MediaProvider {
     
     this.queue = items;
     this._log('✅ Initialized with', this.queue.length, 'items');
+    
+    // V5.3: Dispatch queue statistics for template sensors
+    this._dispatchQueueStats();
+    
+    // V5.3: Subscribe to filter entity state changes for dynamic updates
+    await this._subscribeToFilterEntities();
+    
     return true;
+  }
+  
+  /**
+   * V5.3: Subscribe to entity state changes for dynamic filter updates
+   * Detects filter entity IDs and subscribes to their state changes
+   */
+  async _subscribeToFilterEntities() {
+    const filters = this.config.filters || {};
+    const entityIds = [];
+    
+    // Collect entity IDs from filter configuration
+    if (filters.favorites && typeof filters.favorites === 'string' && filters.favorites.includes('.')) {
+      entityIds.push(filters.favorites);
+    }
+    if (filters.date_range?.start && typeof filters.date_range.start === 'string' && filters.date_range.start.includes('.')) {
+      entityIds.push(filters.date_range.start);
+    }
+    if (filters.date_range?.end && typeof filters.date_range.end === 'string' && filters.date_range.end.includes('.')) {
+      entityIds.push(filters.date_range.end);
+    }
+    
+    if (entityIds.length === 0) {
+      this._log('No filter entities to subscribe to');
+      return;
+    }
+    
+    this._entitySubscriptions = entityIds;
+    this._log('📡 Subscribing to filter entities:', entityIds);
+    
+    // Store initial filter values for change detection
+    this._lastFilterValues = {
+      favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
+      date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
+      date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+    };
+    
+    // Subscribe to state changes
+    try {
+      this._entityUnsubscribe = this.hass.connection.subscribeEvents(
+        async (event) => {
+          // Check if changed entity is one of our filter entities
+          const changedEntityId = event.data?.entity_id;
+          if (!changedEntityId || !this._entitySubscriptions.includes(changedEntityId)) {
+            return;
+          }
+          
+          this._log('🔄 Filter entity changed:', changedEntityId, '→', event.data?.new_state?.state);
+          
+          // Resolve current filter values
+          const filters = this.config.filters || {};
+          const currentFilters = {
+            favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
+            date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
+            date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+          };
+          
+          // Check if filter values actually changed
+          const filtersChanged = 
+            currentFilters.favorites !== this._lastFilterValues.favorites ||
+            currentFilters.date_from !== this._lastFilterValues.date_from ||
+            currentFilters.date_to !== this._lastFilterValues.date_to;
+          
+          if (filtersChanged) {
+            this._log('✨ Filter values changed, reloading queue:', currentFilters);
+            this._lastFilterValues = currentFilters;
+            
+            // Clear queue and reload with new filter values
+            this.queue = [];
+            const newItems = await this._queryMediaIndex(this.queueSize);
+            
+            if (newItems && newItems.length > 0) {
+              this.queue = newItems;
+              this._log('✅ Queue reloaded with', this.queue.length, 'items');
+              
+              // V5.3: Dispatch updated queue statistics
+              this._dispatchQueueStats();
+              
+              // Notify card to load new media
+              if (this.card && this.card._loadNext) {
+                this._log('🔄 Triggering card reload with new filters');
+                await this.card._loadNext();
+              }
+            } else {
+              this._log('⚠️ No items match new filter criteria');
+              // Card will show error message via existing error handling
+              if (this.card) {
+                this.card._errorState = 'No items match filter criteria. Try adjusting your filters.';
+                this.card.requestUpdate();
+              }
+            }
+          }
+        },
+        'state_changed'
+      );
+      
+      this._log('✅ Subscribed to entity state changes');
+    } catch (error) {
+      console.warn('[MediaIndexProvider] Failed to subscribe to entity changes:', error);
+    }
   }
 
   async getNext() {
