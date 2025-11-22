@@ -10,22 +10,26 @@ The Media Card now supports filtering media items using the Media Index backend.
 
 Show only media items marked as favorites in Media Index.
 
-**Configuration:**
+**Direct Value Configuration:**
 ```yaml
-type: custom:media-card
-media_source_type: folder
-folder:
-  path: /media/Photo/PhotoLibrary
-  mode: random
-  use_media_index_for_discovery: true
-
-media_index:
-  entity_id: sensor.media_index_media_photo_photolibrary_total_files
-
-# Show only favorites
 filters:
   favorites: true
 ```
+
+**Entity Reference Configuration:**
+```yaml
+filters:
+  favorites: input_boolean.slideshow_favorites
+```
+
+When using entity references, the filter value updates automatically when the entity state changes. This enables:
+- Toggle favorites filter via dashboard button
+- Automate filter changes based on time of day
+- Control filters from other automations
+
+**Supported Entity Types:**
+- `input_boolean` - Uses state (on = true, off = false)
+- `sensor` - Interprets "on", "true", "1" as true
 
 **Use Cases:**
 - "Best of" slideshow on main dashboard
@@ -36,13 +40,26 @@ filters:
 
 Filter by photo date using EXIF `date_taken` (falls back to `created_time` if no EXIF data).
 
-**Configuration:**
+**Direct Value Configuration:**
 ```yaml
 filters:
   date_range:
     start: "2024-01-01"  # YYYY-MM-DD format
     end: "2024-12-31"
 ```
+
+**Entity Reference Configuration:**
+```yaml
+filters:
+  date_range:
+    start: input_datetime.slideshow_start_date
+    end: input_datetime.slideshow_end_date
+```
+
+**Supported Entity Types:**
+- `input_datetime` - Extracts date portion (YYYY-MM-DD) from state
+- `input_text` - Uses state as date string
+- `sensor` - Uses state as date string
 
 **Date Behavior:**
 - Omit `start` for "everything before end date"
@@ -248,9 +265,116 @@ filters:
 
 No other changes needed!
 
+## Entity Resolution (v5.3+)
+
+Filters support both **direct values** and **entity references** for dynamic control.
+
+### Supported Entity Types
+
+**input_boolean** (for favorites filter):
+```yaml
+filters:
+  favorites: input_boolean.slideshow_favorites
+```
+- State "on" = true (show favorites)
+- State "off" = false (show all)
+
+**input_datetime** (for date ranges):
+```yaml
+filters:
+  date_range:
+    start: input_datetime.slideshow_start_date
+    end: input_datetime.slideshow_end_date
+```
+- Automatically extracts date portion (YYYY-MM-DD)
+- Supports both date-only and datetime formats
+
+**input_text/input_select** (for date strings):
+```yaml
+filters:
+  date_range:
+    start: input_text.custom_start_date
+```
+- Uses state value directly as date string
+- Must be in YYYY-MM-DD format
+
+**sensor** (for computed values):
+```yaml
+filters:
+  favorites: sensor.should_show_favorites
+  date_range:
+    start: sensor.dynamic_start_date
+```
+- Interprets sensor state based on expected type
+- Boolean sensors: "on", "true", "1" = true
+- Date sensors: Must return YYYY-MM-DD format
+
+### Entity Resolution Examples
+
+**Dashboard Toggle Control:**
+```yaml
+# configuration.yaml
+input_boolean:
+  slideshow_favorites:
+    name: Show Favorites Only
+    icon: mdi:star
+
+# Lovelace card
+type: custom:media-card
+filters:
+  favorites: input_boolean.slideshow_favorites
+```
+
+**Dynamic Date Range:**
+```yaml
+# configuration.yaml
+input_datetime:
+  slideshow_start:
+    name: Slideshow Start Date
+    has_date: true
+    has_time: false
+  
+  slideshow_end:
+    name: Slideshow End Date
+    has_date: true
+    has_time: false
+
+# Lovelace card
+type: custom:media-card
+filters:
+  date_range:
+    start: input_datetime.slideshow_start
+    end: input_datetime.slideshow_end
+```
+
+**Automation Example:**
+```yaml
+automation:
+  - alias: "Weekend Favorites Slideshow"
+    trigger:
+      - platform: time
+        at: "08:00:00"
+    condition:
+      - condition: time
+        weekday:
+          - sat
+          - sun
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.slideshow_favorites
+```
+
+### Entity Resolution Behavior
+
+- **Real-time Updates**: Entity states resolved when card loads new media
+- **Fallback**: Missing/invalid entities return null (no filter applied)
+- **Type Safety**: Automatic type conversion based on filter context
+- **Debug Logging**: Enable `debug_mode: true` to see resolved values in console
+
 ## Requirements
 
-- **Media Card v5.3.0+** (with filter support)
+- **Media Card v5.3.0+** (with filter support and entity resolution)
 - **Media Index v1.4.0+** (with favorites_only parameter)
 - Photos marked as favorites (use `media_index.mark_favorite` service)
 - EXIF dates extracted (automatic during scan)
@@ -258,7 +382,8 @@ No other changes needed!
 ## Future Enhancements
 
 Planned for future releases:
-- Entity references (e.g., `favorites: input_boolean.show_favorites`)
+- Dynamic filter updates (reload when entity changes)
+- Queue statistics sensor
 - Rating filter (`min_rating: 3`)
 - Location filter (`location: "Paris, France"`)
 - Dynamic filter updates without reload
