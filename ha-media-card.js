@@ -982,14 +982,23 @@ class MediaIndexProvider extends MediaProvider {
     this._log('📊 Queue stats:', stats);
     
     // V5.3: Fire event through Home Assistant event bus (shows in Developer Tools)
-    if (this.hass && this.hass.connection) {
-      this.hass.connection.sendMessage({
-        type: 'fire_event',
-        event_type: 'media_card_queue_stats',
-        event_data: stats
-      }).catch(err => {
-        console.warn('[MediaIndexProvider] Failed to fire queue stats event:', err);
-      });
+    if (this.hass && this.hass.connection && this.hass.connection.sendMessage) {
+      try {
+        const promise = this.hass.connection.sendMessage({
+          type: 'fire_event',
+          event_type: 'media_card_queue_stats',
+          event_data: stats
+        });
+        
+        // Only add catch handler if sendMessage returned a promise
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch(err => {
+            console.warn('[MediaIndexProvider] Failed to fire queue stats event:', err);
+          });
+        }
+      } catch (err) {
+        console.warn('[MediaIndexProvider] Error firing queue stats event:', err);
+      }
     }
     
     // Also dispatch DOM event for backward compatibility
