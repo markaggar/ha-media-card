@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [5.3.0]
 
 ### Added
+- **Dynamic Filter System**: Real-time media filtering with entity-based controls
+  - Filter by favorites (`filters.favorites: true` or entity reference like `input_boolean.slideshow_favorites`)
+  - Filter by date range (`filters.date_range.start` and `filters.date_range.end` with static dates or `input_datetime` entities)
+  - Entity resolution supports: `input_boolean`, `input_datetime`, `input_number`, `input_text`, `input_select`, `sensor`
+  - Real-time updates: Card responds immediately when filter entities change (no page reload needed)
+  - Subscribes to `state_changed` events for filter entities only (efficient callback-level filtering)
+  - Date filtering uses EXIF `date_taken` with fallback to file modification time via `COALESCE` in backend queries
+  - Visual config editor with dedicated Filters section
+  - Queue statistics events (`media_card_queue_stats`) for template sensor integration
+  - Clear error messages when no items match filter criteria (no silent fallback)
+  - Compatible with Media Index v1.4.0+ backend integration
 - **Navigation Queue Architecture**: Complete rewrite of navigation system for better reliability and wraparound support
   - Three-layer architecture: Provider Queue → Navigation Queue → History
   - Navigation Queue is what users navigate through (populated on-demand from provider)
