@@ -20,7 +20,8 @@ filters:
 - Detects entity state changes automatically
 - Compares new vs old filter values
 - Only reloads if filter values actually changed
-- Clears queue and fetches new items from Media Index
+- **Clears queue AND history** to show fresh filtered results
+- Fetches new items from Media Index
 - Shows error if new filters exclude all results
 
 **Console Output:**
@@ -28,11 +29,14 @@ filters:
 [MediaIndexProvider] 📡 Subscribing to filter entities: ["input_boolean.slideshow_favorites"]
 [MediaIndexProvider] 🔄 Filter entity changed: input_boolean.slideshow_favorites → on
 [MediaIndexProvider] ✨ Filter values changed, reloading queue: {favorites: true, date_from: null, date_to: null}
+[MediaIndexProvider] 🗑️ Clearing card history due to filter change
 [MediaIndexProvider] ✅ Queue reloaded with 45 items
 ```
 
 ### Queue Statistics Events (For Template Sensors)
-The card dispatches `media-card-queue-stats` events whenever the queue state changes.
+The card fires `media_card_queue_stats` events through Home Assistant's event bus whenever the queue state changes.
+
+**Event Type:** `media_card_queue_stats` (visible in Developer Tools → Events)
 
 **Event Structure:**
 ```javascript
@@ -62,7 +66,7 @@ Create a sensor that tracks the current queue size:
 template:
   - trigger:
       - platform: event
-        event_type: media-card-queue-stats
+        event_type: media_card_queue_stats
         id: media_card_1  # Match your card ID if multiple cards
     sensor:
       - name: "Media Card Queue Size"
@@ -82,7 +86,7 @@ Track which filters are currently active:
 template:
   - trigger:
       - platform: event
-        event_type: media-card-queue-stats
+        event_type: media_card_queue_stats
     sensor:
       - name: "Media Card Filter Status"
         unique_id: media_card_filter_status
@@ -110,7 +114,7 @@ Monitor if queue is running low (useful for alerts):
 template:
   - trigger:
       - platform: event
-        event_type: media-card-queue-stats
+        event_type: media_card_queue_stats
     binary_sensor:
       - name: "Media Card Queue Healthy"
         unique_id: media_card_queue_healthy
@@ -261,10 +265,10 @@ Watch browser console (F12) for queue statistics:
 
 ### Monitor Events
 
-Use Developer Tools → Events to watch for `media-card-queue-stats` events:
+Use Developer Tools → Events to watch for `media_card_queue_stats` events:
 
 1. Go to Developer Tools → Events
-2. Listen for event type: `media-card-queue-stats`
+2. Listen for event type: `media_card_queue_stats`
 3. Toggle a filter entity to trigger event
 4. View event data structure
 

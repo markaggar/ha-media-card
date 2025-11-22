@@ -981,14 +981,26 @@ class MediaIndexProvider extends MediaProvider {
     
     this._log('📊 Queue stats:', stats);
     
-    // Dispatch custom event that can be captured by template sensors
-    const event = new CustomEvent('media-card-queue-stats', {
-      detail: stats,
-      bubbles: true,
-      composed: true
-    });
+    // V5.3: Fire event through Home Assistant event bus (shows in Developer Tools)
+    if (this.hass && this.hass.connection) {
+      this.hass.connection.sendMessage({
+        type: 'fire_event',
+        event_type: 'media_card_queue_stats',
+        event_data: stats
+      }).catch(err => {
+        console.warn('[MediaIndexProvider] Failed to fire queue stats event:', err);
+      });
+    }
     
-    this.card.dispatchEvent(event);
+    // Also dispatch DOM event for backward compatibility
+    if (this.card) {
+      const event = new CustomEvent('media-card-queue-stats', {
+        detail: stats,
+        bubbles: true,
+        composed: true
+      });
+      this.card.dispatchEvent(event);
+    }
   }
 
   _log(...args) {
@@ -1179,8 +1191,17 @@ class MediaIndexProvider extends MediaProvider {
             this._log('✨ Filter values changed, reloading queue:', currentFilters);
             this._lastFilterValues = currentFilters;
             
-            // Clear queue and reload with new filter values
+            // V5.3: Clear EVERYTHING - queue, history, current media
             this.queue = [];
+            
+            // Clear card history so we don't show old filtered items
+            if (this.card) {
+              this._log('🗑️ Clearing card history due to filter change');
+              this.card.history = [];
+              this.card.historyPosition = -1;
+              this.card.currentMedia = null;
+            }
+            
             const newItems = await this._queryMediaIndex(this.queueSize);
             
             if (newItems && newItems.length > 0) {
@@ -1190,9 +1211,9 @@ class MediaIndexProvider extends MediaProvider {
               // V5.3: Dispatch updated queue statistics
               this._dispatchQueueStats();
               
-              // Notify card to load new media
+              // Load first item from new queue
               if (this.card && this.card._loadNext) {
-                this._log('🔄 Triggering card reload with new filters');
+                this._log('🔄 Loading first item with new filters');
                 await this.card._loadNext();
               }
             } else {
@@ -1200,6 +1221,7 @@ class MediaIndexProvider extends MediaProvider {
               // Card will show error message via existing error handling
               if (this.card) {
                 this.card._errorState = 'No items match filter criteria. Try adjusting your filters.';
+                this.card.currentMedia = null;
                 this.card.requestUpdate();
               }
             }
