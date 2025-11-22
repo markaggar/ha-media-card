@@ -7846,6 +7846,120 @@ class MediaCardV5aEditor extends LitElement {
     return folders.map(p => p.path).join('\n');
   }
 
+  // Filter event handlers
+  _handleFavoritesFilterChanged(ev) {
+    const favoritesEnabled = ev.target.checked;
+    
+    // Ensure filters object exists
+    const filters = { ...this._config.filters };
+    
+    if (favoritesEnabled) {
+      filters.favorites = true;
+    } else {
+      delete filters.favorites;
+    }
+    
+    // Remove filters object if empty
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _handleDateRangeStartChanged(ev) {
+    const startDate = ev.target.value || null;
+    
+    // Ensure filters and date_range objects exist
+    const filters = { ...this._config.filters };
+    const dateRange = { ...filters.date_range };
+    
+    if (startDate) {
+      dateRange.start = startDate;
+    } else {
+      delete dateRange.start;
+    }
+    
+    // Update or remove date_range
+    if (dateRange.start || dateRange.end) {
+      filters.date_range = dateRange;
+    } else {
+      delete filters.date_range;
+    }
+    
+    // Update or remove filters
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _handleDateRangeEndChanged(ev) {
+    const endDate = ev.target.value || null;
+    
+    // Ensure filters and date_range objects exist
+    const filters = { ...this._config.filters };
+    const dateRange = { ...filters.date_range };
+    
+    if (endDate) {
+      dateRange.end = endDate;
+    } else {
+      delete dateRange.end;
+    }
+    
+    // Update or remove date_range
+    if (dateRange.start || dateRange.end) {
+      filters.date_range = dateRange;
+    } else {
+      delete filters.date_range;
+    }
+    
+    // Update or remove filters
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _getDateRangeDescription() {
+    const filters = this._config.filters || {};
+    const dateRange = filters.date_range || {};
+    const start = dateRange.start;
+    const end = dateRange.end;
+    
+    if (start && end) {
+      return `📅 Showing media from ${start} to ${end}`;
+    } else if (start) {
+      return `📅 Showing media from ${start} onwards`;
+    } else if (end) {
+      return `📅 Showing media up to ${end}`;
+    }
+    return '';
+  }
+
   _parsePriorityFolders(text) {
     // NOT USED - keeping for backward compatibility
     if (!text || text.trim() === '') return [];
@@ -9813,6 +9927,77 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           ` : ''}
         </div>
+
+        <!-- Filters Section (available when Media Index is enabled) -->
+        ${hasMediaIndex && isFolderMode && folderConfig.use_media_index_for_discovery !== false ? html`
+          <div style="background: var(--primary-background-color, #fafafa); padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--divider-color, #e0e0e0);">
+            <div style="margin-bottom: 12px;">
+              <strong>🔍 Filters (Media Index Required)</strong>
+            </div>
+            <p style="margin: 4px 0 16px 0; font-size: 13px; color: var(--secondary-text-color, #666);">
+              Filter media items by favorites, date ranges, or other criteria. Uses Media Index database for fast queries.
+            </p>
+            
+            <!-- Favorites Filter -->
+            <div class="config-row">
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: 500;">
+                <input
+                  type="checkbox"
+                  .checked=${this._config.filters?.favorites === true}
+                  @change=${this._handleFavoritesFilterChanged}
+                />
+                <span>Show favorites only</span>
+              </label>
+              <div style="font-size: 12px; color: var(--secondary-text-color, #666); margin-top: 4px; margin-left: 24px;">
+                ${this._config.filters?.favorites === true
+                  ? '⭐ Only showing favorited media'
+                  : 'Showing all media (favorites and non-favorites)'}
+              </div>
+            </div>
+
+            <!-- Date Range Filter -->
+            <div style="margin-top: 16px;">
+              <div style="font-weight: 500; margin-bottom: 8px;">📅 Date Range Filter</div>
+              <p style="margin: 4px 0 12px 0; font-size: 12px; color: var(--secondary-text-color, #666);">
+                Filter by EXIF date_taken (falls back to created_time). Leave empty for no limit.
+              </p>
+              
+              <div class="config-row">
+                <label>Start Date</label>
+                <div>
+                  <input
+                    type="date"
+                    .value=${this._config.filters?.date_range?.start || ''}
+                    @input=${this._handleDateRangeStartChanged}
+                    placeholder="YYYY-MM-DD"
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media from this date onwards (leave empty for no lower limit)</div>
+                </div>
+              </div>
+
+              <div class="config-row">
+                <label>End Date</label>
+                <div>
+                  <input
+                    type="date"
+                    .value=${this._config.filters?.date_range?.end || ''}
+                    @input=${this._handleDateRangeEndChanged}
+                    placeholder="YYYY-MM-DD"
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media up to this date (leave empty for no upper limit)</div>
+                </div>
+              </div>
+
+              ${this._config.filters?.date_range?.start || this._config.filters?.date_range?.end ? html`
+                <div style="margin-top: 8px; padding: 8px; background: var(--info-color, #e3f2fd); border-radius: 4px; font-size: 12px;">
+                  ${this._getDateRangeDescription()}
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        ` : ''}
 
         <!-- Folder Configuration (when media_source_type = "folder") -->
         ${isFolderMode ? html`
