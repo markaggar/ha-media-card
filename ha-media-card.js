@@ -688,6 +688,17 @@ class FolderProvider extends MediaProvider {
         const success = await this.mediaIndexProvider.initialize();
         
         if (!success) {
+          // V5.3: Check if filters are active - don't fallback if filters caused empty result
+          const filters = this.config.filters || {};
+          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
+          
+          if (hasFilters) {
+            // Filters are active - don't fallback, show error instead
+            console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
+            console.error('[FolderProvider] 💡 Adjust your filters or disable Media Index to use filesystem scanning');
+            throw new Error('No items match filter criteria. Try adjusting your filters.');
+          }
+          
           console.warn('[FolderProvider] MediaIndexProvider initialization failed, falling back to SubfolderQueue');
           // Fallback to filesystem scanning
           this.mediaIndexProvider = null;
@@ -1012,9 +1023,33 @@ class MediaIndexProvider extends MediaProvider {
     // Initial query to fill queue
     const items = await this._queryMediaIndex(this.queueSize);
     
-    if (!items || items.length === 0) {
-      console.warn('[MediaIndexProvider] No items returned from media_index');
+    // V5.3: Distinguish between service failure (null) vs no results (empty array)
+    if (items === null) {
+      // Service call failed - this is a real error
+      console.error('[MediaIndexProvider] ❌ Media Index service call failed');
       return false;
+    }
+    
+    if (items.length === 0) {
+      // Service succeeded but returned no items
+      // V5.3: Check if filters are active - if so, this is likely filter exclusion
+      const filters = this.config.filters || {};
+      const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
+      
+      if (hasFilters) {
+        // Filters are active - this is expected behavior, not an error
+        console.warn('[MediaIndexProvider] ⚠️ No items match filter criteria:', {
+          favorites: filters.favorites || false,
+          date_range: filters.date_range || 'none'
+        });
+        console.warn('[MediaIndexProvider] 💡 Try adjusting your filters or verify files match criteria');
+        // Still return false to prevent display, but with clear user feedback
+        return false;
+      } else {
+        // No filters but still no items - collection might be empty
+        console.warn('[MediaIndexProvider] ⚠️ No items in collection (no filters active)');
+        return false;
+      }
     }
     
     this.queue = items;
