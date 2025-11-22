@@ -1285,6 +1285,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this.lastSeenValue = null; // Cursor for pagination
     this.hasMore = true; // Flag to track if more items available
     this.reachedEnd = false; // Flag to track if we've hit the end
+    this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
   }
 
   _log(...args) {
@@ -1336,6 +1337,12 @@ class SequentialMediaIndexProvider extends MediaProvider {
     // If queue is empty and hasMore is false, we've reached the end
     // (hasMore=false means last query returned fewer items than requested)
     if (this.queue.length === 0 && !this.hasMore) {
+      // V5.3: Don't auto-loop if disabled (during pre-load)
+      if (this.disableAutoLoop) {
+        this._log('🛑 Reached end of sequence, auto-loop disabled, returning null');
+        return null;
+      }
+      
       this._log('🔄 Reached end of sequence (queue empty, hasMore=false), looping back to start...');
       this.lastSeenValue = null;
       this.reachedEnd = false;
@@ -2735,6 +2742,13 @@ class MediaCardV5a extends LitElement {
     this.shownItems = new Set();  // Prevent duplicate display until aged out
     this._maxQueueSize = 0;       // Track highest queue size seen (for position indicator)
     
+    // V5.3: Navigation Queue - Separate from provider queue
+    // This is what the user navigates through (populated on-demand via getNext())
+    this.navigationQueue = [];    // Array of items user can navigate
+    this.navigationIndex = -1;    // Current position (-1 = uninitialized, first increment → 0)
+    this.maxNavQueueSize = 200;   // Will be updated in setConfig based on slideshow_window * 2
+    this.isNavigationQueuePreloaded = false; // V5.3: Track if small collection was pre-loaded
+    
     this.currentMedia = null;
     this.mediaUrl = '';
     this.isLoading = false;
@@ -3154,6 +3168,11 @@ class MediaCardV5a extends LitElement {
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
     this.setAttribute('data-position-indicator-position', positionIndicatorPosition);
     
+    // V5.3: Set max navigation queue size based on slideshow_window
+    const slideshowWindow = this.config.slideshow_window || 100;
+    this.maxNavQueueSize = slideshowWindow * 2;
+    this._log('Set maxNavQueueSize to', this.maxNavQueueSize, '(slideshow_window * 2)');
+    
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
@@ -3290,6 +3309,10 @@ class MediaCardV5a extends LitElement {
           }
         } else {
           this._log('Loading first media');
+          
+          // V5.3: Smart pre-load - only for small collections
+          await this._smartPreloadNavigationQueue();
+          
           await this._loadNext();
         }
       } else {
@@ -3300,6 +3323,108 @@ class MediaCardV5a extends LitElement {
     } finally {
       this.isLoading = false;
     }
+  }
+
+  // V5.3: Pre-load all available items into navigation queue
+  // V5.3: Smart pre-load - only for small collections that fit in window
+  async _smartPreloadNavigationQueue() {
+    // Check if this is a small collection that we should pre-load
+    // Need to access the actual provider (might be wrapped by FolderProvider)
+    let actualProvider = this.provider;
+    
+    // Unwrap FolderProvider to get actual provider
+    if (actualProvider.sequentialProvider) {
+      actualProvider = actualProvider.sequentialProvider;
+    } else if (actualProvider.mediaIndexProvider) {
+      actualProvider = actualProvider.mediaIndexProvider;
+    }
+    
+    // Determine if small collection based on provider type
+    let isSmallCollection = false;
+    let estimatedSize = 0;
+    
+    if (actualProvider.hasMore !== undefined) {
+      // SequentialMediaIndexProvider: Use hasMore flag
+      isSmallCollection = actualProvider.hasMore === false;
+      estimatedSize = actualProvider.queue?.length || 0;
+      this._log(`Checking sequential provider: hasMore=${actualProvider.hasMore}, queue=${estimatedSize}`);
+    } else if (actualProvider.queue) {
+      // MediaIndexProvider (random mode): Small if initial query returned less than requested
+      estimatedSize = actualProvider.queue.length;
+      const requestedSize = actualProvider.queueSize || 100;
+      isSmallCollection = estimatedSize < requestedSize;
+      this._log(`Checking random provider: queue=${estimatedSize}, requested=${requestedSize}, isSmall=${isSmallCollection}`);
+    }
+    
+    if (!isSmallCollection) {
+      this._log(`Large collection detected, skipping pre-load (estimated: ${estimatedSize})`);
+      return;
+    }
+    
+    if (estimatedSize > this.maxNavQueueSize) {
+      this._log(`Collection too large (${estimatedSize} items), skipping pre-load`);
+      return;
+    }
+    
+    this._log(`Small collection detected (${estimatedSize} items), pre-loading all items...`);
+    
+    // Different pre-load strategy based on provider type
+    if (actualProvider.hasMore !== undefined) {
+      // SequentialMediaIndexProvider: Disable auto-loop and call getNext()
+      actualProvider.disableAutoLoop = true;
+      
+      let loadedCount = 0;
+      while (loadedCount < this.maxNavQueueSize) {
+        const item = await this.provider.getNext();
+        if (!item) {
+          this._log(`Pre-load complete: loaded ${loadedCount} items (provider exhausted)`);
+          break;
+        }
+        this.navigationQueue.push(item);
+        loadedCount++;
+      }
+      
+      actualProvider.disableAutoLoop = false;
+    } else if (actualProvider.queue) {
+      // MediaIndexProvider (random): Manually transform queue items (can't disable auto-refill)
+      this._log('Random provider: manually transforming queue items...');
+      
+      for (const rawItem of actualProvider.queue) {
+        // Transform using same logic as getNext() (but don't shift from queue)
+        const pathMetadata = MediaProvider.extractMetadataFromPath(rawItem.path);
+        const mediaId = rawItem.media_source_uri || rawItem.path;
+        
+        const transformedItem = {
+          media_content_id: mediaId,
+          media_content_type: MediaUtils.detectFileType(rawItem.path) || 'image',
+          metadata: {
+            ...pathMetadata,
+            path: rawItem.path,
+            media_source_uri: rawItem.media_source_uri,
+            date_taken: rawItem.date_taken,
+            created_time: rawItem.created_time,
+            location_city: rawItem.location_city,
+            location_state: rawItem.location_state,
+            location_country: rawItem.location_country,
+            location_name: rawItem.location_name,
+            has_coordinates: rawItem.has_coordinates || false,
+            is_geocoded: rawItem.is_geocoded || false,
+            latitude: rawItem.latitude,
+            longitude: rawItem.longitude,
+            is_favorited: rawItem.is_favorited || false
+          }
+        };
+        
+        this.navigationQueue.push(transformedItem);
+        
+        if (this.navigationQueue.length >= this.maxNavQueueSize) break;
+      }
+      
+      this._log(`Transformed ${this.navigationQueue.length} items from provider queue`);
+    }
+    
+    this._log(`✅ Pre-loaded ${this.navigationQueue.length} items into navigation queue`);
+    this.isNavigationQueuePreloaded = true; // Mark as pre-loaded
   }
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
@@ -3313,90 +3438,98 @@ class MediaCardV5a extends LitElement {
     this._handleAutoAdvanceModeOnNavigate();
 
     try {
-      // Check if we're replaying history (went back, now going forward)
-      if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
-        this.historyIndex++;
-        const item = this.history[this.historyIndex];
-        this._log('📖 Replaying from history:', item.title);
-        this.currentMedia = item;
-        // V4: media_content_id should be the path for service calls
-        this._currentMediaPath = item.media_content_id;
-        this._currentMetadata = item.metadata || null;
+      // V5.3: Navigation Queue Architecture
+      // Always increment (starts at -1, first increment → 0)
+      this.navigationIndex++;
+      
+      // Need to load more items?
+      if (this.navigationIndex >= this.navigationQueue.length) {
+        // V5.3: If this was a pre-loaded small collection, don't load more - just wrap
+        if (this.isNavigationQueuePreloaded) {
+          this._log('Pre-loaded collection exhausted, wrapping to beginning');
+          this.navigationIndex = 0;
+        } else {
+          this._log('Navigation queue exhausted, loading from provider');
+          const item = await this.provider.getNext();
         
-        // V5: Clear cached full metadata when media changes
-        this._fullMetadata = null;
-        
-        await this._resolveMediaUrl();
-        this.requestUpdate();
+          if (item) {
+            this._log('Got item from provider:', item.title);
+          
+            // V5: Extract metadata if not provided
+            if (!item.metadata) {
+              this._log('Extracting metadata for:', item.media_content_id);
+              item.metadata = await this._extractMetadataFromItem(item);
+            }
+          
+            // Add to navigation queue
+            this.navigationQueue.push(item);
+          
+            // Implement sliding window: remove oldest if exceeding max size
+            if (this.navigationQueue.length > this.maxNavQueueSize) {
+              this._log('Navigation queue exceeds max size, removing oldest item');
+              this.navigationQueue.shift();
+              this.navigationIndex--; // Adjust index for removed item
+            }
+          } else {
+            // No more items available from provider, wrap to beginning
+            this._log('Provider exhausted, wrapping to beginning');
+            this.navigationIndex = 0;
+          }
+        }
+      }
+      
+      // Get item at current navigation index
+      const item = this.navigationQueue[this.navigationIndex];
+      if (!item) {
+        this._log('ERROR: No item at navigationIndex', this.navigationIndex);
         return;
       }
-
-      // Get fresh item from provider
-      this._log('Getting next item from provider');
-      const item = await this.provider.getNext();
-      this._log('Got item:', item);
       
-      if (item) {
-        // V5: Extract metadata from path if not provided by backend (now async with media_index support)
-        this._log('Item metadata check - has metadata:', !!item.metadata, 'item:', item);
-        if (!item.metadata) {
-          this._log('Calling _extractMetadataFromItem for:', item.media_content_id);
-          item.metadata = await this._extractMetadataFromItem(item);
-          this._log('Extracted metadata:', item.metadata);
-        } else {
-          this._log('Item already has metadata from queue enrichment');
-          this._log('Metadata content:', item.metadata);
-        }
-        
-        // Add to history
+      this._log('Displaying navigation queue item:', item.title, 'at index', this.navigationIndex);
+      
+      // Add to history for tracking (providers use this for exclusion)
+      if (!this.history.includes(item)) {
         this.history.push(item);
-        this.historyIndex = this.history.length - 1;
         
-        // V5: Dynamic history size formula to prevent duplicates with priority_new_files
-        // Formula considers:
-        // - Multiple queue refills (5x multiplier ensures variety)
-        // - Discovery window duration (prevent re-showing files within window)
-        // Memory: ~600-800 bytes per item = 80KB @ 100, 800KB @ 1000, 4MB @ 5000 (negligible)
+        // V5: Dynamic history size formula
         const queueSize = this.config.slideshow_window || 100;
         const autoAdvanceInterval = this.config.auto_advance_interval || 5;
         const discoveryWindow = this.config.folder?.new_files_threshold_seconds || 3600;
         
-        const minQueueMultiplier = 5; // See at least 5 queue refills before repeating
+        const minQueueMultiplier = 5;
         const discoveryWindowItems = Math.floor(discoveryWindow / autoAdvanceInterval);
         const maxHistory = Math.min(
           Math.max(
-            queueSize * minQueueMultiplier,  // e.g., 20 × 5 = 100
-            discoveryWindowItems,             // e.g., 3600/5 = 720
-            100                               // Absolute minimum
+            queueSize * minQueueMultiplier,
+            discoveryWindowItems,
+            100
           ),
-          5000 // Cap for memory sanity
+          5000
         );
         
         if (this.history.length > maxHistory) {
           this.history.shift();
-          this.historyIndex = this.history.length - 1;
         }
-        
-        this.currentMedia = item;
-        this._log('Set currentMedia:', this.currentMedia);
-        
-        // V5: Store metadata in pending state until image loads
-        // This prevents metadata/counters from flashing before the new image appears
-        this._pendingMediaPath = item.media_content_id;
-        this._pendingMetadata = item.metadata;
-        
-        // V5: Clear caches when media changes
-        this._fullMetadata = null;
-        this._folderDisplayCache = null;
-        
-        await this._resolveMediaUrl();
-        this.requestUpdate(); // Force re-render
-        
-        // V5: Setup auto-advance after successfully loading media
-        this._setupAutoRefresh();
-      } else {
-        this._log('Provider returned null item');
       }
+      
+      // Display the item
+      this.currentMedia = item;
+      this._currentMediaPath = item.media_content_id;
+      this._currentMetadata = item.metadata || null;
+      
+      // V5: Store metadata in pending state until image loads
+      this._pendingMediaPath = item.media_content_id;
+      this._pendingMetadata = item.metadata;
+      
+      // V5: Clear caches when media changes
+      this._fullMetadata = null;
+      this._folderDisplayCache = null;
+      
+      await this._resolveMediaUrl();
+      this.requestUpdate();
+      
+      // V5: Setup auto-advance after successfully loading media
+      this._setupAutoRefresh();
     } catch (error) {
       console.error('[MediaCardV5a] Error loading next media:', error);
     }
@@ -3411,39 +3544,41 @@ class MediaCardV5a extends LitElement {
     // V4: Handle auto_advance_mode when manually navigating
     this._handleAutoAdvanceModeOnNavigate();
 
-    // V5: Simple history navigation - just move index back
-    if (this.history.length === 0) {
-      this._log('📖 No history available');
+    // V5.3: Navigation Queue Architecture
+    if (this.navigationQueue.length === 0) {
+      this._log('No items in navigation queue');
       return;
     }
 
-    // If at end (-1), go to second-to-last item
-    if (this.historyIndex === -1) {
-      this.historyIndex = this.history.length - 2;
-    } else if (this.historyIndex > 0) {
-      this.historyIndex--;
-    } else {
-      this._log('📖 Already at oldest item in history');
+    // Move backward in navigation queue
+    this.navigationIndex--;
+    
+    // Wrap to last item if going before beginning
+    if (this.navigationIndex < 0) {
+      this._log('Wrapping to last item in navigation queue');
+      this.navigationIndex = this.navigationQueue.length - 1;
+    }
+    
+    // Get item at current navigation index
+    const item = this.navigationQueue[this.navigationIndex];
+    if (!item) {
+      this._log('ERROR: No item at navigationIndex', this.navigationIndex);
       return;
     }
-
-    if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
-      const item = this.history[this.historyIndex];
-      this._log('📖 Going back to history item:', item.title);
-      
-      this.currentMedia = item;
-      // V4: media_content_id should be the path for service calls
-      this._currentMediaPath = item.media_content_id;
-      this._currentMetadata = item.metadata || null;
-      
-      // V5: Clear cached full metadata when media changes
-      this._fullMetadata = null;
-      
-      await this._resolveMediaUrl();
-      this.requestUpdate();
-    } else {
-      console.warn('[MediaCardV5a] Invalid history index:', this.historyIndex);
-    }
+    
+    this._log('Going back to navigation queue item:', item.title, 'at index', this.navigationIndex);
+    
+    // Display the item
+    this.currentMedia = item;
+    this._currentMediaPath = item.media_content_id;
+    this._currentMetadata = item.metadata || null;
+    
+    // V5: Clear cached full metadata when media changes
+    this._fullMetadata = null;
+    this._folderDisplayCache = null;
+    
+    await this._resolveMediaUrl();
+    this.requestUpdate();
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -4749,26 +4884,28 @@ class MediaCardV5a extends LitElement {
       this._log('Reset _maxQueueSize to', currentQueueSize, '(queue shrunk significantly)');
     }
     
-    // Use max queue size for stable "Y" display (prevents confusing fluctuations)
-    const totalCount = this._maxQueueSize;
-    if (totalCount <= 1) {
-      return html``;
+    // V5.3: Use navigation queue for position indicator
+    const totalCount = this.navigationQueue.length;
+    if (totalCount === 0 || this.navigationIndex < 0) {
+      return html``; // Don't show until initialized (navigationIndex starts at -1)
     }
 
-    // Current position in history (historyIndex === -1 means at end/latest)
-    let rawPosition = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+    // Current position is navigationIndex (starts at 0 after first increment from -1)
+    const currentIndex = this.navigationIndex;
+    const currentPosition = currentIndex + 1;
     
-    // When cycling through queue, wrap position back to 1 instead of exceeding totalCount
-    // Ensure currentIndex stays within bounds [0, totalCount-1]
-    // Note: totalCount is always > 1 here due to early return on line 4508
-    const currentIndex = rawPosition % totalCount;
+    // Total is the max of queue length and history length
+    const totalSeen = Math.max(totalCount, this.history.length);
 
     // Show position indicator if enabled
     let positionIndicator = html``;
     if (this.config.show_position_indicator !== false) {
+      // Only show "X of Y" if X != Y (hide when they're equal to avoid "20 of 20")
+      const showTotal = currentPosition !== totalSeen;
+      
       positionIndicator = html`
         <div class="position-indicator">
-          ${currentIndex + 1} of ${totalCount}
+          ${currentPosition}${showTotal ? ` of ${totalSeen}` : ''}
         </div>
       `;
     }
@@ -5085,20 +5222,13 @@ class MediaCardV5a extends LitElement {
   _handleDebugButtonClick(e) {
     e.stopPropagation();
     
-    // Toggle debug mode and persist to config
-    const newDebugMode = !this._debugMode;
+    // Toggle debug mode
+    this._debugMode = !this._debugMode;
     
-    // Update config with new debug_mode value
-    const updatedConfig = {
-      ...this.config,
-      debug_mode: newDebugMode
-    };
+    // Update config.debug_mode directly (bypass setConfig to avoid defaults)
+    this.config.debug_mode = this._debugMode;
     
-    // Call setConfig to update internal state
-    this.setConfig(updatedConfig);
-    
-    // Fire config-changed event with this.config (the merged/processed config)
-    // This ensures debug_mode persists correctly when Lovelace reloads the card
+    // Fire config-changed event to persist
     const event = new CustomEvent('config-changed', {
       detail: { config: this.config },
       bubbles: true,
@@ -5106,9 +5236,12 @@ class MediaCardV5a extends LitElement {
     });
     this.dispatchEvent(event);
     
-    const status = newDebugMode ? 'ENABLED' : 'DISABLED';
+    const status = this._debugMode ? 'ENABLED' : 'DISABLED';
     console.log(`🐛 [MediaCard] Debug mode ${status} - will persist across reloads`);
     console.log(`🐛 [MediaCard] Persisted config.debug_mode:`, this.config.debug_mode);
+    
+    // Force re-render to update button visual state
+    this.requestUpdate();
   }
   
   // Handle refresh button click - reload current media
@@ -6161,7 +6294,6 @@ class MediaCardV5a extends LitElement {
   static styles = css`
     :host {
       display: block;
-      isolation: isolate; /* V5.3: Contain z-index stacking within the card (PR #37) */
     }
     .card {
       position: relative;
@@ -7001,7 +7133,7 @@ class MediaCardV5a extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10000;
+      z-index: 999999;
     }
     
     .confirmation-dialog {

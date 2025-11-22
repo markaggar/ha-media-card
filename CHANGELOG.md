@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [5.3.0]
 
 ### Added
+- **Navigation Queue Architecture**: Complete rewrite of navigation system for better reliability and wraparound support
+  - Three-layer architecture: Provider Queue → Navigation Queue → History
+  - Navigation Queue is what users navigate through (populated on-demand from provider)
+  - Dynamic sliding window (default 200 items based on `slideshow_window * 2`)
+  - Perfect wraparound for small collections (≤200 items) - pre-loads all items at startup
+  - Efficient on-demand loading for large collections with sliding window behavior
+  - Position indicator shows "X of Y" when exploring, "X" when caught up
+  - Backward navigation wraps to last loaded item (always works within window)
+  - Forward navigation always tries provider before wrapping (discovers new items)
+  - Fixes "can't go back from first image" bug in small collections
+  - Provider-specific pre-load strategies:
+    - Sequential mode: Calls `getNext()` with `disableAutoLoop` flag
+    - Random mode: Manually transforms queue items (can't disable auto-refill)
 - **Fixed Card Height**: New `card_height` configuration option (100-5000 pixels) - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev) in [PR #37](https://github.com/markaggar/ha-media-card/pull/37)*
   - Sets exact card height instead of letting content determine size
   - Applies only in default mode (not when aspect ratio is set)
@@ -52,6 +65,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Configurable Position Indicator Corner**: Position indicator ("X of Y" counter) can now be placed in any corner via `position_indicator.position` config
 
 ### Fixed
+
+- **Debug Button Persistence**: Fixed debug button to properly update and persist `debug_mode` config
+  - Direct config update bypasses `setConfig()` defaults that were resetting the value
+  - Forces re-render to update button visual state immediately
+  - Debug mode now correctly persists across page reloads
+- **Confirmation Dialog Layering**: Fixed delete/edit confirmation dialogs appearing behind other cards
+  - Removed `isolation: isolate` CSS rule that was trapping z-index within card's stacking context
+  - Increased dialog backdrop z-index to 999999 (from 10000)
+  - Dialogs now properly appear above all other dashboard cards
 - **Media Index Actions**: Fixed `targetPath` undefined variable bugs in delete, edit, and favorite handlers
   - All three functions now correctly use `targetUri` parameter
   - Fixes "Failed to delete/edit/favorite media" errors
