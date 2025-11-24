@@ -1106,7 +1106,12 @@ class MediaIndexProvider extends MediaProvider {
       // Service succeeded but returned no items
       // V5.3: Check if filters are active - if so, this is likely filter exclusion
       const filters = this.config.filters || {};
-      const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
+      
+      // Check if any filter has an actual value (not just undefined/null/false/empty string)
+      const hasFavoritesFilter = filters.favorites === true || (typeof filters.favorites === 'string' && filters.favorites.trim().length > 0);
+      const hasDateFromFilter = filters.date_range?.start && filters.date_range.start.trim().length > 0;
+      const hasDateToFilter = filters.date_range?.end && filters.date_range.end.trim().length > 0;
+      const hasFilters = hasFavoritesFilter || hasDateFromFilter || hasDateToFilter;
       
       if (hasFilters) {
         // Filters are active - this is expected behavior, not an error
@@ -3667,18 +3672,73 @@ class MediaCardV5a extends LitElement {
     }
   }
 
-  // V5.3: Pre-load all available items into navigation queue
   // V5.3: Smart pre-load - only for small collections that fit in window
   async _smartPreloadNavigationQueue() {
+    this._log('🔍 _smartPreloadNavigationQueue CALLED');
+    
     // Check if this is a small collection that we should pre-load
     // Need to access the actual provider (might be wrapped by FolderProvider)
     let actualProvider = this.provider;
     
+    this._log('_smartPreloadNavigationQueue - checking provider type:', actualProvider.constructor.name);
+    this._log('actualProvider properties:', Object.keys(actualProvider));
+    
     // Unwrap FolderProvider to get actual provider
     if (actualProvider.sequentialProvider) {
+      this._log('Found sequentialProvider');
       actualProvider = actualProvider.sequentialProvider;
     } else if (actualProvider.mediaIndexProvider) {
+      this._log('Found mediaIndexProvider');
       actualProvider = actualProvider.mediaIndexProvider;
+    } else if (actualProvider.subfolderQueue) {
+      this._log('Found subfolderQueue');
+      // File system scanning via SubfolderQueue
+      const queue = actualProvider.subfolderQueue;
+      const queueSize = queue.queue?.length || 0;
+      const isScanComplete = !queue.isScanning && !queue.discoveryInProgress;
+      
+      // Check mode - pre-loading only makes sense for sequential mode
+      // Random mode manages its own queue dynamically with refills
+      const mode = this.config.folder?.mode || 'random';
+      this._log(`Checking SubfolderQueue: mode=${mode}, queue=${queueSize}, isScanning=${queue.isScanning}, discoveryInProgress=${queue.discoveryInProgress}, isScanComplete=${isScanComplete}`);
+      
+      // Pre-load ONLY for sequential mode if scan is complete and collection is small
+      if (mode === 'sequential' && isScanComplete && queueSize > 0 && queueSize <= this.maxNavQueueSize) {
+        this._log(`Small sequential collection (${queueSize} items), pre-loading...`);
+        
+        // Transform queue items directly
+        for (const rawItem of queue.queue) {
+          // SubfolderQueue stores full media browser items - use media_content_id directly
+          const mediaId = rawItem.media_content_id;
+          const pathForMetadata = rawItem.title || rawItem.media_content_id;
+          const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata);
+          
+          const transformedItem = {
+            media_content_id: mediaId,
+            media_content_type: rawItem.media_class || MediaUtils.detectFileType(pathForMetadata) || 'image',
+            metadata: {
+              ...pathMetadata,
+              title: rawItem.title,
+              path: pathForMetadata
+            }
+          };
+          
+          this.navigationQueue.push(transformedItem);
+          
+          if (this.navigationQueue.length >= this.maxNavQueueSize) break;
+        }
+        
+        this._log(`✅ Pre-loaded ${this.navigationQueue.length} items from SubfolderQueue`);
+        this.isNavigationQueuePreloaded = true;
+      } else {
+        if (mode === 'random') {
+          this._log(`Skipping pre-load: Random mode uses dynamic queue refills from ${queue.discoveredFolders?.length || 0} folders`);
+        } else {
+          this._log(`Skipping pre-load: mode=${mode}, isScanComplete=${isScanComplete}, queueSize=${queueSize}, maxNavQueueSize=${this.maxNavQueueSize}`);
+        }
+      }
+      
+      return; // Exit early, SubfolderQueue handled
     }
     
     // Determine if small collection based on provider type
