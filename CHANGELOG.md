@@ -87,16 +87,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Impact**: Date extraction now works correctly for Immich, local files, and all media sources
   - **Universal Sorting**: Works with any media source that provides filename in title property
 - **Sequential Mode Chronological Order**: Fixed automatic shuffle destroying sorted order in sequential mode
-  - SubfolderQueue was calling `shuffleQueue()` during file addition (batch shuffle every ~100 files)
-  - Mode detection used wrong config path (`this.config.mode` instead of `this.card.config.folder_mode`)
-  - Sequential mode now correctly skips all shuffle logic to preserve sorted order
-  - **Enhanced sorting for all media sources** (not just Reolink):
-    - Reolink: Extracts second timestamp from URI for accurate video start time
+  - **Root Issue**: SubfolderQueue was calling `shuffleQueue()` during file addition (batch shuffle every ~100 files)
+  - **Mode Detection Fix**: Mode detection used wrong config path (`this.config.mode` instead of `this.card.config.folder_mode`)
+  - **Solution**: Sequential mode now correctly skips all shuffle logic to preserve sorted order
+  - **Slideshow Window Compliance**: Fixed SubfolderQueue not respecting `slideshow_window` limit in sequential mode
+    - Queue now stops scanning when `slideshow_window` target reached
+    - Prevents unnecessary folder scanning for large collections
+    - Improves performance and startup time
+  - **Enhanced sorting for all media sources**:
+    - Reolink: Extracts second timestamp from pipe-delimited URI for accurate video start time
     - Date-based filenames: Uses `MediaProvider.extractDateFromFilename()` for standard patterns
-    - Supports: `YYYY-MM-DD`, `YYYYMMDD`, `MM-DD-YYYY`, and other date formats
+    - Supports: `YYYY-MM-DD`, `YYYYMMDD`, `YYYYMMDD_HHMMSS`, `MM-DD-YYYY`, and other formats
     - Alphabetical fallback: Files without dates sort by title/filename
-  - Newest videos/photos now display first in descending order as expected
-  - Works with any security camera, photo collection, or media source
+    - Timestamps always sorted before non-dated files (prevents mixing)
+  - **Recursive Folder Scanning**: Full support for deep folder hierarchies with proper sequential ordering
+  - **Media Browser Integration**: Files from browse_media API correctly recognized and sorted
+  - Works seamlessly with Reolink, Immich, Synology, local files, and any media source
 - **Debug Button Persistence**: Fixed debug button to properly update and persist `debug_mode` config
   - Direct config update bypasses `setConfig()` defaults that were resetting the value
   - Forces re-render to update button visual state immediately
