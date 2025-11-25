@@ -149,6 +149,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Class Naming**: Renamed internal classes from MediaCardV5a to MediaCard for consistency
   - All log messages now use [MediaCard] prefix
   - Cleaner codebase ready for v5.3.0 release
+- **Media Browser Navigation**: Fixed media browser to work with filesystem paths
+  - Converts filesystem paths to `media-source://` URIs for browse_media API compatibility
+  - Added "Up to Parent Folder" button for easier navigation when opening at non-root paths
+  - Improved placeholder styling with better contrast between placeholder and actual input text
+- **Reolink/Synology Integration**: Fixed SubfolderQueue scanning for media sources without `media_class` property
+  - Reolink and Synology DSM don't always set `media_class` in browse_media responses
+  - Added fallback to extension-based filtering (`.jpg`, `.mp4`, etc.) when `media_class` missing
+  - Resolves "0 files found" issue in Reolink and Synology folder scans
+  - Works seamlessly with any media source (Immich, Reolink, Synology, local files)
 
 ### Changed
 - **Cache-Busting Timestamp Logic**: Consolidated into `_addCacheBustingTimestamp()` helper method
