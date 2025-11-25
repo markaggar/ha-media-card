@@ -2513,23 +2513,37 @@ class SubfolderQueue {
       if (isSequentialMode) {
         const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
         
-        // Helper to extract timestamp from Reolink URI for accurate sorting
+        // Helper to extract sortable timestamp/date key from any media source
         const getTimestampForSort = (file) => {
           const mediaId = file.media_content_id;
           
-          // For Reolink URIs, extract the second timestamp (actual video start time)
+          // 1. Reolink: Extract the second timestamp (actual video start time)
           if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
             const parts = mediaId.split('|');
             const timestamps = parts.filter(p => /^\d{14}$/.test(p));
             // Use second timestamp if available (matches video title time)
             const timestamp = timestamps.length > 1 ? timestamps[1] : timestamps[0];
             if (timestamp) {
-              return timestamp; // Return as string for comparison (YYYYMMDDHHMMSS format sorts correctly)
+              return timestamp; // YYYYMMDDHHMMSS format - sorts correctly as string
             }
           }
           
-          // Fallback to title for non-Reolink sources
-          return (file.title || mediaId.split('/').pop() || '').toLowerCase();
+          // 2. Try extracting date from filename using MediaProvider's date extraction
+          const filename = MediaProvider.extractFilename(mediaId);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          if (dateFromFilename) {
+            // Convert to YYYYMMDDHHMMSS format for consistent sorting
+            const year = dateFromFilename.getFullYear();
+            const month = String(dateFromFilename.getMonth() + 1).padStart(2, '0');
+            const day = String(dateFromFilename.getDate()).padStart(2, '0');
+            const hours = String(dateFromFilename.getHours()).padStart(2, '0');
+            const minutes = String(dateFromFilename.getMinutes()).padStart(2, '0');
+            const seconds = String(dateFromFilename.getSeconds()).padStart(2, '0');
+            return `${year}${month}${day}${hours}${minutes}${seconds}`;
+          }
+          
+          // 3. Fallback to title or filename for alphabetical sorting
+          return (file.title || filename || '').toLowerCase();
         };
         
         availableFiles = [...availableFiles].sort((a, b) => {
