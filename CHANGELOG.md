@@ -74,9 +74,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Large collections use standard buffer calculation
   - Prevents infinite scanning loops in small folders
 - **Configurable Position Indicator Corner**: Position indicator ("X of Y" counter) can now be placed in any corner via `position_indicator.position` config
+- **PR #37 Integration**: Integrated community contributions with enhancements - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev)*
+  - Fixed card_height validation to properly clamp values (100-5000 pixels)
+  - Enhanced default_zoom with proper null checking and validation
+  - Improved error handling throughout
 
 ### Fixed
 
+- **Sequential Mode File Ordering**: Fixed files with date-based filenames appearing in wrong order
+  - **Root Cause**: `extractFilename()` incorrectly parsing Immich URIs (returned "jpeg" instead of full filename)
+  - **Solution**: Use `file.title` directly (provided by media source) instead of parsing complex URIs
+  - **Impact**: Date extraction now works correctly for Immich, local files, and all media sources
+  - **Universal Sorting**: Works with any media source that provides filename in title property
 - **Sequential Mode Chronological Order**: Fixed automatic shuffle destroying sorted order in sequential mode
   - SubfolderQueue was calling `shuffleQueue()` during file addition (batch shuffle every ~100 files)
   - Mode detection used wrong config path (`this.config.mode` instead of `this.card.config.folder_mode`)
@@ -116,6 +125,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Significant performance improvement for cards with frequent re-renders
 - **Debug Logging**: Error messages now respect `debug_mode` setting and only appear when explicitly enabled
 - **Console Output**: Cleaned up logging with consistent "[MediaCard]" prefix throughout
+- **Navigation Queue Pre-loading**: Fixed pre-loading behavior to only apply to sequential mode
+  - Random mode no longer pre-loads entire queue (prevents memory issues with large collections)
+  - Sequential mode pre-loads for perfect wraparound in small collections
+  - Resolves performance issues when switching between providers
+- **Duplicate Detection**: Improved duplicate detection in navigation queue to prevent same file appearing multiple times
+- **Error Message Display**: Card now displays error messages in UI when initialization fails
+  - Provides clear feedback when configuration issues occur
+  - Helps users diagnose problems without checking browser console
+- **Media Index Fallback**: Removed silent fallback to SubfolderQueue when Media Index fails
+  - Clear error messages when no items match filter criteria
+  - Prevents confusing behavior where filters appear ignored
+- **Filter Validation**: Properly validates filter results and shows error when all items excluded
+- **Queue Stats Events**: Fixed sendMessage promise handling to avoid undefined errors
+  - Event bus properly emits `media_card_queue_stats` events
+  - History tracking cleared correctly on navigation
+- **Dynamic Filter Updates**: Filter entity subscriptions properly managed
+  - Card responds immediately to entity state changes
+  - Efficient callback-level filtering prevents unnecessary updates
+- **Debug Mode Pass-Through**: Fixed debug_mode not being passed to SubfolderQueue
+  - Debug logging now works correctly in all provider modes
+  - Diagnostic logs appear when debug_mode: true in configuration
+- **Class Naming**: Renamed internal classes from MediaCardV5a to MediaCard for consistency
+  - All log messages now use [MediaCard] prefix
+  - Cleaner codebase ready for v5.3.0 release
 
 ### Changed
 - **Cache-Busting Timestamp Logic**: Consolidated into `_addCacheBustingTimestamp()` helper method
