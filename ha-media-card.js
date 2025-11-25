@@ -671,10 +671,10 @@ class FolderProvider extends MediaProvider {
           return false;
         }
         
-        // Sort queue after scan
-        await this._sortQueueSequential();
-        
-        this.cardAdapter._log('✅ SubfolderQueue initialized and sorted for sequential mode');
+        // Skip post-scan sort for sequential mode - files already sorted during hierarchical scan
+        // Sequential mode sorts by extracted Reolink timestamps (or filenames) during file processing
+        // Post-scan sort by date_taken would reorder since EXIF dates aren't available yet
+        this.cardAdapter._log('✅ SubfolderQueue initialized (sequential mode - preserving scan order)');
         return true;
       }
     }
@@ -2258,9 +2258,18 @@ class SubfolderQueue {
       return false;
     }
 
+    // Sequential mode: Always clear queue and rescan to ensure proper ordering from start
+    // Random mode: Can reuse existing queue
+    const isSequentialMode = folderMode === 'sequential';
     if (this.queue.length > 0) {
-      this._log('✅ Queue already populated with', this.queue.length, 'items - skipping scan');
-      return true;
+      if (isSequentialMode) {
+        this._log('🔄 Sequential mode: Clearing existing queue (', this.queue.length, 'items) to rescan from beginning');
+        this.queue = [];
+        this.shownItems.clear();
+      } else {
+        this._log('✅ Queue already populated with', this.queue.length, 'items - skipping scan');
+        return true;
+      }
     }
 
     this._log('🚀 Starting subfolder queue initialization');
@@ -2326,10 +2335,14 @@ class SubfolderQueue {
                     this.discoveredFolders.map(f => `${f.path} (${f.fileCount} files)`).join(', '));
         }
         
-        if (this.queue.length > 0) {
+        // Only shuffle in random mode - sequential mode maintains sorted order
+        const isSequentialMode = this.card.config.folder_mode === 'sequential';
+        if (this.queue.length > 0 && !isSequentialMode) {
           this.shuffleQueue();
           this.queueShuffleCounter = 0;
           this._log('🔀 Final shuffle completed after hierarchical scan - queue size:', this.queue.length);
+        } else if (isSequentialMode) {
+          this._log('📋 Sequential mode: Preserving sorted order (no shuffle) - queue size:', this.queue.length);
         }
         
         return true;
@@ -2347,6 +2360,8 @@ class SubfolderQueue {
   }
 
   async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = null) {
+    this._log('🔎 hierarchicalScanAndPopulate called:', 'basePath:', basePath, 'currentDepth:', currentDepth, 'maxDepth:', maxDepth);
+    
     await this._waitIfBackgroundPaused();
     
     if (!this.isScanning || this._scanCancelled) {
@@ -2385,6 +2400,12 @@ class SubfolderQueue {
         apiTimeout
       ]);
 
+      this._log('🔍 API Response for', basePath);
+      this._log('   - children:', folderContents?.children?.length || 0);
+      if (folderContents?.children && folderContents.children.length > 0) {
+        this._log('   - First 3 items:', JSON.stringify(folderContents.children.slice(0, 3), null, 2));
+      }
+
       if (!folderContents?.children) {
         this._log('📁 No children found at depth:', currentDepth);
         return { filesProcessed: 0, foldersProcessed: 0 };
@@ -2405,11 +2426,16 @@ class SubfolderQueue {
         return this.card._isMediaFile(pathForExtCheck);
       });
       
+      this._log('🔍 After initial filter:', allFiles.length, 'files (from', folderContents.children.length, 'total items)');
+      
       let files = allFiles;
       
       // Filter by configured media_type (image/video/all)
       const configuredMediaType = this.card.config.media_type || 'all';
+      this._log('🔍 Configured media_type:', configuredMediaType);
+      
       if (configuredMediaType !== 'all') {
+        const beforeFilter = files.length;
         files = files.filter(file => {
           // Use title for Immich compatibility (title = clean filename)
           const filePath = file.title || file.media_content_id || '';
@@ -2424,6 +2450,7 @@ class SubfolderQueue {
           // If neither, exclude
           return false;
         });
+        this._log('🔍 Media type filter (', configuredMediaType, '):', beforeFilter, '→', files.length, 'files');
       }
       
       // V5 FIX: Exclude _Junk and _Edit folders from root of media path
@@ -2477,17 +2504,70 @@ class SubfolderQueue {
       const perFileProbability = Math.min(basePerFileProbability * weightMultiplier, 1.0);
       
       const existingQueueIds = new Set(this.queue.map(item => item.media_content_id));
-      const availableFiles = files.filter(file => 
+      let availableFiles = files.filter(file => 
         !this.shownItems.has(file.media_content_id) && 
         !existingQueueIds.has(file.media_content_id)
       );
       
-      for (const file of availableFiles) {
-        await this._waitIfBackgroundPaused();
+      // Sequential mode: Sort files within folder to match folder sort order
+      if (isSequentialMode) {
+        const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
         
-        if (Math.random() < perFileProbability) {
+        // Helper to extract timestamp from Reolink URI for accurate sorting
+        const getTimestampForSort = (file) => {
+          const mediaId = file.media_content_id;
+          
+          // For Reolink URIs, extract the second timestamp (actual video start time)
+          if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
+            const parts = mediaId.split('|');
+            const timestamps = parts.filter(p => /^\d{14}$/.test(p));
+            // Use second timestamp if available (matches video title time)
+            const timestamp = timestamps.length > 1 ? timestamps[1] : timestamps[0];
+            if (timestamp) {
+              return timestamp; // Return as string for comparison (YYYYMMDDHHMMSS format sorts correctly)
+            }
+          }
+          
+          // Fallback to title for non-Reolink sources
+          return (file.title || mediaId.split('/').pop() || '').toLowerCase();
+        };
+        
+        availableFiles = [...availableFiles].sort((a, b) => {
+          const keyA = getTimestampForSort(a);
+          const keyB = getTimestampForSort(b);
+          
+          if (orderDirection === 'desc') {
+            return keyB.localeCompare(keyA); // Newest first (higher timestamp = more recent)
+          } else {
+            return keyA.localeCompare(keyB); // Oldest first (lower timestamp = older)
+          }
+        });
+        this._log('📅 Sequential: Sorted', availableFiles.length, 'files', orderDirection, 'in', folderName);
+        
+        // Sequential mode: Respect slideshow_window to limit scanning
+        // Add files in order until we reach the target queue size
+        const targetQueueSize = this.card.config.slideshow_window || 1000;
+        for (const file of availableFiles) {
+          // Stop adding if we've reached the target queue size
+          if (this.queue.length >= targetQueueSize) {
+            this._log('⏹️ Sequential: Reached target queue size', targetQueueSize, '- stopping scan');
+            this._scanCancelled = true; // Stop hierarchical scan
+            break;
+          }
+          
+          await this._waitIfBackgroundPaused();
           await this.addFileToQueueWithBatching(file, folderName);
           filesAdded++;
+        }
+      } else {
+        // Random mode: Use probability sampling
+        for (const file of availableFiles) {
+          await this._waitIfBackgroundPaused();
+          
+          if (Math.random() < perFileProbability) {
+            await this.addFileToQueueWithBatching(file, folderName);
+            filesAdded++;
+          }
         }
       }
 
@@ -2502,16 +2582,55 @@ class SubfolderQueue {
       this._log('🔍 Recursion check at depth', currentDepth, ':', 
                 'subfolders:', subfolders.length, 
                 'effectiveMaxDepth:', effectiveMaxDepth, 
-                'shouldRecurse:', shouldRecurse);
+                'currentDepth:', currentDepth,
+                'shouldRecurse:', shouldRecurse,
+                'stopScanning:', this.stopScanning);
+      
+      if (subfolders.length > 0) {
+        this._log('📂 Subfolder sample:', subfolders[0]?.title || subfolders[0]?.media_content_id.split('/').pop(),
+                  '| Full ID:', subfolders[0]?.media_content_id);
+      }
       
       if (shouldRecurse) {
         await this._waitIfBackgroundPaused();
 
-        const shuffledSubfolders = [...subfolders].sort(() => Math.random() - 0.5);
+        // Sort subfolders for efficient sequential scanning
+        const isSequentialMode = this.card.config.folder_mode === 'sequential';
+        const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
+        
+        let sortedSubfolders;
+        if (isSequentialMode) {
+          // Sequential mode: Sort folders by name (descending = newest first, ascending = oldest first)
+          // Most camera/NVR folders use date-based naming (YYYYMMDD, YYYY-MM-DD, etc.)
+          sortedSubfolders = [...subfolders].sort((a, b) => {
+            const nameA = (a.title || a.media_content_id.split('/').pop() || '').toLowerCase();
+            const nameB = (b.title || b.media_content_id.split('/').pop() || '').toLowerCase();
+            
+            if (orderDirection === 'desc') {
+              // Descending: Z to A, newest dates first (20251123 before 20251122)
+              return nameB.localeCompare(nameA);
+            } else {
+              // Ascending: A to Z, oldest dates first (20251122 before 20251123)
+              return nameA.localeCompare(nameB);
+            }
+          });
+          
+          this._log('📅 Sequential mode: Sorted', subfolders.length, 'folders', orderDirection, 
+                    '| First:', sortedSubfolders[0]?.title || sortedSubfolders[0]?.media_content_id.split('/').pop(),
+                    '| Last:', sortedSubfolders[sortedSubfolders.length - 1]?.title || sortedSubfolders[sortedSubfolders.length - 1]?.media_content_id.split('/').pop());
+        } else {
+          // Random mode: Shuffle to prevent alphabetical bias
+          sortedSubfolders = [...subfolders].sort(() => Math.random() - 0.5);
+          this._log('🎲 Random mode: Shuffled', subfolders.length, 'folders');
+        }
 
+        // Sequential mode: Process folders one-at-a-time to maintain order
+        // Random mode: Process 2 at a time for better performance
+        const maxConcurrent = isSequentialMode ? 1 : 2;
+        
         const subfolderResults = await this.processLevelConcurrently(
-          shuffledSubfolders, 
-          2,
+          sortedSubfolders, 
+          maxConcurrent,
           currentDepth + 1, 
           effectiveMaxDepth
         );
@@ -2602,16 +2721,20 @@ class SubfolderQueue {
     };
     this.queueHistory.push(historyEntry);
 
-    this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
+    // Skip shuffle logic in sequential mode (order must be preserved)
+    const isSequentialMode = this.card.config.folder_mode === 'sequential';
+    if (!isSequentialMode) {
+      this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
 
-    const shuffleThreshold = Math.min(
-      this.SHUFFLE_MAX_BATCH, 
-      Math.max(this.SHUFFLE_MIN_BATCH, Math.floor(this.queue.length * this.SHUFFLE_PERCENTAGE))
-    );
+      const shuffleThreshold = Math.min(
+        this.SHUFFLE_MAX_BATCH, 
+        Math.max(this.SHUFFLE_MIN_BATCH, Math.floor(this.queue.length * this.SHUFFLE_PERCENTAGE))
+      );
 
-    if (this.queueShuffleCounter >= shuffleThreshold) {
-      this.shuffleQueue();
-      this.queueShuffleCounter = 0;
+      if (this.queueShuffleCounter >= shuffleThreshold) {
+        this.shuffleQueue();
+        this.queueShuffleCounter = 0;
+      }
     }
   }
 
@@ -2943,6 +3066,12 @@ class SubfolderQueue {
         const comparison = aFilename.localeCompare(bFilename);
         return direction === 'asc' ? comparison : -comparison;
       });
+      
+      // If ALL files are non-dated, preserve scan order (files were already sorted during hierarchical scan)
+      if (datedFiles.length === 0 && nonDatedFiles.length === this.queue.length) {
+        this._log('✅ All files non-dated - preserving scan order (already sorted during hierarchical scan)');
+        return; // Keep existing queue order
+      }
       
       // Combine: dated files first, then non-dated files
       this.queue = [...datedFiles, ...nonDatedFiles];
@@ -3711,11 +3840,35 @@ class MediaCardV5a extends LitElement {
           // SubfolderQueue stores full media browser items - use media_content_id directly
           const mediaId = rawItem.media_content_id;
           const pathForMetadata = rawItem.title || rawItem.media_content_id;
+          
+          // Extract metadata from path/title
           const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata);
+          
+          // For Reolink URIs, try to extract timestamp from media_content_id
+          // Format: media-source://reolink/FILE|device_id|channel|sub|timestamp1|timestamp2|timestamp3
+          // timestamp2 appears to be the actual video start time (matches title "HH:MM:SS duration")
+          if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
+            const parts = mediaId.split('|');
+            // Look for 14-digit timestamps (YYYYMMDDHHmmSS)
+            const timestamps = parts.filter(p => /^\d{14}$/.test(p));
+            
+            // Use second timestamp if available (actual video start time), otherwise first
+            const timestampToUse = timestamps.length > 1 ? timestamps[1] : timestamps[0];
+            
+            if (timestampToUse) {
+              const timestampDate = MediaProvider.extractDateFromFilename(timestampToUse);
+              if (timestampDate) {
+                pathMetadata.date = timestampDate;
+                pathMetadata.date_taken = timestampDate;
+                this._log(`📅 Extracted Reolink timestamp [${timestamps.indexOf(timestampToUse) + 1}/${timestamps.length}]: ${timestampToUse} → ${timestampDate.toISOString()}`);
+              }
+            }
+          }
           
           const transformedItem = {
             media_content_id: mediaId,
             media_content_type: rawItem.media_class || MediaUtils.detectFileType(pathForMetadata) || 'image',
+            title: rawItem.title, // Keep title at top level for display
             metadata: {
               ...pathMetadata,
               title: rawItem.title,
@@ -7629,12 +7782,16 @@ class MediaCardV5a extends LitElement {
 
     // V5.3: Show error state if provider initialization failed
     if (this._errorState) {
+      const errorMessage = typeof this._errorState === 'string' 
+        ? this._errorState 
+        : (this._errorState.message || 'Unknown error');
+      
       return html`
         <ha-card>
           <div class="card">
             <div class="placeholder" style="color: var(--error-color, #db4437); padding: 16px;">
               <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Configuration Error</div>
-              <div>${this._errorState}</div>
+              <div>${errorMessage}</div>
             </div>
           </div>
         </ha-card>
@@ -7642,10 +7799,26 @@ class MediaCardV5a extends LitElement {
     }
 
     if (!this.currentMedia) {
+      // Show helpful message based on media_type filter
+      const mediaType = this.config.media_type || 'all';
+      let message = 'No media configured';
+      let hint = '';
+      
+      if (mediaType === 'image') {
+        message = 'No images found';
+        hint = 'Try changing Media Type to "video" or "all" if folder contains videos';
+      } else if (mediaType === 'video') {
+        message = 'No videos found';
+        hint = 'Try changing Media Type to "image" or "all" if folder contains images';
+      }
+      
       return html`
         <ha-card>
           <div class="card">
-            <div class="placeholder">No media configured</div>
+            <div class="placeholder">
+              <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
+              ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
+            </div>
           </div>
         </ha-card>
       `;
@@ -9492,13 +9665,26 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
-    this._log('Adding media files to browser:', mediaContent.children.length, 'items');
+    // ALWAYS log - bypassing debug check for diagnosis
+    console.log('[MediaCard] 🔍 BROWSER DEBUG - _debugMode:', this._debugMode, 'config.debug_mode:', this.config?.debug_mode);
+    console.log('[MediaCard] Adding media files to browser:', mediaContent.children.length, 'items');
+    
+    // Log first few items for debugging (especially for Reolink integration)
+    if (mediaContent.children && mediaContent.children.length > 0) {
+      console.log('[MediaCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
+    }
     
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
     const hasMediaFiles = itemsToCheck.some(item => {
       const isFolder = item.can_expand;
+      // Check media_class first (works for Reolink and other API-based sources)
+      if (!isFolder && (item.media_class === 'image' || item.media_class === 'video')) {
+        return true;
+      }
+      // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = !isFolder && this._isMediaFile(fileName);
+      console.log(`[MediaCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
       return isMedia;
     });
     
@@ -9597,17 +9783,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     // Filter items to display based on media type configuration
     const itemsToShow = (mediaContent.children || []).filter(item => {
-      if (item.can_expand) return true;
+      if (item.can_expand) {
+        console.log(`[MediaCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
+        return true;
+      }
       
+      // Check media_class first (works for Reolink, Immich, and other API-based sources)
+      if (item.media_class === 'image' || item.media_class === 'video') {
+        console.log(`[MediaCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
+        return true;
+      }
+      
+      // If media type filtering is configured, check file type
       if (this._config.media_type && this._config.media_type !== 'all') {
         const fileName = this._getItemDisplayName(item);
         const fileType = this._detectFileType(fileName);
-        return fileType === this._config.media_type;
+        const included = fileType === this._config.media_type;
+        console.log(`[MediaCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
+        return included;
       }
       
+      // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
-      return this._isMediaFile(fileName);
+      const isMedia = this._isMediaFile(fileName);
+      console.log(`[MediaCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
+      return isMedia;
     });
+    
+    console.log(`[MediaCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
     
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
@@ -9800,6 +10003,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             path: folderPath
           }
         };
+        this._log('Folder mode: Updated path to', folderPath);
       } else {
         // In single_media mode - ask if they want to switch to folder mode
         const switchToFolder = confirm(
@@ -9819,6 +10023,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               recursive: true
             }
           };
+          this._log('Switched to folder mode with path:', folderPath);
         } else {
           this._config = {
             ...this._config,
@@ -10050,7 +10255,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _handleMediaPicked(mediaContentId) {
-    this._log('Media picked:', mediaContentId);
+    console.log('[MediaCard] Media picked:', mediaContentId);
     
     const mediaSourceType = this._config.media_source_type || 'single_media';
     
@@ -10097,16 +10302,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     }
     
-    // Auto-detect media type from extension
-    const extension = mediaContentId.split('.').pop()?.toLowerCase();
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
-      this._config.media_type = 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
-      this._config.media_type = 'image';
+    // Auto-detect media type from extension or media-source protocol
+    let detectedType = null;
+    
+    // Check for Reolink video source
+    if (mediaContentId.includes('media-source://reolink/')) {
+      detectedType = 'video';
+      console.log('[MediaCard] Detected Reolink video source');
+    } else {
+      // Try extension detection for filesystem sources
+      const extension = mediaContentId.split('.').pop()?.toLowerCase();
+      if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
+        detectedType = 'video';
+      } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+        detectedType = 'image';
+      }
+    }
+    
+    if (detectedType) {
+      this._config.media_type = detectedType;
+      console.log('[MediaCard] Auto-detected media type:', detectedType);
     }
     
     this._fireConfigChanged();
-    this._log('Config updated (media selected):', this._config);
+    console.log('[MediaCard] Config updated (media selected):', this._config);
   }
 
   static styles = css`
