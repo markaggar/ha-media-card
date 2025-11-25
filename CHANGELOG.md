@@ -77,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sequential Mode Chronological Order**: Fixed automatic shuffle destroying sorted order in sequential mode
+  - SubfolderQueue was calling `shuffleQueue()` during file addition (batch shuffle every ~100 files)
+  - Mode detection used wrong config path (`this.config.mode` instead of `this.card.config.folder_mode`)
+  - Sequential mode now correctly skips all shuffle logic to preserve sorted order
+  - Newest videos now display first in descending order as expected
+  - Affects Reolink integration and any sequential mode with timestamp-based sorting
 - **Debug Button Persistence**: Fixed debug button to properly update and persist `debug_mode` config
   - Direct config update bypasses `setConfig()` defaults that were resetting the value
   - Forces re-render to update button visual state immediately
