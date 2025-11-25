@@ -230,17 +230,18 @@ class MediaProvider {
     if (!filename) return null;
     
     // Common date+time patterns in filenames
+    // NOTE: Patterns match anywhere in filename (e.g., "Tanya_20220727_140134.jpg")
     const patterns = [
-      // YYYYMMDDHHmmSS format (e.g., 20250920211023 - no separators)
-      /(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/,
-      // YYYYMMDD_HHMMSS format (e.g., 20250920_211023)
+      // YYYYMMDD_HHMMSS format (e.g., 20250920_211023 or Tanya_20220727_140134.jpg)
       /(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/,
+      // YYYYMMDDHHmmSS format (e.g., 20250920211023 - no separators, must be 14 consecutive digits)
+      /(\d{14})/,
       // YYYY-MM-DD_HH-MM-SS format
       /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
       // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format (date only)
-      /(\d{4})(\d{2})(\d{2})/,
+      // YYYYMMDD format (date only, 8 consecutive digits)
+      /(\d{8})/,
       // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
@@ -251,7 +252,25 @@ class MediaProvider {
         try {
           let year, month, day, hour = 0, minute = 0, second = 0;
           
-          if (match.length > 6) {
+          // Handle 14-digit timestamp (YYYYMMDDHHmmSS)
+          if (match[1] && match[1].length === 14) {
+            const ts = match[1];
+            year = parseInt(ts.substring(0, 4));
+            month = parseInt(ts.substring(4, 6)) - 1;
+            day = parseInt(ts.substring(6, 8));
+            hour = parseInt(ts.substring(8, 10));
+            minute = parseInt(ts.substring(10, 12));
+            second = parseInt(ts.substring(12, 14));
+          }
+          // Handle 8-digit date (YYYYMMDD)
+          else if (match[1] && match[1].length === 8) {
+            const ts = match[1];
+            year = parseInt(ts.substring(0, 4));
+            month = parseInt(ts.substring(4, 6)) - 1;
+            day = parseInt(ts.substring(6, 8));
+          }
+          // Handle patterns with separate capture groups
+          else if (match.length > 6) {
             // Date + time pattern matched
             if (match[1].length === 4) {
               // YYYY-MM-DD format with time
@@ -263,7 +282,7 @@ class MediaProvider {
               second = parseInt(match[6]);
             }
           } else if (match[1].length === 4) {
-            // YYYY-MM-DD or YYYYMMDD (date only)
+            // YYYY-MM-DD (date only)
             year = parseInt(match[1]);
             month = parseInt(match[2]) - 1;
             day = parseInt(match[3]);
@@ -576,6 +595,7 @@ class FolderProvider extends MediaProvider {
       folder_mode: this.config.folder?.mode || 'random',  // V4 expects this at root level
       slideshow_window: this.config.slideshow_window || 1000,
       media_type: this.config.media_type || 'all',  // V5: Pass through media_type for filtering
+      debug_mode: this.config.debug_mode || false,  // V5: Pass through debug_mode for SubfolderQueue logging
       folder: {
         order_by: this.config.folder?.order_by || 'date_taken',
         sequential: {
@@ -2529,8 +2549,10 @@ class SubfolderQueue {
           }
           
           // 2. Try extracting date from filename using MediaProvider's date extraction
-          const filename = MediaProvider.extractFilename(mediaId);
+          // For Immich and other sources, file.title is the clean filename
+          const filename = file.title || MediaProvider.extractFilename(mediaId);
           const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          
           if (dateFromFilename) {
             // Convert to YYYYMMDDHHMMSS format for consistent sorting
             const year = dateFromFilename.getFullYear();
@@ -2550,12 +2572,22 @@ class SubfolderQueue {
           const keyA = getTimestampForSort(a);
           const keyB = getTimestampForSort(b);
           
+          // Detect if keys are timestamps (14 digits) or filenames (alphabetical)
+          const isTimestampA = /^\d{14}$/.test(keyA);
+          const isTimestampB = /^\d{14}$/.test(keyB);
+          
+          // Files with timestamps should always come before files without timestamps
+          if (isTimestampA && !isTimestampB) return -1; // A (has date) before B (no date)
+          if (!isTimestampA && isTimestampB) return 1;  // B (has date) before A (no date)
+          
+          // Both have timestamps OR both are filenames - sort normally
           if (orderDirection === 'desc') {
             return keyB.localeCompare(keyA); // Newest first (higher timestamp = more recent)
           } else {
             return keyA.localeCompare(keyB); // Oldest first (lower timestamp = older)
           }
         });
+        
         this._log('📅 Sequential: Sorted', availableFiles.length, 'files', orderDirection, 'in', folderName);
         
         // Sequential mode: Respect slideshow_window to limit scanning
@@ -3155,14 +3187,10 @@ class SubfolderQueue {
 }
 
 /**
- * MediaCardV5a - Main card component
+ * MediaCard - Main card component
  * Phase 2: Now uses provider pattern to display media
  */
-/**
- * MediaCardV5a - Main card component
- * Phase 2: Now uses provider pattern to display media
- */
-class MediaCardV5a extends LitElement {
+class MediaCard extends LitElement {
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -3772,7 +3800,7 @@ class MediaCardV5a extends LitElement {
           break;
         
         default:
-          console.warn('[MediaCardV5a] Unknown media source type:', type, '- defaulting to single_media');
+          console.warn('[MediaCard] Unknown media source type:', type, '- defaulting to single_media');
           this.provider = new SingleMediaProvider(this.config, this.hass);
       }
 
@@ -3803,11 +3831,11 @@ class MediaCardV5a extends LitElement {
           await this._loadNext();
         }
       } else {
-        console.error('[MediaCardV5a] Provider initialization failed');
+        console.error('[MediaCard] Provider initialization failed');
         this._errorState = 'Provider initialization failed';
       }
     } catch (error) {
-      console.error('[MediaCardV5a] Error initializing provider:', error);
+      console.error('[MediaCard] Error initializing provider:', error);
       // V5.3: Store error message for display in card UI
       this._errorState = error.message || 'Provider initialization failed';
     } finally {
@@ -4124,7 +4152,7 @@ class MediaCardV5a extends LitElement {
       // V5: Setup auto-advance after successfully loading media
       this._setupAutoRefresh();
     } catch (error) {
-      console.error('[MediaCardV5a] Error loading next media:', error);
+      console.error('[MediaCard] Error loading next media:', error);
     }
   }
 
@@ -4398,7 +4426,7 @@ class MediaCardV5a extends LitElement {
         this.mediaUrl = finalUrl;
         this.requestUpdate();
       } catch (error) {
-        console.error('[MediaCardV5a] Failed to resolve media URL:', error);
+        console.error('[MediaCard] Failed to resolve media URL:', error);
         this.mediaUrl = '';
         this.requestUpdate();
       }
@@ -4428,7 +4456,7 @@ class MediaCardV5a extends LitElement {
         return; // Success - don't fall through to fallback
       } catch (error) {
         // File doesn't exist or can't be accessed - skip to next
-        console.warn('[MediaCardV5a] File not found or inaccessible, skipping to next:', mediaId, error.message);
+        console.warn('[MediaCard] File not found or inaccessible, skipping to next:', mediaId, error.message);
         
         // Track file as missing to avoid re-querying from media_index
         if (this.provider?.mediaIndexProvider) {
@@ -4455,7 +4483,7 @@ class MediaCardV5a extends LitElement {
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
         if (this._validationDepth >= MAX_VALIDATION_ATTEMPTS) {
-          console.error('[MediaCardV5a] Too many consecutive missing files, stopping validation');
+          console.error('[MediaCard] Too many consecutive missing files, stopping validation');
           this._validationDepth = 0;
           return;
         }
@@ -4498,7 +4526,7 @@ class MediaCardV5a extends LitElement {
         });
         return resolved.url;
       } catch (error) {
-        console.error('[MediaCardV5a] Failed to resolve media path:', mediaPath, error);
+        console.error('[MediaCard] Failed to resolve media path:', mediaPath, error);
         return '';
       }
     }
@@ -4518,7 +4546,7 @@ class MediaCardV5a extends LitElement {
     // Handle case where target is null (element destroyed/replaced)
     if (!target) {
       errorMessage = 'Media element unavailable';
-      console.warn('[MediaCardV5a] Media error event has null target - element may have been destroyed');
+      console.warn('[MediaCard] Media error event has null target - element may have been destroyed');
     } else if (error) {
       switch (error.code) {
         case error.MEDIA_ERR_ABORTED:
@@ -4549,7 +4577,7 @@ class MediaCardV5a extends LitElement {
     const isSynologyUrl = this.mediaUrl && this.mediaUrl.includes('/synology_dsm/') && this.mediaUrl.includes('authSig=');
     if (isSynologyUrl) {
       errorMessage = 'Synology DSM authentication expired - try refreshing';
-      console.warn('[MediaCardV5a] Synology DSM URL authentication may have expired:', this.mediaUrl);
+      console.warn('[MediaCard] Synology DSM URL authentication may have expired:', this.mediaUrl);
     }
     
     // Apply pending metadata even on error to avoid stale metadata from previous media
@@ -4590,7 +4618,7 @@ class MediaCardV5a extends LitElement {
             }
           })
           .catch(err => {
-            console.error('[MediaCardV5a] URL refresh attempt failed:', err);
+            console.error('[MediaCard] URL refresh attempt failed:', err);
             this._showMediaError(errorMessage, isSynologyUrl);
           });
       } else {
@@ -4610,7 +4638,7 @@ class MediaCardV5a extends LitElement {
     // V4: Log additional context for Synology DSM URLs
     if (this.mediaUrl && this.mediaUrl.includes('/synology_dsm/')) {
       this._log('🔄 Synology DSM URL detected - checking authentication signature');
-      console.warn('[MediaCardV5a] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
+      console.warn('[MediaCard] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
     }
     
     try {
@@ -4667,11 +4695,11 @@ class MediaCardV5a extends LitElement {
         }
       }
       
-      console.warn('[MediaCardV5a] ⚠️ All URL refresh attempts failed or returned same URL');
+      console.warn('[MediaCard] ⚠️ All URL refresh attempts failed or returned same URL');
       return false;
       
     } catch (error) {
-      console.error('[MediaCardV5a] ❌ URL refresh failed:', error);
+      console.error('[MediaCard] ❌ URL refresh failed:', error);
       return false;
     }
   }
@@ -8044,10 +8072,10 @@ class MediaCardV5a extends LitElement {
 }
 
 /**
- * MediaCardV5aEditor - V4 editor with full functionality
+ * MediaCardEditor - Card editor with full functionality
  * Will be adapted for v5 architecture in next phase
  */
-class MediaCardV5aEditor extends LitElement {
+class MediaCardEditor extends LitElement {
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -9680,7 +9708,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
     // ALWAYS log - bypassing debug check for diagnosis
-    console.log('[MediaCard] 🔍 BROWSER DEBUG - _debugMode:', this._debugMode, 'config.debug_mode:', this.config?.debug_mode);
+
     console.log('[MediaCard] Adding media files to browser:', mediaContent.children.length, 'items');
     
     // Log first few items for debugging (especially for Reolink integration)
@@ -11428,10 +11456,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
-  customElements.define('media-card', MediaCardV5a);
+  customElements.define('media-card', MediaCard);
 }
 if (!customElements.get('media-card-editor')) {
-  customElements.define('media-card-editor', MediaCardV5aEditor);
+  customElements.define('media-card-editor', MediaCardEditor);
 }
 
 // Register with Home Assistant
