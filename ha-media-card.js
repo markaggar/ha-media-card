@@ -1216,6 +1216,17 @@ class MediaIndexProvider extends MediaProvider {
           // The state_changed event arrives BEFORE hass.states is updated by HA core.
           // Direct mutation is intentional here to ensure filter resolution uses the latest values.
           // Without this, _resolveFilterValue() would read stale state and miss the change.
+          //
+          // Why this is safe:
+          // 1. We're updating with the official new_state from HA's event system
+          // 2. This mutation happens in the event callback, ensuring single-threaded execution
+          // 3. HA core will apply the same update moments later, making this a no-op
+          // 4. The alternative (using event data directly) would require refactoring _resolveFilterValue()
+          //    to accept event data parameters, breaking its reusable design
+          //
+          // Note: While Home Assistant WebSocket API doesn't support entity-specific subscriptions
+          // for state_changed events, filtering in the callback (line 1207) ensures we only process
+          // changes to our watched filter entities, minimizing performance impact.
           if (event.data?.new_state) {
             this.hass.states[changedEntityId] = event.data.new_state;
           }
@@ -4084,11 +4095,31 @@ class MediaCard extends LitElement {
             // Log if we hit the safety limit (indicates provider may be stuck)
             if (attempts >= maxAttempts && alreadyInQueue) {
               this._log('⚠️ Max attempts reached in duplicate detection - provider may be returning same item repeatedly');
+              // Treat as provider exhaustion - wrap to beginning
+              this._log('Treating as provider exhaustion, wrapping to beginning');
+              
+              // Validate queue has items before wrapping
+              if (this.navigationQueue.length === 0) {
+                this._log('ERROR: Cannot wrap - navigation queue is empty');
+                this._errorState = 'Provider exhausted with no items in queue';
+                return;
+              }
+              
+              this.navigationIndex = 0;
+              return;
             }
             
             if (!item || alreadyInQueue) {
               // All items are duplicates or provider exhausted, wrap to beginning
               this._log('Provider exhausted or only returning duplicates, wrapping to beginning');
+              
+              // Validate queue has items before wrapping
+              if (this.navigationQueue.length === 0) {
+                this._log('ERROR: Cannot wrap - navigation queue is empty');
+                this._errorState = 'No media available in navigation queue';
+                return;
+              }
+              
               this.navigationIndex = 0;
               return;
             }
@@ -4113,6 +4144,14 @@ class MediaCard extends LitElement {
           } else {
             // No more items available from provider, wrap to beginning
             this._log('Provider exhausted, wrapping to beginning');
+            
+            // Validate queue has items before wrapping
+            if (this.navigationQueue.length === 0) {
+              this._log('ERROR: Cannot wrap - navigation queue is empty');
+              this._errorState = 'No media available from provider';
+              return;
+            }
+            
             this.navigationIndex = 0;
           }
         }
