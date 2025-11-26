@@ -1198,6 +1198,8 @@ class MediaIndexProvider extends MediaProvider {
     this._log('📝 Initial filter values:', this._lastFilterValues);
     
     // Subscribe to state changes - use subscribeEvents but filter to our entities only
+    // NOTE: WebSocket API doesn't support entity-specific subscriptions for state_changed events,
+    // so we receive ALL state changes and filter in the callback to our watched entities
     try {
       this._entityUnsubscribe = await this.hass.connection.subscribeEvents(
         async (event) => {
@@ -1211,7 +1213,9 @@ class MediaIndexProvider extends MediaProvider {
           this._log('🔄 Filter entity changed:', changedEntityId, '→', newState);
           
           // CRITICAL: Update hass.states immediately with new state from event
-          // The state_changed event arrives BEFORE hass.states is updated
+          // The state_changed event arrives BEFORE hass.states is updated by HA core.
+          // Direct mutation is intentional here to ensure filter resolution uses the latest values.
+          // Without this, _resolveFilterValue() would read stale state and miss the change.
           if (event.data?.new_state) {
             this.hass.states[changedEntityId] = event.data.new_state;
           }
@@ -1224,12 +1228,12 @@ class MediaIndexProvider extends MediaProvider {
           };
           
           this._log('🔍 Resolved filter values:', currentFilters, 'vs last:', this._lastFilterValues);
-              
-              // Check if filter values actually changed
-              const filtersChanged = 
-                currentFilters.favorites !== this._lastFilterValues.favorites ||
-                currentFilters.date_from !== this._lastFilterValues.date_from ||
-                currentFilters.date_to !== this._lastFilterValues.date_to;
+          
+          // Check if filter values actually changed
+          const filtersChanged = 
+            currentFilters.favorites !== this._lastFilterValues.favorites ||
+            currentFilters.date_from !== this._lastFilterValues.date_from ||
+            currentFilters.date_to !== this._lastFilterValues.date_to;
           
           if (filtersChanged) {
             this._log('✨ Filter values changed, reloading queue:', currentFilters);
@@ -1645,7 +1649,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this.recursive = config.folder?.recursive !== false; // Default true
     this.lastSeenValue = null; // Cursor for pagination
     this.hasMore = true; // Flag to track if more items available
-    this.reachedEnd = false; // Flag to track if we've hit the end
+    // Set to true when all items have been paged and no more results are available from the database
+    // Prevents further navigation attempts and unnecessary service calls
+    this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
   }
 
@@ -3191,6 +3197,11 @@ class SubfolderQueue {
  * Phase 2: Now uses provider pattern to display media
  */
 class MediaCard extends LitElement {
+  // Card height validation constants
+  static CARD_HEIGHT_MIN = 100;
+  static CARD_HEIGHT_MAX = 5000;
+  static CARD_HEIGHT_STEP = 50;
+  
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -3323,6 +3334,11 @@ class MediaCard extends LitElement {
     
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
+    
+    // Cleanup provider subscriptions to prevent memory leaks
+    if (this.provider?.dispose) {
+      this.provider.dispose();
+    }
     
     // V4 CODE REUSE: Store navigation history and queue for reconnection (ha-media-card.js lines 4945-4975)
     const mediaPath = this.config?.folder?.path || this.config?.media_path;
@@ -3572,9 +3588,9 @@ class MediaCard extends LitElement {
         const originalValue = config.max_height_pixels;
         delete config.max_height_pixels;
         this._log('⚠️ Removed invalid max_height_pixels:', originalValue);
-      } else if (height < 100 || height > 5000) {
+      } else if (height < MediaCard.CARD_HEIGHT_MIN || height > MediaCard.CARD_HEIGHT_MAX) {
         // Out of range - clamp to valid range
-        config.max_height_pixels = Math.max(100, Math.min(5000, height));
+        config.max_height_pixels = Math.max(MediaCard.CARD_HEIGHT_MIN, Math.min(MediaCard.CARD_HEIGHT_MAX, height));
         this._log('⚠️ Clamped max_height_pixels to valid range (100-5000):', config.max_height_pixels);
       }
     }
@@ -3587,9 +3603,9 @@ class MediaCard extends LitElement {
         const originalValue = config.card_height;
         delete config.card_height;
         this._log('⚠️ Removed invalid card_height:', originalValue);
-      } else if (height < 100 || height > 5000) {
+      } else if (height < MediaCard.CARD_HEIGHT_MIN || height > MediaCard.CARD_HEIGHT_MAX) {
         // Out of range - clamp to valid range
-        config.card_height = Math.max(100, Math.min(5000, height));
+        config.card_height = Math.max(MediaCard.CARD_HEIGHT_MIN, Math.min(MediaCard.CARD_HEIGHT_MAX, height));
         this._log('⚠️ Clamped card_height to valid range (100-5000):', config.card_height);
       }
     }
@@ -4055,7 +4071,7 @@ class MediaCard extends LitElement {
             // V5.3: Check if item already exists in navigation queue (prevent duplicates)
             let alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
             let attempts = 0;
-            const maxAttempts = 10; // Prevent infinite loop
+            const maxAttempts = 10; // Prevent infinite loop if provider keeps returning same item
             
             while (alreadyInQueue && attempts < maxAttempts) {
               this._log(`⚠️ Item already in navigation queue (attempt ${attempts + 1}), getting next:`, item.media_content_id);
@@ -4063,6 +4079,11 @@ class MediaCard extends LitElement {
               if (!item) break;
               alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
               attempts++;
+            }
+            
+            // Log if we hit the safety limit (indicates provider may be stuck)
+            if (attempts >= maxAttempts && alreadyInQueue) {
+              this._log('⚠️ Max attempts reached in duplicate detection - provider may be returning same item repeatedly');
             }
             
             if (!item || alreadyInQueue) {
