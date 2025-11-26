@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.2.0
+ * Media Card v5.3.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -230,15 +230,18 @@ class MediaProvider {
     if (!filename) return null;
     
     // Common date+time patterns in filenames
+    // NOTE: Patterns match anywhere in filename (e.g., "Tanya_20220727_140134.jpg")
     const patterns = [
-      // YYYYMMDD_HHMMSS format (e.g., 20250920_211023)
+      // YYYYMMDD_HHMMSS format (e.g., 20250920_211023 or Tanya_20220727_140134.jpg)
       /(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/,
+      // YYYYMMDDHHmmSS format (e.g., 20250920211023 - no separators, must be 14 consecutive digits)
+      /(\d{14})/,
       // YYYY-MM-DD_HH-MM-SS format
       /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
       // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format (date only)
-      /(\d{4})(\d{2})(\d{2})/,
+      // YYYYMMDD format (date only, 8 consecutive digits)
+      /(\d{8})/,
       // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
@@ -249,7 +252,25 @@ class MediaProvider {
         try {
           let year, month, day, hour = 0, minute = 0, second = 0;
           
-          if (match.length > 6) {
+          // Handle 14-digit timestamp (YYYYMMDDHHmmSS)
+          if (match[1] && match[1].length === 14) {
+            const ts = match[1];
+            year = parseInt(ts.substring(0, 4));
+            month = parseInt(ts.substring(4, 6)) - 1;
+            day = parseInt(ts.substring(6, 8));
+            hour = parseInt(ts.substring(8, 10));
+            minute = parseInt(ts.substring(10, 12));
+            second = parseInt(ts.substring(12, 14));
+          }
+          // Handle 8-digit date (YYYYMMDD)
+          else if (match[1] && match[1].length === 8) {
+            const ts = match[1];
+            year = parseInt(ts.substring(0, 4));
+            month = parseInt(ts.substring(4, 6)) - 1;
+            day = parseInt(ts.substring(6, 8));
+          }
+          // Handle patterns with separate capture groups
+          else if (match.length > 6) {
             // Date + time pattern matched
             if (match[1].length === 4) {
               // YYYY-MM-DD format with time
@@ -261,7 +282,7 @@ class MediaProvider {
               second = parseInt(match[6]);
             }
           } else if (match[1].length === 4) {
-            // YYYY-MM-DD or YYYYMMDD (date only)
+            // YYYY-MM-DD (date only)
             year = parseInt(match[1]);
             month = parseInt(match[2]) - 1;
             day = parseInt(match[3]);
@@ -345,25 +366,22 @@ class MediaIndexHelper {
   static async fetchFileMetadata(hass, config, filePath) {
     if (!hass || !MediaProvider.isMediaIndexActive(config)) return null;
     
-    // V4: Strip media-source:// prefix before sending to media_index
-    // Backend expects: /media/Photo/PhotoLibrary/New/file.jpg
-    // Not: media-source://media_source/media/Photo/PhotoLibrary/New/file.jpg
-    let cleanPath = filePath;
-    if (cleanPath.startsWith('media-source://media_source')) {
-      cleanPath = cleanPath.replace('media-source://media_source', '');
-    }
-    
     try {
       // Build WebSocket call to get_file_metadata service
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_file_metadata',
-        service_data: {
-          file_path: cleanPath  // Use cleaned path
-        },
+        service_data: {},  // Will populate based on path type
         return_response: true
       };
+      
+      // V5.3 / Media Index v1.4+: Use media_source_uri when path is a URI, file_path otherwise
+      if (filePath.startsWith('media-source://')) {
+        wsCall.service_data.media_source_uri = filePath;
+      } else {
+        wsCall.service_data.file_path = filePath;
+      }
       
       // If user specified a media_index entity, add target to route to correct instance
       if (config.media_index?.entity_id) {
@@ -577,6 +595,7 @@ class FolderProvider extends MediaProvider {
       folder_mode: this.config.folder?.mode || 'random',  // V4 expects this at root level
       slideshow_window: this.config.slideshow_window || 1000,
       media_type: this.config.media_type || 'all',  // V5: Pass through media_type for filtering
+      debug_mode: this.config.debug_mode || false,  // V5: Pass through debug_mode for SubfolderQueue logging
       folder: {
         order_by: this.config.folder?.order_by || 'date_taken',
         sequential: {
@@ -672,33 +691,43 @@ class FolderProvider extends MediaProvider {
           return false;
         }
         
-        // Sort queue after scan
-        await this._sortQueueSequential();
-        
-        this.cardAdapter._log('✅ SubfolderQueue initialized and sorted for sequential mode');
+        // Skip post-scan sort for sequential mode - files already sorted during hierarchical scan
+        // Sequential mode sorts by extracted Reolink timestamps (or filenames) during file processing
+        // Post-scan sort by date_taken would reorder since EXIF dates aren't available yet
+        this.cardAdapter._log('✅ SubfolderQueue initialized (sequential mode - preserving scan order)');
         return true;
       }
     }
     
     // RANDOM MODE - Random selection
     if (mode === 'random') {
-      // V5 ARCHITECTURE: Use MediaIndexProvider when enabled, fallback to SubfolderQueue
+      // V5.3: Use MediaIndexProvider when enabled - NO SILENT FALLBACK
       if (useMediaIndex) {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
         this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.mediaIndexProvider.initialize();
         
         if (!success) {
-          console.warn('[FolderProvider] MediaIndexProvider initialization failed, falling back to SubfolderQueue');
-          // Fallback to filesystem scanning
-          this.mediaIndexProvider = null;
-        } else {
-          this.cardAdapter._log('✅ MediaIndexProvider initialized');
-          return true;
+          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
+          const filters = this.config.filters || {};
+          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
+          
+          if (hasFilters) {
+            console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
+            console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
+            throw new Error('No items match filter criteria. Try adjusting your filters.');
+          } else {
+            console.error('[FolderProvider] ❌ Media Index initialization failed');
+            console.error('[FolderProvider] 💡 Check Media Index entity exists and is populated, or set use_media_index_for_discovery: false');
+            throw new Error('Media Index initialization failed. Check entity configuration.');
+          }
         }
+        
+        this.cardAdapter._log('✅ MediaIndexProvider initialized');
+        return true;
       }
       
-      // Use SubfolderQueue (filesystem scanning) if media_index disabled or failed
+      // Use SubfolderQueue (filesystem scanning) only when Media Index explicitly disabled
       if (!this.mediaIndexProvider) {
         this.cardAdapter._log('Using SubfolderQueue for filesystem scanning (recursive:', recursive, ')');
         
@@ -827,20 +856,26 @@ class FolderProvider extends MediaProvider {
       if (item && MediaProvider.isMediaIndexActive(this.config)) {
         this.cardAdapter._log('🔍 Attempting to enrich item:', item.media_content_id);
         
-        // Extract file path - media_index expects /media/... format
-        let filePath = item.media_content_id?.replace('media-source://media_source/', '/') || '';
-        this.cardAdapter._log('📂 Extracted file path:', filePath);
+        const mediaUri = item.media_content_id;
+        this.cardAdapter._log('📂 Media URI:', mediaUri);
         
-        if (filePath) {
+        if (mediaUri) {
           try {
-            // Try to get full metadata from media_index service
+            // V5.2: Call get_file_metadata with media_source_uri (no path conversion)
             const wsCall = {
               type: 'call_service',
               domain: 'media_index',
               service: 'get_file_metadata',
-              service_data: { file_path: filePath },
+              service_data: { media_source_uri: mediaUri },
               return_response: true
             };
+            
+            // Add target entity_id if configured (required for multi-instance setups)
+            if (this.config.media_index?.entity_id) {
+              wsCall.target = {
+                entity_id: this.config.media_index.entity_id
+              };
+            }
             
             this.cardAdapter._log('📡 Calling get_file_metadata with:', wsCall);
             const response = await this.hass.callWS(wsCall);
@@ -850,6 +885,9 @@ class FolderProvider extends MediaProvider {
               // Flatten EXIF data to match MediaIndexProvider format
               const serviceMetadata = response.response;
               const exif = serviceMetadata.exif || {};
+              
+              // V5.2: Use path from service response (contains filesystem path)
+              const filePath = serviceMetadata.path || '';
               
               // Merge media_index metadata with path-based metadata
               const pathMetadata = MediaProvider.extractMetadataFromPath(filePath);
@@ -870,12 +908,16 @@ class FolderProvider extends MediaProvider {
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);
             } else {
               console.warn('[FolderProvider] ⚠️ Service returned error or no metadata:', response?.response);
-              item.metadata = MediaProvider.extractMetadataFromPath(filePath);
+              // Fallback to extracting path from URI
+              const pathFromUri = mediaUri.replace('media-source://media_source', '');
+              item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
             }
           } catch (error) {
             // Fallback to path-based metadata if service call fails
             console.error('[FolderProvider] ❌ Could not fetch media_index metadata:', error);
-            item.metadata = MediaProvider.extractMetadataFromPath(filePath);
+            // Extract path from URI for metadata fallback
+            const pathFromUri = mediaUri.replace('media-source://media_source', '');
+            item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
           }
         } else {
           console.warn('[FolderProvider] ⚠️ Could not extract file path from media_content_id');
@@ -915,11 +957,149 @@ class MediaIndexProvider extends MediaProvider {
     this.recentFilesExhausted = false; // Flag: skip priority_new_files if recent cache exhausted
     this.consecutiveHighFilterCount = 0; // Counter: consecutive queries with >80% filter rate
     this.EXHAUSTION_THRESHOLD = 2; // After 2 consecutive high-filter queries, consider exhausted
+    
+    // V5.3: Entity subscription for dynamic filter updates
+    this._entitySubscriptions = []; // Track subscribed entity IDs
+    this._entityUnsubscribe = null; // Unsubscribe function
+    this._lastFilterValues = {}; // Track last known filter values for change detection
+  }
+  
+  /**
+   * Clean up subscriptions when provider is destroyed
+   */
+  dispose() {
+    if (this._entityUnsubscribe) {
+      this._log('🧹 Unsubscribing from entity state changes');
+      this._entityUnsubscribe();
+      this._entityUnsubscribe = null;
+    }
+  }
+  
+  /**
+   * V5.3: Dispatch queue statistics event for template sensor integration
+   */
+  _dispatchQueueStats() {
+    if (!this.card) return;
+    
+    const filters = this.config.filters || {};
+    const activeFilters = [];
+    
+    if (filters.favorites) activeFilters.push('favorites');
+    if (filters.date_range?.start || filters.date_range?.end) activeFilters.push('date_range');
+    
+    const stats = {
+      queue_size: this.queue.length,
+      queue_capacity: this.queueSize,
+      filters_active: activeFilters,
+      filter_config: {
+        favorites: filters.favorites || null,
+        date_from: filters.date_range?.start || null,
+        date_to: filters.date_range?.end || null
+      },
+      timestamp: new Date().toISOString()
+    };
+    
+    this._log('📊 Queue stats:', stats);
+    
+    // V5.3: Fire event through Home Assistant event bus (shows in Developer Tools)
+    if (this.hass && this.hass.connection && this.hass.connection.sendMessage) {
+      try {
+        const promise = this.hass.connection.sendMessage({
+          type: 'fire_event',
+          event_type: 'media_card_queue_stats',
+          event_data: stats
+        });
+        
+        // Only add catch handler if sendMessage returned a promise
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch(err => {
+            console.warn('[MediaIndexProvider] Failed to fire queue stats event:', err);
+          });
+        }
+      } catch (err) {
+        console.warn('[MediaIndexProvider] Error firing queue stats event:', err);
+      }
+    }
+    
+    // Also dispatch DOM event for backward compatibility
+    if (this.card) {
+      const event = new CustomEvent('media-card-queue-stats', {
+        detail: stats,
+        bubbles: true,
+        composed: true
+      });
+      this.card.dispatchEvent(event);
+    }
   }
 
   _log(...args) {
     if (this.config?.debug_mode) {
       console.log('[MediaIndexProvider]', ...args);
+    }
+  }
+
+  /**
+   * Resolve filter value - supports both direct values and entity references
+   * @param {*} configValue - Value from config (direct value or entity_id)
+   * @param {string} expectedType - Expected type: 'boolean', 'date', 'number', 'string'
+   * @returns {Promise<*>} Resolved value or null
+   */
+  async _resolveFilterValue(configValue, expectedType) {
+    if (configValue === null || configValue === undefined) {
+      return null;
+    }
+    
+    // If it's not a string, return as-is (direct value)
+    if (typeof configValue !== 'string') {
+      return configValue;
+    }
+    
+    // Check if it looks like an entity_id (contains a dot)
+    if (!configValue.includes('.')) {
+      // Direct string value (e.g., date string "2024-01-01")
+      return configValue;
+    }
+    
+    // It's an entity_id - resolve it
+    const state = this.hass?.states[configValue];
+    if (!state) {
+      this._log(`⚠️ Filter entity not found: ${configValue}`);
+      return null;
+    }
+    
+    const domain = state.entity_id.split('.')[0];
+    
+    // Resolve based on expected type and domain
+    switch (domain) {
+      case 'input_boolean':
+        return state.state === 'on';
+      
+      case 'input_datetime':
+        // Can be date-only or datetime
+        // state.state format: "2024-01-01" or "2024-01-01 12:00:00"
+        const dateValue = state.state.split(' ')[0]; // Extract date part
+        return dateValue || null;
+      
+      case 'input_number':
+        return parseFloat(state.state) || null;
+      
+      case 'input_text':
+      case 'input_select':
+        return state.state || null;
+      
+      case 'sensor':
+        // Sensors can provide various types - infer from expected type
+        if (expectedType === 'boolean') {
+          return state.state === 'on' || state.state === 'true' || state.state === '1';
+        } else if (expectedType === 'number') {
+          return parseFloat(state.state) || null;
+        } else {
+          return state.state || null;
+        }
+      
+      default:
+        this._log(`⚠️ Unsupported entity domain for filter: ${domain}`);
+        return null;
     }
   }
 
@@ -935,14 +1115,202 @@ class MediaIndexProvider extends MediaProvider {
     // Initial query to fill queue
     const items = await this._queryMediaIndex(this.queueSize);
     
-    if (!items || items.length === 0) {
-      console.warn('[MediaIndexProvider] No items returned from media_index');
+    // V5.3: Distinguish between service failure (null) vs no results (empty array)
+    if (items === null) {
+      // Service call failed - this is a real error
+      console.error('[MediaIndexProvider] ❌ Media Index service call failed');
       return false;
+    }
+    
+    if (items.length === 0) {
+      // Service succeeded but returned no items
+      // V5.3: Check if filters are active - if so, this is likely filter exclusion
+      const filters = this.config.filters || {};
+      
+      // Check if any filter has an actual value (not just undefined/null/false/empty string)
+      const hasFavoritesFilter = filters.favorites === true || (typeof filters.favorites === 'string' && filters.favorites.trim().length > 0);
+      const hasDateFromFilter = filters.date_range?.start && filters.date_range.start.trim().length > 0;
+      const hasDateToFilter = filters.date_range?.end && filters.date_range.end.trim().length > 0;
+      const hasFilters = hasFavoritesFilter || hasDateFromFilter || hasDateToFilter;
+      
+      if (hasFilters) {
+        // Filters are active - this is expected behavior, not an error
+        console.warn('[MediaIndexProvider] ⚠️ No items match filter criteria:', {
+          favorites: filters.favorites || false,
+          date_range: filters.date_range || 'none'
+        });
+        console.warn('[MediaIndexProvider] 💡 Try adjusting your filters or verify files match criteria');
+        // Still return false to prevent display, but with clear user feedback
+        return false;
+      } else {
+        // No filters but still no items - collection might be empty
+        console.warn('[MediaIndexProvider] ⚠️ No items in collection (no filters active)');
+        return false;
+      }
     }
     
     this.queue = items;
     this._log('✅ Initialized with', this.queue.length, 'items');
+    
+    // V5.3: Dispatch queue statistics for template sensors
+    this._dispatchQueueStats();
+    
+    // V5.3: Subscribe to filter entity state changes for dynamic updates
+    await this._subscribeToFilterEntities();
+    
     return true;
+  }
+  
+  /**
+   * V5.3: Subscribe to entity state changes for dynamic filter updates
+   * Detects filter entity IDs and subscribes to their state changes
+   */
+  async _subscribeToFilterEntities() {
+    const filters = this.config.filters || {};
+    const entityIds = [];
+    
+    // Collect entity IDs from filter configuration
+    if (filters.favorites && typeof filters.favorites === 'string' && filters.favorites.includes('.')) {
+      entityIds.push(filters.favorites);
+    }
+    if (filters.date_range?.start && typeof filters.date_range.start === 'string' && filters.date_range.start.includes('.')) {
+      entityIds.push(filters.date_range.start);
+    }
+    if (filters.date_range?.end && typeof filters.date_range.end === 'string' && filters.date_range.end.includes('.')) {
+      entityIds.push(filters.date_range.end);
+    }
+    
+    if (entityIds.length === 0) {
+      this._log('No filter entities to subscribe to');
+      return;
+    }
+    
+    this._entitySubscriptions = entityIds;
+    this._log('📡 Subscribing to filter entities:', entityIds);
+    
+    // Store initial filter values for change detection
+    this._lastFilterValues = {
+      favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
+      date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
+      date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+    };
+    
+    this._log('📝 Initial filter values:', this._lastFilterValues);
+    
+    // Subscribe to state changes - use subscribeEvents but filter to our entities only
+    // NOTE: WebSocket API doesn't support entity-specific subscriptions for state_changed events,
+    // so we receive ALL state changes and filter in the callback to our watched entities
+    try {
+      this._entityUnsubscribe = await this.hass.connection.subscribeEvents(
+        async (event) => {
+          // Only process state_changed events for our filter entities
+          const changedEntityId = event.data?.entity_id;
+          if (!changedEntityId || !this._entitySubscriptions.includes(changedEntityId)) {
+            return; // Ignore non-filter entities
+          }
+          
+          const newState = event.data?.new_state?.state;
+          this._log('🔄 Filter entity changed:', changedEntityId, '→', newState);
+          
+          // CRITICAL: Update hass.states immediately with new state from event
+          // The state_changed event arrives BEFORE hass.states is updated by HA core.
+          // Direct mutation is intentional here to ensure filter resolution uses the latest values.
+          // Without this, _resolveFilterValue() would read stale state and miss the change.
+          //
+          // Why this is safe:
+          // 1. We're updating with the official new_state from HA's event system
+          // 2. This mutation happens in the event callback, ensuring single-threaded execution
+          // 3. HA core will apply the same update moments later, making this a no-op
+          // 4. The alternative (using event data directly) would require refactoring _resolveFilterValue()
+          //    to accept event data parameters, breaking its reusable design
+          //
+          // Note: While Home Assistant WebSocket API doesn't support entity-specific subscriptions
+          // for state_changed events, filtering in the callback (line 1207) ensures we only process
+          // changes to our watched filter entities, minimizing performance impact.
+          if (event.data?.new_state) {
+            this.hass.states[changedEntityId] = event.data.new_state;
+          }
+          
+          // Resolve current filter values (now using updated hass.states)
+          const currentFilters = {
+            favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
+            date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
+            date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+          };
+          
+          this._log('🔍 Resolved filter values:', currentFilters, 'vs last:', this._lastFilterValues);
+          
+          // Check if filter values actually changed
+          const filtersChanged = 
+            currentFilters.favorites !== this._lastFilterValues.favorites ||
+            currentFilters.date_from !== this._lastFilterValues.date_from ||
+            currentFilters.date_to !== this._lastFilterValues.date_to;
+          
+          if (filtersChanged) {
+            this._log('✨ Filter values changed, reloading queue:', currentFilters);
+            this._lastFilterValues = currentFilters;
+            
+            // V5.3: Clear EVERYTHING - queue, history, current media
+            this.queue = [];
+            
+            // Clear card history so we don't show old filtered items
+            if (this.card) {
+              this._log('🗑️ Clearing card state due to filter change');
+              this.card.history = [];
+              this.card.historyPosition = -1;
+              this.card.currentMedia = null;
+              // V5.3: Also clear navigation queue so it rebuilds from new provider queue
+              this.card.navigationQueue = [];
+              this.card.navigationIndex = -1;
+              this.card.isNavigationQueuePreloaded = false;
+            }
+            
+            const newItems = await this._queryMediaIndex(this.queueSize);
+            
+            if (newItems && newItems.length > 0) {
+              this.queue = newItems;
+              this._log('✅ Queue reloaded with', this.queue.length, 'items');
+              
+              // V5.3: Dispatch updated queue statistics
+              this._dispatchQueueStats();
+              
+              // Load first item from new queue
+              if (this.card) {
+                this._log('🔄 Loading first item with new filters');
+                // Clear error state in case it was set
+                this.card._errorState = null;
+                this.card.isLoading = true;
+                this.card.requestUpdate();
+                
+                if (this.card._loadNext) {
+                  await this.card._loadNext();
+                }
+                
+                this.card.isLoading = false;
+                this.card.requestUpdate();
+                this._log('✅ Card updated with new filtered media');
+              }
+            } else {
+              this._log('⚠️ No items match new filter criteria');
+              // Card will show error message via existing error handling
+              if (this.card) {
+                this.card._errorState = 'No items match filter criteria. Try adjusting your filters.';
+                this.card.currentMedia = null;
+                this.card.isLoading = false;
+                this.card.requestUpdate();
+              }
+            }
+          } else {
+            this._log('Filter entity changed but values are same, no reload needed');
+          }
+        },
+        'state_changed'
+      );
+      
+      this._log('✅ Subscribed to filter entity state changes (filtering in callback)');
+    } catch (error) {
+      console.warn('[MediaIndexProvider] Failed to subscribe to entity changes:', error);
+    }
   }
 
   async getNext() {
@@ -950,9 +1318,10 @@ class MediaIndexProvider extends MediaProvider {
     if (this.queue.length < 10) {
       this._log('Queue low, refilling...', 'current queue size:', this.queue.length);
       
-      // V5 FIX: Track paths already in queue to avoid duplicates
-      const existingPaths = new Set(this.queue.map(item => item.path));
-      this._log('Existing paths in queue:', existingPaths.size);
+      // V5 FIX: Track media_content_ids already in queue to avoid duplicates
+      // V5 URI: Now uses URIs instead of paths for deduplication
+      const existingPaths = new Set(this.queue.map(item => item.media_source_uri || item.path));
+      this._log('Existing media IDs in queue:', existingPaths.size);
       
       // V5 FIX: Also exclude paths in navigation history
       const historyPaths = new Set();
@@ -976,9 +1345,11 @@ class MediaIndexProvider extends MediaProvider {
       const items = await this._queryMediaIndex(this.queueSize, shouldUsePriority ? null : false);
       if (items && items.length > 0) {
         // V5 FIX: Filter out items already in queue OR history to avoid duplicates
-        const newItems = items.filter(item => 
-          !existingPaths.has(item.path) && !historyPaths.has(item.path)
-        );
+        // V5 URI: Compare using media_source_uri when available
+        const newItems = items.filter(item => {
+          const mediaId = item.media_source_uri || item.path;
+          return !existingPaths.has(mediaId) && !historyPaths.has(mediaId);
+        });
         const filteredCount = items.length - newItems.length;
         const filteredPercent = (filteredCount / items.length) * 100;
         this._log('Filtered', filteredCount, 'duplicate/history items (', filteredPercent.toFixed(1), '%)');
@@ -1010,9 +1381,10 @@ class MediaIndexProvider extends MediaProvider {
           const nonRecentItems = await this._queryMediaIndex(this.queueSize, false); // false = disable priority
           
           if (nonRecentItems && nonRecentItems.length > 0) {
-            const additionalItems = nonRecentItems.filter(item => 
-              !existingPaths.has(item.path) && !historyPaths.has(item.path)
-            );
+            const additionalItems = nonRecentItems.filter(item => {
+              const mediaId = item.media_source_uri || item.path;
+              return !existingPaths.has(mediaId) && !historyPaths.has(mediaId);
+            });
             this._log('Retry got', additionalItems.length, 'non-recent items');
             newItems.push(...additionalItems);
           }
@@ -1036,15 +1408,21 @@ class MediaIndexProvider extends MediaProvider {
       // V4 code already includes EXIF fields in item, so we merge path-based + EXIF
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
       
+      // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
+      // Media Index v1.1.0+ provides both path and media_source_uri
+      // Fallback to path for backward compatibility
+      const mediaId = item.media_source_uri || item.path;
+      
       return {
-        // V4: Use database path for media_content_id (service calls need this)
+        // V5: Use URI for media_content_id (Media Index v1.1.0+ provides media_source_uri)
         // URL resolution happens separately in card's _resolveMediaUrl()
-        media_content_id: item.path,
+        media_content_id: mediaId,
         media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend (V4 pattern)
-          path: item.path, // V4: Store actual file path in metadata too
+          path: item.path, // V4: Store filesystem path in metadata for logging/fallback
+          media_source_uri: item.media_source_uri, // V5: Store URI for service calls
           date_taken: item.date_taken,
           created_time: item.created_time,
           location_city: item.location_city,
@@ -1076,20 +1454,15 @@ class MediaIndexProvider extends MediaProvider {
     try {
       this._log('🔍 Querying media_index for', count, 'random items...');
       
-      // V4 CODE: Extract folder path from media_path config
-      // Database stores full paths like: /media/Photo/PhotoLibrary/2023/06
-      // Config might be: media-source://media_source/media/Photo/PhotoLibrary
-      // We need to extract: /media/Photo/PhotoLibrary
+      // V5.2: Pass folder path as-is - Media Index v1.1.0+ handles URI ↔ path conversion
+      // Config can be:
+      //   - media-source://media_source/local/folder (Media Index will convert to /config/www/local/folder)
+      //   - /media/Photo/PhotoLibrary (direct filesystem path)
+      // Media Index uses media_source_uri config to do the mapping
       let folderFilter = null;
       if (this.config.folder?.path) {
-        let path = this.config.folder.path;
-        // Remove media-source://media_source prefix if present
-        if (path.startsWith('media-source://media_source')) {
-          path = path.replace('media-source://media_source', '');
-        }
-        // Now path should be like: /media/Photo/PhotoLibrary
-        folderFilter = path;
-        this._log('🔍 Filtering by folder:', folderFilter);
+        folderFilter = this.config.folder.path;
+        this._log('🔍 Filtering by folder (URI or path):', folderFilter);
       }
       
       // V4 CODE: Call media_index.get_random_items service with return_response via WebSocket
@@ -1107,6 +1480,21 @@ class MediaIndexProvider extends MediaProvider {
         'config.folder': this.config.folder
       });
       
+      // V5.3: Extract and resolve filter values from config
+      // Supports both direct values (favorites: true) and entity references (favorites: input_boolean.show_favorites)
+      const filters = this.config.filters || {};
+      const favoritesOnly = await this._resolveFilterValue(filters.favorites, 'boolean');
+      const dateFrom = await this._resolveFilterValue(filters.date_range?.start, 'date');
+      const dateTo = await this._resolveFilterValue(filters.date_range?.end, 'date');
+      
+      if (favoritesOnly || dateFrom || dateTo) {
+        this._log('🔍 Active filters:', {
+          favorites_only: favoritesOnly,
+          date_from: dateFrom,
+          date_to: dateTo
+        });
+      }
+      
       // V4 CODE: Build WebSocket call with optional target for multi-instance support
       const wsCall = {
         type: 'call_service',
@@ -1118,6 +1506,11 @@ class MediaIndexProvider extends MediaProvider {
           recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
           file_type: configuredMediaType === 'all' ? undefined : configuredMediaType,
+          // V5.3: Favorites filter (uses EXIF is_favorited field)
+          favorites_only: favoritesOnly || undefined,
+          // V5.3: Date range filter (uses EXIF date_taken with fallback to created_time)
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: priorityNewFiles,
@@ -1182,15 +1575,16 @@ class MediaIndexProvider extends MediaProvider {
         
         // V4 CODE: Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
-          // Backend returns 'path', not 'file_path'
-          const filePath = item.path;
-          const resolvedUrl = await this._resolveMediaPath(filePath);
+          // V5 URI: Use media_source_uri for URL resolution when available
+          // Backend provides both path (filesystem) and media_source_uri (Media Index v1.1.0+)
+          const mediaId = item.media_source_uri || item.path;
+          const resolvedUrl = await this._resolveMediaPath(mediaId);
           return {
             ...item,
             url: resolvedUrl,
-            path: filePath,
-            filename: item.filename || filePath.split('/').pop(),
-            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            path: item.path, // Keep filesystem path for metadata
+            filename: item.filename || item.path.split('/').pop(),
+            folder: item.folder || item.path.substring(0, item.path.lastIndexOf('/')),
             // EXIF metadata (already present in backend response)
             date_taken: item.date_taken,
             created_time: item.created_time, // File creation time as fallback
@@ -1266,7 +1660,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this.recursive = config.folder?.recursive !== false; // Default true
     this.lastSeenValue = null; // Cursor for pagination
     this.hasMore = true; // Flag to track if more items available
-    this.reachedEnd = false; // Flag to track if we've hit the end
+    // Set to true when all items have been paged and no more results are available from the database
+    // Prevents further navigation attempts and unnecessary service calls
+    this.reachedEnd = false;
+    this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
   }
 
   _log(...args) {
@@ -1318,6 +1715,12 @@ class SequentialMediaIndexProvider extends MediaProvider {
     // If queue is empty and hasMore is false, we've reached the end
     // (hasMore=false means last query returned fewer items than requested)
     if (this.queue.length === 0 && !this.hasMore) {
+      // V5.3: Don't auto-loop if disabled (during pre-load)
+      if (this.disableAutoLoop) {
+        this._log('🛑 Reached end of sequence, auto-loop disabled, returning null');
+        return null;
+      }
+      
       this._log('🔄 Reached end of sequence (queue empty, hasMore=false), looping back to start...');
       this.lastSeenValue = null;
       this.reachedEnd = false;
@@ -1360,14 +1763,18 @@ class SequentialMediaIndexProvider extends MediaProvider {
       // Extract metadata using MediaProvider helper (V5 architecture)
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
       
+      // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
+      const mediaId = item.media_source_uri || item.path;
+      
       return {
-        // V4: Use database path for media_content_id (service calls need this)
-        media_content_id: item.path,
+        // V5: Use URI for media_content_id (Media Index v1.1.0+ provides media_source_uri)
+        media_content_id: mediaId,
         media_content_type: MediaUtils.detectFileType(item.path) || 'image',
         metadata: {
           ...pathMetadata,
           // EXIF data from media_index backend
-          path: item.path, // V4: Store actual file path in metadata
+          path: item.path, // V4: Store filesystem path in metadata for logging/fallback
+          media_source_uri: item.media_source_uri, // V5: Store URI for service calls
           date_taken: item.date_taken,
           created_time: item.created_time,
           location_city: item.location_city,
@@ -1397,24 +1804,23 @@ class SequentialMediaIndexProvider extends MediaProvider {
     try {
       this._log('🔍 Querying media_index for ordered files...');
       
-      // Extract folder path from config
+      // V5.2: Pass folder path as-is - Media Index v1.1.0+ handles URI ↔ path conversion
+      // Config can be:
+      //   - media-source://media_source/local/folder (Media Index will convert using media_source_uri mapping)
+      //   - /media/Photo/PhotoLibrary (direct filesystem path)
+      //   - media-source://immich/... (skip - Immich paths not supported by Media Index)
       let folderFilter = null;
       if (this.config.folder?.path) {
         let path = this.config.folder.path;
         
-        // Skip Immich and other integration paths - media_index only works with filesystem paths
+        // Skip Immich and other integration paths - media_index only works with filesystem/media_source paths
         if (path.startsWith('media-source://immich')) {
           this._log('⚠️ Immich path detected - media_index incompatible, skipping folder filter');
           // Don't set folderFilter - will query all media_index files
-        } else if (path.startsWith('media-source://media_source')) {
-          // Remove media-source://media_source prefix for filesystem paths
-          path = path.replace('media-source://media_source', '');
-          folderFilter = path;
-          this._log('🔍 Filtering by folder:', folderFilter);
         } else {
-          // Direct filesystem path
+          // Pass path as-is - Media Index will handle conversion
           folderFilter = path;
-          this._log('🔍 Filtering by folder:', folderFilter);
+          this._log('🔍 Filtering by folder (URI or path):', folderFilter);
         }
       }
       
@@ -1505,14 +1911,15 @@ class SequentialMediaIndexProvider extends MediaProvider {
         
         // Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
-          const filePath = item.path;
-          const resolvedUrl = await this._resolveMediaPath(filePath);
+          // V5 URI: Use media_source_uri for URL resolution when available
+          const mediaId = item.media_source_uri || item.path;
+          const resolvedUrl = await this._resolveMediaPath(mediaId);
           return {
             ...item,
             url: resolvedUrl,
-            path: filePath,
-            filename: item.filename || filePath.split('/').pop(),
-            folder: item.folder || filePath.substring(0, filePath.lastIndexOf('/')),
+            path: item.path, // Keep filesystem path for metadata
+            filename: item.filename || item.path.split('/').pop(),
+            folder: item.folder || item.path.substring(0, item.path.lastIndexOf('/')),
             // EXIF metadata from backend
             date_taken: item.date_taken,
             created_time: item.created_time,
@@ -1888,9 +2295,18 @@ class SubfolderQueue {
       return false;
     }
 
+    // Sequential mode: Always clear queue and rescan to ensure proper ordering from start
+    // Random mode: Can reuse existing queue
+    const isSequentialMode = folderMode === 'sequential';
     if (this.queue.length > 0) {
-      this._log('✅ Queue already populated with', this.queue.length, 'items - skipping scan');
-      return true;
+      if (isSequentialMode) {
+        this._log('🔄 Sequential mode: Clearing existing queue (', this.queue.length, 'items) to rescan from beginning');
+        this.queue = [];
+        this.shownItems.clear();
+      } else {
+        this._log('✅ Queue already populated with', this.queue.length, 'items - skipping scan');
+        return true;
+      }
     }
 
     this._log('🚀 Starting subfolder queue initialization');
@@ -1956,10 +2372,14 @@ class SubfolderQueue {
                     this.discoveredFolders.map(f => `${f.path} (${f.fileCount} files)`).join(', '));
         }
         
-        if (this.queue.length > 0) {
+        // Only shuffle in random mode - sequential mode maintains sorted order
+        const isSequentialMode = this.card.config.folder_mode === 'sequential';
+        if (this.queue.length > 0 && !isSequentialMode) {
           this.shuffleQueue();
           this.queueShuffleCounter = 0;
           this._log('🔀 Final shuffle completed after hierarchical scan - queue size:', this.queue.length);
+        } else if (isSequentialMode) {
+          this._log('📋 Sequential mode: Preserving sorted order (no shuffle) - queue size:', this.queue.length);
         }
         
         return true;
@@ -1977,6 +2397,8 @@ class SubfolderQueue {
   }
 
   async hierarchicalScanAndPopulate(basePath, currentDepth = 0, maxDepth = null) {
+    this._log('🔎 hierarchicalScanAndPopulate called:', 'basePath:', basePath, 'currentDepth:', currentDepth, 'maxDepth:', maxDepth);
+    
     await this._waitIfBackgroundPaused();
     
     if (!this.isScanning || this._scanCancelled) {
@@ -2015,6 +2437,12 @@ class SubfolderQueue {
         apiTimeout
       ]);
 
+      this._log('🔍 API Response for', basePath);
+      this._log('   - children:', folderContents?.children?.length || 0);
+      if (folderContents?.children && folderContents.children.length > 0) {
+        this._log('   - First 3 items:', JSON.stringify(folderContents.children.slice(0, 3), null, 2));
+      }
+
       if (!folderContents?.children) {
         this._log('📁 No children found at depth:', currentDepth);
         return { filesProcessed: 0, foldersProcessed: 0 };
@@ -2035,11 +2463,16 @@ class SubfolderQueue {
         return this.card._isMediaFile(pathForExtCheck);
       });
       
+      this._log('🔍 After initial filter:', allFiles.length, 'files (from', folderContents.children.length, 'total items)');
+      
       let files = allFiles;
       
       // Filter by configured media_type (image/video/all)
       const configuredMediaType = this.card.config.media_type || 'all';
+      this._log('🔍 Configured media_type:', configuredMediaType);
+      
       if (configuredMediaType !== 'all') {
+        const beforeFilter = files.length;
         files = files.filter(file => {
           // Use title for Immich compatibility (title = clean filename)
           const filePath = file.title || file.media_content_id || '';
@@ -2054,6 +2487,7 @@ class SubfolderQueue {
           // If neither, exclude
           return false;
         });
+        this._log('🔍 Media type filter (', configuredMediaType, '):', beforeFilter, '→', files.length, 'files');
       }
       
       // V5 FIX: Exclude _Junk and _Edit folders from root of media path
@@ -2107,17 +2541,96 @@ class SubfolderQueue {
       const perFileProbability = Math.min(basePerFileProbability * weightMultiplier, 1.0);
       
       const existingQueueIds = new Set(this.queue.map(item => item.media_content_id));
-      const availableFiles = files.filter(file => 
+      let availableFiles = files.filter(file => 
         !this.shownItems.has(file.media_content_id) && 
         !existingQueueIds.has(file.media_content_id)
       );
       
-      for (const file of availableFiles) {
-        await this._waitIfBackgroundPaused();
+      // Sequential mode: Sort files within folder to match folder sort order
+      if (isSequentialMode) {
+        const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
         
-        if (Math.random() < perFileProbability) {
+        // Helper to extract sortable timestamp/date key from any media source
+        const getTimestampForSort = (file) => {
+          const mediaId = file.media_content_id;
+          
+          // 1. Reolink: Extract the second timestamp (actual video start time)
+          if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
+            const parts = mediaId.split('|');
+            const timestamps = parts.filter(p => /^\d{14}$/.test(p));
+            // Use second timestamp if available (matches video title time)
+            const timestamp = timestamps.length > 1 ? timestamps[1] : timestamps[0];
+            if (timestamp) {
+              return timestamp; // YYYYMMDDHHMMSS format - sorts correctly as string
+            }
+          }
+          
+          // 2. Try extracting date from filename using MediaProvider's date extraction
+          // For Immich and other sources, file.title is the clean filename
+          const filename = file.title || MediaProvider.extractFilename(mediaId);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          
+          if (dateFromFilename) {
+            // Convert to YYYYMMDDHHMMSS format for consistent sorting
+            const year = dateFromFilename.getFullYear();
+            const month = String(dateFromFilename.getMonth() + 1).padStart(2, '0');
+            const day = String(dateFromFilename.getDate()).padStart(2, '0');
+            const hours = String(dateFromFilename.getHours()).padStart(2, '0');
+            const minutes = String(dateFromFilename.getMinutes()).padStart(2, '0');
+            const seconds = String(dateFromFilename.getSeconds()).padStart(2, '0');
+            return `${year}${month}${day}${hours}${minutes}${seconds}`;
+          }
+          
+          // 3. Fallback to title or filename for alphabetical sorting
+          return (file.title || filename || '').toLowerCase();
+        };
+        
+        availableFiles = [...availableFiles].sort((a, b) => {
+          const keyA = getTimestampForSort(a);
+          const keyB = getTimestampForSort(b);
+          
+          // Detect if keys are timestamps (14 digits) or filenames (alphabetical)
+          const isTimestampA = /^\d{14}$/.test(keyA);
+          const isTimestampB = /^\d{14}$/.test(keyB);
+          
+          // Files with timestamps should always come before files without timestamps
+          if (isTimestampA && !isTimestampB) return -1; // A (has date) before B (no date)
+          if (!isTimestampA && isTimestampB) return 1;  // B (has date) before A (no date)
+          
+          // Both have timestamps OR both are filenames - sort normally
+          if (orderDirection === 'desc') {
+            return keyB.localeCompare(keyA); // Newest first (higher timestamp = more recent)
+          } else {
+            return keyA.localeCompare(keyB); // Oldest first (lower timestamp = older)
+          }
+        });
+        
+        this._log('📅 Sequential: Sorted', availableFiles.length, 'files', orderDirection, 'in', folderName);
+        
+        // Sequential mode: Respect slideshow_window to limit scanning
+        // Add files in order until we reach the target queue size
+        const targetQueueSize = this.card.config.slideshow_window || 1000;
+        for (const file of availableFiles) {
+          // Stop adding if we've reached the target queue size
+          if (this.queue.length >= targetQueueSize) {
+            this._log('⏹️ Sequential: Reached target queue size', targetQueueSize, '- stopping scan');
+            this._scanCancelled = true; // Stop hierarchical scan
+            break;
+          }
+          
+          await this._waitIfBackgroundPaused();
           await this.addFileToQueueWithBatching(file, folderName);
           filesAdded++;
+        }
+      } else {
+        // Random mode: Use probability sampling
+        for (const file of availableFiles) {
+          await this._waitIfBackgroundPaused();
+          
+          if (Math.random() < perFileProbability) {
+            await this.addFileToQueueWithBatching(file, folderName);
+            filesAdded++;
+          }
         }
       }
 
@@ -2132,16 +2645,55 @@ class SubfolderQueue {
       this._log('🔍 Recursion check at depth', currentDepth, ':', 
                 'subfolders:', subfolders.length, 
                 'effectiveMaxDepth:', effectiveMaxDepth, 
-                'shouldRecurse:', shouldRecurse);
+                'currentDepth:', currentDepth,
+                'shouldRecurse:', shouldRecurse,
+                'stopScanning:', this.stopScanning);
+      
+      if (subfolders.length > 0) {
+        this._log('📂 Subfolder sample:', subfolders[0]?.title || subfolders[0]?.media_content_id.split('/').pop(),
+                  '| Full ID:', subfolders[0]?.media_content_id);
+      }
       
       if (shouldRecurse) {
         await this._waitIfBackgroundPaused();
 
-        const shuffledSubfolders = [...subfolders].sort(() => Math.random() - 0.5);
+        // Sort subfolders for efficient sequential scanning
+        const isSequentialMode = this.card.config.folder_mode === 'sequential';
+        const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
+        
+        let sortedSubfolders;
+        if (isSequentialMode) {
+          // Sequential mode: Sort folders by name (descending = newest first, ascending = oldest first)
+          // Most camera/NVR folders use date-based naming (YYYYMMDD, YYYY-MM-DD, etc.)
+          sortedSubfolders = [...subfolders].sort((a, b) => {
+            const nameA = (a.title || a.media_content_id.split('/').pop() || '').toLowerCase();
+            const nameB = (b.title || b.media_content_id.split('/').pop() || '').toLowerCase();
+            
+            if (orderDirection === 'desc') {
+              // Descending: Z to A, newest dates first (20251123 before 20251122)
+              return nameB.localeCompare(nameA);
+            } else {
+              // Ascending: A to Z, oldest dates first (20251122 before 20251123)
+              return nameA.localeCompare(nameB);
+            }
+          });
+          
+          this._log('📅 Sequential mode: Sorted', subfolders.length, 'folders', orderDirection, 
+                    '| First:', sortedSubfolders[0]?.title || sortedSubfolders[0]?.media_content_id.split('/').pop(),
+                    '| Last:', sortedSubfolders[sortedSubfolders.length - 1]?.title || sortedSubfolders[sortedSubfolders.length - 1]?.media_content_id.split('/').pop());
+        } else {
+          // Random mode: Shuffle to prevent alphabetical bias
+          sortedSubfolders = [...subfolders].sort(() => Math.random() - 0.5);
+          this._log('🎲 Random mode: Shuffled', subfolders.length, 'folders');
+        }
 
+        // Sequential mode: Process folders one-at-a-time to maintain order
+        // Random mode: Process 2 at a time for better performance
+        const maxConcurrent = isSequentialMode ? 1 : 2;
+        
         const subfolderResults = await this.processLevelConcurrently(
-          shuffledSubfolders, 
-          2,
+          sortedSubfolders, 
+          maxConcurrent,
           currentDepth + 1, 
           effectiveMaxDepth
         );
@@ -2232,16 +2784,20 @@ class SubfolderQueue {
     };
     this.queueHistory.push(historyEntry);
 
-    this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
+    // Skip shuffle logic in sequential mode (order must be preserved)
+    const isSequentialMode = this.card.config.folder_mode === 'sequential';
+    if (!isSequentialMode) {
+      this.queueShuffleCounter = (this.queueShuffleCounter || 0) + 1;
 
-    const shuffleThreshold = Math.min(
-      this.SHUFFLE_MAX_BATCH, 
-      Math.max(this.SHUFFLE_MIN_BATCH, Math.floor(this.queue.length * this.SHUFFLE_PERCENTAGE))
-    );
+      const shuffleThreshold = Math.min(
+        this.SHUFFLE_MAX_BATCH, 
+        Math.max(this.SHUFFLE_MIN_BATCH, Math.floor(this.queue.length * this.SHUFFLE_PERCENTAGE))
+      );
 
-    if (this.queueShuffleCounter >= shuffleThreshold) {
-      this.shuffleQueue();
-      this.queueShuffleCounter = 0;
+      if (this.queueShuffleCounter >= shuffleThreshold) {
+        this.shuffleQueue();
+        this.queueShuffleCounter = 0;
+      }
     }
   }
 
@@ -2574,6 +3130,12 @@ class SubfolderQueue {
         return direction === 'asc' ? comparison : -comparison;
       });
       
+      // If ALL files are non-dated, preserve scan order (files were already sorted during hierarchical scan)
+      if (datedFiles.length === 0 && nonDatedFiles.length === this.queue.length) {
+        this._log('✅ All files non-dated - preserving scan order (already sorted during hierarchical scan)');
+        return; // Keep existing queue order
+      }
+      
       // Combine: dated files first, then non-dated files
       this.queue = [...datedFiles, ...nonDatedFiles];
       
@@ -2642,14 +3204,15 @@ class SubfolderQueue {
 }
 
 /**
- * MediaCardV5a - Main card component
+ * MediaCard - Main card component
  * Phase 2: Now uses provider pattern to display media
  */
-/**
- * MediaCardV5a - Main card component
- * Phase 2: Now uses provider pattern to display media
- */
-class MediaCardV5a extends LitElement {
+class MediaCard extends LitElement {
+  // Card height validation constants
+  static CARD_HEIGHT_MIN = 100;
+  static CARD_HEIGHT_MAX = 5000;
+  static CARD_HEIGHT_STEP = 50;
+  
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -2712,6 +3275,13 @@ class MediaCardV5a extends LitElement {
     this.historyIndex = -1;       // Current position in history (-1 = at end)
     this.shownItems = new Set();  // Prevent duplicate display until aged out
     this._maxQueueSize = 0;       // Track highest queue size seen (for position indicator)
+    
+    // V5.3: Navigation Queue - Separate from provider queue
+    // This is what the user navigates through (populated on-demand via getNext())
+    this.navigationQueue = [];    // Array of items user can navigate
+    this.navigationIndex = -1;    // Current position (-1 = uninitialized, first increment → 0)
+    this.maxNavQueueSize = 200;   // Will be updated in setConfig based on slideshow_window * 2
+    this.isNavigationQueuePreloaded = false; // V5.3: Track if small collection was pre-loaded
     
     this.currentMedia = null;
     this.mediaUrl = '';
@@ -2776,6 +3346,11 @@ class MediaCardV5a extends LitElement {
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
     
+    // Cleanup provider subscriptions to prevent memory leaks
+    if (this.provider?.dispose) {
+      this.provider.dispose();
+    }
+    
     // V4 CODE REUSE: Store navigation history and queue for reconnection (ha-media-card.js lines 4945-4975)
     const mediaPath = this.config?.folder?.path || this.config?.media_path;
     if (mediaPath && (this.provider || this.history.length > 0)) {
@@ -2805,7 +3380,7 @@ class MediaCardV5a extends LitElement {
     
     // V4: Stop auto-refresh interval to prevent zombie card
     if (this._refreshInterval) {
-      this._log('🛑 Clearing auto-refresh interval:', this._refreshInterval);
+      this._log('🧹 Clearing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
@@ -3024,10 +3599,25 @@ class MediaCardV5a extends LitElement {
         const originalValue = config.max_height_pixels;
         delete config.max_height_pixels;
         this._log('⚠️ Removed invalid max_height_pixels:', originalValue);
-      } else if (height < 100 || height > 5000) {
+      } else if (height < MediaCard.CARD_HEIGHT_MIN || height > MediaCard.CARD_HEIGHT_MAX) {
         // Out of range - clamp to valid range
-        config.max_height_pixels = Math.max(100, Math.min(5000, height));
+        config.max_height_pixels = Math.max(MediaCard.CARD_HEIGHT_MIN, Math.min(MediaCard.CARD_HEIGHT_MAX, height));
         this._log('⚠️ Clamped max_height_pixels to valid range (100-5000):', config.max_height_pixels);
+      }
+    }
+    
+    // V5.3: Validate and clamp card_height if present (PR #37 by BasicCPPDev)
+    if (config.card_height !== undefined) {
+      const height = parseInt(config.card_height);
+      if (isNaN(height) || height <= 0) {
+        // Invalid value - remove it
+        const originalValue = config.card_height;
+        delete config.card_height;
+        this._log('⚠️ Removed invalid card_height:', originalValue);
+      } else if (height < MediaCard.CARD_HEIGHT_MIN || height > MediaCard.CARD_HEIGHT_MAX) {
+        // Out of range - clamp to valid range
+        config.card_height = Math.max(MediaCard.CARD_HEIGHT_MIN, Math.min(MediaCard.CARD_HEIGHT_MAX, height));
+        this._log('⚠️ Clamped card_height to valid range (100-5000):', config.card_height);
       }
     }
     
@@ -3079,7 +3669,12 @@ class MediaCardV5a extends LitElement {
     };
     
     // V4: Set debug mode from config
-    this._debugMode = this.config.debug_mode === true;
+    // Honor debug_mode config (YAML setting or runtime toggle via debug button)
+    // This ensures debug button respects existing debug_mode: true in config
+    // Don't override if already set by debug button (runtime toggle)
+    if (this._debugMode === undefined || this._debugMode === false) {
+      this._debugMode = this.config.debug_mode === true;
+    }
     
     // Set aspect ratio mode data attribute for CSS styling (from V4)
     const aspectMode = config.aspect_mode || 'default';
@@ -3089,11 +3684,22 @@ class MediaCardV5a extends LitElement {
       this.removeAttribute('data-aspect-mode');
     }
     
-    // Set custom max height if configured
-    if (config.max_height_pixels && config.max_height_pixels > 0) {
-      this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
-    } else {
+    // V5.3: Set card height CSS variables with precedence logic (PR #37 by BasicCPPDev)
+    // card_height takes precedence over max_height_pixels when both are present
+    if (config.card_height && config.card_height > 0) {
+      this.style.setProperty('--card-height', `${config.card_height}px`);
+      this.setAttribute('data-card-height', 'true');
+      // Remove max_height if card_height is set (precedence)
       this.style.removeProperty('--media-max-height');
+    } else {
+      this.style.removeProperty('--card-height');
+      this.removeAttribute('data-card-height');
+      // Apply max_height_pixels only if card_height is not set (backward compatibility)
+      if (config.max_height_pixels && config.max_height_pixels > 0) {
+        this.style.setProperty('--media-max-height', `${config.max_height_pixels}px`);
+      } else {
+        this.style.removeProperty('--media-max-height');
+      }
     }
     
     // V5: Set media source type attribute for CSS targeting
@@ -3103,6 +3709,11 @@ class MediaCardV5a extends LitElement {
     // V5: Set position indicator position attribute for CSS targeting
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
     this.setAttribute('data-position-indicator-position', positionIndicatorPosition);
+    
+    // V5.3: Set max navigation queue size based on slideshow_window
+    const slideshowWindow = this.config.slideshow_window || 100;
+    this.maxNavQueueSize = slideshowWindow * 2;
+    this._log('Set maxNavQueueSize to', this.maxNavQueueSize, '(slideshow_window * 2)');
     
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
@@ -3216,7 +3827,7 @@ class MediaCardV5a extends LitElement {
           break;
         
         default:
-          console.warn('[MediaCardV5a] Unknown media source type:', type, '- defaulting to single_media');
+          console.warn('[MediaCard] Unknown media source type:', type, '- defaulting to single_media');
           this.provider = new SingleMediaProvider(this.config, this.hass);
       }
 
@@ -3240,16 +3851,204 @@ class MediaCardV5a extends LitElement {
           }
         } else {
           this._log('Loading first media');
+          
+          // V5.3: Smart pre-load - only for small collections
+          await this._smartPreloadNavigationQueue();
+          
           await this._loadNext();
         }
       } else {
-        console.error('[MediaCardV5a] Provider initialization failed');
+        console.error('[MediaCard] Provider initialization failed');
+        this._errorState = 'Provider initialization failed';
       }
     } catch (error) {
-      console.error('[MediaCardV5a] Error initializing provider:', error);
+      console.error('[MediaCard] Error initializing provider:', error);
+      // V5.3: Store error message for display in card UI
+      this._errorState = error.message || 'Provider initialization failed';
     } finally {
       this.isLoading = false;
     }
+  }
+
+  // V5.3: Smart pre-load - only for small collections that fit in window
+  async _smartPreloadNavigationQueue() {
+    this._log('🔍 _smartPreloadNavigationQueue CALLED');
+    
+    // Check if this is a small collection that we should pre-load
+    // Need to access the actual provider (might be wrapped by FolderProvider)
+    let actualProvider = this.provider;
+    
+    this._log('_smartPreloadNavigationQueue - checking provider type:', actualProvider.constructor.name);
+    this._log('actualProvider properties:', Object.keys(actualProvider));
+    
+    // Unwrap FolderProvider to get actual provider
+    if (actualProvider.sequentialProvider) {
+      this._log('Found sequentialProvider');
+      actualProvider = actualProvider.sequentialProvider;
+    } else if (actualProvider.mediaIndexProvider) {
+      this._log('Found mediaIndexProvider');
+      actualProvider = actualProvider.mediaIndexProvider;
+    } else if (actualProvider.subfolderQueue) {
+      this._log('Found subfolderQueue');
+      // File system scanning via SubfolderQueue
+      const queue = actualProvider.subfolderQueue;
+      const queueSize = queue.queue?.length || 0;
+      const isScanComplete = !queue.isScanning && !queue.discoveryInProgress;
+      
+      // Check mode - pre-loading only makes sense for sequential mode
+      // Random mode manages its own queue dynamically with refills
+      const mode = this.config.folder?.mode || 'random';
+      this._log(`Checking SubfolderQueue: mode=${mode}, queue=${queueSize}, isScanning=${queue.isScanning}, discoveryInProgress=${queue.discoveryInProgress}, isScanComplete=${isScanComplete}`);
+      
+      // Pre-load ONLY for sequential mode if scan is complete and collection is small
+      if (mode === 'sequential' && isScanComplete && queueSize > 0 && queueSize <= this.maxNavQueueSize) {
+        this._log(`Small sequential collection (${queueSize} items), pre-loading...`);
+        
+        // Transform queue items directly
+        for (const rawItem of queue.queue) {
+          // SubfolderQueue stores full media browser items - use media_content_id directly
+          const mediaId = rawItem.media_content_id;
+          const pathForMetadata = rawItem.title || rawItem.media_content_id;
+          
+          // Extract metadata from path/title
+          const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata);
+          
+          // For Reolink URIs, try to extract timestamp from media_content_id
+          // Format: media-source://reolink/FILE|device_id|channel|sub|timestamp1|timestamp2|timestamp3
+          // timestamp2 appears to be the actual video start time (matches title "HH:MM:SS duration")
+          if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
+            const parts = mediaId.split('|');
+            // Look for 14-digit timestamps (YYYYMMDDHHmmSS)
+            const timestamps = parts.filter(p => /^\d{14}$/.test(p));
+            
+            // Use second timestamp if available (actual video start time), otherwise first
+            const timestampToUse = timestamps.length > 1 ? timestamps[1] : timestamps[0];
+            
+            if (timestampToUse) {
+              const timestampDate = MediaProvider.extractDateFromFilename(timestampToUse);
+              if (timestampDate) {
+                pathMetadata.date = timestampDate;
+                pathMetadata.date_taken = timestampDate;
+                this._log(`📅 Extracted Reolink timestamp [${timestamps.indexOf(timestampToUse) + 1}/${timestamps.length}]: ${timestampToUse} → ${timestampDate.toISOString()}`);
+              }
+            }
+          }
+          
+          const transformedItem = {
+            media_content_id: mediaId,
+            media_content_type: rawItem.media_class || MediaUtils.detectFileType(pathForMetadata) || 'image',
+            title: rawItem.title, // Keep title at top level for display
+            metadata: {
+              ...pathMetadata,
+              title: rawItem.title,
+              path: pathForMetadata
+            }
+          };
+          
+          this.navigationQueue.push(transformedItem);
+          
+          if (this.navigationQueue.length >= this.maxNavQueueSize) break;
+        }
+        
+        this._log(`✅ Pre-loaded ${this.navigationQueue.length} items from SubfolderQueue`);
+        this.isNavigationQueuePreloaded = true;
+      } else {
+        if (mode === 'random') {
+          this._log(`Skipping pre-load: Random mode uses dynamic queue refills from ${queue.discoveredFolders?.length || 0} folders`);
+        } else {
+          this._log(`Skipping pre-load: mode=${mode}, isScanComplete=${isScanComplete}, queueSize=${queueSize}, maxNavQueueSize=${this.maxNavQueueSize}`);
+        }
+      }
+      
+      return; // Exit early, SubfolderQueue handled
+    }
+    
+    // Determine if small collection based on provider type
+    let isSmallCollection = false;
+    let estimatedSize = 0;
+    
+    if (actualProvider.hasMore !== undefined) {
+      // SequentialMediaIndexProvider: Use hasMore flag
+      isSmallCollection = actualProvider.hasMore === false;
+      estimatedSize = actualProvider.queue?.length || 0;
+      this._log(`Checking sequential provider: hasMore=${actualProvider.hasMore}, queue=${estimatedSize}`);
+    } else if (actualProvider.queue) {
+      // MediaIndexProvider (random mode): Small if initial query returned less than requested
+      estimatedSize = actualProvider.queue.length;
+      const requestedSize = actualProvider.queueSize || 100;
+      isSmallCollection = estimatedSize < requestedSize;
+      this._log(`Checking random provider: queue=${estimatedSize}, requested=${requestedSize}, isSmall=${isSmallCollection}`);
+    }
+    
+    if (!isSmallCollection) {
+      this._log(`Large collection detected, skipping pre-load (estimated: ${estimatedSize})`);
+      return;
+    }
+    
+    if (estimatedSize > this.maxNavQueueSize) {
+      this._log(`Collection too large (${estimatedSize} items), skipping pre-load`);
+      return;
+    }
+    
+    this._log(`Small collection detected (${estimatedSize} items), pre-loading all items...`);
+    
+    // Different pre-load strategy based on provider type
+    if (actualProvider.hasMore !== undefined) {
+      // SequentialMediaIndexProvider: Disable auto-loop and call getNext()
+      actualProvider.disableAutoLoop = true;
+      
+      let loadedCount = 0;
+      while (loadedCount < this.maxNavQueueSize) {
+        const item = await this.provider.getNext();
+        if (!item) {
+          this._log(`Pre-load complete: loaded ${loadedCount} items (provider exhausted)`);
+          break;
+        }
+        this.navigationQueue.push(item);
+        loadedCount++;
+      }
+      
+      actualProvider.disableAutoLoop = false;
+    } else if (actualProvider.queue) {
+      // MediaIndexProvider (random): Manually transform queue items (can't disable auto-refill)
+      this._log('Random provider: manually transforming queue items...');
+      
+      for (const rawItem of actualProvider.queue) {
+        // Transform using same logic as getNext() (but don't shift from queue)
+        const pathMetadata = MediaProvider.extractMetadataFromPath(rawItem.path);
+        const mediaId = rawItem.media_source_uri || rawItem.path;
+        
+        const transformedItem = {
+          media_content_id: mediaId,
+          media_content_type: MediaUtils.detectFileType(rawItem.path) || 'image',
+          metadata: {
+            ...pathMetadata,
+            path: rawItem.path,
+            media_source_uri: rawItem.media_source_uri,
+            date_taken: rawItem.date_taken,
+            created_time: rawItem.created_time,
+            location_city: rawItem.location_city,
+            location_state: rawItem.location_state,
+            location_country: rawItem.location_country,
+            location_name: rawItem.location_name,
+            has_coordinates: rawItem.has_coordinates || false,
+            is_geocoded: rawItem.is_geocoded || false,
+            latitude: rawItem.latitude,
+            longitude: rawItem.longitude,
+            is_favorited: rawItem.is_favorited || false
+          }
+        };
+        
+        this.navigationQueue.push(transformedItem);
+        
+        if (this.navigationQueue.length >= this.maxNavQueueSize) break;
+      }
+      
+      this._log(`Transformed ${this.navigationQueue.length} items from provider queue`);
+    }
+    
+    this._log(`✅ Pre-loaded ${this.navigationQueue.length} items into navigation queue`);
+    this.isNavigationQueuePreloaded = true; // Mark as pre-loaded
   }
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
@@ -3263,92 +4062,157 @@ class MediaCardV5a extends LitElement {
     this._handleAutoAdvanceModeOnNavigate();
 
     try {
-      // Check if we're replaying history (went back, now going forward)
-      if (this.historyIndex >= 0 && this.historyIndex < this.history.length - 1) {
-        this.historyIndex++;
-        const item = this.history[this.historyIndex];
-        this._log('📖 Replaying from history:', item.title);
-        this.currentMedia = item;
-        // V4: media_content_id should be the path for service calls
-        this._currentMediaPath = item.media_content_id;
-        this._currentMetadata = item.metadata || null;
+      // V5.3: Navigation Queue Architecture
+      // Always increment (starts at -1, first increment → 0)
+      this.navigationIndex++;
+      
+      // Need to load more items?
+      if (this.navigationIndex >= this.navigationQueue.length) {
+        // V5.3: If this was a pre-loaded small collection, don't load more - just wrap
+        if (this.isNavigationQueuePreloaded) {
+          this._log('Pre-loaded collection exhausted, wrapping to beginning');
+          this.navigationIndex = 0;
+        } else {
+          this._log('Navigation queue exhausted, loading from provider');
+          let item = await this.provider.getNext();
         
-        // V5: Clear cached full metadata when media changes
-        this._fullMetadata = null;
-        
-        await this._resolveMediaUrl();
-        this.requestUpdate();
+          if (item) {
+            this._log('Got item from provider:', item.title);
+          
+            // V5.3: Check if item already exists in navigation queue (prevent duplicates)
+            let alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
+            let attempts = 0;
+            const maxAttempts = 10; // Prevent infinite loop if provider keeps returning same item
+            
+            while (alreadyInQueue && attempts < maxAttempts) {
+              this._log(`⚠️ Item already in navigation queue (attempt ${attempts + 1}), getting next:`, item.media_content_id);
+              item = await this.provider.getNext();
+              if (!item) break;
+              alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
+              attempts++;
+            }
+            
+            // Log if we hit the safety limit (indicates provider may be stuck)
+            if (attempts >= maxAttempts && alreadyInQueue) {
+              this._log('⚠️ Max attempts reached in duplicate detection - provider may be returning same item repeatedly');
+              // Treat as provider exhaustion - wrap to beginning
+              this._log('Treating as provider exhaustion, wrapping to beginning');
+              
+              // Validate queue has items before wrapping
+              if (this.navigationQueue.length === 0) {
+                this._log('ERROR: Cannot wrap - navigation queue is empty');
+                this._errorState = 'Provider exhausted with no items in queue';
+                return;
+              }
+              
+              this.navigationIndex = 0;
+              return;
+            }
+            
+            if (!item || alreadyInQueue) {
+              // All items are duplicates or provider exhausted, wrap to beginning
+              this._log('Provider exhausted or only returning duplicates, wrapping to beginning');
+              
+              // Validate queue has items before wrapping
+              if (this.navigationQueue.length === 0) {
+                this._log('ERROR: Cannot wrap - navigation queue is empty');
+                this._errorState = 'No media available in navigation queue';
+                return;
+              }
+              
+              this.navigationIndex = 0;
+              return;
+            }
+            
+            this._log('✅ Adding new item to navigation queue:', item.title);
+          
+            // V5: Extract metadata if not provided
+            if (!item.metadata) {
+              this._log('Extracting metadata for:', item.media_content_id);
+              item.metadata = await this._extractMetadataFromItem(item);
+            }
+          
+            // Add to navigation queue
+            this.navigationQueue.push(item);
+          
+            // Implement sliding window: remove oldest if exceeding max size
+            if (this.navigationQueue.length > this.maxNavQueueSize) {
+              this._log('Navigation queue exceeds max size, removing oldest item');
+              this.navigationQueue.shift();
+              this.navigationIndex--; // Adjust index for removed item
+            }
+          } else {
+            // No more items available from provider, wrap to beginning
+            this._log('Provider exhausted, wrapping to beginning');
+            
+            // Validate queue has items before wrapping
+            if (this.navigationQueue.length === 0) {
+              this._log('ERROR: Cannot wrap - navigation queue is empty');
+              this._errorState = 'No media available from provider';
+              return;
+            }
+            
+            this.navigationIndex = 0;
+          }
+        }
+      }
+      
+      // Get item at current navigation index
+      const item = this.navigationQueue[this.navigationIndex];
+      if (!item) {
+        this._log('ERROR: No item at navigationIndex', this.navigationIndex);
         return;
       }
-
-      // Get fresh item from provider
-      this._log('Getting next item from provider');
-      const item = await this.provider.getNext();
-      this._log('Got item:', item);
       
-      if (item) {
-        // V5: Extract metadata from path if not provided by backend (now async with media_index support)
-        this._log('Item metadata check - has metadata:', !!item.metadata, 'item:', item);
-        if (!item.metadata) {
-          this._log('Calling _extractMetadataFromItem for:', item.media_content_id);
-          item.metadata = await this._extractMetadataFromItem(item);
-          this._log('Extracted metadata:', item.metadata);
-        } else {
-          this._log('Item already has metadata from queue enrichment');
-          this._log('Metadata content:', item.metadata);
-        }
-        
-        // Add to history
+      this._log('Displaying navigation queue item:', item.title, 'at index', this.navigationIndex);
+      
+      // Add to history for tracking (providers use this for exclusion)
+      // Check by media_content_id to avoid duplicate object references
+      const alreadyInHistory = this.history.some(h => h.media_content_id === item.media_content_id);
+      if (!alreadyInHistory) {
         this.history.push(item);
-        this.historyIndex = this.history.length - 1;
         
-        // V5: Dynamic history size formula to prevent duplicates with priority_new_files
-        // Formula considers:
-        // - Multiple queue refills (5x multiplier ensures variety)
-        // - Discovery window duration (prevent re-showing files within window)
-        // Memory: ~600-800 bytes per item = 80KB @ 100, 800KB @ 1000, 4MB @ 5000 (negligible)
+        // V5: Dynamic history size formula
         const queueSize = this.config.slideshow_window || 100;
         const autoAdvanceInterval = this.config.auto_advance_interval || 5;
         const discoveryWindow = this.config.folder?.new_files_threshold_seconds || 3600;
         
-        const minQueueMultiplier = 5; // See at least 5 queue refills before repeating
+        const minQueueMultiplier = 5;
         const discoveryWindowItems = Math.floor(discoveryWindow / autoAdvanceInterval);
         const maxHistory = Math.min(
           Math.max(
-            queueSize * minQueueMultiplier,  // e.g., 20 × 5 = 100
-            discoveryWindowItems,             // e.g., 3600/5 = 720
-            100                               // Absolute minimum
+            queueSize * minQueueMultiplier,
+            discoveryWindowItems,
+            100
           ),
-          5000 // Cap for memory sanity
+          5000
         );
         
         if (this.history.length > maxHistory) {
           this.history.shift();
-          this.historyIndex = this.history.length - 1;
         }
-        
-        this.currentMedia = item;
-        this._log('Set currentMedia:', this.currentMedia);
-        
-        // V5: Store metadata in pending state until image loads
-        // This prevents metadata/counters from flashing before the new image appears
-        this._pendingMediaPath = item.media_content_id;
-        this._pendingMetadata = item.metadata;
-        
-        // V5: Clear caches when media changes
-        this._fullMetadata = null;
-        this._folderDisplayCache = null;
-        
-        await this._resolveMediaUrl();
-        this.requestUpdate(); // Force re-render
-        
-        // V5: Setup auto-advance after successfully loading media
-        this._setupAutoRefresh();
-      } else {
-        this._log('Provider returned null item');
       }
+      
+      // Display the item
+      this.currentMedia = item;
+      this._currentMediaPath = item.media_content_id;
+      this._currentMetadata = item.metadata || null;
+      
+      // V5: Store metadata in pending state until image loads
+      this._pendingMediaPath = item.media_content_id;
+      this._pendingMetadata = item.metadata;
+      
+      // V5: Clear caches when media changes
+      this._fullMetadata = null;
+      this._folderDisplayCache = null;
+      
+      await this._resolveMediaUrl();
+      this.requestUpdate();
+      
+      // V5: Setup auto-advance after successfully loading media
+      this._setupAutoRefresh();
     } catch (error) {
-      console.error('[MediaCardV5a] Error loading next media:', error);
+      console.error('[MediaCard] Error loading next media:', error);
     }
   }
 
@@ -3361,39 +4225,41 @@ class MediaCardV5a extends LitElement {
     // V4: Handle auto_advance_mode when manually navigating
     this._handleAutoAdvanceModeOnNavigate();
 
-    // V5: Simple history navigation - just move index back
-    if (this.history.length === 0) {
-      this._log('📖 No history available');
+    // V5.3: Navigation Queue Architecture
+    if (this.navigationQueue.length === 0) {
+      this._log('No items in navigation queue');
       return;
     }
 
-    // If at end (-1), go to second-to-last item
-    if (this.historyIndex === -1) {
-      this.historyIndex = this.history.length - 2;
-    } else if (this.historyIndex > 0) {
-      this.historyIndex--;
-    } else {
-      this._log('📖 Already at oldest item in history');
+    // Move backward in navigation queue
+    this.navigationIndex--;
+    
+    // Wrap to last item if going before beginning
+    if (this.navigationIndex < 0) {
+      this._log('Wrapping to last item in navigation queue');
+      this.navigationIndex = this.navigationQueue.length - 1;
+    }
+    
+    // Get item at current navigation index
+    const item = this.navigationQueue[this.navigationIndex];
+    if (!item) {
+      this._log('ERROR: No item at navigationIndex', this.navigationIndex);
       return;
     }
-
-    if (this.historyIndex >= 0 && this.historyIndex < this.history.length) {
-      const item = this.history[this.historyIndex];
-      this._log('📖 Going back to history item:', item.title);
-      
-      this.currentMedia = item;
-      // V4: media_content_id should be the path for service calls
-      this._currentMediaPath = item.media_content_id;
-      this._currentMetadata = item.metadata || null;
-      
-      // V5: Clear cached full metadata when media changes
-      this._fullMetadata = null;
-      
-      await this._resolveMediaUrl();
-      this.requestUpdate();
-    } else {
-      console.warn('[MediaCardV5a] Invalid history index:', this.historyIndex);
-    }
+    
+    this._log('Going back to navigation queue item:', item.title, 'at index', this.navigationIndex);
+    
+    // Display the item
+    this.currentMedia = item;
+    this._currentMediaPath = item.media_content_id;
+    this._currentMetadata = item.metadata || null;
+    
+    // V5: Clear cached full metadata when media changes
+    this._fullMetadata = null;
+    this._folderDisplayCache = null;
+    
+    await this._resolveMediaUrl();
+    this.requestUpdate();
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -3620,7 +4486,7 @@ class MediaCardV5a extends LitElement {
         this.mediaUrl = finalUrl;
         this.requestUpdate();
       } catch (error) {
-        console.error('[MediaCardV5a] Failed to resolve media URL:', error);
+        console.error('[MediaCard] Failed to resolve media URL:', error);
         this.mediaUrl = '';
         this.requestUpdate();
       }
@@ -3650,7 +4516,7 @@ class MediaCardV5a extends LitElement {
         return; // Success - don't fall through to fallback
       } catch (error) {
         // File doesn't exist or can't be accessed - skip to next
-        console.warn('[MediaCardV5a] File not found or inaccessible, skipping to next:', mediaId, error.message);
+        console.warn('[MediaCard] File not found or inaccessible, skipping to next:', mediaId, error.message);
         
         // Track file as missing to avoid re-querying from media_index
         if (this.provider?.mediaIndexProvider) {
@@ -3677,7 +4543,7 @@ class MediaCardV5a extends LitElement {
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
         if (this._validationDepth >= MAX_VALIDATION_ATTEMPTS) {
-          console.error('[MediaCardV5a] Too many consecutive missing files, stopping validation');
+          console.error('[MediaCard] Too many consecutive missing files, stopping validation');
           this._validationDepth = 0;
           return;
         }
@@ -3720,7 +4586,7 @@ class MediaCardV5a extends LitElement {
         });
         return resolved.url;
       } catch (error) {
-        console.error('[MediaCardV5a] Failed to resolve media path:', mediaPath, error);
+        console.error('[MediaCard] Failed to resolve media path:', mediaPath, error);
         return '';
       }
     }
@@ -3740,7 +4606,7 @@ class MediaCardV5a extends LitElement {
     // Handle case where target is null (element destroyed/replaced)
     if (!target) {
       errorMessage = 'Media element unavailable';
-      console.warn('[MediaCardV5a] Media error event has null target - element may have been destroyed');
+      console.warn('[MediaCard] Media error event has null target - element may have been destroyed');
     } else if (error) {
       switch (error.code) {
         case error.MEDIA_ERR_ABORTED:
@@ -3771,7 +4637,7 @@ class MediaCardV5a extends LitElement {
     const isSynologyUrl = this.mediaUrl && this.mediaUrl.includes('/synology_dsm/') && this.mediaUrl.includes('authSig=');
     if (isSynologyUrl) {
       errorMessage = 'Synology DSM authentication expired - try refreshing';
-      console.warn('[MediaCardV5a] Synology DSM URL authentication may have expired:', this.mediaUrl);
+      console.warn('[MediaCard] Synology DSM URL authentication may have expired:', this.mediaUrl);
     }
     
     // Apply pending metadata even on error to avoid stale metadata from previous media
@@ -3812,7 +4678,7 @@ class MediaCardV5a extends LitElement {
             }
           })
           .catch(err => {
-            console.error('[MediaCardV5a] URL refresh attempt failed:', err);
+            console.error('[MediaCard] URL refresh attempt failed:', err);
             this._showMediaError(errorMessage, isSynologyUrl);
           });
       } else {
@@ -3832,7 +4698,7 @@ class MediaCardV5a extends LitElement {
     // V4: Log additional context for Synology DSM URLs
     if (this.mediaUrl && this.mediaUrl.includes('/synology_dsm/')) {
       this._log('🔄 Synology DSM URL detected - checking authentication signature');
-      console.warn('[MediaCardV5a] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
+      console.warn('[MediaCard] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
     }
     
     try {
@@ -3889,11 +4755,11 @@ class MediaCardV5a extends LitElement {
         }
       }
       
-      console.warn('[MediaCardV5a] ⚠️ All URL refresh attempts failed or returned same URL');
+      console.warn('[MediaCard] ⚠️ All URL refresh attempts failed or returned same URL');
       return false;
       
     } catch (error) {
-      console.error('[MediaCardV5a] ❌ URL refresh failed:', error);
+      console.error('[MediaCard] ❌ URL refresh failed:', error);
       return false;
     }
   }
@@ -4245,6 +5111,16 @@ class MediaCardV5a extends LitElement {
       this._retryAttempts.delete(this.mediaUrl);
     }
     
+    // V5.3: Apply default zoom AFTER image loads (PR #37 by BasicCPPDev)
+    // This ensures the inline transform style isn't lost during re-render
+    if (this.config.default_zoom && this.config.default_zoom > 1) {
+      const img = this.shadowRoot.querySelector('.media-container img');
+      if (img) {
+        const level = Math.max(1.0, Math.min(5.0, this.config.default_zoom));
+        this._zoomToPoint(img, 50, 50, level);
+      }
+    }
+    
     // V5: Apply pending metadata now that image has loaded
     // This synchronizes metadata/counter updates with the new image appearing
     if (this._pendingMetadata !== null) {
@@ -4568,12 +5444,12 @@ class MediaCardV5a extends LitElement {
     const enableInfo = config.enable_info !== false;
     const enableFullscreen = config.enable_fullscreen === true;
     const enableRefresh = this.config.show_refresh_button === true;
+    const enableDebugButton = this.config.debug_button === true;
     
-    // Don't render anything if all are disabled
-    if (!enablePause && !showMediaIndexButtons && !enableFullscreen && !enableRefresh) {
-      return html``;
-    }
-    if (!enablePause && !enableFavorite && !enableDelete && !enableEdit && !enableInfo && !enableFullscreen && !enableRefresh) {
+    // Don't render anything if all buttons are disabled
+    const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo));
+    if (!anyButtonEnabled) {
       return html``;
     }
 
@@ -4590,6 +5466,14 @@ class MediaCardV5a extends LitElement {
             @click=${this._handlePauseClick}
             title="${isPaused ? 'Resume' : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableDebugButton ? html`
+          <button
+            class="action-btn debug-btn ${this._debugMode ? 'active' : ''}"
+            @click=${this._handleDebugButtonClick}
+            title="${this._debugMode ? 'Disable Debug Mode' : 'Enable Debug Mode'}">
+            <ha-icon icon="${this._debugMode ? 'mdi:bug' : 'mdi:bug-outline'}"></ha-icon>
           </button>
         ` : ''}
         ${enableRefresh ? html`
@@ -4681,26 +5565,28 @@ class MediaCardV5a extends LitElement {
       this._log('Reset _maxQueueSize to', currentQueueSize, '(queue shrunk significantly)');
     }
     
-    // Use max queue size for stable "Y" display (prevents confusing fluctuations)
-    const totalCount = this._maxQueueSize;
-    if (totalCount <= 1) {
-      return html``;
+    // V5.3: Use navigation queue for position indicator
+    const totalCount = this.navigationQueue.length;
+    if (totalCount === 0 || this.navigationIndex < 0) {
+      return html``; // Don't show until initialized (navigationIndex starts at -1)
     }
 
-    // Current position in history (historyIndex === -1 means at end/latest)
-    let rawPosition = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
+    // Current position is navigationIndex (starts at 0 after first increment from -1)
+    const currentIndex = this.navigationIndex;
+    const currentPosition = currentIndex + 1;
     
-    // When cycling through queue, wrap position back to 1 instead of exceeding totalCount
-    // Ensure currentIndex stays within bounds [0, totalCount-1]
-    // Note: totalCount is always > 1 here due to early return on line 4508
-    const currentIndex = rawPosition % totalCount;
+    // Total is the max of queue length and history length
+    const totalSeen = Math.max(totalCount, this.history.length);
 
     // Show position indicator if enabled
     let positionIndicator = html``;
     if (this.config.show_position_indicator !== false) {
+      // Only show "X of Y" if X != Y (hide when they're equal to avoid "20 of 20")
+      const showTotal = currentPosition !== totalSeen;
+      
       positionIndicator = html`
         <div class="position-indicator">
-          ${currentIndex + 1} of ${totalCount}
+          ${currentPosition}${showTotal ? ` of ${totalSeen}` : ''}
         </div>
       `;
     }
@@ -4964,21 +5850,21 @@ class MediaCardV5a extends LitElement {
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     // CRITICAL: Capture current state NOW before async operations
-    const targetPath = this._currentMediaPath;
+    const targetUri = this._currentMediaPath;
     const isFavorite = this._currentMetadata?.is_favorited || false;
     const newState = !isFavorite;
     
-    console.warn(`💗 FAVORITE CAPTURE: path="${targetPath}", current_is_favorited=${isFavorite}, new_state=${newState}`);
+    console.warn(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
     console.warn(`💗 CURRENT METADATA:`, this._currentMetadata);
     
     try {
-      // V4: Call media_index service via WebSocket API
+      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_favorite',
         service_data: {
-          file_path: targetPath,
+          media_source_uri: targetUri,
           is_favorite: newState
         },
         return_response: true
@@ -4991,7 +5877,7 @@ class MediaCardV5a extends LitElement {
       
       const response = await this.hass.callWS(wsCall);
       
-      console.warn(`✅ Favorite toggled for ${targetPath}: ${newState}`, response);
+      console.warn(`✅ Favorite toggled for ${targetUri}: ${newState}`, response);
       
       // Update current metadata
       if (this._currentMetadata) {
@@ -5011,6 +5897,32 @@ class MediaCardV5a extends LitElement {
     e.stopPropagation();
     this._setPauseState(!this._isPaused);
     this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
+  }
+  
+  // Handle debug button click - toggle debug mode dynamically
+  _handleDebugButtonClick(e) {
+    e.stopPropagation();
+    
+    // Toggle debug mode
+    this._debugMode = !this._debugMode;
+    
+    // Update config.debug_mode directly (bypass setConfig to avoid defaults)
+    this.config.debug_mode = this._debugMode;
+    
+    // Fire config-changed event to persist
+    const event = new CustomEvent('config-changed', {
+      detail: { config: this.config },
+      bubbles: true,
+      composed: true
+    });
+    this.dispatchEvent(event);
+    
+    const status = this._debugMode ? 'ENABLED' : 'DISABLED';
+    console.log(`🐛 [MediaCard] Debug mode ${status} - will persist across reloads`);
+    console.log(`🐛 [MediaCard] Persisted config.debug_mode:`, this.config.debug_mode);
+    
+    // Force re-render to update button visual state
+    this.requestUpdate();
   }
   
   // Handle refresh button click - reload current media
@@ -5068,18 +5980,13 @@ class MediaCardV5a extends LitElement {
     // Or if overlay is already open but media changed (no cached metadata)
     if (this._showInfoOverlay && this._currentMediaPath && !this._fullMetadata) {
       try {
-        // Convert media-source:// URL to database path format
-        let filePath = this._currentMediaPath;
-        if (filePath.startsWith('media-source://media_source/')) {
-          filePath = filePath.replace('media-source://media_source/', '/');
-        }
-        
+        // V5.2: Pass media_source_uri as-is to Media Index
         const wsCall = {
           type: 'call_service',
           domain: 'media_index',
           service: 'get_file_metadata',
           service_data: {
-            file_path: filePath
+            media_source_uri: this._currentMediaPath
           },
           return_response: true
         };
@@ -5111,18 +6018,13 @@ class MediaCardV5a extends LitElement {
     this._fetchingMetadata = true;
     
     try {
-      // Convert media-source:// URL to database path format
-      let filePath = this._currentMediaPath;
-      if (filePath.startsWith('media-source://media_source/')) {
-        filePath = filePath.replace('media-source://media_source/', '/');
-      }
-      
+      // V5.2: Pass media_source_uri as-is to Media Index
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_file_metadata',
         service_data: {
-          file_path: filePath
+          media_source_uri: this._currentMediaPath
         },
         return_response: true
       };
@@ -5163,19 +6065,8 @@ class MediaCardV5a extends LitElement {
     this._showDeleteConfirmation(targetPath, thumbnailUrl, filename);
   }
 
-  // V5 FIX: Convert media-source URI to filesystem path for media_index services
-  _convertToFilesystemPath(mediaSourceUri) {
-    if (!mediaSourceUri) return null;
-    
-    // Strip media-source://media_source prefix if present
-    // Example: media-source://media_source/media/Photo/PhotoLibrary/file.jpg -> /media/Photo/PhotoLibrary/file.jpg
-    if (mediaSourceUri.startsWith('media-source://media_source')) {
-      return mediaSourceUri.replace('media-source://media_source', '');
-    }
-    
-    // Already a filesystem path
-    return mediaSourceUri;
-  }
+  // V5.2: _convertToFilesystemPath removed - Media Index v1.1.0+ accepts media_source_uri directly
+  // No path conversion needed anymore
   
   // Get thumbnail URL from media browser (same as used in file picker)
   async _getMediaThumbnail(filePath) {
@@ -5268,26 +6159,19 @@ class MediaCardV5a extends LitElement {
     });
   }
   
-  async _performDelete(targetPath) {
-    if (!targetPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+  async _performDelete(targetUri) {
+    if (!targetUri || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      // V5 FIX: Convert media-source URI to filesystem path
-      const filesystemPath = this._convertToFilesystemPath(targetPath);
+      this._log('🗑️ Deleting file:', targetUri);
       
-      if (!filesystemPath) {
-        throw new Error('Invalid media path');
-      }
-      
-      this._log('🗑️ Deleting file:', filesystemPath, '(from URI:', targetPath, ')');
-      
-      // V4: Call media_index service via WebSocket API
+      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'delete_media',
         service_data: {
-          file_path: filesystemPath
+          media_source_uri: targetUri
         },
         return_response: true
       };
@@ -5306,14 +6190,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Same logic as _performEdit - prevent showing deleted files
       
-      // Add to provider's exclusion list (use captured targetPath for exclusion)
+      // Add to provider's exclusion list (use captured targetUri for exclusion)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(targetPath);
-        this._log(`📝 Added to provider exclusion list: ${targetPath}`);
+        this.provider.excludedFiles.add(targetUri);
+        this._log(`📝 Added to provider exclusion list: ${targetUri}`);
       }
       
-      // Remove from navigation history (use captured targetPath)
-      const historyIndex = this.history.findIndex(h => h.media_content_id === targetPath);
+      // Remove from navigation history (use captured targetUri)
+      const historyIndex = this.history.findIndex(h => h.media_content_id === targetUri);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
@@ -5557,26 +6441,19 @@ class MediaCardV5a extends LitElement {
     });
   }
   
-  async _performEdit(targetPath) {
-    if (!targetPath || !MediaProvider.isMediaIndexActive(this.config)) return;
+  async _performEdit(targetUri) {
+    if (!targetUri || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      // V5 FIX: Convert media-source URI to filesystem path
-      const filesystemPath = this._convertToFilesystemPath(targetPath);
+      this._log('✏️ Marking file for edit:', targetUri);
       
-      if (!filesystemPath) {
-        throw new Error('Invalid media path');
-      }
-      
-      this._log('✏️ Marking file for edit:', filesystemPath, '(from URI:', targetPath, ')');
-      
-      // V4: Call media_index service via WebSocket API
+      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'mark_for_edit',
         service_data: {
-          file_path: filesystemPath,
+          media_source_uri: targetUri,
           mark_for_edit: true
         },
         return_response: true
@@ -5596,14 +6473,14 @@ class MediaCardV5a extends LitElement {
       // V4 CODE REUSE: Remove file from history and exclude from future queries
       // Copied from ha-media-card.js lines 6008-6020
       
-      // Add to provider's exclusion list to prevent reappearance (use captured targetPath)
+      // Add to provider's exclusion list to prevent reappearance (use captured targetUri)
       if (this.provider && this.provider.excludedFiles) {
-        this.provider.excludedFiles.add(targetPath);
-        this._log(`📝 Added to provider exclusion list: ${targetPath}`);
+        this.provider.excludedFiles.add(targetUri);
+        this._log(`📝 Added to provider exclusion list: ${targetUri}`);
       }
       
-      // Remove from navigation history (use captured targetPath)
-      const historyIndex = this.history.findIndex(h => h.media_content_id === targetPath);
+      // Remove from navigation history (use captured targetUri)
+      const historyIndex = this.history.findIndex(h => h.media_content_id === targetUri);
       if (historyIndex >= 0) {
         this.history.splice(historyIndex, 1);
         // Adjust history position if we removed an earlier item
@@ -6151,19 +7028,67 @@ class MediaCardV5a extends LitElement {
       display: block;
     }
     
-    /* Custom max height override with aspect ratio preservation */
-    /* Only apply in default mode (no aspect-mode attribute set) */
-    :host(:not([data-aspect-mode])) img {
-      max-height: var(--media-max-height, none);
-      width: auto;
-      height: auto;
-      object-fit: contain;
+    /* V5.3: Fixed card height - only applies in default mode (PR #37 by BasicCPPDev) */
+    /* Title is excluded from height constraint - rendered outside the fixed container */
+    :host([data-card-height]:not([data-aspect-mode])) {
+      display: block;
     }
-    :host(:not([data-aspect-mode])) video {
-      max-height: var(--media-max-height, none);
+    
+    :host([data-card-height]:not([data-aspect-mode])) ha-card {
+      display: block;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) .card {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) .title {
+      flex: 0 0 auto;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) .media-container {
+      height: var(--card-height);
+      width: 100%;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    
+    :host([data-card-height]:not([data-aspect-mode])) img,
+    :host([data-card-height]:not([data-aspect-mode])) video {
+      max-height: 100%;
+      max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
+      display: block;
+    }
+    
+    /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
+    :host(:not([data-aspect-mode]):not([data-card-height])) .media-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    :host(:not([data-aspect-mode]):not([data-card-height])) img {
+      max-height: var(--media-max-height, 400px);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    :host(:not([data-aspect-mode]):not([data-card-height])) video {
+      max-height: var(--media-max-height, 400px);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
     }
     
     /* Remove max-height constraint in fullscreen mode */
@@ -6291,7 +7216,7 @@ class MediaCardV5a extends LitElement {
       font-size: 0.85em;
       line-height: 1.2;
       pointer-events: none;
-      z-index: 11;
+      z-index: 5;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
@@ -6392,6 +7317,17 @@ class MediaCardV5a extends LitElement {
     .pause-btn.paused:hover {
       color: var(--primary-color, #03a9f4);
       background: rgba(3, 169, 244, 0.25);
+    }
+
+    /* Debug button active state - warning color when enabled */
+    .debug-btn.active {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.15);
+    }
+
+    .debug-btn.active:hover {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.25);
     }
 
     .favorite-btn.favorited {
@@ -6539,7 +7475,7 @@ class MediaCardV5a extends LitElement {
       font-size: 0.8em;
       font-weight: 500;
       pointer-events: none;
-      z-index: 15;
+      z-index: 8;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
     }
@@ -6574,7 +7510,7 @@ class MediaCardV5a extends LitElement {
       display: flex;
       gap: 6px;
       pointer-events: none;
-      z-index: 15;
+      z-index: 8;
       max-width: 200px;
       overflow: hidden;
     }
@@ -6878,7 +7814,7 @@ class MediaCardV5a extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10000;
+      z-index: 999999;
     }
     
     .confirmation-dialog {
@@ -6946,11 +7882,45 @@ class MediaCardV5a extends LitElement {
       `;
     }
 
-    if (!this.currentMedia) {
+    // V5.3: Show error state if provider initialization failed
+    if (this._errorState) {
+      const errorMessage = typeof this._errorState === 'string' 
+        ? this._errorState 
+        : (this._errorState.message || 'Unknown error');
+      
       return html`
         <ha-card>
           <div class="card">
-            <div class="placeholder">No media configured</div>
+            <div class="placeholder" style="color: var(--error-color, #db4437); padding: 16px;">
+              <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Configuration Error</div>
+              <div>${errorMessage}</div>
+            </div>
+          </div>
+        </ha-card>
+      `;
+    }
+
+    if (!this.currentMedia) {
+      // Show helpful message based on media_type filter
+      const mediaType = this.config.media_type || 'all';
+      let message = 'No media configured';
+      let hint = '';
+      
+      if (mediaType === 'image') {
+        message = 'No images found';
+        hint = 'Try changing Media Type to "video" or "all" if folder contains videos';
+      } else if (mediaType === 'video') {
+        message = 'No videos found';
+        hint = 'Try changing Media Type to "image" or "all" if folder contains images';
+      }
+      
+      return html`
+        <ha-card>
+          <div class="card">
+            <div class="placeholder">
+              <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
+              ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
+            </div>
           </div>
         </ha-card>
       `;
@@ -7066,7 +8036,6 @@ class MediaCardV5a extends LitElement {
             alt="${this.currentMedia.title || 'Media'}"
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
-            style="width: 100%; height: auto; display: block;"
           />
         `}
         ${this._renderNavigationZones()}
@@ -7163,10 +8132,10 @@ class MediaCardV5a extends LitElement {
 }
 
 /**
- * MediaCardV5aEditor - V4 editor with full functionality
+ * MediaCardEditor - Card editor with full functionality
  * Will be adapted for v5 architecture in next phase
  */
-class MediaCardV5aEditor extends LitElement {
+class MediaCardEditor extends LitElement {
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -7546,6 +8515,120 @@ class MediaCardV5aEditor extends LitElement {
     return folders.map(p => p.path).join('\n');
   }
 
+  // Filter event handlers
+  _handleFavoritesFilterChanged(ev) {
+    const favoritesEnabled = ev.target.checked;
+    
+    // Ensure filters object exists
+    const filters = { ...this._config.filters };
+    
+    if (favoritesEnabled) {
+      filters.favorites = true;
+    } else {
+      delete filters.favorites;
+    }
+    
+    // Remove filters object if empty
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _handleDateRangeStartChanged(ev) {
+    const startDate = ev.target.value || null;
+    
+    // Ensure filters and date_range objects exist
+    const filters = { ...this._config.filters };
+    const dateRange = { ...filters.date_range };
+    
+    if (startDate) {
+      dateRange.start = startDate;
+    } else {
+      delete dateRange.start;
+    }
+    
+    // Update or remove date_range
+    if (dateRange.start || dateRange.end) {
+      filters.date_range = dateRange;
+    } else {
+      delete filters.date_range;
+    }
+    
+    // Update or remove filters
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _handleDateRangeEndChanged(ev) {
+    const endDate = ev.target.value || null;
+    
+    // Ensure filters and date_range objects exist
+    const filters = { ...this._config.filters };
+    const dateRange = { ...filters.date_range };
+    
+    if (endDate) {
+      dateRange.end = endDate;
+    } else {
+      delete dateRange.end;
+    }
+    
+    // Update or remove date_range
+    if (dateRange.start || dateRange.end) {
+      filters.date_range = dateRange;
+    } else {
+      delete filters.date_range;
+    }
+    
+    // Update or remove filters
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+    
+    this._fireConfigChanged();
+  }
+
+  _getDateRangeDescription() {
+    const filters = this._config.filters || {};
+    const dateRange = filters.date_range || {};
+    const start = dateRange.start;
+    const end = dateRange.end;
+    
+    if (start && end) {
+      return `📅 Showing media from ${start} to ${end}`;
+    } else if (start) {
+      return `📅 Showing media from ${start} onwards`;
+    } else if (end) {
+      return `📅 Showing media up to ${end}`;
+    }
+    return '';
+  }
+
   _parsePriorityFolders(text) {
     // NOT USED - keeping for backward compatibility
     if (!text || text.trim() === '') return [];
@@ -7829,6 +8912,19 @@ class MediaCardV5aEditor extends LitElement {
       this._config = { ...this._config, max_height_pixels: value };
     } else {
       const { max_height_pixels, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
+  // V5.3: Card height handler (PR #37 by BasicCPPDev)
+  _cardHeightChanged(ev) {
+    const value = parseInt(ev.target.value);
+    // Only store positive integers; everything else removes the property
+    if (!isNaN(value) && value > 0) {
+      this._config = { ...this._config, card_height: value };
+    } else {
+      const { card_height, ...rest } = this._config;
       this._config = rest;
     }
     this._fireConfigChanged();
@@ -8350,6 +9446,19 @@ class MediaCardV5aEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  // V5.3: Default zoom handler (PR #37 by BasicCPPDev)
+  _defaultZoomChanged(ev) {
+    const value = parseFloat(ev.target.value);
+    // Only store valid zoom levels; everything else removes the property
+    if (!isNaN(value) && value > 1) {
+      this._config = { ...this._config, default_zoom: value };
+    } else {
+      const { default_zoom, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _renderInputBooleanEntityOptions() {
     if (!this.hass || !this.hass.states) {
       return html``;
@@ -8658,13 +9767,26 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
-    this._log('Adding media files to browser:', mediaContent.children.length, 'items');
+    // ALWAYS log - bypassing debug check for diagnosis
+
+    console.log('[MediaCard] Adding media files to browser:', mediaContent.children.length, 'items');
+    
+    // Log first few items for debugging (especially for Reolink integration)
+    if (mediaContent.children && mediaContent.children.length > 0) {
+      console.log('[MediaCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
+    }
     
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
     const hasMediaFiles = itemsToCheck.some(item => {
       const isFolder = item.can_expand;
+      // Check media_class first (works for Reolink and other API-based sources)
+      if (!isFolder && (item.media_class === 'image' || item.media_class === 'video')) {
+        return true;
+      }
+      // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = !isFolder && this._isMediaFile(fileName);
+      console.log(`[MediaCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
       return isMedia;
     });
     
@@ -8763,17 +9885,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     // Filter items to display based on media type configuration
     const itemsToShow = (mediaContent.children || []).filter(item => {
-      if (item.can_expand) return true;
+      if (item.can_expand) {
+        console.log(`[MediaCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
+        return true;
+      }
       
+      // Check media_class first (works for Reolink, Immich, and other API-based sources)
+      if (item.media_class === 'image' || item.media_class === 'video') {
+        console.log(`[MediaCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
+        return true;
+      }
+      
+      // If media type filtering is configured, check file type
       if (this._config.media_type && this._config.media_type !== 'all') {
         const fileName = this._getItemDisplayName(item);
         const fileType = this._detectFileType(fileName);
-        return fileType === this._config.media_type;
+        const included = fileType === this._config.media_type;
+        console.log(`[MediaCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
+        return included;
       }
       
+      // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
-      return this._isMediaFile(fileName);
+      const isMedia = this._isMediaFile(fileName);
+      console.log(`[MediaCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
+      return isMedia;
     });
+    
+    console.log(`[MediaCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
     
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
@@ -8966,6 +10105,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             path: folderPath
           }
         };
+        this._log('Folder mode: Updated path to', folderPath);
       } else {
         // In single_media mode - ask if they want to switch to folder mode
         const switchToFolder = confirm(
@@ -8985,6 +10125,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               recursive: true
             }
           };
+          this._log('Switched to folder mode with path:', folderPath);
         } else {
           this._config = {
             ...this._config,
@@ -9216,7 +10357,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _handleMediaPicked(mediaContentId) {
-    this._log('Media picked:', mediaContentId);
+    console.log('[MediaCard] Media picked:', mediaContentId);
     
     const mediaSourceType = this._config.media_source_type || 'single_media';
     
@@ -9263,16 +10404,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     }
     
-    // Auto-detect media type from extension
-    const extension = mediaContentId.split('.').pop()?.toLowerCase();
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
-      this._config.media_type = 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
-      this._config.media_type = 'image';
+    // Auto-detect media type from extension or media-source protocol
+    let detectedType = null;
+    
+    // Check for Reolink video source
+    if (mediaContentId.includes('media-source://reolink/')) {
+      detectedType = 'video';
+      console.log('[MediaCard] Detected Reolink video source');
+    } else {
+      // Try extension detection for filesystem sources
+      const extension = mediaContentId.split('.').pop()?.toLowerCase();
+      if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
+        detectedType = 'video';
+      } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension)) {
+        detectedType = 'image';
+      }
+    }
+    
+    if (detectedType) {
+      this._config.media_type = detectedType;
+      console.log('[MediaCard] Auto-detected media type:', detectedType);
     }
     
     this._fireConfigChanged();
-    this._log('Config updated (media selected):', this._config);
+    console.log('[MediaCard] Config updated (media selected):', this._config);
   }
 
   static styles = css`
@@ -9487,6 +10642,77 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           ` : ''}
         </div>
+
+        <!-- Filters Section (available when Media Index is enabled) -->
+        ${hasMediaIndex && isFolderMode && folderConfig.use_media_index_for_discovery !== false ? html`
+          <div style="background: var(--primary-background-color, #fafafa); padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--divider-color, #e0e0e0);">
+            <div style="margin-bottom: 12px;">
+              <strong>🔍 Filters (Media Index Required)</strong>
+            </div>
+            <p style="margin: 4px 0 16px 0; font-size: 13px; color: var(--secondary-text-color, #666);">
+              Filter media items by favorites, date ranges, or other criteria. Uses Media Index database for fast queries.
+            </p>
+            
+            <!-- Favorites Filter -->
+            <div class="config-row">
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: 500;">
+                <input
+                  type="checkbox"
+                  .checked=${this._config.filters?.favorites === true}
+                  @change=${this._handleFavoritesFilterChanged}
+                />
+                <span>Show favorites only</span>
+              </label>
+              <div style="font-size: 12px; color: var(--secondary-text-color, #666); margin-top: 4px; margin-left: 24px;">
+                ${this._config.filters?.favorites === true
+                  ? '⭐ Only showing favorited media'
+                  : 'Showing all media (favorites and non-favorites)'}
+              </div>
+            </div>
+
+            <!-- Date Range Filter -->
+            <div style="margin-top: 16px;">
+              <div style="font-weight: 500; margin-bottom: 8px;">📅 Date Range Filter</div>
+              <p style="margin: 4px 0 12px 0; font-size: 12px; color: var(--secondary-text-color, #666);">
+                Filter by EXIF date_taken (falls back to created_time). Leave empty for no limit.
+              </p>
+              
+              <div class="config-row">
+                <label>Start Date</label>
+                <div>
+                  <input
+                    type="date"
+                    .value=${this._config.filters?.date_range?.start || ''}
+                    @input=${this._handleDateRangeStartChanged}
+                    placeholder="YYYY-MM-DD"
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media from this date onwards (leave empty for no lower limit)</div>
+                </div>
+              </div>
+
+              <div class="config-row">
+                <label>End Date</label>
+                <div>
+                  <input
+                    type="date"
+                    .value=${this._config.filters?.date_range?.end || ''}
+                    @input=${this._handleDateRangeEndChanged}
+                    placeholder="YYYY-MM-DD"
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media up to this date (leave empty for no upper limit)</div>
+                </div>
+              </div>
+
+              ${this._config.filters?.date_range?.start || this._config.filters?.date_range?.end ? html`
+                <div style="margin-top: 8px; padding: 8px; background: var(--info-color, #e3f2fd); border-radius: 4px; font-size: 12px;">
+                  ${this._getDateRangeDescription()}
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        ` : ''}
 
         <!-- Folder Configuration (when media_source_type = "folder") -->
         ${isFolderMode ? html`
@@ -9830,6 +11056,38 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 placeholder="Auto (no limit)"
               />
               <div class="help-text">Maximum height in pixels (100-5000, applies in default mode)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Card Height (pixels)</label>
+            <div>
+              <input
+                type="number"
+                min="100"
+                max="5000"
+                step="50"
+                .value=${this._config.card_height || ''}
+                @input=${this._cardHeightChanged}
+                placeholder="Auto (no fixed height)"
+              />
+              <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Default Zoom Level</label>
+            <div>
+              <input
+                type="number"
+                min="1"
+                max="5"
+                step="0.1"
+                .value=${this._config.default_zoom || ''}
+                @input=${this._defaultZoomChanged}
+                placeholder="No zoom"
+              />
+              <div class="help-text">Images load pre-zoomed at this level (1-5x, click image to reset)</div>
             </div>
           </div>
           
@@ -10258,10 +11516,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
-  customElements.define('media-card', MediaCardV5a);
+  customElements.define('media-card', MediaCard);
 }
 if (!customElements.get('media-card-editor')) {
-  customElements.define('media-card-editor', MediaCardV5aEditor);
+  customElements.define('media-card-editor', MediaCardEditor);
 }
 
 // Register with Home Assistant
@@ -10277,7 +11535,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.2.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.3.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

@@ -5,9 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.2.0]
+## [5.3.0]
 
 ### Added
+- **Dynamic Filter System**: Real-time media filtering with entity-based controls
+  - Filter by favorites (`filters.favorites: true` or entity reference like `input_boolean.slideshow_favorites`)
+  - Filter by date range (`filters.date_range.start` and `filters.date_range.end` with static dates or `input_datetime` entities)
+  - Entity resolution supports: `input_boolean`, `input_datetime`, `input_number`, `input_text`, `input_select`, `sensor`
+  - Real-time updates: Card responds immediately when filter entities change (no page reload needed)
+  - Subscribes to `state_changed` events for filter entities only (efficient callback-level filtering)
+  - Date filtering uses EXIF `date_taken` with fallback to file modification time via `COALESCE` in backend queries
+  - Visual config editor with dedicated Filters section
+  - Queue statistics events (`media_card_queue_stats`) for template sensor integration
+  - Clear error messages when no items match filter criteria (no silent fallback)
+  - Compatible with Media Index v1.4.0+ backend integration
+- **Navigation Queue Architecture**: Complete rewrite of navigation system for better reliability and wraparound support
+  - Three-layer architecture: Provider Queue → Navigation Queue → History
+  - Navigation Queue is what users navigate through (populated on-demand from provider)
+  - Dynamic sliding window (default 200 items based on `slideshow_window * 2`)
+  - Perfect wraparound for small collections (≤200 items) - pre-loads all items at startup
+  - Efficient on-demand loading for large collections with sliding window behavior
+  - Position indicator shows "X of Y" when exploring, "X" when caught up
+  - Backward navigation wraps to last loaded item (always works within window)
+  - Forward navigation always tries provider before wrapping (discovers new items)
+  - Fixes "can't go back from first image" bug in small collections
+  - Provider-specific pre-load strategies:
+    - Sequential mode: Calls `getNext()` with `disableAutoLoop` flag
+    - Random mode: Manually transforms queue items (can't disable auto-refill)
+- **Fixed Card Height**: New `card_height` configuration option (100-5000 pixels) - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev) in [PR #37](https://github.com/markaggar/ha-media-card/pull/37)*
+  - Sets exact card height instead of letting content determine size
+  - Applies only in default mode (not when aspect ratio is set)
+  - Takes precedence over `max_height_pixels` when both are configured
+  - Media scales to fit within container while maintaining aspect ratio
+  - Perfect for consistent dashboard layouts
+- **Default Zoom Level**: New `default_zoom` configuration option (1-5x) - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev) in [PR #37](https://github.com/markaggar/ha-media-card/pull/37)*
+  - Images automatically load pre-zoomed to the specified level
+  - Works in both single media and folder modes
+  - Click image to reset zoom, works with existing zoom toggle feature
+  - Useful for camera feeds or images where you want to focus on a specific area
+- **Filename Date Pattern**: Added `YYYYMMDDHHmmSS` pattern (e.g., `20250920211023`) for datetime extraction from filenames without separators
+- **Debug Button**: New YAML-only `debug_button` configuration for dynamic debug mode control
+  - Action button to toggle debug logging on/off without page reload
+  - Persists debug_mode state to card configuration (survives page reloads)
+  - Uses `this.config` for config-changed event to ensure proper Lovelace persistence
+  - Active state shown with warning color (orange) and filled bug icon
+  - Position follows `action_buttons.position` setting
+  - YAML-only configuration (not exposed in visual editor)
+  - Usage: `debug_button: true` in card YAML
 - **Refresh Button**: New action button to manually reload current media
   - Appears between pause and fullscreen buttons in action button group
   - Re-resolves media URL to get fresh authentication tokens (useful for Synology/Immich signed URLs)
@@ -30,8 +74,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Large collections use standard buffer calculation
   - Prevents infinite scanning loops in small folders
 - **Configurable Position Indicator Corner**: Position indicator ("X of Y" counter) can now be placed in any corner via `position_indicator.position` config
+- **PR #37 Integration**: Integrated community contributions with enhancements - *Contributed by [@BasicCPPDev](https://github.com/BasicCPPDev)*
+  - Fixed card_height validation to properly clamp values (100-5000 pixels)
+  - Enhanced default_zoom with proper null checking and validation
+  - Improved error handling throughout
 
 ### Fixed
+
+- **Sequential Mode File Ordering**: Fixed files with date-based filenames appearing in wrong order
+  - **Root Cause**: `extractFilename()` incorrectly parsing Immich URIs (returned "jpeg" instead of full filename)
+  - **Solution**: Use `file.title` directly (provided by media source) instead of parsing complex URIs
+  - **Impact**: Date extraction now works correctly for Immich, local files, and all media sources
+  - **Universal Sorting**: Works with any media source that provides filename in title property
+- **Sequential Mode Chronological Order**: Fixed automatic shuffle destroying sorted order in sequential mode
+  - **Root Issue**: SubfolderQueue was calling `shuffleQueue()` during file addition (batch shuffle every ~100 files)
+  - **Mode Detection Fix**: Mode detection used wrong config path (`this.config.mode` instead of `this.card.config.folder_mode`)
+  - **Solution**: Sequential mode now correctly skips all shuffle logic to preserve sorted order
+  - **Slideshow Window Compliance**: Fixed SubfolderQueue not respecting `slideshow_window` limit in sequential mode
+    - Queue now stops scanning when `slideshow_window` target reached
+    - Prevents unnecessary folder scanning for large collections
+    - Improves performance and startup time
+  - **Enhanced sorting for all media sources**:
+    - Reolink: Extracts second timestamp from pipe-delimited URI for accurate video start time
+    - Date-based filenames: Uses `MediaProvider.extractDateFromFilename()` for standard patterns
+    - Supports: `YYYY-MM-DD`, `YYYYMMDD`, `YYYYMMDD_HHMMSS`, `MM-DD-YYYY`, and other formats
+    - Alphabetical fallback: Files without dates sort by title/filename
+    - Timestamps always sorted before non-dated files (prevents mixing)
+  - **Recursive Folder Scanning**: Full support for deep folder hierarchies with proper sequential ordering
+  - **Media Browser Integration**: Files from browse_media API correctly recognized and sorted
+  - Works seamlessly with Reolink, Immich, Synology, local files, and any media source
+- **Debug Button Persistence**: Fixed debug button to properly update and persist `debug_mode` config
+  - Direct config update bypasses `setConfig()` defaults that were resetting the value
+  - Forces re-render to update button visual state immediately
+  - Debug mode now correctly persists across page reloads
+- **Confirmation Dialog Layering**: Fixed delete/edit confirmation dialogs appearing behind other cards
+  - Removed `isolation: isolate` CSS rule that was trapping z-index within card's stacking context
+  - Increased dialog backdrop z-index to 999999 (from 10000)
+  - Dialogs now properly appear above all other dashboard cards
+- **Media Index Actions**: Fixed `targetPath` undefined variable bugs in delete, edit, and favorite handlers
+  - All three functions now correctly use `targetUri` parameter
+  - Fixes "Failed to delete/edit/favorite media" errors
+- **Z-Index Layering**: Reduced z-index values for metadata overlay, position indicator, and dots indicator
+  - Metadata overlay: 11 → 5
+  - Position and dots indicators: 15 → 8
+  - Prevents card overlays from showing through Home Assistant dialogs and popups
+  - Added `isolation: isolate` to contain z-index stacking within the card
 - **Folder Display Logic**: Fixed `show_root_folder` metadata option to properly show first and last folder names
   - When enabled: displays "FirstFolder...LastFolder" format for nested paths
   - When disabled: displays only the immediate parent folder name
@@ -44,16 +131,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Significant performance improvement for cards with frequent re-renders
 - **Debug Logging**: Error messages now respect `debug_mode` setting and only appear when explicitly enabled
 - **Console Output**: Cleaned up logging with consistent "[MediaCard]" prefix throughout
+- **Navigation Queue Pre-loading**: Fixed pre-loading behavior to only apply to sequential mode
+  - Random mode no longer pre-loads entire queue (prevents memory issues with large collections)
+  - Sequential mode pre-loads for perfect wraparound in small collections
+  - Resolves performance issues when switching between providers
+- **Duplicate Detection**: Improved duplicate detection in navigation queue to prevent same file appearing multiple times
+- **Error Message Display**: Card now displays error messages in UI when initialization fails
+  - Provides clear feedback when configuration issues occur
+  - Helps users diagnose problems without checking browser console
+- **Media Index Fallback**: Removed silent fallback to SubfolderQueue when Media Index fails
+  - Clear error messages when no items match filter criteria
+  - Prevents confusing behavior where filters appear ignored
+- **Filter Validation**: Properly validates filter results and shows error when all items excluded
+- **Queue Stats Events**: Fixed sendMessage promise handling to avoid undefined errors
+  - Event bus properly emits `media_card_queue_stats` events
+  - History tracking cleared correctly on navigation
+- **Dynamic Filter Updates**: Filter entity subscriptions properly managed
+  - Card responds immediately to entity state changes
+  - Efficient callback-level filtering prevents unnecessary updates
+- **Debug Mode Pass-Through**: Fixed debug_mode not being passed to SubfolderQueue
+  - Debug logging now works correctly in all provider modes
+  - Diagnostic logs appear when debug_mode: true in configuration
+- **Class Naming**: Renamed internal classes from MediaCardV5a to MediaCard for consistency
+  - All log messages now use [MediaCard] prefix
+  - Cleaner codebase ready for v5.3.0 release
+- **Media Browser Navigation**: Fixed media browser to work with filesystem paths
+  - Converts filesystem paths to `media-source://` URIs for browse_media API compatibility
+  - Added "Up to Parent Folder" button for easier navigation when opening at non-root paths
+  - Improved placeholder styling with better contrast between placeholder and actual input text
+- **Reolink/Synology Integration**: Fixed SubfolderQueue scanning for media sources without `media_class` property
+  - Reolink and Synology DSM don't always set `media_class` in browse_media responses
+  - Added fallback to extension-based filtering (`.jpg`, `.mp4`, etc.) when `media_class` missing
+  - Resolves "0 files found" issue in Reolink and Synology folder scans
+  - Works seamlessly with any media source (Immich, Reolink, Synology, local files)
 
 ### Changed
 - **Cache-Busting Timestamp Logic**: Consolidated into `_addCacheBustingTimestamp()` helper method
   - Used by both auto-refresh and manual refresh for consistency
   - Intelligently handles signed URLs (never modifies authSig signatures)
   - Adds timestamp parameter to force browser cache reload when file content changes
+- **URI-Based Media Index Workflow**: Card now uses `media_source_uri` exclusively with Media Index services
+  - All service calls (`mark_favorite`, `delete_media`, `mark_for_edit`, `get_file_metadata`) use `media_source_uri` parameter
+  - Removed frontend path manipulation (`_convertToFilesystemPath()` method eliminated)
+  - Backend (Media Index) handles all URI ↔ path conversions
+  - Cleaner code architecture aligned with Home Assistant's media-source system
 - Optimized hass property setter to reduce logging noise (only logs on first call)
 - Video element now uses proper boolean logic for autoplay/muted attributes (`!== false` instead of `|| false`)
 - Editor UI reorganized for better clarity with consolidated overlay positioning section
 - Refresh timer configuration moved to "Image Options" section (always visible, not mode-dependent)
+
+### Media Index Integration Updates (v1.4.0 recommended)
+
+**Note**: Media Card v5.3.0 works with all Media Index versions. For full URI-based workflow support, update to Media Index v1.4.0+.
+
+- **Complete Media-Source URI Support**: All Media Index services now support URIs throughout
+  - **Folder Filtering**: `get_random_items` and `get_ordered_files` accept `media-source://` URIs for `folder` parameter
+  - **Individual File Operations**: All services accept `media_source_uri` parameter as alternative to `file_path`
+    - `get_file_metadata`: Accepts either `file_path` OR `media_source_uri`
+    - `geocode_file`: Accepts `file_path`, `file_id`, OR `media_source_uri`
+    - `mark_favorite`: Accepts either `file_path` OR `media_source_uri`
+    - `delete_media`: Accepts either `file_path` OR `media_source_uri`
+    - `mark_for_edit`: Accepts either `file_path` OR `media_source_uri`
+  - **Response Items**: Both `get_random_items` and `get_ordered_files` return both `path` and `media_source_uri` for each item
+- **Automatic URI Construction**: Media Index automatically constructs `media_source_uri` from `base_folder` if not specified
+  - Format: `media-source://media_source` + `base_folder`
+  - Example: `/media/Photo/PhotoLibrary` → `media-source://media_source/media/Photo/PhotoLibrary`
+- **Sensor Attribute Exposure**: `media_source_uri` configuration exposed as sensor state attribute for verification
+- **Full Backward Compatibility**: All services maintain complete backward compatibility with `file_path`-only usage
+
+**When to Configure `media_source_uri` Explicitly**:
+
+Automatic construction works for standard paths under `/media`. **You MUST configure `media_source_uri` explicitly** when using custom `media_dirs` mappings in your Home Assistant configuration:
+
+```yaml
+# configuration.yaml - Custom media_dirs example
+homeassistant:
+  media_dirs:
+    media: /media
+    camera: /config/camera
+    local: /config/www/local  # Maps media-source://media_source/local to filesystem /config/www/local
+```
+
+In this case, automatic construction would produce incorrect URIs because the filesystem path differs from the media-source URI path:
+
+```yaml
+sensor:
+  - platform: media_index
+    name: "LocalPhotos"
+    base_folder: "/config/www/local/photos"  # Filesystem path
+    media_source_uri: "media-source://media_source/local/photos"  # Must specify - URI path differs!
+```
+
+**Configuration Examples**:
+
+Standard paths (automatic construction works):
+```yaml
+sensor:
+  - platform: media_index
+    name: "PhotoLibrary"
+    base_folder: "/media/Photo/PhotoLibrary"
+    # media_source_uri auto-constructed: media-source://media_source/media/Photo/PhotoLibrary
+```
+
+Custom media_dirs (explicit configuration required):
+```yaml
+sensor:
+  - platform: media_index
+    name: "LocalPhotos"
+    base_folder: "/config/www/local/photos"
+    media_source_uri: "media-source://media_source/local/photos"  # Required - maps to custom media_dir
+```
+
+**Card Configuration** (works with both URI and path formats):
+```yaml
+folder:
+  path: media-source://media_source/local/ai_image_notifications  # URI format
+  # OR
+  path: /config/www/local/ai_image_notifications  # Path format (legacy)
+  use_media_index_for_discovery: true
+media_index:
+  entity_id: sensor.media_index_config_www_local_total_files
+```
 
 ## [5.1.0] - 2025-11-15
 
