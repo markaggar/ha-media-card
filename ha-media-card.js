@@ -10968,7 +10968,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div>
                 <input
                   type="checkbox"
-                  .checked=${this._config.video_autoplay || false}
+                  .checked=${this._config.video_autoplay ?? true}
                   @change=${this._autoplayChanged}
                 />
                 <div class="help-text">Start playing automatically when loaded</div>
@@ -10992,7 +10992,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div>
                 <input
                   type="checkbox"
-                  .checked=${this._config.video_muted || false}
+                  .checked=${this._config.video_muted ?? true}
                   @change=${this._mutedChanged}
                 />
                 <div class="help-text">Start video without sound</div>
