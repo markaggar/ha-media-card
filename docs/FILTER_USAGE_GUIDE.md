@@ -379,13 +379,3 @@ automation:
 - Photos marked as favorites (use `media_index.mark_favorite` service)
 - EXIF dates extracted (automatic during scan)
 
-## Future Enhancements
-
-Planned for future releases:
-- Dynamic filter updates (reload when entity changes)
-- Queue statistics sensor
-- Rating filter (`min_rating: 3`)
-- Location filter (`location: "Paris, France"`)
-- Dynamic filter updates without reload
-
-Current implementation (v5.3.0) uses static boolean/date values only.

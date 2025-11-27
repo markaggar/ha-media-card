@@ -1044,7 +1044,7 @@ class MediaIndexProvider extends MediaProvider {
    * @param {string} expectedType - Expected type: 'boolean', 'date', 'number', 'string'
    * @returns {Promise<*>} Resolved value or null
    */
-  async _resolveFilterValue(configValue, expectedType) {
+  async _resolveFilterValue(configValue, expectedType, providedState = null) {
     if (configValue === null || configValue === undefined) {
       return null;
     }
@@ -1061,7 +1061,8 @@ class MediaIndexProvider extends MediaProvider {
     }
     
     // It's an entity_id - resolve it
-    const state = this.hass?.states[configValue];
+    // Use providedState if available (from state_changed event), otherwise lookup in hass.states
+    const state = providedState || this.hass?.states[configValue];
     if (!state) {
       this._log(`⚠️ Filter entity not found: ${configValue}`);
       return null;
@@ -1209,33 +1210,28 @@ class MediaIndexProvider extends MediaProvider {
             return; // Ignore non-filter entities
           }
           
-          const newState = event.data?.new_state?.state;
-          this._log('🔄 Filter entity changed:', changedEntityId, '→', newState);
+          // Get the new state from event data
+          const newState = event.data?.new_state;
+          this._log('🔄 Filter entity changed:', changedEntityId, '→', newState?.state);
           
-          // CRITICAL: Update hass.states immediately with new state from event
-          // The state_changed event arrives BEFORE hass.states is updated by HA core.
-          // Direct mutation is intentional here to ensure filter resolution uses the latest values.
-          // Without this, _resolveFilterValue() would read stale state and miss the change.
-          //
-          // Why this is safe:
-          // 1. We're updating with the official new_state from HA's event system
-          // 2. This mutation happens in the event callback, ensuring single-threaded execution
-          // 3. HA core will apply the same update moments later, making this a no-op
-          // 4. The alternative (using event data directly) would require refactoring _resolveFilterValue()
-          //    to accept event data parameters, breaking its reusable design
-          //
-          // Note: While Home Assistant WebSocket API doesn't support entity-specific subscriptions
-          // for state_changed events, filtering in the callback (line 1207) ensures we only process
-          // changes to our watched filter entities, minimizing performance impact.
-          if (event.data?.new_state) {
-            this.hass.states[changedEntityId] = event.data.new_state;
-          }
-          
-          // Resolve current filter values (now using updated hass.states)
+          // Resolve current filter values, passing new state directly to avoid mutating hass.states
+          // For the changed entity, use new_state from event; others will lookup from hass.states
           const currentFilters = {
-            favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
-            date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
-            date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+            favorites: await this._resolveFilterValue(
+              filters.favorites, 
+              'boolean', 
+              filters.favorites === changedEntityId ? newState : null
+            ),
+            date_from: await this._resolveFilterValue(
+              filters.date_range?.start, 
+              'date',
+              filters.date_range?.start === changedEntityId ? newState : null
+            ),
+            date_to: await this._resolveFilterValue(
+              filters.date_range?.end, 
+              'date',
+              filters.date_range?.end === changedEntityId ? newState : null
+            )
           };
           
           this._log('🔍 Resolved filter values:', currentFilters, 'vs last:', this._lastFilterValues);
@@ -8346,16 +8342,24 @@ class MediaCardEditor extends LitElement {
       
       if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
         const entity = this.hass.states[mediaIndexEntityId];
-        const filesystemPath = entity.attributes?.media_path || 
-                               entity.attributes?.folder_path || 
-                               entity.attributes?.base_path || null;
         
-        if (filesystemPath) {
-          // Convert filesystem path to media-source URI
-          // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
-          const normalizedPath = filesystemPath.startsWith('/') ? filesystemPath : '/' + filesystemPath;
-          folderPath = `media-source://media_source${normalizedPath}`;
-          this._log('📁 Auto-populated folder path from media_index:', filesystemPath, '→', folderPath);
+        // V5.3: Prioritize media_source_uri (correct URI format for custom media_dirs)
+        // Falls back to constructing URI from filesystem path if needed
+        if (entity.attributes?.media_source_uri) {
+          folderPath = entity.attributes.media_source_uri;
+          this._log('📁 Auto-populated folder path from media_source_uri:', folderPath);
+        } else {
+          const filesystemPath = entity.attributes?.media_path || 
+                                 entity.attributes?.folder_path || 
+                                 entity.attributes?.base_path || null;
+          
+          if (filesystemPath) {
+            // Convert filesystem path to media-source URI
+            // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
+            const normalizedPath = filesystemPath.startsWith('/') ? filesystemPath : '/' + filesystemPath;
+            folderPath = `media-source://media_source${normalizedPath}`;
+            this._log('📁 Auto-populated folder path from media_path:', filesystemPath, '→', folderPath);
+          }
         }
       }
       
@@ -8692,22 +8696,35 @@ class MediaCardEditor extends LitElement {
         this._log('Media Index entity attributes:', entity.attributes);
         this._log('Available attribute keys:', Object.keys(entity.attributes));
         
-        // Try different possible attribute names
-        const mediaFolder = entity.attributes?.media_path ||   // media_index uses this
-                           entity.attributes?.media_folder || 
-                           entity.attributes?.folder_path ||
-                           entity.attributes?.base_path;
+        // V5.3: Prioritize media_source_uri (correct URI format for custom media_dirs)
+        // Falls back to constructing URI from filesystem path if needed
+        let folderPath = null;
         
-        this._log('Extracted media folder:', mediaFolder);
+        if (entity.attributes?.media_source_uri) {
+          // Use media_source_uri directly (already in correct format)
+          folderPath = entity.attributes.media_source_uri;
+          this._log('Using media_source_uri attribute:', folderPath);
+        } else {
+          // Fallback: construct URI from filesystem path attributes
+          const mediaFolder = entity.attributes?.media_path ||   // media_index uses this
+                             entity.attributes?.media_folder || 
+                             entity.attributes?.folder_path ||
+                             entity.attributes?.base_path;
+          
+          this._log('Extracted media folder:', mediaFolder);
+          
+          if (mediaFolder) {
+            // Convert filesystem path to media-source URI format
+            const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
+            folderPath = `media-source://media_source${normalizedPath}`;
+            this._log('Constructed URI from media_path:', mediaFolder, '→', folderPath);
+          }
+        }
+        
         this._log('Is in folder mode?', this._config.media_source_type === 'folder');
         
-        if (mediaFolder) {
-          this._log('Auto-populating path from media_index entity:', mediaFolder);
-          
-          // Convert filesystem path to media-source URI format
-          const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
-          const folderPath = `media-source://media_source${normalizedPath}`;
-          this._log('Converted path:', mediaFolder, '→', folderPath);
+        if (folderPath) {
+          this._log('Auto-populating path from media_index entity:', folderPath);
           
           // For folder mode: set folder.path
           if (this._config.media_source_type === 'folder') {
@@ -8723,7 +8740,7 @@ class MediaCardEditor extends LitElement {
             this._log('Folder available for browsing:', mediaFolder);
           }
         } else {
-          console.warn('⚠️ No media_folder attribute found on entity');
+          console.warn('⚠️ No media_source_uri or media_path attribute found on entity');
         }
       } else {
         console.warn('⚠️ Entity not found in hass.states:', entityId);
@@ -9523,38 +9540,55 @@ class MediaCardEditor extends LitElement {
     // Determine the starting path for the browser
     let startPath = '';
     
-    // First, try to get path from current config structure (v5)
-    const mediaSourceType = this._config.media_source_type || 'single_media';
-    let configuredPath = '';
-    
-    if (mediaSourceType === 'single_media') {
-      configuredPath = this._config.single_media?.path || this._config.media_path || '';
-    } else if (mediaSourceType === 'folder') {
-      configuredPath = this._config.folder?.path || this._config.media_path || '';
-    }
-    
-    this._log('🔍 Configured path:', configuredPath);
-    
-    if (configuredPath) {
-      // If we have a path, start browsing from that location (or its parent)
-      if (mediaSourceType === 'single_media' && configuredPath.includes('/')) {
-        // For single media, start from parent folder
-        const pathParts = configuredPath.split('/');
-        pathParts.pop(); // Remove the filename
-        startPath = pathParts.join('/');
-        this._log('Starting browser from parent folder:', startPath);
-      } else {
-        // For folders, start from the folder itself
-        startPath = configuredPath;
-        this._log('Starting browser from configured folder:', startPath);
-      }
-    } else if (this._config.media_index?.entity_id) {
-      // If Media Index is configured but no path, try to get from entity
+    // V5.3: FIRST priority - Check Media Index entity for media_source_uri attribute
+    // This ensures custom media_dirs mappings work correctly
+    if (this._config.media_index?.entity_id) {
       const entityId = this._config.media_index.entity_id;
       const entity = this.hass.states[entityId];
       
       this._log('🔍 Media Index entity:', entityId);
       this._log('🔍 Entity attributes:', entity?.attributes);
+      
+      // Media Index v1.4.0+ provides media_source_uri attribute
+      if (entity && entity.attributes.media_source_uri) {
+        startPath = entity.attributes.media_source_uri;
+        this._log('Starting browser from Media Index URI (attribute):', startPath);
+      }
+    }
+    
+    // Second priority - try to get path from current config structure (v5)
+    if (!startPath) {
+      const mediaSourceType = this._config.media_source_type || 'single_media';
+      let configuredPath = '';
+      
+      if (mediaSourceType === 'single_media') {
+        configuredPath = this._config.single_media?.path || this._config.media_path || '';
+      } else if (mediaSourceType === 'folder') {
+        configuredPath = this._config.folder?.path || this._config.media_path || '';
+      }
+      
+      this._log('🔍 Configured path:', configuredPath);
+      
+      if (configuredPath) {
+        // If we have a path, start browsing from that location (or its parent)
+        if (mediaSourceType === 'single_media' && configuredPath.includes('/')) {
+          // For single media, start from parent folder
+          const pathParts = configuredPath.split('/');
+          pathParts.pop(); // Remove the filename
+          startPath = pathParts.join('/');
+          this._log('Starting browser from parent folder:', startPath);
+        } else {
+          // For folders, start from the folder itself
+          startPath = configuredPath;
+          this._log('Starting browser from configured folder:', startPath);
+        }
+      }
+    }
+    
+    // Third priority - fallback to other Media Index attributes if no URI found
+    if (!startPath && this._config.media_index?.entity_id) {
+      const entityId = this._config.media_index.entity_id;
+      const entity = this.hass.states[entityId];
       
       if (entity && entity.attributes.media_folder) {
         startPath = entity.attributes.media_folder;
@@ -10968,7 +11002,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div>
                 <input
                   type="checkbox"
-                  .checked=${this._config.video_autoplay || false}
+                  .checked=${this._config.video_autoplay ?? true}
                   @change=${this._autoplayChanged}
                 />
                 <div class="help-text">Start playing automatically when loaded</div>
@@ -10992,7 +11026,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div>
                 <input
                   type="checkbox"
-                  .checked=${this._config.video_muted || false}
+                  .checked=${this._config.video_muted ?? true}
                   @change=${this._mutedChanged}
                 />
                 <div class="help-text">Start video without sound</div>
