@@ -9556,7 +9556,11 @@ class MediaCardEditor extends LitElement {
       this._log('🔍 Media Index entity:', entityId);
       this._log('🔍 Entity attributes:', entity?.attributes);
       
-      if (entity && entity.attributes.media_folder) {
+      // V5.3: First try media_source_uri attribute (Media Index v1.4.0+)
+      if (entity && entity.attributes.media_source_uri) {
+        startPath = entity.attributes.media_source_uri;
+        this._log('Starting browser from Media Index URI (attribute):', startPath);
+      } else if (entity && entity.attributes.media_folder) {
         startPath = entity.attributes.media_folder;
         this._log('Starting browser from Media Index folder (attribute):', startPath);
       } else {
