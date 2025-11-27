@@ -9523,44 +9523,57 @@ class MediaCardEditor extends LitElement {
     // Determine the starting path for the browser
     let startPath = '';
     
-    // First, try to get path from current config structure (v5)
-    const mediaSourceType = this._config.media_source_type || 'single_media';
-    let configuredPath = '';
-    
-    if (mediaSourceType === 'single_media') {
-      configuredPath = this._config.single_media?.path || this._config.media_path || '';
-    } else if (mediaSourceType === 'folder') {
-      configuredPath = this._config.folder?.path || this._config.media_path || '';
-    }
-    
-    this._log('🔍 Configured path:', configuredPath);
-    
-    if (configuredPath) {
-      // If we have a path, start browsing from that location (or its parent)
-      if (mediaSourceType === 'single_media' && configuredPath.includes('/')) {
-        // For single media, start from parent folder
-        const pathParts = configuredPath.split('/');
-        pathParts.pop(); // Remove the filename
-        startPath = pathParts.join('/');
-        this._log('Starting browser from parent folder:', startPath);
-      } else {
-        // For folders, start from the folder itself
-        startPath = configuredPath;
-        this._log('Starting browser from configured folder:', startPath);
-      }
-    } else if (this._config.media_index?.entity_id) {
-      // If Media Index is configured but no path, try to get from entity
+    // V5.3: FIRST priority - Check Media Index entity for media_source_uri attribute
+    // This ensures custom media_dirs mappings work correctly
+    if (this._config.media_index?.entity_id) {
       const entityId = this._config.media_index.entity_id;
       const entity = this.hass.states[entityId];
       
       this._log('🔍 Media Index entity:', entityId);
       this._log('🔍 Entity attributes:', entity?.attributes);
       
-      // V5.3: First try media_source_uri attribute (Media Index v1.4.0+)
+      // Media Index v1.4.0+ provides media_source_uri attribute
       if (entity && entity.attributes.media_source_uri) {
         startPath = entity.attributes.media_source_uri;
         this._log('Starting browser from Media Index URI (attribute):', startPath);
-      } else if (entity && entity.attributes.media_folder) {
+      }
+    }
+    
+    // Second priority - try to get path from current config structure (v5)
+    if (!startPath) {
+      const mediaSourceType = this._config.media_source_type || 'single_media';
+      let configuredPath = '';
+      
+      if (mediaSourceType === 'single_media') {
+        configuredPath = this._config.single_media?.path || this._config.media_path || '';
+      } else if (mediaSourceType === 'folder') {
+        configuredPath = this._config.folder?.path || this._config.media_path || '';
+      }
+      
+      this._log('🔍 Configured path:', configuredPath);
+      
+      if (configuredPath) {
+        // If we have a path, start browsing from that location (or its parent)
+        if (mediaSourceType === 'single_media' && configuredPath.includes('/')) {
+          // For single media, start from parent folder
+          const pathParts = configuredPath.split('/');
+          pathParts.pop(); // Remove the filename
+          startPath = pathParts.join('/');
+          this._log('Starting browser from parent folder:', startPath);
+        } else {
+          // For folders, start from the folder itself
+          startPath = configuredPath;
+          this._log('Starting browser from configured folder:', startPath);
+        }
+      }
+    }
+    
+    // Third priority - fallback to other Media Index attributes if no URI found
+    if (!startPath && this._config.media_index?.entity_id) {
+      const entityId = this._config.media_index.entity_id;
+      const entity = this.hass.states[entityId];
+      
+      if (entity && entity.attributes.media_folder) {
         startPath = entity.attributes.media_folder;
         this._log('Starting browser from Media Index folder (attribute):', startPath);
       } else {
