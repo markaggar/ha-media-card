@@ -8700,22 +8700,35 @@ class MediaCardEditor extends LitElement {
         this._log('Media Index entity attributes:', entity.attributes);
         this._log('Available attribute keys:', Object.keys(entity.attributes));
         
-        // Try different possible attribute names
-        const mediaFolder = entity.attributes?.media_path ||   // media_index uses this
-                           entity.attributes?.media_folder || 
-                           entity.attributes?.folder_path ||
-                           entity.attributes?.base_path;
+        // V5.3: Prioritize media_source_uri (correct URI format for custom media_dirs)
+        // Falls back to constructing URI from filesystem path if needed
+        let folderPath = null;
         
-        this._log('Extracted media folder:', mediaFolder);
+        if (entity.attributes?.media_source_uri) {
+          // Use media_source_uri directly (already in correct format)
+          folderPath = entity.attributes.media_source_uri;
+          this._log('Using media_source_uri attribute:', folderPath);
+        } else {
+          // Fallback: construct URI from filesystem path attributes
+          const mediaFolder = entity.attributes?.media_path ||   // media_index uses this
+                             entity.attributes?.media_folder || 
+                             entity.attributes?.folder_path ||
+                             entity.attributes?.base_path;
+          
+          this._log('Extracted media folder:', mediaFolder);
+          
+          if (mediaFolder) {
+            // Convert filesystem path to media-source URI format
+            const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
+            folderPath = `media-source://media_source${normalizedPath}`;
+            this._log('Constructed URI from media_path:', mediaFolder, '→', folderPath);
+          }
+        }
+        
         this._log('Is in folder mode?', this._config.media_source_type === 'folder');
         
-        if (mediaFolder) {
-          this._log('Auto-populating path from media_index entity:', mediaFolder);
-          
-          // Convert filesystem path to media-source URI format
-          const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
-          const folderPath = `media-source://media_source${normalizedPath}`;
-          this._log('Converted path:', mediaFolder, '→', folderPath);
+        if (folderPath) {
+          this._log('Auto-populating path from media_index entity:', folderPath);
           
           // For folder mode: set folder.path
           if (this._config.media_source_type === 'folder') {
@@ -8731,7 +8744,7 @@ class MediaCardEditor extends LitElement {
             this._log('Folder available for browsing:', mediaFolder);
           }
         } else {
-          console.warn('⚠️ No media_folder attribute found on entity');
+          console.warn('⚠️ No media_source_uri or media_path attribute found on entity');
         }
       } else {
         console.warn('⚠️ Entity not found in hass.states:', entityId);
