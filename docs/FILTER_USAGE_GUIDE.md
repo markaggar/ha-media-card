@@ -382,9 +382,11 @@ automation:
 ## Future Enhancements
 
 Planned for future releases:
-- Dynamic filter updates (reload when entity changes)
+
 - Queue statistics sensor
 - Rating filter (`min_rating: 3`)
 - Location filter (`location: "Paris, France"`)
 
-Current implementation (v5.3.0) uses static boolean/date values only.
+**Implemented in v5.3:**
+
+- ✅ Dynamic filter updates (automatic reload when entity state changes)
