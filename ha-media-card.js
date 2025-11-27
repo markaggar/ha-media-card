@@ -8346,16 +8346,24 @@ class MediaCardEditor extends LitElement {
       
       if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
         const entity = this.hass.states[mediaIndexEntityId];
-        const filesystemPath = entity.attributes?.media_path || 
-                               entity.attributes?.folder_path || 
-                               entity.attributes?.base_path || null;
         
-        if (filesystemPath) {
-          // Convert filesystem path to media-source URI
-          // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
-          const normalizedPath = filesystemPath.startsWith('/') ? filesystemPath : '/' + filesystemPath;
-          folderPath = `media-source://media_source${normalizedPath}`;
-          this._log('📁 Auto-populated folder path from media_index:', filesystemPath, '→', folderPath);
+        // V5.3: Prioritize media_source_uri (correct URI format for custom media_dirs)
+        // Falls back to constructing URI from filesystem path if needed
+        if (entity.attributes?.media_source_uri) {
+          folderPath = entity.attributes.media_source_uri;
+          this._log('📁 Auto-populated folder path from media_source_uri:', folderPath);
+        } else {
+          const filesystemPath = entity.attributes?.media_path || 
+                                 entity.attributes?.folder_path || 
+                                 entity.attributes?.base_path || null;
+          
+          if (filesystemPath) {
+            // Convert filesystem path to media-source URI
+            // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
+            const normalizedPath = filesystemPath.startsWith('/') ? filesystemPath : '/' + filesystemPath;
+            folderPath = `media-source://media_source${normalizedPath}`;
+            this._log('📁 Auto-populated folder path from media_path:', filesystemPath, '→', folderPath);
+          }
         }
       }
       
