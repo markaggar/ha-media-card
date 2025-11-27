@@ -1044,7 +1044,7 @@ class MediaIndexProvider extends MediaProvider {
    * @param {string} expectedType - Expected type: 'boolean', 'date', 'number', 'string'
    * @returns {Promise<*>} Resolved value or null
    */
-  async _resolveFilterValue(configValue, expectedType) {
+  async _resolveFilterValue(configValue, expectedType, providedState = null) {
     if (configValue === null || configValue === undefined) {
       return null;
     }
@@ -1061,7 +1061,8 @@ class MediaIndexProvider extends MediaProvider {
     }
     
     // It's an entity_id - resolve it
-    const state = this.hass?.states[configValue];
+    // Use providedState if available (from state_changed event), otherwise lookup in hass.states
+    const state = providedState || this.hass?.states[configValue];
     if (!state) {
       this._log(`⚠️ Filter entity not found: ${configValue}`);
       return null;
@@ -1209,33 +1210,28 @@ class MediaIndexProvider extends MediaProvider {
             return; // Ignore non-filter entities
           }
           
-          const newState = event.data?.new_state?.state;
-          this._log('🔄 Filter entity changed:', changedEntityId, '→', newState);
+          // Get the new state from event data
+          const newState = event.data?.new_state;
+          this._log('🔄 Filter entity changed:', changedEntityId, '→', newState?.state);
           
-          // CRITICAL: Update hass.states immediately with new state from event
-          // The state_changed event arrives BEFORE hass.states is updated by HA core.
-          // Direct mutation is intentional here to ensure filter resolution uses the latest values.
-          // Without this, _resolveFilterValue() would read stale state and miss the change.
-          //
-          // Why this is safe:
-          // 1. We're updating with the official new_state from HA's event system
-          // 2. This mutation happens in the event callback, ensuring single-threaded execution
-          // 3. HA core will apply the same update moments later, making this a no-op
-          // 4. The alternative (using event data directly) would require refactoring _resolveFilterValue()
-          //    to accept event data parameters, breaking its reusable design
-          //
-          // Note: While Home Assistant WebSocket API doesn't support entity-specific subscriptions
-          // for state_changed events, filtering in the callback (line 1207) ensures we only process
-          // changes to our watched filter entities, minimizing performance impact.
-          if (event.data?.new_state) {
-            this.hass.states[changedEntityId] = event.data.new_state;
-          }
-          
-          // Resolve current filter values (now using updated hass.states)
+          // Resolve current filter values, passing new state directly to avoid mutating hass.states
+          // For the changed entity, use new_state from event; others will lookup from hass.states
           const currentFilters = {
-            favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
-            date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
-            date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+            favorites: await this._resolveFilterValue(
+              filters.favorites, 
+              'boolean', 
+              filters.favorites === changedEntityId ? newState : null
+            ),
+            date_from: await this._resolveFilterValue(
+              filters.date_range?.start, 
+              'date',
+              filters.date_range?.start === changedEntityId ? newState : null
+            ),
+            date_to: await this._resolveFilterValue(
+              filters.date_range?.end, 
+              'date',
+              filters.date_range?.end === changedEntityId ? newState : null
+            )
           };
           
           this._log('🔍 Resolved filter values:', currentFilters, 'vs last:', this._lastFilterValues);
