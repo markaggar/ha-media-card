@@ -143,36 +143,45 @@ Copy-Item "ha-media-card.js" "\\10.0.0.26\config\www\cards\ha-media-card.js" -Fo
 - **Production Server**: `\\10.0.0.26\config\www\cards\ha-media-card.js`
 
 ## Git Workflow
-**CRITICAL**: ALL development work must be done on feature branches
+**CRITICAL**: ALL development work must be done on the `dev` branch
 
 ### Branch Protection Rules
 - **NEVER push directly to `master` branch**
 - Master branch is for stable releases only
-- All new features/fixes must use feature branches
+- All development work happens on `dev` branch
+- Create feature branches from `dev` for experimental work
 
 ### Development Workflow
-1. **Create feature branch** for any new work:
+1. **Work on dev branch** for ongoing development:
    ```powershell
-   git checkout -b feature/integration-support
-   # or
-   git checkout -b fix/bug-description
-   ```
-
-2. **Make changes and commit** to feature branch:
-   ```powershell
+   git checkout dev
+   git pull origin dev
+   # Make changes
    git add .
-   git commit -m "feat: add integration support for metadata display"
-   git push -u origin feature/integration-support
+   git commit -m "feat: add new feature"
+   git push origin dev
    ```
 
-3. **Create Pull Request** on GitHub when ready
-4. **Merge to master** only after review and testing
-5. **Tag releases** on master branch for version control
+2. **Optional: Create feature branch** for experimental/isolated work:
+   ```powershell
+   git checkout -b feature/experimental-feature
+   # Work on feature
+   git commit -m "feat: experimental feature"
+   git push -u origin feature/experimental-feature
+   # Merge back to dev when ready
+   git checkout dev
+   git merge feature/experimental-feature
+   ```
+
+3. **Merge to master** only for releases:
+   - Create Pull Request from `dev` to `master`
+   - After review and testing, merge to master
+   - Tag release on master branch
 
 ### Current Development Branch
-- `feature/integration-support` - For integration with media-index backend
+- `dev` - Main development branch (all ongoing work)
 
-### Branch Naming Convention
+### Branch Naming Convention (for experimental branches off dev)
 - `feature/description` - New features
 - `fix/description` - Bug fixes
 - `docs/description` - Documentation updates
