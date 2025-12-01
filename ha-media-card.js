@@ -784,7 +784,7 @@ class FolderProvider extends MediaProvider {
     }
     
     // Unsupported mode
-    console.warn('[FolderProvider] Unsupported mode/configuration. Mode:', mode, 'Recursive:', recursive);
+    this.cardAdapter._log('⚠️ Unsupported mode/configuration. Mode:', mode, 'Recursive:', recursive);
     return false;
   }
 
@@ -920,11 +920,11 @@ class FolderProvider extends MediaProvider {
             item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
           }
         } else {
-          console.warn('[FolderProvider] ⚠️ Could not extract file path from media_content_id');
+          this.cardAdapter._log('⚠️ Could not extract file path from media_content_id');
         }
       } else {
         if (!item) {
-          console.warn('[FolderProvider] ⚠️ SubfolderQueue returned null item');
+          this.cardAdapter._log('⚠️ SubfolderQueue returned null item (file may have moved or been deleted)');
         } else if (!MediaProvider.isMediaIndexActive(this.config)) {
           this.cardAdapter._log('ℹ️ Media index not active, skipping metadata enrichment');
         }
@@ -933,7 +933,7 @@ class FolderProvider extends MediaProvider {
       return item;
     }
     
-    console.warn('[FolderProvider] getNext() called but no provider initialized');
+    this.cardAdapter._log('⚠️ getNext() called but no provider initialized');
     return null;
   }
 
