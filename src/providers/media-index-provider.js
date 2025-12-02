@@ -464,7 +464,7 @@ export class MediaIndexProvider extends MediaProvider {
       
       // Extract metadata using MediaProvider helper (V5 architecture)
       // V4 code already includes EXIF fields in item, so we merge path-based + EXIF
-      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
+      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
       
       // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
       // Media Index v1.1.0+ provides both path and media_source_uri

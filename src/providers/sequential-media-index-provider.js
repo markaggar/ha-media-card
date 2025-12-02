@@ -120,7 +120,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       }
       
       // Extract metadata using MediaProvider helper (V5 architecture)
-      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
+      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
       
       // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
       const mediaId = item.media_source_uri || item.path;

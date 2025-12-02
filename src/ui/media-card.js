@@ -715,7 +715,7 @@ export class MediaCard extends LitElement {
           const pathForMetadata = rawItem.title || rawItem.media_content_id;
           
           // Extract metadata from path/title
-          const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata);
+          const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata, this.config);
           
           // For Reolink URIs, try to extract timestamp from media_content_id
           // Format: media-source://reolink/FILE|device_id|channel|sub|timestamp1|timestamp2|timestamp3
@@ -729,7 +729,7 @@ export class MediaCard extends LitElement {
             const timestampToUse = timestamps.length > 1 ? timestamps[1] : timestamps[0];
             
             if (timestampToUse) {
-              const timestampDate = MediaProvider.extractDateFromFilename(timestampToUse);
+              const timestampDate = MediaProvider.extractDateFromFilename(timestampToUse, this.config);
               if (timestampDate) {
                 pathMetadata.date = timestampDate;
                 pathMetadata.date_taken = timestampDate;
@@ -819,7 +819,7 @@ export class MediaCard extends LitElement {
       
       for (const rawItem of actualProvider.queue) {
         // Transform using same logic as getNext() (but don't shift from queue)
-        const pathMetadata = MediaProvider.extractMetadataFromPath(rawItem.path);
+        const pathMetadata = MediaProvider.extractMetadataFromPath(rawItem.path, this.config);
         const mediaId = rawItem.media_source_uri || rawItem.path;
         
         const transformedItem = {

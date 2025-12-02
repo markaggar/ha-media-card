@@ -146,11 +146,13 @@ class MediaProvider {
   /**
    * V4: Extract metadata from file path (shared by providers and card)
    * Moved from SingleMediaProvider to base class for reuse
+   * V5.5: Support custom datetime extraction from folder path
    */
-  static extractMetadataFromPath(mediaPath) {
+  static extractMetadataFromPath(mediaPath, config = null) {
     if (!mediaPath) return {};
     
     const metadata = {};
+    const debugMode = config?.debug_mode || false;
     
     // Normalize Immich pipe-delimited paths to slash-delimited
     // Immich uses: media-source://immich/uuid|albums|uuid|uuid|filename.jpg|image/jpeg
@@ -209,12 +211,31 @@ class MediaProvider {
         
         // Store as relative path (e.g., "Photo/OneDrive/Mark-Pictures/Camera")
         metadata.folder = decodedParts.join('/');
+        
+        // V5.5: Try custom folder datetime extraction
+        if (config?.custom_datetime_format?.folder_pattern) {
+          const folderDatetime = MediaProvider._extractDateWithCustomFormat(
+            metadata.folder,
+            config.custom_datetime_format.folder_pattern,
+            debugMode,
+            'folder'
+          );
+          if (folderDatetime) {
+            metadata.date = folderDatetime;
+            if (debugMode) {
+              console.log(`🕒 [Custom DateTime] Extracted from folder "${metadata.folder}":`, folderDatetime);
+            }
+          } else if (debugMode) {
+            console.warn(`⚠️ [Custom DateTime] Failed to extract from folder "${metadata.folder}" with pattern "${config.custom_datetime_format.folder_pattern}"`);
+          }
+        }
       }
     }
     
     // Try to extract date from filename (basic support - full EXIF will come from media_index)
-    const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
-    if (dateFromFilename) {
+    // Filename extraction takes priority over folder extraction if no custom folder pattern
+    const dateFromFilename = MediaProvider.extractDateFromFilename(filename, config);
+    if (dateFromFilename && !metadata.date) {
       metadata.date = dateFromFilename;
     }
     
@@ -225,9 +246,31 @@ class MediaProvider {
    * V4: Extract date from filename patterns (shared helper)
    * Moved from SingleMediaProvider to base class for reuse
    * Enhanced to extract time components when present
+   * V5.5: Support custom datetime formats via config
    */
-  static extractDateFromFilename(filename) {
+  static extractDateFromFilename(filename, config = null) {
     if (!filename) return null;
+    
+    const debugMode = config?.debug_mode || false;
+    
+    // Try custom format first if provided
+    if (config?.custom_datetime_format?.filename_pattern) {
+      const customResult = MediaProvider._extractDateWithCustomFormat(
+        filename, 
+        config.custom_datetime_format.filename_pattern,
+        debugMode,
+        'filename'
+      );
+      if (customResult) {
+        if (debugMode) {
+          console.log(`🕒 [Custom DateTime] Extracted from filename "${filename}":`, customResult);
+        }
+        return customResult;
+      }
+      if (debugMode) {
+        console.warn(`⚠️ [Custom DateTime] Failed to extract from filename "${filename}" with pattern "${config.custom_datetime_format.filename_pattern}", falling back to default patterns`);
+      }
+    }
     
     // Common date+time patterns in filenames
     // NOTE: Patterns match anywhere in filename (e.g., "Tanya_20220727_140134.jpg")
@@ -293,14 +336,137 @@ class MediaProvider {
             year = parseInt(match[3]);
           }
           
-          return new Date(year, month, day, hour, minute, second);
+          const result = new Date(year, month, day, hour, minute, second);
+          if (debugMode && !config?.custom_datetime_format?.filename_pattern) {
+            console.log(`🕒 [DateTime] Extracted from filename "${filename}":`, result);
+          }
+          return result;
         } catch (e) {
           // Invalid date, continue to next pattern
         }
       }
     }
     
+    if (debugMode) {
+      console.warn(`⚠️ [DateTime] No date pattern matched in filename: "${filename}"`);
+    }
     return null;
+  }
+  
+  /**
+   * V5.5: Extract date using custom format pattern
+   * Supports moment.js-style format tokens: YYYY, MM, DD, HH, mm, ss
+   * Example: "YYYY-MM-DD_HH-mm-ss" matches "2024-12-01_14-30-45"
+   */
+  static _extractDateWithCustomFormat(input, formatPattern, debugMode, source) {
+    if (!input || !formatPattern) return null;
+    
+    try {
+      // Convert format pattern to regex, capturing each component
+      // YYYY -> (\d{4}), MM/DD/HH/mm/ss -> (\d{2})
+      let regexPattern = formatPattern
+        .replace(/YYYY/g, '(\\d{4})')
+        .replace(/MM|DD|HH|mm|ss/g, '(\\d{2})');
+      
+      // Escape special regex characters that might be in the pattern
+      regexPattern = regexPattern.replace(/[.*+?^${}()|[\]\\]/g, (match) => {
+        // Don't escape our capture groups
+        if (match === '(' || match === ')' || match === '\\') return match;
+        return '\\' + match;
+      });
+      
+      const regex = new RegExp(regexPattern);
+      const match = input.match(regex);
+      
+      if (!match) {
+        if (debugMode) {
+          console.warn(`⚠️ [Custom DateTime] Pattern "${formatPattern}" did not match ${source}: "${input}"`);
+        }
+        return null;
+      }
+      
+      // Extract components based on format pattern
+      const tokenPositions = [];
+      const tokens = ['YYYY', 'MM', 'DD', 'HH', 'mm', 'ss'];
+      
+      tokens.forEach(token => {
+        const pos = formatPattern.indexOf(token);
+        if (pos !== -1) {
+          tokenPositions.push({ token, pos });
+        }
+      });
+      
+      // Sort by position to match capture groups
+      tokenPositions.sort((a, b) => a.pos - b.pos);
+      
+      // Map capture groups to components
+      const components = {
+        year: 0,
+        month: 0,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0
+      };
+      
+      tokenPositions.forEach((tokenInfo, index) => {
+        const value = match[index + 1]; // +1 because match[0] is full match
+        if (!value) return;
+        
+        switch (tokenInfo.token) {
+          case 'YYYY':
+            components.year = parseInt(value);
+            break;
+          case 'MM':
+            components.month = parseInt(value) - 1; // JavaScript months are 0-indexed
+            break;
+          case 'DD':
+            components.day = parseInt(value);
+            break;
+          case 'HH':
+            components.hour = parseInt(value);
+            break;
+          case 'mm':
+            components.minute = parseInt(value);
+            break;
+          case 'ss':
+            components.second = parseInt(value);
+            break;
+        }
+      });
+      
+      // Validate components
+      if (components.year < 1900 || components.year > 2100) {
+        if (debugMode) {
+          console.warn(`⚠️ [Custom DateTime] Invalid year ${components.year} from ${source}: "${input}"`);
+        }
+        return null;
+      }
+      
+      const result = new Date(
+        components.year,
+        components.month,
+        components.day,
+        components.hour,
+        components.minute,
+        components.second
+      );
+      
+      // Verify the date is valid
+      if (isNaN(result.getTime())) {
+        if (debugMode) {
+          console.warn(`⚠️ [Custom DateTime] Invalid date components from ${source}: "${input}"`, components);
+        }
+        return null;
+      }
+      
+      return result;
+    } catch (error) {
+      if (debugMode) {
+        console.error(`❌ [Custom DateTime] Error parsing ${source} "${input}" with pattern "${formatPattern}":`, error);
+      }
+      return null;
+    }
   }
 
   /**
@@ -309,7 +475,7 @@ class MediaProvider {
    */
   static async extractMetadataWithExif(mediaPath, config, hass) {
     // Step 1: Extract path-based metadata
-    let metadata = MediaProvider.extractMetadataFromPath(mediaPath);
+    let metadata = MediaProvider.extractMetadataFromPath(mediaPath, config);
     
     // Step 2: Enrich with media_index EXIF data if hass is available
     // Try to call media_index even if not explicitly configured as media source
@@ -893,7 +1059,7 @@ class FolderProvider extends MediaProvider {
               const filePath = serviceMetadata.path || '';
               
               // Merge media_index metadata with path-based metadata
-              const pathMetadata = MediaProvider.extractMetadataFromPath(filePath);
+              const pathMetadata = MediaProvider.extractMetadataFromPath(filePath, this.config);
               item.metadata = {
                 ...pathMetadata,
                 ...serviceMetadata,
@@ -913,7 +1079,7 @@ class FolderProvider extends MediaProvider {
               console.warn('[FolderProvider] ⚠️ Service returned error or no metadata:', response?.response);
               // Fallback to extracting path from URI
               const pathFromUri = mediaUri.replace('media-source://media_source', '');
-              item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
+              item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri, this.config);
             }
           } catch (error) {
             // Fallback to path-based metadata if service call fails
@@ -1528,7 +1694,7 @@ class SubfolderQueue {
           // 2. Try extracting date from filename using MediaProvider's date extraction
           // For Immich and other sources, file.title is the clean filename
           const filename = file.title || MediaProvider.extractFilename(mediaId);
-          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename, this.config);
           
           if (dateFromFilename) {
             // Convert to YYYYMMDDHHMMSS format for consistent sorting
@@ -2051,7 +2217,7 @@ class SubfolderQueue {
         } else {
           // Check filename
           const filename = MediaProvider.extractFilename(item.media_content_id);
-          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename, this.config);
           hasDate = !!dateFromFilename;
         }
         
@@ -2072,8 +2238,8 @@ class SubfolderQueue {
         } else {
           const aFilename = MediaProvider.extractFilename(a.media_content_id);
           const bFilename = MediaProvider.extractFilename(b.media_content_id);
-          const aDate = MediaProvider.extractDateFromFilename(aFilename);
-          const bDate = MediaProvider.extractDateFromFilename(bFilename);
+          const aDate = MediaProvider.extractDateFromFilename(aFilename, this.config);
+          const bDate = MediaProvider.extractDateFromFilename(bFilename, this.config);
           aVal = aDate ? aDate.getTime() : 0;
           bVal = bDate ? bDate.getTime() : 0;
         }
@@ -2631,7 +2797,7 @@ class MediaIndexProvider extends MediaProvider {
       
       // Extract metadata using MediaProvider helper (V5 architecture)
       // V4 code already includes EXIF fields in item, so we merge path-based + EXIF
-      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
+      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
       
       // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
       // Media Index v1.1.0+ provides both path and media_source_uri
@@ -2986,7 +3152,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       }
       
       // Extract metadata using MediaProvider helper (V5 architecture)
-      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path);
+      const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
       
       // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
       const mediaId = item.media_source_uri || item.path;
@@ -3924,7 +4090,7 @@ class MediaCard extends LitElement {
           const pathForMetadata = rawItem.title || rawItem.media_content_id;
           
           // Extract metadata from path/title
-          const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata);
+          const pathMetadata = MediaProvider.extractMetadataFromPath(pathForMetadata, this.config);
           
           // For Reolink URIs, try to extract timestamp from media_content_id
           // Format: media-source://reolink/FILE|device_id|channel|sub|timestamp1|timestamp2|timestamp3
@@ -3938,7 +4104,7 @@ class MediaCard extends LitElement {
             const timestampToUse = timestamps.length > 1 ? timestamps[1] : timestamps[0];
             
             if (timestampToUse) {
-              const timestampDate = MediaProvider.extractDateFromFilename(timestampToUse);
+              const timestampDate = MediaProvider.extractDateFromFilename(timestampToUse, this.config);
               if (timestampDate) {
                 pathMetadata.date = timestampDate;
                 pathMetadata.date_taken = timestampDate;
@@ -4028,7 +4194,7 @@ class MediaCard extends LitElement {
       
       for (const rawItem of actualProvider.queue) {
         // Transform using same logic as getNext() (but don't shift from queue)
-        const pathMetadata = MediaProvider.extractMetadataFromPath(rawItem.path);
+        const pathMetadata = MediaProvider.extractMetadataFromPath(rawItem.path, this.config);
         const mediaId = rawItem.media_source_uri || rawItem.path;
         
         const transformedItem = {

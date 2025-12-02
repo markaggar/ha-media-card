@@ -586,7 +586,7 @@ export class SubfolderQueue {
           // 2. Try extracting date from filename using MediaProvider's date extraction
           // For Immich and other sources, file.title is the clean filename
           const filename = file.title || MediaProvider.extractFilename(mediaId);
-          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename, this.config);
           
           if (dateFromFilename) {
             // Convert to YYYYMMDDHHMMSS format for consistent sorting
@@ -1109,7 +1109,7 @@ export class SubfolderQueue {
         } else {
           // Check filename
           const filename = MediaProvider.extractFilename(item.media_content_id);
-          const dateFromFilename = MediaProvider.extractDateFromFilename(filename);
+          const dateFromFilename = MediaProvider.extractDateFromFilename(filename, this.config);
           hasDate = !!dateFromFilename;
         }
         
@@ -1130,8 +1130,8 @@ export class SubfolderQueue {
         } else {
           const aFilename = MediaProvider.extractFilename(a.media_content_id);
           const bFilename = MediaProvider.extractFilename(b.media_content_id);
-          const aDate = MediaProvider.extractDateFromFilename(aFilename);
-          const bDate = MediaProvider.extractDateFromFilename(bFilename);
+          const aDate = MediaProvider.extractDateFromFilename(aFilename, this.config);
+          const bDate = MediaProvider.extractDateFromFilename(bFilename, this.config);
           aVal = aDate ? aDate.getTime() : 0;
           bVal = bDate ? bDate.getTime() : 0;
         }

@@ -356,7 +356,7 @@ export class FolderProvider extends MediaProvider {
               const filePath = serviceMetadata.path || '';
               
               // Merge media_index metadata with path-based metadata
-              const pathMetadata = MediaProvider.extractMetadataFromPath(filePath);
+              const pathMetadata = MediaProvider.extractMetadataFromPath(filePath, this.config);
               item.metadata = {
                 ...pathMetadata,
                 ...serviceMetadata,
@@ -376,7 +376,7 @@ export class FolderProvider extends MediaProvider {
               console.warn('[FolderProvider] ⚠️ Service returned error or no metadata:', response?.response);
               // Fallback to extracting path from URI
               const pathFromUri = mediaUri.replace('media-source://media_source', '');
-              item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri);
+              item.metadata = MediaProvider.extractMetadataFromPath(pathFromUri, this.config);
             }
           } catch (error) {
             // Fallback to path-based metadata if service call fails
