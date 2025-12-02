@@ -1,5 +1,4 @@
-## v5.4.1
-
+## v5.4.0
 ### Added
 - **Custom Date/Time Extraction**
   - YAML-only configuration to parse dates/times from filenames and/or folder paths
@@ -14,10 +13,6 @@
 ### Changed
 - **Build Process**: Removed Rollup bundling path; concat build is the only supported method (preserves exact class names and avoids runtime renaming issues)
 - **Architecture Cleanup**: Resolved circular dependency between `MediaProvider` and `MediaIndexHelper` by inlining the media_index active check in helper (no cross-import)
-
----
-
-## v5.4.0
 
 ### UX & Controls
 - Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:
