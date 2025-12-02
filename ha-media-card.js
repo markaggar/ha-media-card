@@ -3214,7 +3214,8 @@ class MediaCard extends LitElement {
     config: { attribute: false },
     currentMedia: { state: true },
     mediaUrl: { state: true },
-    isLoading: { state: true }
+    isLoading: { state: true },
+    _actionButtonsVisible: { state: true }
   };
 
   // V4: Image Zoom Helpers
@@ -3303,6 +3304,10 @@ class MediaCard extends LitElement {
     this._consecutive404Count = 0;
     this._last404Time = 0;
     this._errorAutoAdvanceTimeout = null;
+    
+    // Auto-hide action buttons for touch screens
+    this._showButtonsExplicitly = false; // true = show via touch tap (independent of hover)
+    this._hideButtonsTimer = null;
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -4207,6 +4212,16 @@ class MediaCard extends LitElement {
       
       // V5: Setup auto-advance after successfully loading media
       this._setupAutoRefresh();
+
+      // Reset timer if buttons are explicitly showing (restart 3s countdown)
+      if (this._showButtonsExplicitly) {
+        // Restart 3s timer after navigation when buttons are showing
+        this._startActionButtonsHideTimer();
+      }
+
+      // Refresh metadata from media_index in background after navigation
+      // Ensures overlay reflects latest EXIF/location/favorite flags
+      this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
       console.error('[MediaCard] Error loading next media:', error);
     }
@@ -4256,6 +4271,15 @@ class MediaCard extends LitElement {
     
     await this._resolveMediaUrl();
     this.requestUpdate();
+    
+    // V5: Setup auto-advance after successfully loading media  
+    this._setupAutoRefresh();
+
+    // Reset timer if buttons are explicitly showing (restart 3s countdown)
+    if (this._showButtonsExplicitly) {
+      // Restart 3s timer after navigation when buttons are showing
+      this._startActionButtonsHideTimer();
+    }
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -4356,6 +4380,8 @@ class MediaCard extends LitElement {
             if (this.currentMedia) {
               await this._resolveMediaUrl();
               this.requestUpdate();
+              // Refresh metadata from media_index in background to keep overlay up-to-date
+              this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
             }
           } else {
             // Advance to next media (folder mode with auto_advance)
@@ -5455,7 +5481,7 @@ class MediaCard extends LitElement {
     const position = config.position || 'top-right';
 
     return html`
-      <div class="action-buttons action-buttons-${position}">
+      <div class="action-buttons action-buttons-${position} ${this._showButtonsExplicitly ? 'show-buttons' : ''}">
         ${enablePause ? html`
           <button
             class="action-btn pause-btn ${isPaused ? 'paused' : ''}"
@@ -5958,6 +5984,9 @@ class MediaCard extends LitElement {
       this._mediaLoadedLogged = false; // Allow load success log again
       this.requestUpdate();
       
+      // Refresh metadata from media_index in background so overlay stays current
+      this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+
       this._log('✅ Media refreshed successfully');
     } catch (error) {
       console.error('Failed to refresh media:', error);
@@ -6504,6 +6533,27 @@ class MediaCard extends LitElement {
   }
   
   _handleTap(e) {
+    // Check if tap is in center 50% of card (not on nav zones)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const width = rect.width;
+    const leftEdge = width * 0.25;
+    const rightEdge = width * 0.75;
+    
+    const isCenterTap = x > leftEdge && x < rightEdge;
+    
+    // Tap detection for center vs edges
+    
+    // Center tap ALWAYS toggles button visibility (takes priority over configured actions)
+    if (isCenterTap) {
+      // Center tap toggles explicit action buttons
+      this._toggleActionButtons();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    
+    // Otherwise handle configured tap action
     if (!this.config.tap_action) return;
     
     // Prevent default to avoid navigation zone clicks
@@ -6519,6 +6569,48 @@ class MediaCard extends LitElement {
       this._performAction(this.config.tap_action);
       this._tapTimeout = null;
     }, 250);
+  }
+  
+  _toggleActionButtons() {
+    // Toggle explicit action buttons visibility
+    
+    if (this._showButtonsExplicitly) {
+      // Already showing - hide them
+      // Hide explicit buttons if currently showing
+      this._showButtonsExplicitly = false;
+      
+      // Clear timer
+      if (this._hideButtonsTimer) {
+        clearTimeout(this._hideButtonsTimer);
+        this._hideButtonsTimer = null;
+      }
+    } else {
+      // Not showing - show them and start timer
+      // Show explicit buttons and start timer
+      this._showButtonsExplicitly = true;
+      
+      // Start/restart 3s hide timer
+      this._startActionButtonsHideTimer();
+    }
+    
+    this.requestUpdate();
+  }
+  
+  _startActionButtonsHideTimer() {
+    // Start/restart 3s hide timer
+    
+    // Clear existing timer
+    if (this._hideButtonsTimer) {
+      clearTimeout(this._hideButtonsTimer);
+    }
+    
+    // Start fresh 3s timer
+    this._hideButtonsTimer = setTimeout(() => {
+      // Timer expired - hide explicit buttons
+      this._showButtonsExplicitly = false;
+      this._hideButtonsTimer = null;
+      this.requestUpdate();
+    }, 3000);
   }
   
   _handleDoubleTap(e) {
@@ -6982,6 +7074,8 @@ class MediaCard extends LitElement {
       position: relative;
       width: 100%;
       background: #000;
+      /* Enable container-based sizing for child elements (cqi/cqw units) */
+      container-type: inline-size;
     }
     
     /* V4 Smart aspect ratio handling */
@@ -7149,7 +7243,8 @@ class MediaCard extends LitElement {
       width: 100%;
       height: 100%;
       pointer-events: none;
-      z-index: 20;
+      /* Keep below overlays and HA header */
+      z-index: 1;
     }
 
     .nav-zone {
@@ -7182,24 +7277,49 @@ class MediaCard extends LitElement {
       border-radius: 8px;
     }
 
-    .nav-zone:hover {
-      background: rgba(0, 0, 0, 0.2);
+    /* On mouse devices, show background overlay on hover */
+    @media (hover: hover) and (pointer: fine) {
+      .nav-zone:hover {
+        background: rgba(0, 0, 0, 0.2);
+      }
     }
 
-    .nav-zone-left:hover::after {
+    /* Base nav arrow pseudo-elements (hidden by default) */
+    .nav-zone-left::after {
       content: '◀';
       color: white;
       font-size: 1.5em;
       text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
-      opacity: 0.9;
+      opacity: 0;
+      transition: opacity 0.2s ease;
     }
-    
-    .nav-zone-right:hover::after {
+    .nav-zone-right::after {
       content: '▶';
       color: white;
       font-size: 1.5em;
       text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    /* On mouse devices, show arrows on hover */
+    @media (hover: hover) and (pointer: fine) {
+      .nav-zone-left:hover::after,
+      .nav-zone-right:hover::after {
+        opacity: 0.9;
+      }
+    }
+
+    /* In touch-explicit mode, show arrows */
+    .nav-zone-left.show-buttons::after,
+    .nav-zone-right.show-buttons::after {
       opacity: 0.9;
+    }
+    
+    /* Show background when visible (not just hover) */
+    /* In touch-explicit mode, show background overlay */
+    .nav-zone.show-buttons {
+      background: rgba(0, 0, 0, 0.2);
     }
     
     /* V4: Metadata overlay */
@@ -7209,10 +7329,13 @@ class MediaCard extends LitElement {
       color: white;
       padding: 6px 12px;
       border-radius: 4px;
-      font-size: 0.85em;
+      /* Responsive size with user scale factor.
+         Use container query units so size follows card viewport, not page. */
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(0.9rem, 1.4cqi, 2.0rem));
       line-height: 1.2;
       pointer-events: none;
-      z-index: 5;
+      /* Above nav zones, below HA header */
+      z-index: 2;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
@@ -7247,14 +7370,22 @@ class MediaCard extends LitElement {
       position: absolute;
       display: flex;
       gap: 8px;
-      z-index: 50;
+      /* Above overlays for click priority, below HA header */
+      z-index: 3;
       pointer-events: auto;
       opacity: 0;
       transition: opacity 0.3s ease;
     }
 
-    /* Show action buttons on hover over the corner area */
-    .media-container:hover .action-buttons {
+    /* Hover shows buttons on devices with mouse (not touch) */
+    @media (hover: hover) and (pointer: fine) {
+      .media-container:hover .action-buttons {
+        opacity: 1;
+      }
+    }
+
+    /* Explicit show for touch screens */
+    .action-buttons.show-buttons {
       opacity: 1;
     }
 
@@ -7397,7 +7528,8 @@ class MediaCard extends LitElement {
       font-size: 1.2em;
       font-weight: 500;
       pointer-events: none;
-      z-index: 12;
+      /* Above nav zones, below HA header */
+      z-index: 2;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       display: flex;
@@ -7419,7 +7551,8 @@ class MediaCard extends LitElement {
       border-radius: 6px;
       font-size: 13px;
       pointer-events: none;
-      z-index: 12;
+      /* Above nav zones, below HA header */
+      z-index: 2;
       opacity: 0.9;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
@@ -7468,10 +7601,13 @@ class MediaCard extends LitElement {
       color: white;
       padding: 4px 8px;
       border-radius: 12px;
-      font-size: 0.8em;
+      /* Responsive size with user scale factor, matched to metadata overlay.
+         Use container query units so size follows card viewport, not page. */
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(0.7rem, 1.2cqi, 1.6rem));
       font-weight: 500;
       pointer-events: none;
-      z-index: 8;
+      /* Above nav zones, below HA header */
+      z-index: 2;
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
     }
@@ -7506,7 +7642,8 @@ class MediaCard extends LitElement {
       display: flex;
       gap: 6px;
       pointer-events: none;
-      z-index: 8;
+      /* Above nav zones, below HA header */
+      z-index: 2;
       max-width: 200px;
       overflow: hidden;
     }
@@ -7990,9 +8127,13 @@ class MediaCard extends LitElement {
     const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
                     MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
 
+    // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
+    const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
+
     return html`
       <div 
         class="media-container"
+        style="--ha-media-metadata-scale: ${metadataScale}"
         @click=${this._handleTap}
         @dblclick=${this._handleDoubleTap}
         @pointerdown=${this._handlePointerDown}
@@ -8017,7 +8158,9 @@ class MediaCard extends LitElement {
             @pause=${this._onVideoPause}
             @ended=${this._onVideoEnded}
             @seeking=${this._onVideoSeeking}
-            @click=${this._onVideoClick}
+            @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
+            @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
+            @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
           >
             <source src="${this.mediaUrl}" type="video/mp4">
@@ -8058,14 +8201,26 @@ class MediaCard extends LitElement {
     // V4-style navigation zones with keyboard support
     return html`
       <div class="navigation-zones">
-        <div class="nav-zone nav-zone-left"
-             @click=${(e) => { e.stopPropagation(); this._loadPrevious(); }}
+           <div class="nav-zone nav-zone-left ${this._showButtonsExplicitly ? 'show-buttons' : ''}"
+             @click=${async (e) => { 
+            e.stopPropagation(); 
+            // Navigate first
+            await this._loadPrevious(); 
+            // If buttons are showing, restart the 3s timer to auto-hide
+            if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+             }}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Previous">
         </div>
-        <div class="nav-zone nav-zone-right"  
-             @click=${(e) => { e.stopPropagation(); this._loadNext(); }}
+           <div class="nav-zone nav-zone-right ${this._showButtonsExplicitly ? 'show-buttons' : ''}"  
+             @click=${async (e) => { 
+            e.stopPropagation(); 
+            // Navigate first
+            await this._loadNext(); 
+            // If buttons are showing, restart the 3s timer to auto-hide
+            if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+             }}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Next">
@@ -9092,6 +9247,34 @@ class MediaCardEditor extends LitElement {
       metadata: {
         ...this._config.metadata,
         show_location: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _metadataScaleChanged(ev) {
+    // Accept empty to clear (use default = 1)
+    const raw = ev.target.value;
+    if (raw === '' || raw === null || raw === undefined) {
+      const newConfig = { ...this._config };
+      newConfig.metadata = { ...(newConfig.metadata || {}) };
+      delete newConfig.metadata.scale;
+      this._config = newConfig;
+      this._fireConfigChanged();
+      return;
+    }
+
+    let value = parseFloat(raw);
+    if (isNaN(value)) {
+      return; // ignore invalid input until it becomes a number
+    }
+    // Clamp to safe range
+    value = Math.max(0.3, Math.min(4, value));
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        scale: value
       }
     };
     this._fireConfigChanged();
@@ -11307,6 +11490,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._metadataShowLocationChanged}
               />
               <div class="help-text">Display geocoded location from EXIF data (requires media_index integration)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Overlay Scale</label>
+            <div>
+              <input
+                type="number"
+                min="0.3"
+                max="4"
+                step="0.1"
+                .value=${this._config.metadata?.scale ?? ''}
+                @input=${this._metadataScaleChanged}
+                placeholder="1.0"
+              />
+              <div class="help-text">Adjust overlay text size relative to card viewport (affects metadata and position indicator). Default is 1.0; range 0.3–4.0.</div>
             </div>
           </div>
         </div>
