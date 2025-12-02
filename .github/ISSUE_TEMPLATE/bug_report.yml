@@ -9,48 +9,130 @@ body:
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
-  - type: input
-    id: contact
+        
+        **Please provide as much detail as possible to help us diagnose the issue quickly.**
+        
+  - type: dropdown
+    id: version
     attributes:
-      label: Contact Details
-      description: How can we get in touch with you if we need more info?
-      placeholder: ex. email@example.com
+      label: Media Card Version
+      description: What version of the media card are you running? (Check the first line in browser console)
+      options:
+        - Lastest version
+        - v5.4.0 
+        - v5.3.0
+        - v5.1.0
+        - v5.0.0
+        - v4.1.0
+        - v4.0.0
+        - Earlier version
+      default: 0
+    validations:
+      required: true
+      
+  - type: input
+    id: ha-version
+    attributes:
+      label: Home Assistant Version
+      description: What version of Home Assistant are you running?
+      placeholder: e.g., 2024.11.3
+    validations:
+      required: true
+      
+  - type: input
+    id: media-index-version
+    attributes:
+      label: Media Index Version (if using Media Index)
+      description: |
+        If using Media Index integration, what version is installed? 
+        Check Settings → Devices & Services → Media Index → click the integration → look for version in the info section.
+      placeholder: e.g., v1.4.0, v1.3.0, or leave blank if not using Media Index
     validations:
       required: false
+      
   - type: textarea
     id: what-happened
     attributes:
       label: What happened?
-      description: Also tell us, what did you expect to happen?
-      placeholder: Tell us what you see!
-      value: "A bug happened!"
+      description: Describe the bug and what you expected to happen instead
+      placeholder: |
+        When I click the refresh button, the image doesn't reload...
+        
+        Expected: Image should reload with cache-busting timestamp
+        Actual: Same cached image displays
     validations:
       required: true
-  - type: dropdown
-    id: version
+      
+  - type: textarea
+    id: card-config
     attributes:
-      label: Version
-      description: What version of our software are you running?
-      options:
-        - 1.0.20
-        - 1.0.19
-        - 1.0.18
-      default: 0
+      label: Card YAML Configuration
+      description: |
+        **REQUIRED**: Please paste your complete card configuration (sanitize any sensitive paths/tokens)
+        Open your dashboard in edit mode, click the card's edit button, then switch to "Show code editor" to copy the YAML.
+      placeholder: |
+        type: custom:media-card
+        folder:
+          path: /media/Photo/PhotoLibrary
+          mode: random
+        metadata:
+          show_folder: true
+          show_date: true
+        # ... rest of your config
+      render: yaml
     validations:
       required: true
+      
+  - type: textarea
+    id: media-index-config
+    attributes:
+      label: Media Index Sensor Attributes (if applicable)
+      description: |
+        If using Media Index integration, go to Developer Tools → States, find your sensor (e.g., `sensor.media_index_media_photo_total_files`), and paste the **attributes** section here.
+        This helps diagnose database/scanning issues.
+      placeholder: |
+        base_folder: /media/Photo/PhotoLibrary
+        media_source_uri: media-source://media_source/media/Photo/PhotoLibrary
+        total_files: 15234
+        images_count: 14890
+        videos_count: 344
+        # ... other attributes
+      render: yaml
+    validations:
+      required: false
+      
+  - type: textarea
+    id: console-logs
+    attributes:
+      label: Browser Console Logs
+      description: |
+        **HIGHLY RECOMMENDED**: Open browser Developer Tools (F12), go to Console tab, reproduce the issue, then copy/paste any error messages or relevant logs.
+        Look for lines starting with `[MediaCard]` or error stack traces.
+      placeholder: |
+        [MediaCard] MEDIA-CARD v5.4.0 Loaded
+        [MediaCard] Initializing with config: {...}
+        Error: Failed to load media - 404 Not Found
+        ... stack trace ...
+      render: shell
+    validations:
+      required: false
+      
   - type: dropdown
     id: browsers
     attributes:
-      label: What browsers are you seeing the problem on?
+      label: What browser are you seeing the problem on?
       multiple: true
       options:
+        - Chrome/Edge (Chromium-based)
         - Firefox
-        - Chrome
         - Safari
-        - Microsoft Edge
+        - Home Assistant Companion App (iOS)
+        - Home Assistant Companion App (Android)
+        
   - type: textarea
-    id: logs
+    id: additional-context
     attributes:
-      label: Relevant log output
-      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
-      render: shell
+      label: Additional Context
+      description: Add screenshots, workarounds you've tried, or any other relevant information
+    validations:
+      required: false
