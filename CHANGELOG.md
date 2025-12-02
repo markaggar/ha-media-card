@@ -1,3 +1,27 @@
+## v5.4.0
+
+### UX & Controls
+- Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:
+  - Hover behavior is enabled only on mouse devices (`@media (hover: hover) and (pointer: fine)`)
+  - Touch interactions (center tap/video touch) explicitly show buttons and nav zones and auto-hide after ~3s of inactivity
+  - Navigation zone clicks restart the 3s auto-hide timer after navigation
+- Video controls are synced with action buttons: touching the video shows controls and action buttons, both fade after ~3s
+- Semi-opaque nav target areas no longer stick on touch; hover-only on mouse, explicit-only on touch
+
+### Visual Hierarchy
+- Z-index tuning so overlays/buttons stay below the HA header bar when scrolling
+
+### Scaling
+- Container-query based scaling for metadata and position indicator using `cqi` units and `--ha-media-metadata-scale`
+- Added card editor UI input for `metadata.scale` (range 0.3–4.0; default 1.0)
+
+### Stability & Cleanups
+- Removed temporary debug `console.log` statements added during investigation
+- Internal comments updated for v5.4 context
+
+### Notes
+- This release focuses on polished touch/mouse parity for controls and predictable auto-hide timing.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

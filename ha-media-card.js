@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.3.0
+ * Media Card v5.4.0
  */
 
 // Import Lit from CDN for standalone usage
@@ -3273,12 +3273,12 @@ class MediaCard extends LitElement {
     this.shownItems = new Set();  // Prevent duplicate display until aged out
     this._maxQueueSize = 0;       // Track highest queue size seen (for position indicator)
     
-    // V5.3: Navigation Queue - Separate from provider queue
+    // V5.4: Navigation Queue - Separate from provider queue
     // This is what the user navigates through (populated on-demand via getNext())
     this.navigationQueue = [];    // Array of items user can navigate
     this.navigationIndex = -1;    // Current position (-1 = uninitialized, first increment → 0)
     this.maxNavQueueSize = 200;   // Will be updated in setConfig based on slideshow_window * 2
-    this.isNavigationQueuePreloaded = false; // V5.3: Track if small collection was pre-loaded
+    this.isNavigationQueuePreloaded = false; // V5.4: Track if small collection was pre-loaded
     
     this.currentMedia = null;
     this.mediaUrl = '';
