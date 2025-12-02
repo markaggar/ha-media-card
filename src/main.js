@@ -6,6 +6,11 @@
 // Import Lit from CDN for standalone usage
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
 
+// NOTE: All imports below are intentional for the concat build process.
+// The build script concatenates all modules into a single file, so these imports
+// ensure all classes are available in the bundled output even though they're not
+// directly referenced in this entry point file.
+
 // Core utilities
 import { MediaUtils } from './core/media-utils.js';
 import { MediaProvider } from './core/media-provider.js';

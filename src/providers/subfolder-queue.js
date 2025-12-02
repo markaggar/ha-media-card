@@ -1,5 +1,4 @@
 import { MediaProvider } from '../core/media-provider.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
 
 /**
  * SUBFOLDER QUEUE - Essential V4 code copied for v5

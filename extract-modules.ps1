@@ -57,6 +57,9 @@ Write-Host "`n🔄 Note: FolderProvider needs manual completion to import Subfol
 Write-Host "`n✂️ Extracting MediaCard (this will take a moment - 5000+ lines)..." -ForegroundColor Yellow
 $mediaCard = ($lines[3205..8287] -join "`n")
 
+# NOTE: CDN import from unpkg.com is intentional for Home Assistant custom cards.
+# HA custom cards are expected to import dependencies from CDN rather than bundle them.
+# This follows the standard HA custom card development pattern.
 $mediaCardContent = @"
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
 import { MediaProvider } from '../core/media-provider.js';
@@ -75,6 +78,7 @@ Write-Host "✅ Created media-card.js (5,083 lines)" -ForegroundColor Green
 Write-Host "`n✂️ Extracting MediaCardEditor (3400+ lines)..." -ForegroundColor Yellow
 $editor = ($lines[8288..11750] -join "`n")
 
+# NOTE: CDN import is standard practice for HA custom cards (see comment above)
 $editorContent = @"
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
 

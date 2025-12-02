@@ -11941,6 +11941,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
 // Import Lit from CDN for standalone usage
 
+// NOTE: All imports below are intentional for the concat build process.
+// The build script concatenates all modules into a single file, so these imports
+// ensure all classes are available in the bundled output even though they're not
+// directly referenced in this entry point file.
+
 // Core utilities
 
 // Providers

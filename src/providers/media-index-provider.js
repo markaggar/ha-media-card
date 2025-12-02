@@ -1,5 +1,4 @@
 import { MediaProvider } from '../core/media-provider.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
 import { MediaUtils } from '../core/media-utils.js';
 
 /**
