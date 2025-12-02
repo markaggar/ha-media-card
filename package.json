@@ -1,0 +1,19 @@
+{
+  "name": "ha-media-card",
+  "version": "5.4.0",
+  "description": "Home Assistant Lovelace card for displaying media with slideshow, favorites, and metadata",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markaggar/ha-media-card.git"
+  },
+  "author": "Mark Aggar",
+  "license": "MIT",
+  "devDependencies": {
+    "rollup": "^4.0.0"
+  }
+}
