@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "rollup -c",
-    "watch": "rollup -c -w"
+    "watch": "rollup -c -w",
+    "build:concat": "node ./scripts/build-concat.mjs"
   },
   "repository": {
     "type": "git",
