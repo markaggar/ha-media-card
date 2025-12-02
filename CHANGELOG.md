@@ -19,6 +19,13 @@
 - Removed temporary debug `console.log` statements added during investigation
 - Internal comments updated for v5.4 context
 
+### Other Improvements
+- Config editor prioritizes `media_source_uri` when a Media Index entity is selected (auto-populates folder path correctly)
+- Media browser defaults to `media_source_uri` when available for better URI-first workflows
+- Video autoplay/muted checkboxes in editor now reflect correct defaults (`true`)
+- Provider logging tightened: FolderProvider null-item warnings moved to debug logging
+- Git workflow docs updated: `dev` is the active development branch
+
 ### Notes
 - This release focuses on polished touch/mouse parity for controls and predictable auto-hide timing.
 
