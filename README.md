@@ -133,6 +133,59 @@ kiosk_mode_auto_enable: true
 kiosk_mode_show_indicator: true
 ```
 
+## 🕒 Custom Date/Time Extraction (Beta)
+
+Add support for parsing dates and times directly from your filenames and/or folder paths using simple, declarative patterns.
+
+### Configuration
+
+Add the `custom_datetime_format` block to your card config. You can specify different patterns for filenames and folders. Enable `debug_mode` to see extraction logs in the browser console.
+
+```yaml
+type: custom:media-card
+debug_mode: true
+custom_datetime_format:
+  # Example filename formats:
+  #  - "YYYY-MM-DD_HH-mm-ss"  -> 2024-12-01_14-30-45.jpg
+  #  - "YYYYMMDD_HHmmss"      -> 20241201_143045.jpg
+  #  - "YYYYMMDD"             -> 20241201.jpg
+  filename_pattern: "YYYY-MM-DD_HH-mm-ss"
+
+  # Example folder format:
+  #  - "YYYY/MM/DD"           -> .../2024/12/01/filename.jpg
+  folder_pattern: "YYYY/MM/DD"
+```
+
+### Supported Tokens
+
+- `YYYY`: 4-digit year
+- `MM`: 2-digit month
+- `DD`: 2-digit day
+- `HH`: 2-digit hour (24h)
+- `mm`: 2-digit minute
+- `ss`: 2-digit second
+
+You can use separators like `-`, `_`, `/`, `T`, or spaces to match your naming scheme.
+
+### How It Works
+
+- The card first attempts to parse using your custom patterns.
+- If parsing fails, it automatically falls back to the built-in filename patterns used in previous versions (no config change required).
+- If both custom and built-in parsing fail, the card will rely on EXIF data (if available via Media Index) or leave the date unset.
+- When both folder and filename patterns are configured, the folder date is used first only if it successfully parses; otherwise the filename date is used.
+
+### Debugging
+
+Set `debug_mode: true` to see helpful logs in the console:
+
+```
+🕒 [Custom DateTime] Extracted from filename "2024-12-01_14-30-45.jpg": Sun Dec 01 2024 14:30:45
+⚠️ [Custom DateTime] Failed to extract from folder "2024/12/01" with pattern "YYYY-MM-DD"
+🕒 [DateTime] Extracted from filename "20220727_140134.jpg": Wed Jul 27 2022 14:01:34
+```
+
+No changes are required if you don't need this feature — it's fully optional and backward compatible.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
