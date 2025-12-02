@@ -3465,5 +3465,5 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 }
 
-// Register the custom elements (guard against re-registration)
-if (!customElements.get('media-card')) {
+// Note: Custom elements are registered in src/main.js
+// This module only exports the editor component class.

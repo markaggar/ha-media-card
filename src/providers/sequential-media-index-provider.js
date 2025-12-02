@@ -341,9 +341,5 @@ export class SequentialMediaIndexProvider extends MediaProvider {
   }
 }
 
-// =================================================================
-// SUBFOLDER QUEUE - Essential V4 code copied for v5
-// Handles random folder scanning with hierarchical scan
-// =================================================================
-
-class SubfolderQueue {
+// Note: SubfolderQueue is defined in src/providers/subfolder-queue.js
+// Any hierarchical random folder logic should be imported from that module.

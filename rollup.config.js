@@ -19,6 +19,7 @@ export default {
     // Mark Lit as external so it's not bundled
     'https://unpkg.com/lit@3/index.js?module'
   ],
+  treeshake: false,
   // No plugins needed - we're just concatenating ES modules
   // The Lit import stays as CDN import, everything else gets inlined
 };

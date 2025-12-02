@@ -137,6 +137,32 @@ kiosk_mode_show_indicator: true
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+## 🤝 Contributing
+
+Contributions are welcome! This project uses a modular source structure for easier development and maintenance.
+
+### Development Workflow
+
+The card is developed under `src/` as ES modules and bundled into a single `ha-media-card.js` file for deployment.
+
+**Quick Start:**
+1. Fork the repository and clone your fork
+2. Create a branch from `dev`: `git checkout -b feature/my-feature dev`
+3. Install Node.js and dependencies: `npm install`
+4. Edit source files under `src/`:
+   - `src/core/` - Shared utilities and base classes
+   - `src/providers/` - Provider implementations
+   - `src/ui/` - Main card component
+   - `src/editor/` - Configuration editor
+5. Build: `npm run build:concat`
+6. Test on your Home Assistant instance
+7. Commit changes and push to your fork
+8. Open a Pull Request against the `dev` branch
+
+**Important**: All contributions and PRs should be based off the `dev` branch, not `master`. The `master` branch is reserved for stable releases only.
+
+For detailed development guidelines, see [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
+
 ## 🙏 Acknowledgments
 
 - Home Assistant community for inspiration and support

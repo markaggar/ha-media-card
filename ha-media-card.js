@@ -2,58 +2,7 @@
  * Media Card v5.4.0
  */
 
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
-
-/** 
- * Media Card v5.4.0
- * Entry point for modular build
- */
-
-// Import Lit from CDN for standalone usage
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
-
-// Core utilities
-import { MediaUtils } from './core/media-utils.js';
-import { MediaProvider } from './core/media-provider.js';
-import { MediaIndexHelper } from './core/media-index-helper.js';
-
-// Providers
-import { SingleMediaProvider } from './providers/single-media-provider.js';
-import { MediaIndexProvider } from './providers/media-index-provider.js';
-import { SequentialMediaIndexProvider } from './providers/sequential-media-index-provider.js';
-import { SubfolderQueue } from './providers/subfolder-queue.js';
-import { FolderProvider } from './providers/folder-provider.js';
-
-// UI Components
-import { MediaCard } from './ui/media-card.js';
-import { MediaCardEditor } from './editor/media-card-editor.js';
-
-// Register the custom elements (guard against re-registration)
-if (!customElements.get('media-card')) {
-  customElements.define('media-card', MediaCard);
-}
-if (!customElements.get('media-card-editor')) {
-  customElements.define('media-card-editor', MediaCardEditor);
-}
-
-// Register with Home Assistant
-window.customCards = window.customCards || [];
-if (!window.customCards.some(card => card.type === 'media-card')) {
-  window.customCards.push({
-    type: 'media-card',
-    name: 'Media Card',
-    description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
-    preview: true,
-    documentationURL: 'https://github.com/markaggar/ha-media-card'
-  });
-}
-
-console.info(
-  '%c  MEDIA-CARD  %c  v5.4.0 Loaded  ',
-  'color: lime; font-weight: bold; background: black',
-  'color: white; font-weight: bold; background: green'
-);
-
+import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
 
 // Shared utility functions for media detection
 export const MediaUtils = {
@@ -91,9 +40,6 @@ export const MediaUtils = {
 };
 
 
-import { MediaUtils } from './media-utils.js';
-import { MediaIndexHelper } from './media-index-helper.js';
-
 /**
  * V5 Core Infrastructure Classes
  */
@@ -105,7 +51,7 @@ import { MediaIndexHelper } from './media-index-helper.js';
  * 
  * Manages video pause/resume events and auto-advance on video end
  */
-export class MediaProvider {
+class MediaProvider {
   constructor(config, hass) {
     this.config = config;
     this.hass = hass;
@@ -409,13 +355,11 @@ export class MediaProvider {
 }
 
 
-import { MediaProvider } from './media-provider.js';
-
 /**
  * MediaIndexHelper - Shared utility for media_index integration
  * V5: Provides unified metadata fetching for all providers
  */
-export class MediaIndexHelper {
+class MediaIndexHelper {
   /**
    * Fetch EXIF metadata from media_index backend for a single file
    * This is a NEW v5 feature - V4 only gets metadata via get_random_items
@@ -542,13 +486,11 @@ export class MediaIndexHelper {
 }
 
 
-import { MediaProvider } from '../core/media-provider.js';
-
 /**
  * SingleMediaProvider - Provider for single image/video
  * Phase 2: Simplest provider to validate architecture
  */
-export class SingleMediaProvider extends MediaProvider {
+class SingleMediaProvider extends MediaProvider {
   constructor(config, hass) {
     super(config, hass);
     this.mediaPath = config.single_media?.path || config.media_path;
@@ -598,16 +540,10 @@ export class SingleMediaProvider extends MediaProvider {
 }
 
 
-import { MediaProvider } from '../core/media-provider.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
-import { MediaIndexProvider } from './media-index-provider.js';
-import { SequentialMediaIndexProvider } from './sequential-media-index-provider.js';
-import { SubfolderQueue } from './subfolder-queue.js';
-
 /**
  * FOLDER PROVIDER - Wraps SubfolderQueue for folder slideshow
  */
-export class FolderProvider extends MediaProvider {
+class FolderProvider extends MediaProvider {
   constructor(config, hass, card = null) {
     super(config, hass);
     this.subfolderQueue = null;
@@ -1006,14 +942,11 @@ export class FolderProvider extends MediaProvider {
 }
 
 
-import { MediaProvider } from '../core/media-provider.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
-
 /**
  * SUBFOLDER QUEUE - Essential V4 code copied for v5
  * Handles random folder scanning with hierarchical scan
  */
-export class SubfolderQueue {
+class SubfolderQueue {
   constructor(card) {
     this.card = card;
     this.config = card.config.subfolder_queue;
@@ -2235,16 +2168,12 @@ export class SubfolderQueue {
  */
 
 
-import { MediaProvider } from '../core/media-provider.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
-import { MediaUtils } from '../core/media-utils.js';
-
 /**
  * MEDIA INDEX PROVIDER - Database-backed random media queries
  * V4 CODE REUSE: Copied from ha-media-card.js lines 2121-2250 (_queryMediaIndex)
  * Adapted for provider pattern architecture
  */
-export class MediaIndexProvider extends MediaProvider {
+class MediaIndexProvider extends MediaProvider {
   constructor(config, hass, card = null) {
     super(config, hass);
     this.queue = []; // Internal queue of items from database
@@ -2937,15 +2866,12 @@ export class MediaIndexProvider extends MediaProvider {
 }
 
 
-import { MediaProvider } from '../core/media-provider.js';
-import { MediaUtils } from '../core/media-utils.js';
-
 /**
  * SEQUENTIAL MEDIA INDEX PROVIDER - Database-backed ordered queries
  * NEW V5 FEATURE: Sequential mode with cursor-based pagination
  * Uses media_index.get_ordered_files service for deterministic ordering
  */
-export class SequentialMediaIndexProvider extends MediaProvider {
+class SequentialMediaIndexProvider extends MediaProvider {
   constructor(config, hass) {
     super(config, hass);
     this.queue = []; // Internal queue of items from database
@@ -3284,15 +3210,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
 // Any hierarchical random folder logic should be imported from that module.
 
 
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
-import { MediaProvider } from '../core/media-provider.js';
-import { MediaUtils } from '../core/media-utils.js';
-
 /**
  * MediaCard - Main card component
  * Phase 2: Now uses provider pattern to display media
  */
-export class MediaCard extends LitElement {
+class MediaCard extends LitElement {
   // Card height validation constants
   static CARD_HEIGHT_MIN = 100;
   static CARD_HEIGHT_MAX = 5000;
@@ -8377,13 +8299,11 @@ export class MediaCard extends LitElement {
  */
 
 
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
-
 /**
  * MediaCardEditor - Card editor with full functionality
  * Will be adapted for v5 architecture in next phase
  */
-export class MediaCardEditor extends LitElement {
+class MediaCardEditor extends LitElement {
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -11847,4 +11767,42 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 // Note: Custom elements are registered in src/main.js
 // This module only exports the editor component class.
 
+/** 
+ * Media Card v5.4.0
+ * Entry point for modular build
+ */
+
+// Import Lit from CDN for standalone usage
+
+// Core utilities
+
+// Providers
+
+// UI Components
+
+// Register the custom elements (guard against re-registration)
+if (!customElements.get('media-card')) {
+  customElements.define('media-card', MediaCard);
+}
+if (!customElements.get('media-card-editor')) {
+  customElements.define('media-card-editor', MediaCardEditor);
+}
+
+// Register with Home Assistant
+window.customCards = window.customCards || [];
+if (!window.customCards.some(card => card.type === 'media-card')) {
+  window.customCards.push({
+    type: 'media-card',
+    name: 'Media Card',
+    description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
+    preview: true,
+    documentationURL: 'https://github.com/markaggar/ha-media-card'
+  });
+}
+
+console.info(
+  '%c  MEDIA-CARD  %c  v5.4.0 Loaded  ',
+  'color: lime; font-weight: bold; background: black',
+  'color: white; font-weight: bold; background: green'
+);
 
