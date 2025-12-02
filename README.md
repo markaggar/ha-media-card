@@ -154,7 +154,7 @@ The card is developed under `src/` as ES modules and bundled into a single `ha-m
    - `src/providers/` - Provider implementations
    - `src/ui/` - Main card component
    - `src/editor/` - Configuration editor
-5. Build: `npm run build:concat`
+5. Build: `npm run build:concat` (concatenation build - preserves class names)
 6. Test on your Home Assistant instance
 7. Commit changes and push to your fork
 8. Open a Pull Request against the `dev` branch

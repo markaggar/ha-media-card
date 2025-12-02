@@ -112,17 +112,15 @@ The card is now developed under `src/` as ES modules and bundled into a single d
   - `src/editor/media-card-editor.js` for the visual editor
   - `src/main.js` for custom element registration
 
-### Build Options
-- Preferred: Rollup bundling (normalized output)
-  - `npm run build` → bundles `src/` to `ha-media-card.js`
-  - Treeshaking is disabled to ensure modules are included
-- Alternative: Concatenation build (preserves spacing and single-file style)
-  - `npm run build:concat` → concatenates modules in a deterministic order
-  - Strips internal `import` statements and converts `export class` → `class`
-  - Ensures a single CDN import for Lit is present at the top
+### Build Process
+The card uses a custom concatenation build script that preserves class names and structure:
+- `npm run build:concat` → concatenates modules in a deterministic order
+- Strips internal `import` statements and converts `export class` → `class`
+- Ensures a single CDN import for Lit is present at the top
+- Preserves exact class names (unlike Rollup which renames to avoid collisions)
 
 ### Validation Steps
-1. Build: `npm run build` or `npm run build:concat`
+1. Build: `npm run build:concat`
 2. Line count check (optional for regression-style diffs):
    - `(Get-Content "ha-media-card.js" | Measure-Object -Line).Lines`
 3. Deploy to HADev:
@@ -137,11 +135,12 @@ The card is now developed under `src/` as ES modules and bundled into a single d
 
 ### Common Pitfalls & Fixes
 - Duplicate CDN imports can cause `Identifier 'LitElement' has already been declared`
-  - Use `build:concat` which removes duplicate CDN imports from modules
+  - Build script automatically removes duplicate CDN imports from modules
 - Registration order issues can cause `Cannot access 'MediaCard' before initialization`
   - Ensure `src/main.js` (registration) is concatenated last; classes defined first
 - Sticky caching in HA requires a hard refresh after deployment
   - Always use Ctrl+Shift+R or Ctrl+F5
+- **Never use Rollup** - it renames classes causing runtime errors
 
 ### Recommended Flow for Changes
 1. Edit `src/` files

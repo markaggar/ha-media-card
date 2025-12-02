@@ -1,5 +1,3 @@
-import { MediaProvider } from './media-provider.js';
-
 /**
  * MediaIndexHelper - Shared utility for media_index integration
  * V5: Provides unified metadata fetching for all providers
@@ -10,7 +8,9 @@ export class MediaIndexHelper {
    * This is a NEW v5 feature - V4 only gets metadata via get_random_items
    */
   static async fetchFileMetadata(hass, config, filePath) {
-    if (!hass || !MediaProvider.isMediaIndexActive(config)) return null;
+    // Check if media_index integration is active (enabled flag or entity_id provided)
+    const isMediaIndexActive = !!(config?.media_index?.enabled || config?.media_index?.entity_id);
+    if (!hass || !isMediaIndexActive) return null;
     
     try {
       // Build WebSocket call to get_file_metadata service
