@@ -20,6 +20,7 @@
 - Internal comments updated for v5.4 context
 
 ### Other Improvements
+- Metadata now refreshes alongside image changes: on manual refresh and when advancing to next/previous media, metadata (EXIF, location, dates) is re-resolved to ensure up-to-date display
 - Config editor prioritizes `media_source_uri` when a Media Index entity is selected (auto-populates folder path correctly)
 - Media browser defaults to `media_source_uri` when available for better URI-first workflows
 - Video autoplay/muted checkboxes in editor now reflect correct defaults (`true`)
