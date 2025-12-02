@@ -1,3 +1,22 @@
+## v5.4.1-beta
+
+### Added
+- **Custom Date/Time Extraction (Beta)**
+  - YAML-only configuration to parse dates/times from filenames and/or folder paths
+  - New `custom_datetime_format` block:
+    - `filename_pattern`: e.g. `YYYY-MM-DD_HH-mm-ss`, `YYYYMMDD_HHmmss`, `YYYYMMDD`
+    - `folder_pattern`: e.g. `YYYY/MM/DD`
+  - Supported tokens: `YYYY`, `MM`, `DD`, `HH`, `mm`, `ss`
+  - Respects `debug_mode: true` and logs extraction attempts/results to console
+  - Safe fallback: if custom parsing fails, card falls back to built-in filename patterns; if those fail, EXIF/Media Index is used when available
+  - Precedence: folder pattern applies first (when provided and matched), then filename pattern, then built-in patterns
+
+### Changed
+- **Build Process**: Removed Rollup bundling path; concat build is the only supported method (preserves exact class names and avoids runtime renaming issues)
+- **Architecture Cleanup**: Resolved circular dependency between `MediaProvider` and `MediaIndexHelper` by inlining the media_index active check in helper (no cross-import)
+
+---
+
 ## v5.4.0
 
 ### UX & Controls
