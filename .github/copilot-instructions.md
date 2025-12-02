@@ -100,6 +100,57 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 - Handle errors gracefully with user feedback
 - Add comments for complex logic
 
+## Modular Source + Build Workflow (v5.4+)
+
+The card is now developed under `src/` as ES modules and bundled into a single distributable `ha-media-card.js` for deployment.
+
+### Where to Make Changes
+- Edit source files only under `src/`:
+  - `src/core/` for shared utilities and base classes
+  - `src/providers/` for provider implementations and queues
+  - `src/ui/media-card.js` for the main LitElement card
+  - `src/editor/media-card-editor.js` for the visual editor
+  - `src/main.js` for custom element registration
+
+### Build Options
+- Preferred: Rollup bundling (normalized output)
+  - `npm run build` → bundles `src/` to `ha-media-card.js`
+  - Treeshaking is disabled to ensure modules are included
+- Alternative: Concatenation build (preserves spacing and single-file style)
+  - `npm run build:concat` → concatenates modules in a deterministic order
+  - Strips internal `import` statements and converts `export class` → `class`
+  - Ensures a single CDN import for Lit is present at the top
+
+### Validation Steps
+1. Build: `npm run build` or `npm run build:concat`
+2. Line count check (optional for regression-style diffs):
+   - `(Get-Content "ha-media-card.js" | Measure-Object -Line).Lines`
+3. Deploy to HADev:
+   - `Copy-Item "ha-media-card.js" "\\10.0.0.62\config\www\cards\ha-media-card.js" -Force`
+4. Hard refresh browser (Ctrl+Shift+R)
+5. Verify console shows `MEDIA-CARD v5.4.0 Loaded` and test card behavior
+
+### Commit & Push
+- Work on `dev` branch only
+- Commit modular source and build scripts
+- The built `ha-media-card.js` may be committed when validating diffs; otherwise regenerate on demand
+
+### Common Pitfalls & Fixes
+- Duplicate CDN imports can cause `Identifier 'LitElement' has already been declared`
+  - Use `build:concat` which removes duplicate CDN imports from modules
+- Registration order issues can cause `Cannot access 'MediaCard' before initialization`
+  - Ensure `src/main.js` (registration) is concatenated last; classes defined first
+- Sticky caching in HA requires a hard refresh after deployment
+  - Always use Ctrl+Shift+R or Ctrl+F5
+
+### Recommended Flow for Changes
+1. Edit `src/` files
+2. Run `npm run build:concat`
+3. Check line count and perform targeted diffs when needed
+4. Deploy to HADev and hard refresh
+5. Test and iterate
+6. Commit and push to `dev`
+
 
 **Template Variables Available**:
 For confirmation dialogs and service data:
