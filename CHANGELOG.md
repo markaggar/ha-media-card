@@ -1,7 +1,7 @@
-## v5.4.1-beta
+## v5.4.1
 
 ### Added
-- **Custom Date/Time Extraction (Beta)**
+- **Custom Date/Time Extraction**
   - YAML-only configuration to parse dates/times from filenames and/or folder paths
   - New `custom_datetime_format` block:
     - `filename_pattern`: e.g. `YYYY-MM-DD_HH-mm-ss`, `YYYYMMDD_HHmmss`, `YYYYMMDD`
