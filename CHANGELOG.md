@@ -42,6 +42,12 @@
 - Container-query based scaling for metadata and position indicator using `cqi` units and `--ha-media-metadata-scale`
 - Added card editor UI input for `metadata.scale` (range 0.3–4.0; default 1.0)
 
+### Fixed
+- **Navigation After Delete/Edit**: Fixed regression where deleting or editing a photo prevented navigating back to previous images
+  - Root cause: Delete/edit handlers were removing items from old v4 `history` array instead of v5.3 `navigationQueue`
+  - Solution: Updated both `_performDelete()` and `_performEdit()` to correctly remove from `navigationQueue` and adjust `navigationIndex`
+  - Backward navigation now works correctly after any delete or edit operation
+
 ### Stability & Cleanups
 - Removed temporary debug `console.log` statements added during investigation
 - Internal comments updated for v5.4 context

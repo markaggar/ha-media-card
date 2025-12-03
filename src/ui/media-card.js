@@ -3034,15 +3034,15 @@ export class MediaCard extends LitElement {
         this._log(`📝 Added to provider exclusion list: ${targetUri}`);
       }
       
-      // Remove from navigation history (use captured targetUri)
-      const historyIndex = this.history.findIndex(h => h.media_content_id === targetUri);
-      if (historyIndex >= 0) {
-        this.history.splice(historyIndex, 1);
-        // Adjust history position if we removed an earlier item
-        if (historyIndex <= this.historyPosition) {
-          this.historyPosition--;
+      // V5.3: Remove from navigation queue (use captured targetUri)
+      const navIndex = this.navigationQueue.findIndex(item => item.media_content_id === targetUri);
+      if (navIndex >= 0) {
+        this.navigationQueue.splice(navIndex, 1);
+        // Adjust navigation index if we removed an earlier item or current item
+        if (navIndex <= this.navigationIndex) {
+          this.navigationIndex--;
         }
-        this._log(`📚 Removed from navigation history at index ${historyIndex} (${this.history.length} remaining)`);
+        this._log(`📚 Removed from navigation queue at index ${navIndex} (${this.navigationQueue.length} remaining)`);
       }
       
       // Advance to next media after delete
@@ -3308,8 +3308,7 @@ export class MediaCard extends LitElement {
       
       this._log('✅ File marked for editing');
       
-      // V4 CODE REUSE: Remove file from history and exclude from future queries
-      // Copied from ha-media-card.js lines 6008-6020
+      // V5.3: Remove file from navigation queue and exclude from future queries
       
       // Add to provider's exclusion list to prevent reappearance (use captured targetUri)
       if (this.provider && this.provider.excludedFiles) {
@@ -3317,15 +3316,15 @@ export class MediaCard extends LitElement {
         this._log(`📝 Added to provider exclusion list: ${targetUri}`);
       }
       
-      // Remove from navigation history (use captured targetUri)
-      const historyIndex = this.history.findIndex(h => h.media_content_id === targetUri);
-      if (historyIndex >= 0) {
-        this.history.splice(historyIndex, 1);
-        // Adjust history position if we removed an earlier item
-        if (historyIndex <= this.historyPosition) {
-          this.historyPosition--;
+      // V5.3: Remove from navigation queue (use captured targetUri)
+      const navIndex = this.navigationQueue.findIndex(item => item.media_content_id === targetUri);
+      if (navIndex >= 0) {
+        this.navigationQueue.splice(navIndex, 1);
+        // Adjust navigation index if we removed an earlier item or current item
+        if (navIndex <= this.navigationIndex) {
+          this.navigationIndex--;
         }
-        this._log(`📚 Removed from navigation history at index ${historyIndex} (${this.history.length} remaining)`);
+        this._log(`📚 Removed from navigation queue at index ${navIndex} (${this.navigationQueue.length} remaining)`);
       }
       
       // V4 CODE: Automatically advance to next media (line 6030-6032)
