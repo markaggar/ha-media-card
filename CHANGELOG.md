@@ -18,12 +18,14 @@
 ### Changed
 - **Build Process**: Removed Rollup bundling path; concat build is the only supported method (preserves exact class names and avoids runtime renaming issues)
 - **Architecture Cleanup**: Resolved circular dependency between `MediaProvider` and `MediaIndexHelper` by inlining the media_index active check in helper (no cross-import)
-- **Theme-Aware Overlays**: All overlays now adapt to Home Assistant light/dark themes:
-  - Metadata and position indicator backgrounds use `rgba(var(--rgb-card-background-color), 0.60)` with `20px` blur
-  - Text color changed to `var(--secondary-text-color)` for softer appearance in both themes
-  - Media container background uses `var(--card-background-color)` instead of hard-coded black
-  - Video element background set to `transparent` to allow theme passthrough
+- **Theme-Aware Backgrounds**: Complete theme integration for seamless blending with Home Assistant interface:
+  - Media container background uses `var(--primary-background-color)` (black in dark theme, white in light theme)
+  - Metadata and position indicator backgrounds use `rgba(var(--rgb-primary-background-color), 0.60)` with `20px` blur
+  - Text color changed to `var(--primary-text-color)` for proper contrast in both themes
+  - Video element background set to `transparent` to inherit container theme
+  - Fullscreen container respects theme settings
   - Removed text-shadow from metadata overlay (was causing blurry appearance)
+  - Backgrounds now match HA menu bars and footers perfectly in all themes
 
 ### UX & Controls
 - Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:

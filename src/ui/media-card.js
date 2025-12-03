@@ -3135,7 +3135,7 @@ export class MediaCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: black;
+      background: var(--primary-background-color);
     `;
     
     // Store original location to restore later
@@ -3885,7 +3885,7 @@ export class MediaCard extends LitElement {
     .media-container {
       position: relative;
       width: 100%;
-      background: var(--card-background-color);
+      background: var(--primary-background-color);
       /* Enable container-based sizing for child elements (cqi/cqw units) */
       container-type: inline-size;
     }
@@ -4138,8 +4138,8 @@ export class MediaCard extends LitElement {
     /* V4: Metadata overlay */
     .metadata-overlay {
       position: absolute;
-      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.60);
-      color: var(--secondary-text-color);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.60);
+      color: var(--primary-text-color);
       padding: 6px 12px;
       border-radius: 4px;
       /* Responsive size with user scale factor.
@@ -4409,8 +4409,8 @@ export class MediaCard extends LitElement {
     /* Copied from V4 lines 1362-1425 */
     .position-indicator {
       position: absolute;
-      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.60);
-      color: var(--secondary-text-color);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.60);
+      color: var(--primary-text-color);
       padding: 4px 8px;
       border-radius: 12px;
       /* Responsive size with user scale factor, matched to metadata overlay.
@@ -4973,7 +4973,7 @@ export class MediaCard extends LitElement {
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
-            style="width: 100%; height: auto; display: block; background: #000; max-width: 100%;"
+            style="width: 100%; height: auto; display: block; background: transparent; max-width: 100%;"
           >
             <source src="${this.mediaUrl}" type="video/mp4">
             <source src="${this.mediaUrl}" type="video/webm">
