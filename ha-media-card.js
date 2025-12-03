@@ -7265,8 +7265,9 @@ class MediaCard extends LitElement {
       container-type: inline-size;
     }
     
-    /* V4 Smart aspect ratio handling */
-    img, video {
+    /* V4 Smart aspect ratio handling - base rules for default mode only */
+    :host(:not([data-aspect-mode])) img,
+    :host(:not([data-aspect-mode])) video {
       width: 100%;
       height: auto;
       display: block;
@@ -7295,13 +7296,19 @@ class MediaCard extends LitElement {
       margin: 0;
     }
     
+    :host([data-aspect-mode="smart-scale"]) .media-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    
     :host([data-aspect-mode="smart-scale"]) img {
       max-height: 90vh;
       max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
-      margin: 0 auto;
       display: block;
     }
     
@@ -7407,6 +7414,10 @@ class MediaCard extends LitElement {
     :host([data-aspect-mode="viewport-fit"]) video {
       max-height: 100vh;
       max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
@@ -7421,6 +7432,7 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
+      display: block;
     }
     
     /* V4 Navigation Zones - invisible overlay controls */
