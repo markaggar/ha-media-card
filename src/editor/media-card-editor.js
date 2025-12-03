@@ -970,6 +970,17 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _metadataShowRatingChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_rating: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataScaleChanged(ev) {
     // Accept empty to clear (use default = 1)
     const raw = ev.target.value;
@@ -3208,6 +3219,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._metadataShowLocationChanged}
               />
               <div class="help-text">Display geocoded location from EXIF data (requires media_index integration)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Show Rating/Favorite</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_rating === true}
+                @change=${this._metadataShowRatingChanged}
+              />
+              <div class="help-text">Display heart icon for favorites or star rating (requires media_index integration)</div>
             </div>
           </div>
 

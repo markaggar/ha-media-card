@@ -466,6 +466,7 @@ export class MediaCard extends LitElement {
         show_date: true,
         show_time: false,
         show_location: true,
+        show_rating: false,
         show_root_folder: true,
         position: 'bottom-left',
         ...config.metadata
@@ -2051,6 +2052,15 @@ export class MediaCard extends LitElement {
         if (this.config.metadata.show_time) {
           parts.push(`🕐 ${date.toLocaleTimeString(locale)}`);
         }
+      }
+    }
+    
+    // Show rating/favorite if available (from media_index)
+    if (this.config.metadata.show_rating) {
+      if (metadata.is_favorited) {
+        parts.push('❤️');
+      } else if (metadata.rating && metadata.rating > 0) {
+        parts.push('⭐'.repeat(Math.min(5, Math.max(0, metadata.rating))));
       }
     }
     
@@ -3876,7 +3886,7 @@ export class MediaCard extends LitElement {
     .media-container {
       position: relative;
       width: 100%;
-      background: #000;
+      background: var(--card-background-color);
       /* Enable container-based sizing for child elements (cqi/cqw units) */
       container-type: inline-size;
     }
@@ -4017,6 +4027,7 @@ export class MediaCard extends LitElement {
     video {
       max-height: 400px;
       object-fit: contain;
+      background: transparent;
     }
 
     :host([data-aspect-mode="viewport-fit"]) video {
@@ -4128,8 +4139,8 @@ export class MediaCard extends LitElement {
     /* V4: Metadata overlay */
     .metadata-overlay {
       position: absolute;
-      background: rgba(0, 0, 0, 0.8);
-      color: white;
+      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.60);
+      color: var(--secondary-text-color);
       padding: 6px 12px;
       border-radius: 4px;
       /* Responsive size with user scale factor.
@@ -4139,9 +4150,8 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       /* Above nav zones, below HA header */
       z-index: 2;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       animation: fadeIn 0.3s ease;
       max-width: calc(100% - 16px);
       word-break: break-word;
@@ -4271,12 +4281,12 @@ export class MediaCard extends LitElement {
 
     .edit-btn:hover {
       color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.1);
+      transform: scale(1.15);
     }
 
     .delete-btn:hover {
       color: var(--error-color, #ff5252);
-      background: rgba(255, 82, 82, 0.1);
+      transform: scale(1.15);
     }
 
     /* V4: Delete/Edit Confirmation Dialog */
@@ -4400,8 +4410,8 @@ export class MediaCard extends LitElement {
     /* Copied from V4 lines 1362-1425 */
     .position-indicator {
       position: absolute;
-      background: rgba(0, 0, 0, 0.7);
-      color: white;
+      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.60);
+      color: var(--secondary-text-color);
       padding: 4px 8px;
       border-radius: 12px;
       /* Responsive size with user scale factor, matched to metadata overlay.
@@ -4411,8 +4421,8 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       /* Above nav zones, below HA header */
       z-index: 2;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
     }
     
     /* Position indicator corner positioning - bottom-right is default */

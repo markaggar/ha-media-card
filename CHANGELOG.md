@@ -9,10 +9,21 @@
   - Respects `debug_mode: true` and logs extraction attempts/results to console
   - Safe fallback: if custom parsing fails, card falls back to built-in filename patterns; if those fail, EXIF/Media Index is used when available
   - Precedence: folder pattern applies first (when provided and matched), then filename pattern, then built-in patterns
+- **Rating/Favorite Display**
+  - New `metadata.show_rating` option to display favorite (❤️) and rating (⭐1-5) indicators in metadata overlay
+  - Requires Media Index integration for `is_favorited` and `rating` attributes
+  - Defaults to `false` (opt-in feature)
+  - Editor checkbox: "Show Rating/Favorite"
 
 ### Changed
 - **Build Process**: Removed Rollup bundling path; concat build is the only supported method (preserves exact class names and avoids runtime renaming issues)
 - **Architecture Cleanup**: Resolved circular dependency between `MediaProvider` and `MediaIndexHelper` by inlining the media_index active check in helper (no cross-import)
+- **Theme-Aware Overlays**: All overlays now adapt to Home Assistant light/dark themes:
+  - Metadata and position indicator backgrounds use `rgba(var(--rgb-card-background-color), 0.60)` with `20px` blur
+  - Text color changed to `var(--secondary-text-color)` for softer appearance in both themes
+  - Media container background uses `var(--card-background-color)` instead of hard-coded black
+  - Video element background set to `transparent` to allow theme passthrough
+  - Removed text-shadow from metadata overlay (was causing blurry appearance)
 
 ### UX & Controls
 - Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:
@@ -21,6 +32,8 @@
   - Navigation zone clicks restart the 3s auto-hide timer after navigation
 - Video controls are synced with action buttons: touching the video shows controls and action buttons, both fade after ~3s
 - Semi-opaque nav target areas no longer stick on touch; hover-only on mouse, explicit-only on touch
+- Edit and delete buttons now scale on hover (`transform: scale(1.15)`) to match other action buttons
+- Removed colored background overlays from edit/delete button hover states for consistency
 
 ### Visual Hierarchy
 - Z-index tuning so overlays/buttons stay below the HA header bar when scrolling
