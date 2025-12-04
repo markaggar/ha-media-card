@@ -339,7 +339,109 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     return this.initialize();
   }
+
+  // Query for files newer than the given date (for queue refresh feature)
+  async getFilesNewerThan(dateThreshold) {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      this._log('⚠️ Media index not configured');
+      return [];
+    }
+
+    try {
+      this._log('🔍 Checking for files newer than:', dateThreshold);
+      
+      // Build query similar to _queryOrderedFiles but with date filter
+      let folderFilter = null;
+      if (this.config.folder?.path) {
+        let path = this.config.folder.path;
+        if (!path.startsWith('media-source://immich')) {
+          folderFilter = path;
+        }
+      }
+      
+      const serviceData = {
+        count: 100, // Check first 100 new files
+        folder: folderFilter,
+        recursive: this.recursive,
+        file_type: this.config.media_type === 'all' ? undefined : this.config.media_type,
+        order_by: this.orderBy,
+        order_direction: this.orderDirection,
+        date_taken_after: dateThreshold // Filter for files newer than threshold
+      };
+      
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_ordered_files',
+        service_data: serviceData,
+        return_response: true
+      };
+      
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
+      
+      this._log('🔍 Service call:', wsCall);
+      const response = await this.hass.callWS(wsCall);
+      this._log('📥 Response:', response);
+      
+      if (response?.response?.items && Array.isArray(response.response.items)) {
+        const items = response.response.items;
+        this._log(`✅ Found ${items.length} files newer than ${dateThreshold}`);
+        return items;
+      } else {
+        this._log('No new files found');
+        return [];
+      }
+    } catch (error) {
+      console.error('[SequentialMediaIndexProvider] ❌ Error checking for new files:', error);
+      return [];
+    }
+  }
+
+  // Rescan by resetting cursor and checking if first item changed
+  async rescanForNewFiles() {
+    this._log('🔄 Rescanning database for new files...');
+    
+    // Save current first item in queue
+    const previousFirstItem = this.queue.length > 0 ? this.queue[0].media_content_id : null;
+    
+    // Reset cursor to beginning
+    this.lastSeenValue = null;
+    this.hasMore = true;
+    this.reachedEnd = false;
+    
+    // Re-query from start
+    const items = await this._queryOrderedFiles();
+    
+    if (!items || items.length === 0) {
+      this._log('⚠️ Rescan returned no items');
+      return {
+        queueChanged: false,
+        previousFirstItem,
+        newFirstItem: previousFirstItem
+      };
+    }
+    
+    // Replace queue with fresh results
+    this.queue = items;
+    const newFirstItem = this.queue[0].media_content_id;
+    const queueChanged = previousFirstItem !== newFirstItem;
+    
+    this._log(`📊 Rescan complete - first item changed: ${queueChanged}`);
+    this._log(`   Previous: ${previousFirstItem}`);
+    this._log(`   New: ${newFirstItem}`);
+    
+    return {
+      queueChanged,
+      previousFirstItem,
+      newFirstItem
+    };
+  }
 }
 
 // Note: SubfolderQueue is defined in src/providers/subfolder-queue.js
 // Any hierarchical random folder logic should be imported from that module.
+

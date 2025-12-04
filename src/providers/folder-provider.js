@@ -403,4 +403,45 @@ export class FolderProvider extends MediaProvider {
     return null;
   }
 
+  // Query for files newer than the given date (for queue refresh feature)
+  async getFilesNewerThan(dateThreshold) {
+    // Delegate to the underlying provider
+    if (this.sequentialProvider && typeof this.sequentialProvider.getFilesNewerThan === 'function') {
+      this.cardAdapter._log('🔍 Delegating getFilesNewerThan to SequentialMediaIndexProvider');
+      return await this.sequentialProvider.getFilesNewerThan(dateThreshold);
+    }
+    
+    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.getFilesNewerThan === 'function') {
+      this.cardAdapter._log('🔍 Delegating getFilesNewerThan to MediaIndexProvider');
+      return await this.mediaIndexProvider.getFilesNewerThan(dateThreshold);
+    }
+    
+    // For SubfolderQueue (filesystem-based), filter existing queue
+    if (this.subfolderQueue && typeof this.subfolderQueue.getFilesNewerThan === 'function') {
+      this.cardAdapter._log('🔍 Checking SubfolderQueue for files newer than', dateThreshold);
+      return this.subfolderQueue.getFilesNewerThan(dateThreshold);
+    }
+    
+    this.cardAdapter._log('⚠️ No provider available for getFilesNewerThan');
+    return [];
+  }
+
+  async rescanForNewFiles() {
+    // Delegate to SequentialMediaIndexProvider for database-backed sources
+    if (this.sequentialProvider && typeof this.sequentialProvider.rescanForNewFiles === 'function') {
+      this.cardAdapter._log('🔍 Triggering SequentialMediaIndexProvider rescan');
+      return await this.sequentialProvider.rescanForNewFiles();
+    }
+    
+    // Delegate to SubfolderQueue for filesystem-based sources
+    if (this.subfolderQueue && typeof this.subfolderQueue.rescanForNewFiles === 'function') {
+      this.cardAdapter._log('🔍 Triggering SubfolderQueue rescan');
+      return await this.subfolderQueue.rescanForNewFiles();
+    }
+    
+    this.cardAdapter._log('⚠️ No rescan method available for this provider');
+    return { queueChanged: false };
+  }
+
 }
+

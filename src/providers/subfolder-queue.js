@@ -396,7 +396,50 @@ export class SubfolderQueue {
           this.queueShuffleCounter = 0;
           this._log('🔀 Final shuffle completed after hierarchical scan - queue size:', this.queue.length);
         } else if (isSequentialMode) {
-          this._log('📋 Sequential mode: Preserving sorted order (no shuffle) - queue size:', this.queue.length);
+          this._log('📋 Sequential mode: Sorting entire queue by date/timestamp...');
+          // Sort entire queue to ensure newest files are first (or oldest, based on config)
+          const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
+          
+          // Helper to extract sortable timestamp from any media source
+          const getTimestampForSort = (file) => {
+            const mediaId = file.media_content_id;
+            
+            // 1. Reolink: Extract the second timestamp (actual video start time)
+            if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
+              const parts = mediaId.split('|');
+              const timestamps = parts.filter(p => /^\d{14}$/.test(p));
+              const timestamp = timestamps.length > 1 ? timestamps[1] : timestamps[0];
+              if (timestamp) return timestamp;
+            }
+            
+            // 2. Try date_taken metadata if available
+            if (file.metadata?.date_taken) {
+              const date = new Date(file.metadata.date_taken);
+              const year = date.getFullYear();
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              const hours = String(date.getHours()).padStart(2, '0');
+              const minutes = String(date.getMinutes()).padStart(2, '0');
+              const seconds = String(date.getSeconds()).padStart(2, '0');
+              return `${year}${month}${day}${hours}${minutes}${seconds}`;
+            }
+            
+            // 3. Fallback to title/filename
+            return (file.title || '').toLowerCase();
+          };
+          
+          this.queue.sort((a, b) => {
+            const keyA = getTimestampForSort(a);
+            const keyB = getTimestampForSort(b);
+            
+            if (orderDirection === 'desc') {
+              return keyB.localeCompare(keyA); // Newest first
+            } else {
+              return keyA.localeCompare(keyB); // Oldest first
+            }
+          });
+          
+          this._log('✅ Queue sorted', orderDirection, '- first item:', this.queue[0]?.title, 'last item:', this.queue[this.queue.length - 1]?.title);
         }
         
         return true;
@@ -1217,6 +1260,119 @@ export class SubfolderQueue {
       // Standard sorting without priority
       this.queue.sort(compareItems);
     }
+  }
+
+  /**
+   * Rescan the folder to detect new files
+   * Returns info about whether the queue changed
+   * @returns {Object} { queueChanged: boolean, previousFirstItem: Object, newFirstItem: Object }
+   */
+  async rescanForNewFiles() {
+    this._log('🔄 Rescanning folder to detect new files...');
+    
+    // Save the current first item details before rescan
+    const previousFirstItem = this.queue.length > 0 ? {
+      title: this.queue[0].title,
+      media_content_id: this.queue[0].media_content_id,
+      date_taken: this.queue[0].metadata?.date_taken
+    } : null;
+    const previousQueueSize = this.queue.length;
+    
+    this._log('🔍 Previous first item:', previousFirstItem);
+    
+    try {
+      // Clear everything just like initialize() does
+      this.queue = [];
+      this.shownItems.clear();
+      this.discoveryStartTime = Date.now();
+      
+      // Enable scanning flags to allow rescan
+      this._scanCancelled = false;
+      this.isScanning = true;
+      this.discoveryInProgress = true;
+      
+      // Trigger a quick scan to rebuild the queue with latest files
+      await this.quickScan();
+      
+      const newFirstItem = this.queue.length > 0 ? {
+        title: this.queue[0].title,
+        media_content_id: this.queue[0].media_content_id,
+        date_taken: this.queue[0].metadata?.date_taken
+      } : null;
+      
+      this._log('🔍 New first item:', newFirstItem);
+      
+      // Compare by title (which includes timestamp) for better change detection
+      // Also compare by date_taken if available (more reliable than title)
+      let queueChanged = false;
+      
+      if (!previousFirstItem && newFirstItem) {
+        queueChanged = true; // Was empty, now has items
+        this._log('📊 Queue changed: was empty, now has', this.queue.length, 'items');
+      } else if (previousFirstItem && !newFirstItem) {
+        queueChanged = true; // Had items, now empty
+        this._log('📊 Queue changed: had items, now empty');
+      } else if (previousFirstItem && newFirstItem) {
+        // Compare date_taken first (most reliable), then title
+        if (previousFirstItem.date_taken && newFirstItem.date_taken) {
+          queueChanged = previousFirstItem.date_taken !== newFirstItem.date_taken;
+          this._log('📊 Comparing by date_taken:', previousFirstItem.date_taken, '→', newFirstItem.date_taken, 'changed:', queueChanged);
+        } else {
+          queueChanged = previousFirstItem.title !== newFirstItem.title;
+          this._log('📊 Comparing by title:', previousFirstItem.title, '→', newFirstItem.title, 'changed:', queueChanged);
+        }
+      }
+      
+      this._log(`✅ Rescan complete: queue was ${previousQueueSize}, now ${this.queue.length}, changed: ${queueChanged}`);
+      
+      return {
+        queueChanged,
+        previousFirstItem,
+        newFirstItem,
+        previousQueueSize,
+        newQueueSize: this.queue.length
+      };
+    } catch (error) {
+      this._log('⚠️ Rescan failed:', error);
+      return {
+        queueChanged: false,
+        previousFirstItem,
+        newFirstItem: previousFirstItem,
+        previousQueueSize,
+        newQueueSize: this.queue.length
+      };
+    } finally {
+      // Clean up scanning flags
+      this.isScanning = false;
+      this.discoveryInProgress = false;
+    }
+  }
+
+  /**
+   * Get files from the queue that are newer than the specified date
+   * This method filters the existing queue without rescanning
+   * Note: Use rescanForNewFiles() to trigger a full rescan first
+   * @param {Date} dateThreshold - Only return files newer than this date
+   * @returns {Array} Files with date_taken newer than threshold
+   */
+  async getFilesNewerThan(dateThreshold) {
+    if (!dateThreshold) {
+      this._log('⚠️ getFilesNewerThan: No date threshold provided');
+      return [];
+    }
+
+    // Filter existing queue for newer files
+    const thresholdTime = dateThreshold.getTime();
+    const newerFiles = this.queue.filter(item => {
+      if (!item.metadata?.date_taken) {
+        return false;
+      }
+      const itemDate = new Date(item.metadata.date_taken);
+      return itemDate.getTime() > thresholdTime;
+    });
+
+    this._log(`🔍 getFilesNewerThan: Found ${newerFiles.length} files newer than ${dateThreshold.toISOString()} (checked ${this.queue.length} files in queue)`);
+    return newerFiles;
   }
 }
 

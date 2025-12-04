@@ -696,4 +696,35 @@ export class MediaIndexProvider extends MediaProvider {
   excludeFile(path) {
     this.excludedFiles.add(path);
   }
+
+  // Query for new files (for queue refresh feature)
+  // For random mode, we don't filter by date but can query with priority_new_files
+  async getFilesNewerThan(dateThreshold) {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      this._log('⚠️ Media index not configured');
+      return [];
+    }
+
+    try {
+      this._log('🔍 Checking for new files (random mode - using priority_new_files)');
+      
+      // Query with priority_new_files to get recently indexed files
+      const result = await this._queryMediaIndex({
+        priority_new_files: true,
+        new_files_threshold_seconds: 3600, // Last hour
+        count: 50 // Check first 50 new files
+      });
+      
+      if (result && result.length > 0) {
+        this._log(`✅ Found ${result.length} new files`);
+        return result;
+      } else {
+        this._log('No new files found');
+        return [];
+      }
+    } catch (error) {
+      console.error('[MediaIndexProvider] ❌ Error checking for new files:', error);
+      return [];
+    }
+  }
 }

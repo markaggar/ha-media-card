@@ -1106,7 +1106,48 @@ class FolderProvider extends MediaProvider {
     return null;
   }
 
+  // Query for files newer than the given date (for queue refresh feature)
+  async getFilesNewerThan(dateThreshold) {
+    // Delegate to the underlying provider
+    if (this.sequentialProvider && typeof this.sequentialProvider.getFilesNewerThan === 'function') {
+      this.cardAdapter._log('🔍 Delegating getFilesNewerThan to SequentialMediaIndexProvider');
+      return await this.sequentialProvider.getFilesNewerThan(dateThreshold);
+    }
+    
+    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.getFilesNewerThan === 'function') {
+      this.cardAdapter._log('🔍 Delegating getFilesNewerThan to MediaIndexProvider');
+      return await this.mediaIndexProvider.getFilesNewerThan(dateThreshold);
+    }
+    
+    // For SubfolderQueue (filesystem-based), filter existing queue
+    if (this.subfolderQueue && typeof this.subfolderQueue.getFilesNewerThan === 'function') {
+      this.cardAdapter._log('🔍 Checking SubfolderQueue for files newer than', dateThreshold);
+      return this.subfolderQueue.getFilesNewerThan(dateThreshold);
+    }
+    
+    this.cardAdapter._log('⚠️ No provider available for getFilesNewerThan');
+    return [];
+  }
+
+  async rescanForNewFiles() {
+    // Delegate to SequentialMediaIndexProvider for database-backed sources
+    if (this.sequentialProvider && typeof this.sequentialProvider.rescanForNewFiles === 'function') {
+      this.cardAdapter._log('🔍 Triggering SequentialMediaIndexProvider rescan');
+      return await this.sequentialProvider.rescanForNewFiles();
+    }
+    
+    // Delegate to SubfolderQueue for filesystem-based sources
+    if (this.subfolderQueue && typeof this.subfolderQueue.rescanForNewFiles === 'function') {
+      this.cardAdapter._log('🔍 Triggering SubfolderQueue rescan');
+      return await this.subfolderQueue.rescanForNewFiles();
+    }
+    
+    this.cardAdapter._log('⚠️ No rescan method available for this provider');
+    return { queueChanged: false };
+  }
+
 }
+
 
 
 /**
@@ -1505,7 +1546,50 @@ class SubfolderQueue {
           this.queueShuffleCounter = 0;
           this._log('🔀 Final shuffle completed after hierarchical scan - queue size:', this.queue.length);
         } else if (isSequentialMode) {
-          this._log('📋 Sequential mode: Preserving sorted order (no shuffle) - queue size:', this.queue.length);
+          this._log('📋 Sequential mode: Sorting entire queue by date/timestamp...');
+          // Sort entire queue to ensure newest files are first (or oldest, based on config)
+          const orderDirection = this.card.config.folder?.sequential?.order_direction || 'desc';
+          
+          // Helper to extract sortable timestamp from any media source
+          const getTimestampForSort = (file) => {
+            const mediaId = file.media_content_id;
+            
+            // 1. Reolink: Extract the second timestamp (actual video start time)
+            if (mediaId && mediaId.includes('reolink') && mediaId.includes('|')) {
+              const parts = mediaId.split('|');
+              const timestamps = parts.filter(p => /^\d{14}$/.test(p));
+              const timestamp = timestamps.length > 1 ? timestamps[1] : timestamps[0];
+              if (timestamp) return timestamp;
+            }
+            
+            // 2. Try date_taken metadata if available
+            if (file.metadata?.date_taken) {
+              const date = new Date(file.metadata.date_taken);
+              const year = date.getFullYear();
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              const hours = String(date.getHours()).padStart(2, '0');
+              const minutes = String(date.getMinutes()).padStart(2, '0');
+              const seconds = String(date.getSeconds()).padStart(2, '0');
+              return `${year}${month}${day}${hours}${minutes}${seconds}`;
+            }
+            
+            // 3. Fallback to title/filename
+            return (file.title || '').toLowerCase();
+          };
+          
+          this.queue.sort((a, b) => {
+            const keyA = getTimestampForSort(a);
+            const keyB = getTimestampForSort(b);
+            
+            if (orderDirection === 'desc') {
+              return keyB.localeCompare(keyA); // Newest first
+            } else {
+              return keyA.localeCompare(keyB); // Oldest first
+            }
+          });
+          
+          this._log('✅ Queue sorted', orderDirection, '- first item:', this.queue[0]?.title, 'last item:', this.queue[this.queue.length - 1]?.title);
         }
         
         return true;
@@ -2327,6 +2411,119 @@ class SubfolderQueue {
       this.queue.sort(compareItems);
     }
   }
+
+  /**
+   * Rescan the folder to detect new files
+   * Returns info about whether the queue changed
+   * @returns {Object} { queueChanged: boolean, previousFirstItem: Object, newFirstItem: Object }
+   */
+  async rescanForNewFiles() {
+    this._log('🔄 Rescanning folder to detect new files...');
+    
+    // Save the current first item details before rescan
+    const previousFirstItem = this.queue.length > 0 ? {
+      title: this.queue[0].title,
+      media_content_id: this.queue[0].media_content_id,
+      date_taken: this.queue[0].metadata?.date_taken
+    } : null;
+    const previousQueueSize = this.queue.length;
+    
+    this._log('🔍 Previous first item:', previousFirstItem);
+    
+    try {
+      // Clear everything just like initialize() does
+      this.queue = [];
+      this.shownItems.clear();
+      this.discoveryStartTime = Date.now();
+      
+      // Enable scanning flags to allow rescan
+      this._scanCancelled = false;
+      this.isScanning = true;
+      this.discoveryInProgress = true;
+      
+      // Trigger a quick scan to rebuild the queue with latest files
+      await this.quickScan();
+      
+      const newFirstItem = this.queue.length > 0 ? {
+        title: this.queue[0].title,
+        media_content_id: this.queue[0].media_content_id,
+        date_taken: this.queue[0].metadata?.date_taken
+      } : null;
+      
+      this._log('🔍 New first item:', newFirstItem);
+      
+      // Compare by title (which includes timestamp) for better change detection
+      // Also compare by date_taken if available (more reliable than title)
+      let queueChanged = false;
+      
+      if (!previousFirstItem && newFirstItem) {
+        queueChanged = true; // Was empty, now has items
+        this._log('📊 Queue changed: was empty, now has', this.queue.length, 'items');
+      } else if (previousFirstItem && !newFirstItem) {
+        queueChanged = true; // Had items, now empty
+        this._log('📊 Queue changed: had items, now empty');
+      } else if (previousFirstItem && newFirstItem) {
+        // Compare date_taken first (most reliable), then title
+        if (previousFirstItem.date_taken && newFirstItem.date_taken) {
+          queueChanged = previousFirstItem.date_taken !== newFirstItem.date_taken;
+          this._log('📊 Comparing by date_taken:', previousFirstItem.date_taken, '→', newFirstItem.date_taken, 'changed:', queueChanged);
+        } else {
+          queueChanged = previousFirstItem.title !== newFirstItem.title;
+          this._log('📊 Comparing by title:', previousFirstItem.title, '→', newFirstItem.title, 'changed:', queueChanged);
+        }
+      }
+      
+      this._log(`✅ Rescan complete: queue was ${previousQueueSize}, now ${this.queue.length}, changed: ${queueChanged}`);
+      
+      return {
+        queueChanged,
+        previousFirstItem,
+        newFirstItem,
+        previousQueueSize,
+        newQueueSize: this.queue.length
+      };
+    } catch (error) {
+      this._log('⚠️ Rescan failed:', error);
+      return {
+        queueChanged: false,
+        previousFirstItem,
+        newFirstItem: previousFirstItem,
+        previousQueueSize,
+        newQueueSize: this.queue.length
+      };
+    } finally {
+      // Clean up scanning flags
+      this.isScanning = false;
+      this.discoveryInProgress = false;
+    }
+  }
+
+  /**
+   * Get files from the queue that are newer than the specified date
+   * This method filters the existing queue without rescanning
+   * Note: Use rescanForNewFiles() to trigger a full rescan first
+   * @param {Date} dateThreshold - Only return files newer than this date
+   * @returns {Array} Files with date_taken newer than threshold
+   */
+  async getFilesNewerThan(dateThreshold) {
+    if (!dateThreshold) {
+      this._log('⚠️ getFilesNewerThan: No date threshold provided');
+      return [];
+    }
+
+    // Filter existing queue for newer files
+    const thresholdTime = dateThreshold.getTime();
+    const newerFiles = this.queue.filter(item => {
+      if (!item.metadata?.date_taken) {
+        return false;
+      }
+      const itemDate = new Date(item.metadata.date_taken);
+      return itemDate.getTime() > thresholdTime;
+    });
+
+    this._log(`🔍 getFilesNewerThan: Found ${newerFiles.length} files newer than ${dateThreshold.toISOString()} (checked ${this.queue.length} files in queue)`);
+    return newerFiles;
+  }
 }
 
 /**
@@ -3030,6 +3227,37 @@ class MediaIndexProvider extends MediaProvider {
   excludeFile(path) {
     this.excludedFiles.add(path);
   }
+
+  // Query for new files (for queue refresh feature)
+  // For random mode, we don't filter by date but can query with priority_new_files
+  async getFilesNewerThan(dateThreshold) {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      this._log('⚠️ Media index not configured');
+      return [];
+    }
+
+    try {
+      this._log('🔍 Checking for new files (random mode - using priority_new_files)');
+      
+      // Query with priority_new_files to get recently indexed files
+      const result = await this._queryMediaIndex({
+        priority_new_files: true,
+        new_files_threshold_seconds: 3600, // Last hour
+        count: 50 // Check first 50 new files
+      });
+      
+      if (result && result.length > 0) {
+        this._log(`✅ Found ${result.length} new files`);
+        return result;
+      } else {
+        this._log('No new files found');
+        return [];
+      }
+    } catch (error) {
+      console.error('[MediaIndexProvider] ❌ Error checking for new files:', error);
+      return [];
+    }
+  }
 }
 
 
@@ -3371,10 +3599,112 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     return this.initialize();
   }
+
+  // Query for files newer than the given date (for queue refresh feature)
+  async getFilesNewerThan(dateThreshold) {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      this._log('⚠️ Media index not configured');
+      return [];
+    }
+
+    try {
+      this._log('🔍 Checking for files newer than:', dateThreshold);
+      
+      // Build query similar to _queryOrderedFiles but with date filter
+      let folderFilter = null;
+      if (this.config.folder?.path) {
+        let path = this.config.folder.path;
+        if (!path.startsWith('media-source://immich')) {
+          folderFilter = path;
+        }
+      }
+      
+      const serviceData = {
+        count: 100, // Check first 100 new files
+        folder: folderFilter,
+        recursive: this.recursive,
+        file_type: this.config.media_type === 'all' ? undefined : this.config.media_type,
+        order_by: this.orderBy,
+        order_direction: this.orderDirection,
+        date_taken_after: dateThreshold // Filter for files newer than threshold
+      };
+      
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_ordered_files',
+        service_data: serviceData,
+        return_response: true
+      };
+      
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
+      
+      this._log('🔍 Service call:', wsCall);
+      const response = await this.hass.callWS(wsCall);
+      this._log('📥 Response:', response);
+      
+      if (response?.response?.items && Array.isArray(response.response.items)) {
+        const items = response.response.items;
+        this._log(`✅ Found ${items.length} files newer than ${dateThreshold}`);
+        return items;
+      } else {
+        this._log('No new files found');
+        return [];
+      }
+    } catch (error) {
+      console.error('[SequentialMediaIndexProvider] ❌ Error checking for new files:', error);
+      return [];
+    }
+  }
+
+  // Rescan by resetting cursor and checking if first item changed
+  async rescanForNewFiles() {
+    this._log('🔄 Rescanning database for new files...');
+    
+    // Save current first item in queue
+    const previousFirstItem = this.queue.length > 0 ? this.queue[0].media_content_id : null;
+    
+    // Reset cursor to beginning
+    this.lastSeenValue = null;
+    this.hasMore = true;
+    this.reachedEnd = false;
+    
+    // Re-query from start
+    const items = await this._queryOrderedFiles();
+    
+    if (!items || items.length === 0) {
+      this._log('⚠️ Rescan returned no items');
+      return {
+        queueChanged: false,
+        previousFirstItem,
+        newFirstItem: previousFirstItem
+      };
+    }
+    
+    // Replace queue with fresh results
+    this.queue = items;
+    const newFirstItem = this.queue[0].media_content_id;
+    const queueChanged = previousFirstItem !== newFirstItem;
+    
+    this._log(`📊 Rescan complete - first item changed: ${queueChanged}`);
+    this._log(`   Previous: ${previousFirstItem}`);
+    this._log(`   New: ${newFirstItem}`);
+    
+    return {
+      queueChanged,
+      previousFirstItem,
+      newFirstItem
+    };
+  }
 }
 
 // Note: SubfolderQueue is defined in src/providers/subfolder-queue.js
 // Any hierarchical random folder logic should be imported from that module.
+
 
 
 /**
@@ -4541,11 +4871,35 @@ class MediaCard extends LitElement {
     
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       const modeLabel = isRefreshMode ? 'auto-refresh (reload current)' : 'auto-advance (next media)';
-      this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds`);
+      const intervalMs = refreshSeconds * 1000;
+      this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
+      this._log(`🔄 Timer will fire at: ${new Date(Date.now() + intervalMs).toLocaleTimeString()}`);
       
       this._refreshInterval = setInterval(async () => {
+        // Track when timer fires
+        this._lastRefreshCheckTime = Date.now();
+        this._log(`🔄 ⏰ Timer fired at ${new Date().toLocaleTimeString()}`);
+        
         // Check pause states before advancing
         if (!this._isPaused && !this._backgroundPaused) {
+          // Check for new files FIRST (before video completion check)
+          // This allows queue refresh to interrupt video playback in manual mode at position 1
+          this._log('🔄 Timer fired - checking provider type:', this.provider?.constructor?.name);
+          let queueWasRefreshed = false;
+          if (this.provider && this.provider.constructor.name !== 'SingleMediaProvider') {
+            this._log('🔄 Calling _checkForNewFiles()...');
+            queueWasRefreshed = await this._checkForNewFiles();
+            this._log('🔄 _checkForNewFiles() returned:', queueWasRefreshed);
+          } else {
+            this._log('🔄 Skipping _checkForNewFiles() - SingleMediaProvider detected');
+          }
+          
+          // If queue was refreshed, skip the rest of the timer logic
+          if (queueWasRefreshed) {
+            this._log('🔄 Queue was refreshed - skipping normal timer behavior');
+            return;
+          }
+          
           // V4 CODE REUSE: Check if we should wait for video to complete
           // Based on V4 lines 3259-3302
           if (await this._shouldWaitForVideoCompletion()) {
@@ -4578,6 +4932,300 @@ class MediaCard extends LitElement {
         refreshSeconds,
         hasHass: !!this.hass
       });
+    }
+  }
+
+  // Check for new files in folder mode and refresh queue if needed
+  // Returns true if queue was refreshed, false otherwise
+  async _checkForNewFiles() {
+    this._log('🔄 _checkForNewFiles() START');
+    
+    // Only for sequential mode providers
+    const isSeq = this._isSequentialMode();
+    this._log('🔄 Is sequential mode?', isSeq);
+    if (!isSeq) {
+      this._log('🔄 Not sequential mode - skipping');
+      return false;
+    }
+    
+    // Respect navigation grace period (avoid interrupting active navigation)
+    const timeSinceLastNav = Date.now() - (this._lastNavigationTime || 0);
+    this._log('🔄 Time since last navigation:', timeSinceLastNav, 'ms');
+    if (timeSinceLastNav < 5000) {
+      this._log('🔄 Skipping new file check - within navigation grace period');
+      return false;
+    }
+    
+    // Check if we're at position 1 (index 0) before rescan
+    const wasAtPositionOne = this.navigationIndex === 0;
+    this._log('🔄 Currently at position 1 (index 0)?', wasAtPositionOne);
+    
+    if (!wasAtPositionOne) {
+      this._log('🔄 Not at position 1 - skipping rescan (manual navigation in progress)');
+      return false;
+    }
+    
+    try {
+      // Trigger full rescan to detect new files
+      this._log('🔄 Triggering full folder rescan...');
+      if (!this.provider || typeof this.provider.rescanForNewFiles !== 'function') {
+        this._log('🔄 Provider does not support rescanForNewFiles');
+        return false;
+      }
+      
+      const scanResult = await this.provider.rescanForNewFiles();
+      this._log('🔄 Rescan result:', scanResult);
+      this._log('🔄 Current time:', new Date().toLocaleTimeString());
+      
+      // If the first item in queue changed, refresh display
+      if (scanResult.queueChanged) {
+        this._log(`🆕 Queue changed - new first item detected! Refreshing display...`);
+        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || 'none'}`);
+        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || 'none'}`);
+        await this._refreshQueue();
+        return true; // Queue was refreshed
+      } else {
+        this._log('✅ Rescan complete - no change in first item, display stays the same');
+        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || 'none'}`);
+        return false;
+      }
+    } catch (error) {
+      this._log('⚠️ Error checking for new files:', error);
+    }
+    
+    return false; // Queue was not refreshed
+  }
+  
+  // Check if provider is in sequential mode
+  _isSequentialMode() {
+    // SequentialMediaIndexProvider is always sequential
+    if (this.provider && this.provider.constructor.name === 'SequentialMediaIndexProvider') {
+      return true;
+    }
+    
+    // FolderProvider with sequential mode
+    if (this.provider && this.provider.constructor.name === 'FolderProvider') {
+      const folderMode = this.config?.folder?.mode;
+      return folderMode === 'sequential';
+    }
+    
+    return false;
+  }
+  
+  // Get time until next auto-refresh timer check (for logging)
+  _getTimeUntilNextRefresh() {
+    if (!this._lastRefreshCheckTime || !this.config?.auto_refresh_seconds) {
+      return 'unknown';
+    }
+    const elapsed = (Date.now() - this._lastRefreshCheckTime) / 1000;
+    const remaining = Math.max(0, this.config.auto_refresh_seconds - elapsed);
+    return Math.round(remaining);
+  }
+  
+  // Check if at end of navigation queue
+  _isAtEndOfQueue() {
+    if (!this.navigationQueue || this.navigationQueue.length === 0) {
+      return false;
+    }
+    
+    const currentIndex = this.navigationQueue.indexOf(this.currentMedia);
+    return currentIndex === this.navigationQueue.length - 1;
+  }
+  
+  // Full queue refresh - clear navigation state and reinitialize provider
+  async _refreshQueue() {
+    this._log('🔄 Starting full queue refresh...');
+    
+    try {
+      // Save current media to compare after refresh
+      const currentMediaId = this.currentMedia?.media_content_id;
+      const currentDateTaken = this.currentMedia?.metadata?.date_taken;
+      this._log('🔄 Current media before refresh:', currentMediaId, 'date_taken:', currentDateTaken);
+      
+      // Save queue size before refresh (for position indicator)
+      const previousQueueSize = this.navigationQueue.length;
+      this._log('🔄 Previous navigation queue size:', previousQueueSize);
+      
+      // CRITICAL: Clear and rebuild entire navigation queue
+      // Just updating position 0 leaves stale items at positions 1-19
+      this.navigationQueue = [];
+      this.navigationHistory = [];
+      this.navigationIndex = 0; // Will be at first position after loading
+      
+      // Reset provider cursor to beginning (critical for sequential mode)
+      // Check if provider has reset() method (SequentialMediaIndexProvider)
+      let providerToReset = this.provider;
+      
+      // Unwrap FolderProvider to get actual provider
+      if (this.provider?.sequentialProvider) {
+        providerToReset = this.provider.sequentialProvider;
+      } else if (this.provider?.mediaIndexProvider) {
+        providerToReset = this.provider.mediaIndexProvider;
+      }
+      
+      if (providerToReset && typeof providerToReset.reset === 'function') {
+        this._log('🔄 Calling provider.reset() to clear cursor');
+        await providerToReset.reset();
+      } else if (this.provider && typeof this.provider.initialize === 'function') {
+        this._log('🔄 Provider has no reset(), calling initialize()');
+        await this.provider.initialize();
+      }
+      
+      // Get access to the underlying provider's queue
+      let providerQueue = null;
+      if (this.provider?.subfolderQueue?.queue) {
+        providerQueue = this.provider.subfolderQueue.queue;
+        this._log('🔍 Found SubfolderQueue with', providerQueue.length, 'items');
+      } else if (this.provider?.sequentialProvider?.queue) {
+        providerQueue = this.provider.sequentialProvider.queue;
+        this._log('🔍 Found SequentialProvider with', providerQueue.length, 'items');
+      } else if (this.provider?.mediaIndexProvider?.queue) {
+        providerQueue = this.provider.mediaIndexProvider.queue;
+        this._log('🔍 Found MediaIndexProvider with', providerQueue.length, 'items');
+      } else if (this.provider?.queue) {
+        providerQueue = this.provider.queue;
+        this._log('🔍 Found direct provider queue with', providerQueue.length, 'items');
+      }
+      
+      // DEBUG: Log provider structure to understand the data
+      this._log('🔍 Provider structure:', {
+        hasSubfolderQueue: !!this.provider?.subfolderQueue,
+        hasSequentialProvider: !!this.provider?.sequentialProvider,
+        hasMediaIndexProvider: !!this.provider?.mediaIndexProvider,
+        hasDirectQueue: !!this.provider?.queue,
+        providerType: this.provider?.constructor?.name
+      });
+      
+      if (providerQueue && providerQueue.length > 0) {
+        // DEBUG: Log first item structure to understand the format
+        this._log('🔍 First item in provider queue:', providerQueue[0]);
+        this._log('🔍 First item keys:', Object.keys(providerQueue[0] || {}));
+      }
+      
+      // Reload navigation queue by copying from provider's queue (don't call getNext!)
+      // Calling getNext() repeatedly advances the provider's cursor incorrectly
+      if (providerQueue && providerQueue.length > 0) {
+        const itemsToCopy = Math.min(providerQueue.length, previousQueueSize || 20, 20);
+        this._log('🔄 Copying', itemsToCopy, 'items from provider queue (size:', providerQueue.length, ')');
+        
+        for (let i = 0; i < itemsToCopy; i++) {
+          const item = providerQueue[i];
+          
+          // DEBUG: Log each item being copied
+          if (i < 3) { // Only log first 3 to avoid spam
+            this._log('🔍 Copying item', i, ':', {
+              type: typeof item,
+              hasMediaContentId: !!item?.media_content_id,
+              keys: Object.keys(item || {}),
+              item: item
+            });
+          }
+          
+          // Validate item has required properties
+          if (item && item.media_content_id) {
+            // V5: Only refresh metadata if missing or if this is position 1 and it's a NEW file
+            const needsMetadata = !item.metadata || 
+                                  (i === 0 && item.media_content_id !== currentMediaId);
+            
+            if (needsMetadata) {
+              this._log(`🔄 Extracting metadata for item ${i} (position ${i + 1})`);
+              item.metadata = await this._extractMetadataFromItem(item);
+            } else if (i === 0) {
+              this._log(`✅ Position 1 already has metadata (same file as before, no re-extraction needed)`);
+            }
+            this.navigationQueue.push(item);
+          } else {
+            this._log('⚠️ Skipping invalid item at index', i, '- missing media_content_id:', item);
+          }
+        }
+        
+        this._log('🔄 Navigation queue after copy:', this.navigationQueue.length, 'items');
+        if (this.navigationQueue.length > 0) {
+          this._log('🔍 First item in navigation queue:', this.navigationQueue[0]);
+        }
+      } else {
+        // Fallback: if we can't access the queue directly, use getNext() method
+        this._log('🔄 No direct queue access, using getNext() method');
+        const itemsToLoad = Math.min(previousQueueSize || 20, 20);
+        
+        for (let i = 0; i < itemsToLoad; i++) {
+          if (this.provider && typeof this.provider.getNext === 'function') {
+            const item = await this.provider.getNext();
+            if (!item) {
+              this._log('🔄 Provider exhausted after', i, 'items');
+              break;
+            }
+            
+            // V5: Extract metadata if not provided
+            if (!item.metadata) {
+              item.metadata = await this._extractMetadataFromItem(item);
+            }
+            
+            this.navigationQueue.push(item);
+          }
+        }
+      }
+      
+      this._log('🔄 Reloaded navigation queue with', this.navigationQueue.length, 'items');
+      
+      // Set current media to first item in refreshed queue
+      if (this.navigationQueue.length > 0) {
+        const firstItem = this.navigationQueue[0];
+        
+        // Check if we should display this new first item
+        const shouldUpdate = !currentMediaId || firstItem.media_content_id !== currentMediaId;
+        
+        this.currentMedia = firstItem;
+        
+        // CRITICAL: Update _currentMetadata and _currentMediaPath for overlay display
+        this._currentMediaPath = firstItem.media_content_id;
+        this._currentMetadata = firstItem.metadata || null;
+        this._pendingMetadata = firstItem.metadata;
+        this._log('🔄 Updated _currentMetadata with fresh metadata:', !!this._currentMetadata);
+        
+        if (shouldUpdate) {
+          this._log('🆕 New file detected - updating display to:', firstItem.media_content_id);
+          await this._resolveMediaUrl();
+          this.requestUpdate();
+          
+          // Force media element to reload immediately (don't wait for Lit render cycle)
+          await this.updateComplete; // Wait for Lit to finish rendering
+          
+          // Check if it's a video or image and reload appropriately
+          const videoElement = this.shadowRoot?.querySelector('video');
+          const imgElement = this.shadowRoot?.querySelector('.media-container > img');
+          
+          if (videoElement) {
+            this._log('🎬 Forcing video reload after queue refresh');
+            videoElement.load();
+            if (this.config.video_autoplay !== false) {
+              videoElement.play().catch(err => {
+                if (err.name !== 'AbortError') {
+                  console.warn('Video autoplay failed after refresh:', err);
+                }
+              });
+            }
+          } else if (imgElement) {
+            this._log('🖼️ Forcing image reload after queue refresh');
+            // For images, just updating src via Lit is enough, but we can force it
+            const currentSrc = imgElement.src;
+            imgElement.src = this.mediaUrl;
+            // If src didn't change (unlikely but possible), force reload
+            if (currentSrc === this.mediaUrl) {
+              imgElement.src = '';
+              imgElement.src = this.mediaUrl;
+            }
+          }
+        } else {
+          this._log('✅ Queue refreshed - current file is still newest, no display update needed');
+        }
+        
+        this._log('✅ Queue refreshed with', this.navigationQueue.length, 'items (index 0, metadata:', !!firstItem.metadata, ')');
+      } else {
+        this._log('⚠️ No items returned after queue refresh');
+      }
+    } catch (error) {
+      this._log('⚠️ Error during queue refresh:', error);
     }
   }
 
@@ -4654,6 +5302,14 @@ class MediaCard extends LitElement {
     }
 
     const mediaId = this.currentMedia.media_content_id;
+    
+    // Validate mediaId exists
+    if (!mediaId) {
+      this._log('ERROR: currentMedia has no media_content_id:', this.currentMedia);
+      this._errorState = 'Invalid media item (no media_content_id)';
+      return;
+    }
+    
     this._log('_resolveMediaUrl called with mediaId:', mediaId);
     this._log('currentMedia object:', this.currentMedia);
     
@@ -5156,7 +5812,7 @@ class MediaCard extends LitElement {
 
     // Get configuration values
     const videoMaxDuration = this.config.video_max_duration || 0;
-    const autoAdvanceSeconds = this.config.auto_advance_seconds || 30;
+    const autoAdvanceSeconds = this.config.auto_advance_seconds || 0;
 
     this._log('🎬 Video completion check - videoMaxDuration:', videoMaxDuration, 'autoAdvanceSeconds:', autoAdvanceSeconds);
 
@@ -5193,19 +5849,38 @@ class MediaCard extends LitElement {
   }
 
   _onVideoEnded() {
-    this._log('🎬 Video ended:', this.mediaUrl);
+    const endTime = new Date();
+    this._log(`🎬 Video ended at ${endTime.toLocaleTimeString()}:`, this.mediaUrl);
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
     // V4: Trigger immediate navigation to next media in folder/slideshow mode
     if (this.provider) {
-      this._log('🎬 Video ended - triggering immediate next media');
-      // Small delay to ensure video ended event is fully processed
-      setTimeout(() => {
-        this._loadNext().catch(err => {
-          console.error('Error advancing to next media after video end:', err);
-        });
-      }, 100);
+      // Security camera mode: If at position 1 in sequential mode, stay there instead of advancing
+      const isSeq = this._isSequentialMode();
+      const atPositionOne = this.navigationIndex === 0;
+      
+      if (isSeq && atPositionOne) {
+        this._log(`🎬 Security camera mode: Video ended at position 1 (${endTime.toLocaleTimeString()}) - replaying same video until newer file arrives`);
+        this._log('🎬 Current media:', this.mediaUrl);
+        this._log('🎬 Next auto-refresh timer check in:', this._getTimeUntilNextRefresh(), 'seconds');
+        // Reset the video to replay by reloading current media
+        setTimeout(() => {
+          this._resolveMediaUrl().then(() => {
+            this.requestUpdate();
+          }).catch(err => {
+            console.error('Error reloading current media:', err);
+          });
+        }, 100);
+      } else {
+        this._log('🎬 Video ended - triggering immediate next media');
+        // Small delay to ensure video ended event is fully processed
+        setTimeout(() => {
+          this._loadNext().catch(err => {
+            console.error('Error advancing to next media after video end:', err);
+          });
+        }, 100);
+      }
     }
   }
 
@@ -5791,12 +6466,11 @@ class MediaCard extends LitElement {
     // Show position indicator if enabled
     let positionIndicator = html``;
     if (this.config.show_position_indicator !== false) {
-      // Only show "X of Y" if X != Y (hide when they're equal to avoid "20 of 20")
-      const showTotal = currentPosition !== totalSeen;
-      
+      // ALWAYS show "X of Y" format (removed the confusing hide-when-equal logic)
+      // This ensures consistent display even when at position 1 after refresh
       positionIndicator = html`
         <div class="position-indicator">
-          ${currentPosition}${showTotal ? ` of ${totalSeen}` : ''}
+          ${currentPosition} of ${totalSeen}
         </div>
       `;
     }
@@ -6138,7 +6812,17 @@ class MediaCard extends LitElement {
   // Handle refresh button click - reload current media
   async _handleRefreshClick(e) {
     e.stopPropagation();
-    this._log('🔄 Refresh button clicked - reloading current media');
+    this._log('🔄 Refresh button clicked');
+    
+    // Check if in folder mode - if so, trigger full queue refresh
+    if (this.config?.media_source_type === 'folder') {
+      this._log('🔄 Folder mode detected - triggering full queue refresh');
+      await this._refreshQueue();
+      return;
+    }
+    
+    // Single media mode - reload current media URL
+    this._log('🔄 Single media mode - reloading current media');
     
     // Get the current media content ID
     const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
@@ -7300,7 +7984,7 @@ class MediaCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      height: 100vh;
+      min-height: 50vh;
     }
     
     :host([data-aspect-mode="smart-scale"]) img {
@@ -11548,7 +12232,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 max="3600"
                 step="1"
               />
-              <div class="help-text">Reload current media every N seconds (0 = disabled). For single image mode (cameras) or folder mode when auto-advance is 0. Leave at 0 if auto-advance is configured.</div>
+              <div class="help-text">Check for new files every N seconds (0 = disabled). Single media: reloads image URL. Folder mode: checks for new files and refreshes queue if at newest position.</div>
             </div>
           </div>
         </div>

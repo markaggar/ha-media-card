@@ -93,6 +93,13 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 4. Maintain HA theme integration with CSS variables
 5. Test on HADev before production deployment
 
+**CRITICAL: Configuration Field Names**:
+- **NEVER assume config structure** - always verify actual field names in schema or config
+- Common mistake: Using made-up field names like `folder.navigation_mode` when actual is `folder.mode`
+- Always check: `src/editor/media-card-editor.js` for actual schema definitions
+- Always check: User's actual config YAML before writing detection logic
+- Document actual config structure when working with new features
+
 **Code Style**:
 - Use Lit `html` and `css` tagged templates
 - Prefix private methods with underscore `_methodName()`
@@ -105,6 +112,9 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 The card is now developed under `src/` as ES modules and bundled into a single distributable `ha-media-card.js` for deployment.
 
 ### Where to Make Changes
+
+NEVER MAKE CHANGES TO HA-MEDIA-CARD.JS DIRECTLY!
+
 - Edit source files only under `src/`:
   - `src/core/` for shared utilities and base classes
   - `src/providers/` for provider implementations and queues

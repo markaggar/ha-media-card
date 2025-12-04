@@ -3061,7 +3061,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 max="3600"
                 step="1"
               />
-              <div class="help-text">Reload current media every N seconds (0 = disabled). For single image mode (cameras) or folder mode when auto-advance is 0. Leave at 0 if auto-advance is configured.</div>
+              <div class="help-text">Check for new files every N seconds (0 = disabled). Single media: reloads image URL. Folder mode: checks for new files and refreshes queue if at newest position.</div>
             </div>
           </div>
         </div>
