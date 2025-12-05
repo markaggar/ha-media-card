@@ -49,6 +49,11 @@
   - Root cause: Delete/edit handlers were removing items from old v4 `history` array instead of v5.3 `navigationQueue`
   - Solution: Updated both `_performDelete()` and `_performEdit()` to correctly remove from `navigationQueue` and adjust `navigationIndex`
   - Backward navigation now works correctly after any delete or edit operation
+- **Auto-Refresh for Sequential Media Index Mode**: Fixed folder mode with media_index not auto-refreshing or responding to refresh button
+  - Root cause: `SequentialMediaIndexProvider._queryOrderedFiles()` was not adding `media_content_id` to transformed items, causing `_refreshQueue()` validation to reject all items
+  - Solution: Added `media_content_id: mediaId` to item transformation in `_queryOrderedFiles()` method
+  - Queue refresh now correctly populates navigationQueue with valid items from media_index
+  - Both auto-refresh timer and manual refresh button now work correctly in folder mode with sequential media_index provider
 
 ### Stability & Cleanups
 - Removed temporary debug `console.log` statements added during investigation

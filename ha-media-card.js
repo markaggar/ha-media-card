@@ -3535,6 +3535,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
           const resolvedUrl = await this._resolveMediaPath(mediaId);
           return {
             ...item,
+            media_content_id: mediaId, // CRITICAL: Add media_content_id for queue validation
             url: resolvedUrl,
             path: item.path, // Keep filesystem path for metadata
             filename: item.filename || item.path.split('/').pop(),
