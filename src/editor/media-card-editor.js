@@ -3487,6 +3487,3 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
   }
 }
-
-// Note: Custom elements are registered in src/main.js
-// This module only exports the editor component class.

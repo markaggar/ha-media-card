@@ -12679,27 +12679,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 }
 
-// Note: Custom elements are registered in src/main.js
-// This module only exports the editor component class.
-
-/** 
- * Media Card v5.4.0
- * Entry point for modular build
- */
-
-// Import Lit from CDN for standalone usage
-
-// NOTE: All imports below are intentional for the concat build process.
-// The build script concatenates all modules into a single file, so these imports
-// ensure all classes are available in the bundled output even though they're not
-// directly referenced in this entry point file.
-
-// Core utilities
-
-// Providers
-
-// UI Components
-
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
   customElements.define('media-card', MediaCard);

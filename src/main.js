@@ -1,29 +1,12 @@
-/** 
- * Media Card v5.4.0
- * Entry point for modular build
- */
-
-// Import Lit from CDN for standalone usage
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
-
-// NOTE: All imports below are intentional for the concat build process.
-// The build script concatenates all modules into a single file, so these imports
-// ensure all classes are available in the bundled output even though they're not
-// directly referenced in this entry point file.
-
-// Core utilities
 import { MediaUtils } from './core/media-utils.js';
 import { MediaProvider } from './core/media-provider.js';
 import { MediaIndexHelper } from './core/media-index-helper.js';
-
-// Providers
 import { SingleMediaProvider } from './providers/single-media-provider.js';
 import { MediaIndexProvider } from './providers/media-index-provider.js';
 import { SequentialMediaIndexProvider } from './providers/sequential-media-index-provider.js';
 import { SubfolderQueue } from './providers/subfolder-queue.js';
 import { FolderProvider } from './providers/folder-provider.js';
-
-// UI Components
 import { MediaCard } from './ui/media-card.js';
 import { MediaCardEditor } from './editor/media-card-editor.js';
 
@@ -48,7 +31,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.4.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v__VERSION__ Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
