@@ -54,6 +54,12 @@
   - Solution: Added `media_content_id: mediaId` to item transformation in `_queryOrderedFiles()` method
   - Queue refresh now correctly populates navigationQueue with valid items from media_index
   - Both auto-refresh timer and manual refresh button now work correctly in folder mode with sequential media_index provider
+- **Error State Auto-Recovery**: Fixed media loading errors getting stuck without retry attempts
+  - Changed misleading "Configuration Error" label to "Media Loading Error" for accuracy
+  - Auto-refresh timer now detects error state and automatically clears it to retry loading
+  - Errors are retried on next timer cycle (every N seconds based on `auto_refresh_seconds`)
+  - Particularly helpful for intermittent network issues with security camera feeds
+  - Card will continuously retry until media loads successfully
 
 ### Stability & Cleanups
 - Removed temporary debug `console.log` statements added during investigation

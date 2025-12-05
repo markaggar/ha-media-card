@@ -1175,6 +1175,25 @@ export class MediaCard extends LitElement {
         this._lastRefreshCheckTime = Date.now();
         this._log(`🔄 ⏰ Timer fired at ${new Date().toLocaleTimeString()}`);
         
+        // If in error state, clear it and attempt reload
+        if (this._errorState) {
+          this._log('🔄 Error state detected - clearing and attempting reload');
+          this._errorState = null;
+          this._retryAttempts.clear();
+          if (this.currentMedia) {
+            await this._resolveMediaUrl();
+            this.requestUpdate();
+          } else if (this.provider) {
+            // Try to get next media if no current media
+            try {
+              await this._loadNext();
+            } catch (err) {
+              this._log('❌ Failed to load next after error:', err);
+            }
+          }
+          return;
+        }
+        
         // Check pause states before advancing
         if (!this._isPaused && !this._backgroundPaused) {
           // Check for new files FIRST (before video completion check)
@@ -5203,7 +5222,7 @@ export class MediaCard extends LitElement {
         <ha-card>
           <div class="card">
             <div class="placeholder" style="color: var(--error-color, #db4437); padding: 16px;">
-              <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Configuration Error</div>
+              <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Media Loading Error</div>
               <div>${errorMessage}</div>
             </div>
           </div>
