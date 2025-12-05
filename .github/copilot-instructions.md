@@ -111,6 +111,14 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 
 The card is now developed under `src/` as ES modules and bundled into a single distributable `ha-media-card.js` for deployment.
 
+### Version Management
+- Version is defined **once** in `package.json`
+- Build script automatically injects version into:
+  - Top banner: `/** Media Card v5.4.0 */`
+  - Console log: `v5.4.0 Loaded`
+- To release: Update `package.json` version → run `npm run build:concat`
+- Never hardcode version numbers in source files
+
 ### Where to Make Changes
 
 NEVER MAKE CHANGES TO HA-MEDIA-CARD.JS DIRECTLY!
