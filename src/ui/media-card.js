@@ -3778,11 +3778,11 @@ export class MediaCard extends LitElement {
         domain: 'media_index',
         service: 'get_burst_photos',
         service_data: {
-          reference_path: this._currentMediaPath,
+          media_source_uri: this._currentMediaPath,
           time_window_seconds: 120, // ±2 minutes
           prefer_same_location: true,
           location_tolerance_meters: 50,
-          sort_order: 'asc'
+          sort_order: 'time_asc'
         },
         return_response: true
       };
