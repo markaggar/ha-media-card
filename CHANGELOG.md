@@ -1,3 +1,81 @@
+## v5.4.0
+### Added
+- **Custom Date/Time Extraction**
+  - YAML-only configuration to parse dates/times from filenames and/or folder paths
+  - New `custom_datetime_format` block:
+    - `filename_pattern`: e.g. `YYYY-MM-DD_HH-mm-ss`, `YYYYMMDD_HHmmss`, `YYYYMMDD`
+    - `folder_pattern`: e.g. `YYYY/MM/DD`
+  - Supported tokens: `YYYY`, `MM`, `DD`, `HH`, `mm`, `ss`
+  - Respects `debug_mode: true` and logs extraction attempts/results to console
+  - Safe fallback: if custom parsing fails, card falls back to built-in filename patterns; if those fail, EXIF/Media Index is used when available
+  - Precedence: folder pattern applies first (when provided and matched), then filename pattern, then built-in patterns
+- **Rating/Favorite Display**
+  - New `metadata.show_rating` option to display favorite (❤️) and rating (⭐1-5) indicators in metadata overlay
+  - Requires Media Index integration for `is_favorited` and `rating` attributes
+  - Defaults to `false` (opt-in feature)
+  - Editor checkbox: "Show Rating/Favorite"
+
+### Changed
+- **Build Process**: Removed Rollup bundling path; concat build is the only supported method (preserves exact class names and avoids runtime renaming issues)
+- **Architecture Cleanup**: Resolved circular dependency between `MediaProvider` and `MediaIndexHelper` by inlining the media_index active check in helper (no cross-import)
+- **Theme-Aware Backgrounds**: Complete theme integration for seamless blending with Home Assistant interface:
+  - Media container background uses `var(--primary-background-color)` (black in dark theme, white in light theme)
+  - Metadata and position indicator backgrounds use `rgba(var(--rgb-primary-background-color), 0.60)` with `20px` blur
+  - Text color changed to `var(--primary-text-color)` for proper contrast in both themes
+  - Video element background set to `transparent` to inherit container theme
+  - Fullscreen container respects theme settings
+  - Removed text-shadow from metadata overlay (was causing blurry appearance)
+  - Backgrounds now match HA menu bars and footers perfectly in all themes
+
+### UX & Controls
+- Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:
+  - Hover behavior is enabled only on mouse devices (`@media (hover: hover) and (pointer: fine)`)
+  - Touch interactions (center tap/video touch) explicitly show buttons and nav zones and auto-hide after ~3s of inactivity
+  - Navigation zone clicks restart the 3s auto-hide timer after navigation
+- Video controls are synced with action buttons: touching the video shows controls and action buttons, both fade after ~3s
+- Semi-opaque nav target areas no longer stick on touch; hover-only on mouse, explicit-only on touch
+- Edit and delete buttons now scale on hover (`transform: scale(1.15)`) to match other action buttons
+- Removed colored background overlays from edit/delete button hover states for consistency
+
+### Visual Hierarchy
+- Z-index tuning so overlays/buttons stay below the HA header bar when scrolling
+
+### Scaling
+- Container-query based scaling for metadata and position indicator using `cqi` units and `--ha-media-metadata-scale`
+- Added card editor UI input for `metadata.scale` (range 0.3–4.0; default 1.0)
+
+### Fixed
+- **Navigation After Delete/Edit**: Fixed regression where deleting or editing a photo prevented navigating back to previous images
+  - Root cause: Delete/edit handlers were removing items from old v4 `history` array instead of v5.3 `navigationQueue`
+  - Solution: Updated both `_performDelete()` and `_performEdit()` to correctly remove from `navigationQueue` and adjust `navigationIndex`
+  - Backward navigation now works correctly after any delete or edit operation
+- **Auto-Refresh for Sequential Media Index Mode**: Fixed folder mode with media_index not auto-refreshing or responding to refresh button
+  - Root cause: `SequentialMediaIndexProvider._queryOrderedFiles()` was not adding `media_content_id` to transformed items, causing `_refreshQueue()` validation to reject all items
+  - Solution: Added `media_content_id: mediaId` to item transformation in `_queryOrderedFiles()` method
+  - Queue refresh now correctly populates navigationQueue with valid items from media_index
+  - Both auto-refresh timer and manual refresh button now work correctly in folder mode with sequential media_index provider
+- **Error State Auto-Recovery**: Fixed media loading errors getting stuck without retry attempts
+  - Changed misleading "Configuration Error" label to "Media Loading Error" for accuracy
+  - Auto-refresh timer now detects error state and automatically clears it to retry loading
+  - Errors are retried on next timer cycle (every N seconds based on `auto_refresh_seconds`)
+  - Particularly helpful for intermittent network issues with security camera feeds
+  - Card will continuously retry until media loads successfully
+
+### Stability & Cleanups
+- Removed temporary debug `console.log` statements added during investigation
+- Internal comments updated for v5.4 context
+
+### Other Improvements
+- Metadata now refreshes alongside image changes: on manual refresh and when advancing to next/previous media, metadata (EXIF, location, dates) is re-resolved to ensure up-to-date display
+- Config editor prioritizes `media_source_uri` when a Media Index entity is selected (auto-populates folder path correctly)
+- Media browser defaults to `media_source_uri` when available for better URI-first workflows
+- Video autoplay/muted checkboxes in editor now reflect correct defaults (`true`)
+- Provider logging tightened: FolderProvider null-item warnings moved to debug logging
+- Git workflow docs updated: `dev` is the active development branch
+
+### Notes
+- This release focuses on polished touch/mouse parity for controls and predictable auto-hide timing.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

@@ -1,3 +1,31 @@
+# ============================================================================
+# WHITELISTED ROOT DIRECTORY FILES
+# ============================================================================
+# Only these files should exist in the project root:
+#
+# PRODUCTION FILES:
+#   - ha-media-card.js         (built distribution file)
+#   - hacs.json                (HACS integration manifest)
+#   - LICENSE                  (Apache 2.0 license)
+#   - README.md                (user documentation)
+#   - CHANGELOG.md             (version history)
+#
+# BUILD & DEPENDENCY FILES:
+#   - package.json             (npm dependencies and scripts)
+#
+# CONFIGURATION (if needed):
+#   - .gitignore               (this file)
+#
+# DIRECTORIES:
+#   - src/                     (modular source code)
+#   - .github/                 (GitHub workflows and templates)
+#   - docs/                    (user-facing documentation - tracked)
+#   - dev-docs/                (development docs - ignored)
+#   - scripts/                 (build scripts - ignored)
+#
+# All other files in root should be blocked by patterns below.
+# ============================================================================
+
 # Dependencies
 node_modules/
 package-lock.json
@@ -6,6 +34,17 @@ package-lock.json
 dist/
 *.min.js
 *.map
+
+# Backup files
+*-backup.js
+*-backup-*.js
+*.backup
+
+# Obsolete build artifacts
+extract-modules.ps1
+rollup.config.js
+*.config.js
+*.config.mjs
 
 # Development and test files
 
