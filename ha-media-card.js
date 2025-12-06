@@ -4248,6 +4248,21 @@ class MediaCard extends LitElement {
       this._initializeProvider();
     }
     
+    // V5.4: Monitor media_index entity state for auto-recovery after HA restart
+    // If card is in error state and media_index entity exists and is available, retry init
+    if (hass && this._errorState && this.config?.media_index?.entity_id) {
+      const entityId = this.config.media_index.entity_id;
+      const entityState = hass.states[entityId];
+      
+      // Check if entity exists and has valid state (not unavailable/unknown)
+      if (entityState && entityState.state !== 'unavailable' && entityState.state !== 'unknown') {
+        // Entity is now available - retry initialization
+        this._log('🔄 Media index entity available - retrying initialization');
+        this._errorState = null; // Clear error state
+        this._initializeProvider();
+      }
+    }
+    
     // Note: Don't call requestUpdate() here - Lit will handle it automatically
     // since hass is a reactive property. We can't prevent the auto-update,
     // but we can make render() cheap when paused.
