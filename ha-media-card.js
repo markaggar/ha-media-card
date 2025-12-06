@@ -4907,11 +4907,38 @@ class MediaCard extends LitElement {
     
     console.log(`📱 Loading panel item ${index + 1}/${this._panelQueue.length}:`, item.filename || item.path);
     
-    // Update current media path
-    this._currentMediaPath = item.media_source_uri || item.path;
+    // Update panel index
+    this._panelQueueIndex = index;
     
-    // Load metadata for this item
-    await this._loadMediaMetadata();
+    // Build metadata object from panel item
+    const metadata = {
+      filename: item.filename,
+      date_taken: item.date_taken,
+      is_favorited: item.is_favorited,
+      latitude: item.latitude,
+      longitude: item.longitude,
+      // Include any other metadata from the item
+      ...item
+    };
+    
+    // Update current media - THIS IS CRITICAL for main image display
+    const mediaUri = item.media_source_uri || item.path;
+    this.currentMedia = {
+      media_content_id: mediaUri,
+      media_content_type: item.filename?.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
+      metadata: metadata
+    };
+    this._currentMediaPath = mediaUri;
+    this._currentMetadata = metadata;
+    
+    // Update deprecated state for compatibility
+    if (this._panelMode === 'burst') {
+      this._burstCurrentIndex = index;
+    }
+    
+    // Clear cached metadata to force refresh
+    this._fullMetadata = null;
+    this._folderDisplayCache = null;
     
     // Update display
     await this._resolveMediaUrl();
@@ -7637,12 +7664,6 @@ class MediaCard extends LitElement {
   }
   
   /**
-   * Exit burst review mode - restore original photo and resume slideshow
-   */
-  _exitBurstMode() {
-    if (!this._burstMode) return;
-  
-  /**
    * Exit panel mode - restore main queue and handle burst metadata updates
    */
   async _exitPanelMode() {
@@ -9265,6 +9286,17 @@ class MediaCard extends LitElement {
     }
 
     /* Side Panel Styles */
+    .card.panel-open {
+      margin-right: 320px;
+      transition: margin-right 0.3s ease-out;
+    }
+
+    @media (max-width: 768px) {
+      .card.panel-open {
+        margin-right: 0; /* Don't shift on mobile */
+      }
+    }
+
     .side-panel {
       position: fixed;
       top: 0;
@@ -9346,12 +9378,16 @@ class MediaCard extends LitElement {
 
     .thumbnail {
       position: relative;
-      aspect-ratio: 1;
+      aspect-ratio: 4 / 3;
       border-radius: 8px;
       overflow: hidden;
       cursor: pointer;
       border: 3px solid transparent;
       transition: border-color 0.2s, transform 0.2s;
+      background: var(--primary-background-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .thumbnail:hover {
@@ -9363,10 +9399,23 @@ class MediaCard extends LitElement {
     }
 
     .thumbnail img {
+      max-width: 100% !important;
+      max-height: 100% !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain !important;
+      display: block !important;
+    }
+
+    .thumbnail-loading {
       width: 100%;
       height: 100%;
-      object-fit: cover;
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      background: var(--primary-background-color);
+      opacity: 0.5;
     }
 
     .time-badge {
@@ -9463,7 +9512,7 @@ class MediaCard extends LitElement {
 
     return html`
       <ha-card>
-        <div class="card"
+        <div class="card ${this._panelOpen ? 'panel-open' : ''}"
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0">
           ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
@@ -9741,6 +9790,27 @@ class MediaCard extends LitElement {
       `;
     }
 
+    // Resolve all thumbnail URLs upfront (async but doesn't block render)
+    this._panelQueue.forEach(async (item) => {
+      if (!item._resolvedUrl && !item._resolving) {
+        item._resolving = true;
+        try {
+          const mediaUri = item.media_source_uri || `media-source://media_source${item.path}`;
+          const resolved = await this.hass.callWS({
+            type: 'media_source/resolve_media',
+            media_content_id: mediaUri,
+            expires: 3600
+          });
+          item._resolvedUrl = resolved.url;
+          this.requestUpdate();
+        } catch (error) {
+          console.error('Failed to resolve thumbnail:', error);
+        } finally {
+          item._resolving = false;
+        }
+      }
+    });
+
     return html`
       <div class="thumbnail-strip">
         ${this._panelQueue.map((item, index) => {
@@ -9771,7 +9841,11 @@ class MediaCard extends LitElement {
               @click=${() => this._loadPanelItem(index)}
               title="${item.filename || item.path}"
             >
-              <img src="${item.path}" alt="${item.filename || 'Thumbnail'}" />
+              ${item._resolvedUrl ? html`
+                <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
+              ` : html`
+                <div class="thumbnail-loading">⏳</div>
+              `}
               ${badge ? html`<div class="time-badge">${badge}</div>` : ''}
               ${isFavorited ? html`<div class="favorite-badge">♥</div>` : ''}
             </div>
