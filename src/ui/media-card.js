@@ -98,12 +98,28 @@ export class MediaCard extends LitElement {
     this._isPaused = false; // V4 pause state for slideshow
     this._showInfoOverlay = false; // Info overlay toggle
     
-    // V5.5: Burst Review Mode (At This Moment feature)
-    this._burstMode = false;           // Panel open/closed
-    this._burstPhotos = [];            // Array of burst items from service
-    this._burstCurrentIndex = 0;       // Which photo is in main display
-    this._burstReferencePhoto = null;  // Original photo when entered mode
-    this._burstLoading = false;        // Loading spinner state
+    // V5.5: Side Panel System (Burst Review & Queue Preview)
+    // Panel state
+    this._panelMode = null;            // null | 'burst' | 'queue' | 'history'
+    this._panelOpen = false;           // Panel visibility
+    this._panelQueue = [];             // Items to display in panel
+    this._panelQueueIndex = 0;         // Current position within panel queue
+    this._panelLoading = false;        // Loading indicator
+    
+    // Main queue (preserved during panel modes)
+    this._mainQueue = [];              // Original navigation queue
+    this._mainQueueIndex = 0;          // Position before entering panel mode
+    
+    // Burst-specific state
+    this._burstReferencePhoto = null;  // Original photo that triggered burst
+    this._burstFavoritedFiles = [];    // Paths favorited during burst session
+    this._burstAllFiles = [];          // All files in burst session for metadata update
+    
+    // Deprecated (replaced by panel system)
+    this._burstMode = false;           // DEPRECATED: Use _panelOpen && _panelMode === 'burst'
+    this._burstPhotos = [];            // DEPRECATED: Use _panelQueue
+    this._burstCurrentIndex = 0;       // DEPRECATED: Use _panelQueueIndex
+    this._burstLoading = false;        // DEPRECATED: Use _panelLoading
     
     // Modal overlay state (gallery-card pattern)
     this._modalOpen = false;
@@ -880,6 +896,11 @@ export class MediaCard extends LitElement {
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
+    // V5.5: Panel Navigation Override
+    if (this._panelOpen && this._panelQueue.length > 0) {
+      return await this._loadNextPanel();
+    }
+    
     if (!this.provider) {
       this._log('_loadNext called but no provider');
       return;
@@ -1054,6 +1075,11 @@ export class MediaCard extends LitElement {
   }
 
   async _loadPrevious() {
+    // V5.5: Panel Navigation Override
+    if (this._panelOpen && this._panelQueue.length > 0) {
+      return await this._loadPreviousPanel();
+    }
+    
     if (!this.provider) {
       this._log('_loadPrevious called but no provider');
       return;
@@ -1141,6 +1167,49 @@ export class MediaCard extends LitElement {
         this._log(`✅ Auto-refresh timer reset complete - old interval: ${oldInterval}, new interval: ${this._refreshInterval}`);
         break;
     }
+  }
+
+  // V5.5: Panel Navigation Methods
+  async _loadNextPanel() {
+    if (this._panelQueueIndex < this._panelQueue.length - 1) {
+      this._panelQueueIndex++;
+      await this._loadPanelItem(this._panelQueueIndex);
+    } else {
+      // Wrap to beginning
+      this._panelQueueIndex = 0;
+      await this._loadPanelItem(this._panelQueueIndex);
+    }
+  }
+
+  async _loadPreviousPanel() {
+    if (this._panelQueueIndex > 0) {
+      this._panelQueueIndex--;
+      await this._loadPanelItem(this._panelQueueIndex);
+    } else {
+      // Wrap to end
+      this._panelQueueIndex = this._panelQueue.length - 1;
+      await this._loadPanelItem(this._panelQueueIndex);
+    }
+  }
+
+  async _loadPanelItem(index) {
+    const item = this._panelQueue[index];
+    if (!item) {
+      console.error('[MediaCard] No item at panel index:', index);
+      return;
+    }
+    
+    console.log(`📱 Loading panel item ${index + 1}/${this._panelQueue.length}:`, item.filename || item.path);
+    
+    // Update current media path
+    this._currentMediaPath = item.media_source_uri || item.path;
+    
+    // Load metadata for this item
+    await this._loadMediaMetadata();
+    
+    // Update display
+    await this._resolveMediaUrl();
+    this.requestUpdate();
   }
 
   // V5: Setup auto-advance timer (copied from V4 lines 1611-1680)
@@ -3116,6 +3185,21 @@ export class MediaCard extends LitElement {
         this._currentMetadata.is_favorited = newState;
       }
       
+      // If in burst mode AND favoriting (not unfavoriting), track for burst metadata
+      if (this._panelOpen && this._panelMode === 'burst' && newState === true) {
+        if (!this._burstFavoritedFiles.includes(targetUri)) {
+          this._burstFavoritedFiles.push(targetUri);
+          console.warn(`🎯 Added to burst favorites: ${targetUri} (${this._burstFavoritedFiles.length} total)`);
+        }
+      } else if (this._panelOpen && this._panelMode === 'burst' && newState === false) {
+        // Remove from favorites tracking if unfavorited
+        const index = this._burstFavoritedFiles.indexOf(targetUri);
+        if (index !== -1) {
+          this._burstFavoritedFiles.splice(index, 1);
+          console.warn(`🎯 Removed from burst favorites: ${targetUri} (${this._burstFavoritedFiles.length} remaining)`);
+        }
+      }
+      
       this.requestUpdate();
       
     } catch (error) {
@@ -3260,8 +3344,11 @@ export class MediaCard extends LitElement {
   async _handleBurstClick(e) {
     e.stopPropagation();
     
-    if (this._burstMode) {
-      // Exit burst mode
+    if (this._panelOpen && this._panelMode === 'burst') {
+      // Exit panel mode (will call _exitPanelMode)
+      this._exitBurstMode();
+    } else if (this._burstMode) {
+      // DEPRECATED path: Exit old burst mode
       this._exitBurstMode();
     } else {
       // Enter burst mode
@@ -3768,10 +3855,15 @@ export class MediaCard extends LitElement {
     }
     
     // Show loading state
-    this._burstLoading = true;
+    this._panelLoading = true;
+    this._burstLoading = true; // DEPRECATED: For compatibility
     this.requestUpdate();
     
     try {
+      // Save main queue state
+      this._mainQueue = [...this.navigationQueue];
+      this._mainQueueIndex = this.navigationIndex;
+      
       // Call media_index.get_related_files service with burst mode
       const wsCall = {
         type: 'call_service',
@@ -3797,26 +3889,42 @@ export class MediaCard extends LitElement {
       
       console.warn('🎥 Burst photos response:', response);
       
-      // Store burst state
-      this._burstPhotos = response.response?.items || [];
+      // Store panel queue
+      this._panelQueue = response.response?.items || [];
+      this._panelQueueIndex = 0; // Start with first photo in burst
+      this._panelMode = 'burst';
+      this._panelOpen = true;
+      
+      // Store burst-specific state
       this._burstReferencePhoto = {
         path: this._currentMediaPath,
         metadata: { ...this._currentMetadata }
       };
-      this._burstCurrentIndex = 0; // Start with first photo in burst
+      this._burstAllFiles = [...this._panelQueue]; // Track for metadata update
+      this._burstFavoritedFiles = []; // Reset favorites tracking
+      
+      // Deprecated state (for compatibility)
+      this._burstPhotos = this._panelQueue;
+      this._burstCurrentIndex = this._panelQueueIndex;
       this._burstMode = true;
+      
+      // Load first burst photo
+      if (this._panelQueue.length > 0) {
+        await this._loadPanelItem(0);
+      }
       
       // Pause auto-advance while in burst mode
       if (!this._isPaused) {
         this._setPauseState(true);
       }
       
-      console.warn(`✅ Entered burst mode with ${this._burstPhotos.length} photos`);
+      console.warn(`✅ Entered burst mode with ${this._panelQueue.length} photos`);
       
     } catch (error) {
       console.error('Failed to enter burst mode:', error);
       alert('Failed to load burst photos: ' + error.message);
     } finally {
+      this._panelLoading = false;
       this._burstLoading = false;
       this.requestUpdate();
     }
@@ -3827,27 +3935,101 @@ export class MediaCard extends LitElement {
    */
   _exitBurstMode() {
     if (!this._burstMode) return;
+  
+  /**
+   * Exit panel mode - restore main queue and handle burst metadata updates
+   */
+  async _exitPanelMode() {
+    console.warn(`🚪 Exiting panel mode: ${this._panelMode}`);
     
-    console.warn('🚪 Exiting burst mode');
-    
-    // Restore original photo state
-    if (this._burstReferencePhoto) {
-      this._currentMediaPath = this._burstReferencePhoto.path;
-      this._currentMetadata = { ...this._burstReferencePhoto.metadata };
+    try {
+      // Handle burst-specific exit actions
+      if (this._panelMode === 'burst' && this._burstFavoritedFiles.length > 0) {
+        console.warn(`💾 Writing burst_favorites metadata to ${this._burstAllFiles.length} files`);
+        
+        // Call update_burst_metadata service (to be implemented in media_index)
+        try {
+          const wsCall = {
+            type: 'call_service',
+            domain: 'media_index',
+            service: 'update_burst_metadata',
+            service_data: {
+              burst_files: this._burstAllFiles.map(item => item.path),
+              favorited_files: this._burstFavoritedFiles
+            },
+            return_response: true
+          };
+          
+          if (this.config.media_index?.entity_id) {
+            wsCall.target = { entity_id: this.config.media_index.entity_id };
+          }
+          
+          const response = await this.hass.callWS(wsCall);
+          console.warn('✅ Burst metadata updated:', response);
+        } catch (metadataError) {
+          console.error('Failed to update burst metadata:', metadataError);
+          // Don't block exit on metadata failure
+        }
+      }
+      
+      // Restore main queue state
+      if (this._mainQueue && this._mainQueue.length > 0) {
+        this.navigationQueue = [...this._mainQueue];
+        this.navigationIndex = this._mainQueueIndex;
+        
+        // Restore the media item we were on before entering panel
+        const restoredItem = this.navigationQueue[this.navigationIndex];
+        if (restoredItem) {
+          this._currentMediaPath = restoredItem.path;
+          this._currentMetadata = { ...restoredItem };
+          console.warn(`↩️ Restored main queue position ${this.navigationIndex + 1}/${this.navigationQueue.length}`);
+        }
+      }
+      
+      // Clear panel state
+      this._panelOpen = false;
+      this._panelMode = null;
+      this._panelQueue = [];
+      this._panelQueueIndex = 0;
+      this._panelLoading = false;
+      
+      // Clear burst-specific state
+      this._burstReferencePhoto = null;
+      this._burstAllFiles = [];
+      this._burstFavoritedFiles = [];
+      
+      // Clear deprecated state
+      this._burstMode = false;
+      this._burstPhotos = [];
+      this._burstCurrentIndex = 0;
+      
+      // Clear saved main queue
+      this._mainQueue = [];
+      this._mainQueueIndex = 0;
+      
+      // Resume auto-advance if it was paused for panel mode
+      if (this._isPaused) {
+        this._setPauseState(false);
+      }
+      
+      this.requestUpdate();
+      console.warn('✅ Panel mode exited, main queue restored');
+      
+    } catch (error) {
+      console.error('Error exiting panel mode:', error);
+      // Force cleanup on error
+      this._panelOpen = false;
+      this._panelMode = null;
+      this.requestUpdate();
     }
-    
-    // Clear burst state
-    this._burstMode = false;
-    this._burstPhotos = [];
-    this._burstCurrentIndex = 0;
-    this._burstReferencePhoto = null;
-    
-    // Resume slideshow if it was paused for burst mode
-    if (this._isPaused) {
-      this._setPauseState(false);
-    }
-    
-    this.requestUpdate();
+  }
+  
+  /**
+   * DEPRECATED: Use _exitPanelMode() instead
+   * Exit burst review mode - restore original state
+   */
+  _exitBurstMode() {
+    return this._exitPanelMode();
   }
   
   /**
@@ -5375,6 +5557,147 @@ export class MediaCard extends LitElement {
       background: var(--secondary-text-color, #757575);
       color: var(--text-primary-color, #fff);
     }
+
+    /* Side Panel Styles */
+    .side-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 320px;
+      max-width: 90vw;
+      height: 100vh;
+      background: var(--card-background-color, #fff);
+      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
+      z-index: 999998;
+      display: flex;
+      flex-direction: column;
+      animation: slideInRight 0.3s ease-out;
+    }
+
+    @keyframes slideInRight {
+      from {
+        transform: translateX(100%);
+      }
+      to {
+        transform: translateX(0);
+      }
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid var(--divider-color, #e0e0e0);
+      background: var(--primary-background-color);
+    }
+
+    .panel-title {
+      flex: 1;
+    }
+
+    .title-text {
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--primary-text-color);
+      margin-bottom: 4px;
+    }
+
+    .subtitle-text {
+      font-size: 13px;
+      color: var(--secondary-text-color);
+      opacity: 0.7;
+    }
+
+    .panel-close-button {
+      background: transparent;
+      border: none;
+      font-size: 24px;
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      border-radius: 50%;
+      color: var(--primary-text-color);
+      transition: background 0.2s;
+    }
+
+    .panel-close-button:hover {
+      background: var(--divider-color, #e0e0e0);
+    }
+
+    .thumbnail-strip {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+
+    .thumbnail {
+      position: relative;
+      aspect-ratio: 1;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      border: 3px solid transparent;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .thumbnail:hover {
+      transform: scale(1.05);
+    }
+
+    .thumbnail.active {
+      border-color: var(--primary-color, #03a9f4);
+    }
+
+    .thumbnail img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .time-badge {
+      position: absolute;
+      bottom: 4px;
+      left: 4px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      font-family: monospace;
+    }
+
+    .favorite-badge {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: rgba(255, 0, 0, 0.8);
+      color: white;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .no-items {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--secondary-text-color);
+      font-size: 14px;
+    }
   `;
 
   render() {
@@ -5454,6 +5777,7 @@ export class MediaCard extends LitElement {
             </div>
           </div>
         ` : ''}
+        ${this._renderPanel()}
       </ha-card>
     `;
   }
@@ -5652,6 +5976,103 @@ export class MediaCard extends LitElement {
     // TODO: Implement proper navigation controls after refactoring to unified queue/history
     // For now, controls are disabled - only click zones work
     return html``;
+  }
+
+  /**
+   * Render side panel (burst review, queue preview, history, etc.)
+   */
+  _renderPanel() {
+    if (!this._panelOpen) return html``;
+
+    return html`
+      <div class="side-panel ${this._panelMode || ''}">
+        ${this._renderPanelHeader()}
+        ${this._renderThumbnailStrip()}
+      </div>
+    `;
+  }
+
+  /**
+   * Render panel header with title and close button
+   */
+  _renderPanelHeader() {
+    let title = 'Panel';
+    let subtitle = '';
+
+    if (this._panelMode === 'burst') {
+      title = '📸 Burst Review';
+      subtitle = `${this._panelQueue.length} photos in this moment`;
+    } else if (this._panelMode === 'queue') {
+      title = '📋 Queue Preview';
+      subtitle = `${this._panelQueue.length} items`;
+    } else if (this._panelMode === 'history') {
+      title = '🕐 History';
+      subtitle = `${this._panelQueue.length} recent items`;
+    }
+
+    return html`
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="title-text">${title}</div>
+          ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
+        </div>
+        <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+          ✕
+        </button>
+      </div>
+    `;
+  }
+
+  /**
+   * Render horizontal thumbnail strip with time badges
+   */
+  _renderThumbnailStrip() {
+    if (!this._panelQueue || this._panelQueue.length === 0) {
+      return html`
+        <div class="thumbnail-strip">
+          <div class="no-items">No items in panel</div>
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="thumbnail-strip">
+        ${this._panelQueue.map((item, index) => {
+          const isActive = index === this._panelQueueIndex;
+          const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(item.path);
+          
+          // Format time offset for burst mode
+          let badge = '';
+          if (this._panelMode === 'burst' && item.seconds_offset !== undefined) {
+            const absSeconds = Math.abs(item.seconds_offset);
+            if (absSeconds < 1) {
+              badge = '0s';
+            } else if (absSeconds < 60) {
+              badge = `${Math.round(absSeconds)}s`;
+            } else {
+              const minutes = Math.floor(absSeconds / 60);
+              const seconds = Math.round(absSeconds % 60);
+              badge = seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+            }
+            // Add sign prefix
+            if (item.seconds_offset > 0) badge = `+${badge}`;
+            else if (item.seconds_offset < 0) badge = `-${badge}`;
+          }
+
+          return html`
+            <div 
+              class="thumbnail ${isActive ? 'active' : ''} ${isFavorited ? 'favorited' : ''}"
+              @click=${() => this._loadPanelItem(index)}
+              title="${item.filename || item.path}"
+            >
+              <img src="${item.path}" alt="${item.filename || 'Thumbnail'}" />
+              ${badge ? html`<div class="time-badge">${badge}</div>` : ''}
+              ${isFavorited ? html`<div class="favorite-badge">♥</div>` : ''}
+            </div>
+          `;
+        })}
+      </div>
+    `;
   }
 }
 
