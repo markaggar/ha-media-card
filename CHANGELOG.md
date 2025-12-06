@@ -1,3 +1,18 @@
+## v5.5.0 (In Development)
+### Added
+- **Similar Items Features** (planned)
+  - Three distinct memory/burst review modes
+  - Media Index v1.5 integration for burst detection
+
+## v5.4.1
+### Fixed
+- **Media Index Auto-Recovery After HA Restart**: Card now automatically recovers when media_index service becomes available
+  - Monitors media_index entity state in hass setter
+  - Automatically retries initialization when entity transitions from unavailable to available
+  - Fixes issue where card gets stuck in error state after HA restart
+  - Works for users without auto-refresh configured
+  - Zero performance impact - leverages existing HA state update stream
+
 ## v5.4.0
 ### Added
 - **Custom Date/Time Extraction**
