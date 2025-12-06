@@ -7478,12 +7478,13 @@ class MediaCard extends LitElement {
     this.requestUpdate();
     
     try {
-      // Call media_index.get_burst_photos service
+      // Call media_index.get_related_files service with burst mode
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
-        service: 'get_burst_photos',
+        service: 'get_related_files',
         service_data: {
+          mode: 'burst',
           media_source_uri: this._currentMediaPath,
           time_window_seconds: 120, // ±2 minutes
           prefer_same_location: true,

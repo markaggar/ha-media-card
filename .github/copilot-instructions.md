@@ -86,6 +86,23 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 
 ## Development Guidelines
 
+**CRITICAL: NEVER ASSUME, ALWAYS VERIFY**:
+- **NEVER invent column names, service names, method names, or config fields**
+- **ALWAYS read the actual code first** before referencing anything
+- **ALWAYS check existing patterns** before writing new code
+- Common mistakes to avoid:
+  - Making up database column names (check CREATE TABLE statements)
+  - Inventing service names (check const.py and services.yaml)
+  - Assuming method signatures (grep for actual method definitions)
+  - Guessing config structure (read actual schema files)
+
+**Before Writing Any Code**:
+1. **Read the actual implementation** you're modifying or referencing
+2. **Search for similar patterns** in the codebase (use grep_search)
+3. **Verify schema/structure** by reading relevant files (models, const files, schemas)
+4. **Check existing tests** or usage examples to understand behavior
+5. Only after verification, write code that matches actual patterns
+
 **When Adding Features**:
 1. Check if V4 had similar functionality in `dev-docs/ha-media-card-v4.js`
 2. Reuse proven patterns from V4 where applicable
@@ -375,6 +392,29 @@ See `MEDIA_INDEX_INTEGRATION_PLAN.md` for complete deployment documentation.
 - See: `MEDIA_INDEX_INTEGRATION_PLAN.md` for architecture
 
 ## Home Assistant Integration Development Best Practices
+
+### CRITICAL: Code Verification Before Writing
+
+**Database Schema & Queries:**
+- **NEVER invent column names** - always check CREATE TABLE statements first
+- Find schema: `grep_search` for "CREATE TABLE IF NOT EXISTS" in cache_manager.py or models files
+- Check existing queries: Search for similar SELECT statements before writing new ones
+- Example mistake: Writing `m.extension, m.size, m.date_modified` when actual columns are `m.filename, m.file_size, m.modified_time`
+- Reference pattern: Look at existing queries in the same file (get_random_files, get_ordered_files)
+
+**Service Names & Methods:**
+- **NEVER invent service names** - check const.py for SERVICE_* constants
+- **NEVER assume method exists** - grep_search for method definition before calling it
+- Check services.yaml for actual service definitions and parameters
+- Example mistake: Calling `cache_manager.execute_query()` when no such method exists
+- Reference pattern: Look at existing service handlers to see what methods they call
+
+**Before Writing ANY Database Query:**
+1. Find and read the CREATE TABLE statement
+2. List all actual column names
+3. Find similar existing queries (grep_search for "FROM same_table")
+4. Copy column names from existing query, don't invent them
+5. Verify JOIN syntax matches existing patterns
 
 ### Configuration Flow Principles (from Water Monitor post-mortem)
 
