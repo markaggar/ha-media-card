@@ -98,6 +98,13 @@ export class MediaCard extends LitElement {
     this._isPaused = false; // V4 pause state for slideshow
     this._showInfoOverlay = false; // Info overlay toggle
     
+    // V5.5: Burst Review Mode (At This Moment feature)
+    this._burstMode = false;           // Panel open/closed
+    this._burstPhotos = [];            // Array of burst items from service
+    this._burstCurrentIndex = 0;       // Which photo is in main display
+    this._burstReferencePhoto = null;  // Original photo when entered mode
+    this._burstLoading = false;        // Loading spinner state
+    
     // Modal overlay state (gallery-card pattern)
     this._modalOpen = false;
     this._modalImageUrl = '';
@@ -2660,9 +2667,12 @@ export class MediaCard extends LitElement {
     const enableRefresh = this.config.show_refresh_button === true;
     const enableDebugButton = this.config.debug_button === true;
     
+    // V5.5: Burst review feature (At This Moment)
+    const enableBurstReview = this.config.filters?.burst_review?.enabled === true;
+    
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
-                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo));
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview));
     if (!anyButtonEnabled) {
       return html``;
     }
@@ -2670,6 +2680,7 @@ export class MediaCard extends LitElement {
     const isFavorite = this._currentMetadata?.is_favorited || false;
     const isPaused = this._isPaused || false;
     const isInfoActive = this._showInfoOverlay || false;
+    const isBurstActive = this._burstMode || false;
     const position = config.position || 'top-right';
 
     return html`
@@ -2712,6 +2723,14 @@ export class MediaCard extends LitElement {
             @click=${this._handleInfoClick}
             title="Show Info">
             <ha-icon icon="mdi:information-outline"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && enableBurstReview ? html`
+          <button
+            class="action-btn burst-btn ${isBurstActive ? 'active' : ''} ${this._burstLoading ? 'loading' : ''}"
+            @click=${this._handleBurstClick}
+            title="${isBurstActive ? 'Exit Burst Review' : 'At This Moment'}">
+            <ha-icon icon="${isBurstActive ? 'mdi:close' : 'mdi:camera-burst'}"></ha-icon>
           </button>
         ` : ''}
         ${showMediaIndexButtons && enableFavorite ? html`
@@ -3237,6 +3256,19 @@ export class MediaCard extends LitElement {
     this._log(`ℹ️ ${this._showInfoOverlay ? 'SHOWING' : 'HIDING'} info overlay`);
   }
   
+  // V5.5: Burst button handler - toggle burst review mode
+  async _handleBurstClick(e) {
+    e.stopPropagation();
+    
+    if (this._burstMode) {
+      // Exit burst mode
+      this._exitBurstMode();
+    } else {
+      // Enter burst mode
+      await this._enterBurstMode();
+    }
+  }
+  
   // Helper to fetch full metadata asynchronously (called from render when overlay is open)
   async _fetchFullMetadataAsync() {
     // Prevent duplicate fetches
@@ -3722,6 +3754,134 @@ export class MediaCard extends LitElement {
       console.error('Failed to mark for edit:', error);
       alert('Failed to mark for edit: ' + error.message);
     }
+  }
+  
+  // V5.5: Burst Review Mode Helper Methods (At This Moment feature)
+  
+  /**
+   * Enter burst review mode - query service and display side panel
+   */
+  async _enterBurstMode() {
+    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('Cannot enter burst mode: no current media or media_index inactive');
+      return;
+    }
+    
+    // Show loading state
+    this._burstLoading = true;
+    this.requestUpdate();
+    
+    try {
+      // Call media_index.get_burst_photos service
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_burst_photos',
+        service_data: {
+          reference_path: this._currentMediaPath,
+          time_window_seconds: 120, // ±2 minutes
+          prefer_same_location: true,
+          location_tolerance_meters: 50,
+          sort_order: 'asc'
+        },
+        return_response: true
+      };
+      
+      // Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
+      
+      console.warn('🎥 Burst photos response:', response);
+      
+      // Store burst state
+      this._burstPhotos = response.response?.items || [];
+      this._burstReferencePhoto = {
+        path: this._currentMediaPath,
+        metadata: { ...this._currentMetadata }
+      };
+      this._burstCurrentIndex = 0; // Start with first photo in burst
+      this._burstMode = true;
+      
+      // Pause auto-advance while in burst mode
+      if (!this._isPaused) {
+        this._setPauseState(true);
+      }
+      
+      console.warn(`✅ Entered burst mode with ${this._burstPhotos.length} photos`);
+      
+    } catch (error) {
+      console.error('Failed to enter burst mode:', error);
+      alert('Failed to load burst photos: ' + error.message);
+    } finally {
+      this._burstLoading = false;
+      this.requestUpdate();
+    }
+  }
+  
+  /**
+   * Exit burst review mode - restore original photo and resume slideshow
+   */
+  _exitBurstMode() {
+    if (!this._burstMode) return;
+    
+    console.warn('🚪 Exiting burst mode');
+    
+    // Restore original photo state
+    if (this._burstReferencePhoto) {
+      this._currentMediaPath = this._burstReferencePhoto.path;
+      this._currentMetadata = { ...this._burstReferencePhoto.metadata };
+    }
+    
+    // Clear burst state
+    this._burstMode = false;
+    this._burstPhotos = [];
+    this._burstCurrentIndex = 0;
+    this._burstReferencePhoto = null;
+    
+    // Resume slideshow if it was paused for burst mode
+    if (this._isPaused) {
+      this._setPauseState(false);
+    }
+    
+    this.requestUpdate();
+  }
+  
+  /**
+   * Select a photo from burst panel - swap to main display
+   * @param {number} index - Index in _burstPhotos array
+   */
+  async _selectBurstPhoto(index) {
+    if (!this._burstMode || !this._burstPhotos || index < 0 || index >= this._burstPhotos.length) {
+      console.warn(`Invalid burst photo selection: index=${index}, photos=${this._burstPhotos?.length}`);
+      return;
+    }
+    
+    const selectedPhoto = this._burstPhotos[index];
+    console.warn(`📸 Selected burst photo ${index + 1}/${this._burstPhotos.length}: ${selectedPhoto.path}`);
+    
+    // Update current media to selected photo
+    this._currentMediaPath = selectedPhoto.path;
+    this._burstCurrentIndex = index;
+    
+    // Fetch metadata for selected photo (may not be in cache)
+    try {
+      const metadata = await this._fetchMetadata(selectedPhoto.path);
+      this._currentMetadata = metadata;
+    } catch (error) {
+      console.error('Failed to fetch metadata for burst photo:', error);
+      // Use basic metadata from burst response
+      this._currentMetadata = {
+        date_taken: selectedPhoto.date_taken,
+        latitude: selectedPhoto.latitude,
+        longitude: selectedPhoto.longitude,
+        is_favorited: selectedPhoto.is_favorited
+      };
+    }
+    
+    this.requestUpdate();
   }
   
   // GALLERY-CARD PATTERN: Modal overlay for image viewing (lines 238-268, 908-961)
