@@ -93,12 +93,80 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 4. Maintain HA theme integration with CSS variables
 5. Test on HADev before production deployment
 
+**CRITICAL: Configuration Field Names**:
+- **NEVER assume config structure** - always verify actual field names in schema or config
+- Common mistake: Using made-up field names like `folder.navigation_mode` when actual is `folder.mode`
+- Always check: `src/editor/media-card-editor.js` for actual schema definitions
+- Always check: User's actual config YAML before writing detection logic
+- Document actual config structure when working with new features
+
 **Code Style**:
 - Use Lit `html` and `css` tagged templates
 - Prefix private methods with underscore `_methodName()`
 - Use async/await for asynchronous operations
 - Handle errors gracefully with user feedback
 - Add comments for complex logic
+
+## Modular Source + Build Workflow (v5.4+)
+
+The card is now developed under `src/` as ES modules and bundled into a single distributable `ha-media-card.js` for deployment.
+
+### Version Management
+- Version is defined **once** in `package.json`
+- Build script automatically injects version into:
+  - Top banner: `/** Media Card v5.4.0 */`
+  - Console log: `v5.4.0 Loaded`
+- To release: Update `package.json` version → run `npm run build:concat`
+- Never hardcode version numbers in source files
+
+### Where to Make Changes
+
+NEVER MAKE CHANGES TO HA-MEDIA-CARD.JS DIRECTLY!
+
+- Edit source files only under `src/`:
+  - `src/core/` for shared utilities and base classes
+  - `src/providers/` for provider implementations and queues
+  - `src/ui/media-card.js` for the main LitElement card
+  - `src/editor/media-card-editor.js` for the visual editor
+  - `src/main.js` for custom element registration
+
+### Build Process
+The card uses a custom concatenation build script that preserves class names and structure:
+- `npm run build:concat` → concatenates modules in a deterministic order
+- Strips internal `import` statements and converts `export class` → `class`
+- Ensures a single CDN import for Lit is present at the top
+- Preserves exact class names (unlike Rollup which renames to avoid collisions)
+
+### Validation Steps
+1. Build: `npm run build:concat`
+2. Line count check (optional for regression-style diffs):
+   - `(Get-Content "ha-media-card.js" | Measure-Object -Line).Lines`
+3. Deploy to HADev:
+   - `Copy-Item "ha-media-card.js" "\\10.0.0.62\config\www\cards\ha-media-card.js" -Force`
+4. Hard refresh browser (Ctrl+Shift+R)
+5. Verify console shows `MEDIA-CARD v5.4.0 Loaded` and test card behavior
+
+### Commit & Push
+- Work on `dev` branch only
+- Commit modular source and build scripts
+- The built `ha-media-card.js` may be committed when validating diffs; otherwise regenerate on demand
+
+### Common Pitfalls & Fixes
+- Duplicate CDN imports can cause `Identifier 'LitElement' has already been declared`
+  - Build script automatically removes duplicate CDN imports from modules
+- Registration order issues can cause `Cannot access 'MediaCard' before initialization`
+  - Ensure `src/main.js` (registration) is concatenated last; classes defined first
+- Sticky caching in HA requires a hard refresh after deployment
+  - Always use Ctrl+Shift+R or Ctrl+F5
+- **Never use Rollup** - it renames classes causing runtime errors
+
+### Recommended Flow for Changes
+1. Edit `src/` files
+2. Run `npm run build:concat`
+3. Check line count and perform targeted diffs when needed
+4. Deploy to HADev and hard refresh
+5. Test and iterate
+6. Commit and push to `dev`
 
 
 **Template Variables Available**:
@@ -143,36 +211,45 @@ Copy-Item "ha-media-card.js" "\\10.0.0.26\config\www\cards\ha-media-card.js" -Fo
 - **Production Server**: `\\10.0.0.26\config\www\cards\ha-media-card.js`
 
 ## Git Workflow
-**CRITICAL**: ALL development work must be done on feature branches
+**CRITICAL**: ALL development work must be done on the `dev` branch
 
 ### Branch Protection Rules
 - **NEVER push directly to `master` branch**
 - Master branch is for stable releases only
-- All new features/fixes must use feature branches
+- All development work happens on `dev` branch
+- Create feature branches from `dev` for experimental work
 
 ### Development Workflow
-1. **Create feature branch** for any new work:
+1. **Work on dev branch** for ongoing development:
    ```powershell
-   git checkout -b feature/integration-support
-   # or
-   git checkout -b fix/bug-description
-   ```
-
-2. **Make changes and commit** to feature branch:
-   ```powershell
+   git checkout dev
+   git pull origin dev
+   # Make changes
    git add .
-   git commit -m "feat: add integration support for metadata display"
-   git push -u origin feature/integration-support
+   git commit -m "feat: add new feature"
+   git push origin dev
    ```
 
-3. **Create Pull Request** on GitHub when ready
-4. **Merge to master** only after review and testing
-5. **Tag releases** on master branch for version control
+2. **Optional: Create feature branch** for experimental/isolated work:
+   ```powershell
+   git checkout -b feature/experimental-feature
+   # Work on feature
+   git commit -m "feat: experimental feature"
+   git push -u origin feature/experimental-feature
+   # Merge back to dev when ready
+   git checkout dev
+   git merge feature/experimental-feature
+   ```
+
+3. **Merge to master** only for releases:
+   - Create Pull Request from `dev` to `master`
+   - After review and testing, merge to master
+   - Tag release on master branch
 
 ### Current Development Branch
-- `feature/integration-support` - For integration with media-index backend
+- `dev` - Main development branch (all ongoing work)
 
-### Branch Naming Convention
+### Branch Naming Convention (for experimental branches off dev)
 - `feature/description` - New features
 - `fix/description` - Bug fixes
 - `docs/description` - Documentation updates
