@@ -700,6 +700,13 @@ export class MediaCard extends LitElement {
           
           await this._loadNext();
         }
+        
+        // V5.6: Auto-open queue preview if configured
+        if (this.config.action_buttons?.auto_open_queue_preview === true && 
+            this.config.action_buttons?.enable_queue_preview === true) {
+          // Small delay to ensure first item is loaded
+          setTimeout(() => this._enterQueuePreviewMode(), 100);
+        }
       } else {
         console.error('[MediaCard] Provider initialization failed');
         this._errorState = 'Provider initialization failed';
@@ -2776,10 +2783,10 @@ export class MediaCard extends LitElement {
     const enableDebugButton = this.config.debug_button === true;
     
     // V5.5: Burst review feature (At This Moment)
-    const enableBurstReview = this.config.filters?.burst_review?.enabled === true;
+    const enableBurstReview = this.config.action_buttons?.enable_burst_review === true;
     
     // V5.6: Queue Preview mode (Show Queue)
-    const enableQueuePreview = this.config.filters?.queue_preview?.enabled === true;
+    const enableQueuePreview = this.config.action_buttons?.enable_queue_preview === true;
     const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length > 1;
     
     // Don't render anything if all buttons are disabled

@@ -1075,6 +1075,39 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsEnableBurstReviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_burst_review: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableQueuePreviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_queue_preview: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsAutoOpenQueuePreviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        auto_open_queue_preview: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsPositionChanged(ev) {
     this._config = {
       ...this._config,
@@ -3365,8 +3398,50 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
               </div>
             </div>
+            
+            <div class="config-row">
+              <label>Enable Burst Review</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_burst_review === true}
+                  @change=${this._actionButtonsEnableBurstReviewChanged}
+                />
+                <div class="help-text">Show "At This Moment" button to review burst photos (requires media_index)</div>
+              </div>
+            </div>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">📋 Queue Preview</div>
+          
+          <div class="config-row">
+            <label>Enable Queue Preview</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.action_buttons?.enable_queue_preview === true}
+                @change=${this._actionButtonsEnableQueuePreviewChanged}
+              />
+              <div class="help-text">Show "Coming Up" button to preview upcoming media in queue</div>
+            </div>
+          </div>
+          
+          ${this._config.action_buttons?.enable_queue_preview === true ? html`
+            <div class="config-row">
+              <label>Auto-open Queue on Load</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.auto_open_queue_preview === true}
+                  @change=${this._actionButtonsAutoOpenQueuePreviewChanged}
+                />
+                <div class="help-text">Automatically open queue preview panel when card loads</div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
 
         <div class="section">
           <div class="section-title">👆 Interactions</div>
