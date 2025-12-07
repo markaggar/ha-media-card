@@ -1239,6 +1239,32 @@ export class MediaCard extends LitElement {
     this.requestUpdate();
   }
 
+  async _jumpToQueuePosition(queueIndex) {
+    if (!this.navigationQueue || queueIndex < 0 || queueIndex >= this.navigationQueue.length) {
+      console.error('[MediaCard] Invalid queue position:', queueIndex);
+      return;
+    }
+
+    console.log(`🎯 Jumping to queue position ${queueIndex + 1}/${this.navigationQueue.length}`);
+
+    // Update navigation index
+    this.navigationIndex = queueIndex;
+
+    // Load the item from the queue
+    const item = this.navigationQueue[queueIndex];
+    this.currentMedia = item;
+    this._currentMediaPath = item.media_content_id;
+    this._currentMetadata = item.metadata || null;
+
+    // Clear cached metadata
+    this._fullMetadata = null;
+    this._folderDisplayCache = null;
+
+    // Update display
+    await this._resolveMediaUrl();
+    this.requestUpdate();
+  }
+
   // V5: Setup auto-advance timer (copied from V4 lines 1611-1680)
   _setupAutoRefresh() {
     // Clear any existing interval FIRST to prevent multiple timers
@@ -2752,9 +2778,14 @@ export class MediaCard extends LitElement {
     // V5.5: Burst review feature (At This Moment)
     const enableBurstReview = this.config.filters?.burst_review?.enabled === true;
     
+    // V5.6: Queue Preview mode (Show Queue)
+    const enableQueuePreview = this.config.filters?.queue_preview?.enabled === true;
+    const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length > 1;
+    
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
-                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview));
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview)) ||
+                            showQueueButton;
     if (!anyButtonEnabled) {
       return html``;
     }
@@ -2767,6 +2798,7 @@ export class MediaCard extends LitElement {
     const isPaused = this._isPaused || false;
     const isInfoActive = this._showInfoOverlay || false;
     const isBurstActive = this._burstMode || false;
+    const isQueueActive = this._panelMode === 'queue';
     const position = config.position || 'top-right';
 
     return html`
@@ -2817,6 +2849,14 @@ export class MediaCard extends LitElement {
             @click=${this._handleBurstClick}
             title="${isBurstActive ? 'Exit Burst Review' : 'At This Moment'}">
             <ha-icon icon="${isBurstActive ? 'mdi:close' : 'mdi:camera-burst'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${showQueueButton ? html`
+          <button
+            class="action-btn queue-btn ${isQueueActive ? 'active' : ''}"
+            @click=${this._handleQueueClick}
+            title="${isQueueActive ? 'Close Queue' : 'Show Queue'}">
+            <ha-icon icon="${isQueueActive ? 'mdi:close' : 'mdi:playlist-play'}"></ha-icon>
           </button>
         ` : ''}
         ${showMediaIndexButtons && enableFavorite ? html`
@@ -3364,6 +3404,17 @@ export class MediaCard extends LitElement {
     this._log(`ℹ️ ${this._showInfoOverlay ? 'SHOWING' : 'HIDING'} info overlay`);
   }
   
+  // V5.6: Queue Preview button handler
+  async _handleQueueClick() {
+    if (this._panelMode === 'queue') {
+      // Exit queue preview mode
+      await this._exitPanelMode();
+    } else {
+      // Enter queue preview mode
+      await this._enterQueuePreviewMode();
+    }
+  }
+
   // V5.5: Burst button handler - toggle burst review mode
   async _handleBurstClick(e) {
     e.stopPropagation();
@@ -3980,6 +4031,9 @@ export class MediaCard extends LitElement {
       this._mainQueue = [...this.navigationQueue];
       this._mainQueueIndex = this.navigationIndex;
       
+      // Save previous panel mode to restore after burst closes
+      this._previousPanelMode = this._panelMode; // Could be 'queue' or null
+      
       // Call media_index.get_related_files service with burst mode
       const wsCall = {
         type: 'call_service',
@@ -4053,6 +4107,39 @@ export class MediaCard extends LitElement {
       this.requestUpdate();
     }
   }
+
+  async _enterQueuePreviewMode() {
+    if (!this.navigationQueue || this.navigationQueue.length <= 1) {
+      console.warn('Cannot enter queue preview: insufficient items in queue');
+      return;
+    }
+
+    // Show loading state
+    this._panelLoading = true;
+    this.requestUpdate();
+
+    try {
+      // Queue preview doesn't need to save/restore queue - it reads directly from navigationQueue
+      // No need for _panelQueue - we'll reference navigationQueue directly
+      
+      this._panelMode = 'queue';
+      this._panelOpen = true;
+      
+      // Load current item to show in panel
+      const currentItem = this.navigationQueue[this.navigationIndex];
+      if (currentItem) {
+        // Current item is already loaded, just open panel
+        console.warn(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${this.navigationIndex + 1}`);
+      }
+      
+    } catch (error) {
+      console.error('Failed to enter queue preview mode:', error);
+      alert('Failed to open queue preview: ' + error.message);
+    } finally {
+      this._panelLoading = false;
+      this.requestUpdate();
+    }
+  }
   
   /**
    * Exit panel mode - restore main queue and handle burst metadata updates
@@ -4114,7 +4201,8 @@ export class MediaCard extends LitElement {
         }
       }
       
-      // Clear panel state
+      // Clear panel state (but might restore queue panel below)
+      const previousPanelMode = this._previousPanelMode;
       this._panelOpen = false;
       this._panelMode = null;
       this._panelQueue = [];
@@ -4134,9 +4222,17 @@ export class MediaCard extends LitElement {
       // Clear saved main queue
       this._mainQueue = [];
       this._mainQueueIndex = 0;
+      this._previousPanelMode = null;
       
-      // Resume auto-advance if it was paused for panel mode
-      if (this._isPaused) {
+      // Restore previous panel mode if we were in queue preview before burst
+      if (previousPanelMode === 'queue') {
+        this._panelMode = 'queue';
+        this._panelOpen = true;
+        console.warn('↩️ Restored queue preview panel after burst review');
+      }
+      
+      // Resume auto-advance if it was paused for panel mode (but not if we restored queue panel)
+      if (this._isPaused && this._panelMode !== 'queue') {
         this._setPauseState(false);
       }
       
@@ -5772,8 +5868,8 @@ export class MediaCard extends LitElement {
       overflow-y: auto;
       padding: 12px;
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
       align-content: start;
     }
 
@@ -6159,8 +6255,10 @@ export class MediaCard extends LitElement {
       title = '📸 Burst Review';
       subtitle = `${this._panelQueue.length} photos in this moment`;
     } else if (this._panelMode === 'queue') {
-      title = '📋 Queue Preview';
-      subtitle = `${this._panelQueue.length} items`;
+      title = '📋 Coming Up';
+      const queueLength = this.navigationQueue?.length || 0;
+      const currentPos = this.navigationIndex + 1;
+      subtitle = `Position ${currentPos} of ${queueLength}`;
     } else if (this._panelMode === 'history') {
       title = '🕐 History';
       subtitle = `${this._panelQueue.length} recent items`;
@@ -6183,20 +6281,52 @@ export class MediaCard extends LitElement {
    * Render horizontal thumbnail strip with time badges
    */
   _renderThumbnailStrip() {
-    if (!this._panelQueue || this._panelQueue.length === 0) {
+    // For queue mode, read directly from navigationQueue
+    const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
+    
+    if (!items || items.length === 0) {
       return html`
         <div class="thumbnail-strip">
-          <div class="no-items">No items in panel</div>
+          <div class="no-items">No items in ${this._panelMode || 'panel'}</div>
         </div>
       `;
     }
 
+    // For queue mode, calculate how many items to show based on viewport height
+    let displayItems = items;
+    let displayStartIndex = 0;
+    
+    if (this._panelMode === 'queue') {
+      // Calculate available height for thumbnails
+      const viewportHeight = window.innerHeight;
+      const panelHeaderHeight = 60; // Approximate header height
+      const panelPadding = 24; // Top and bottom padding
+      const availableHeight = viewportHeight - panelHeaderHeight - panelPadding;
+      
+      // Calculate thumbnail dimensions (2 columns, aspect ratio 4:3)
+      const panelWidth = 320;
+      const gridGap = 16;
+      const thumbnailWidth = (panelWidth - gridGap - 24) / 2; // 24 for padding
+      const thumbnailHeight = thumbnailWidth * (3 / 4); // 4:3 aspect ratio
+      const rowHeight = thumbnailHeight + gridGap;
+      
+      // Calculate how many rows can fit
+      const maxRows = Math.floor(availableHeight / rowHeight);
+      const maxDisplay = Math.max(4, maxRows * 2); // At least 4 items (2 rows), 2 per row
+      
+      displayStartIndex = this.navigationIndex;
+      displayItems = items.slice(displayStartIndex, displayStartIndex + maxDisplay);
+    }
+
     // Resolve all thumbnail URLs upfront (async but doesn't block render)
-    this._panelQueue.forEach(async (item) => {
+    displayItems.forEach(async (item) => {
       if (!item._resolvedUrl && !item._resolving) {
         item._resolving = true;
         try {
-          const mediaUri = item.media_source_uri || `media-source://media_source${item.path}`;
+          // For queue mode, use media_content_id directly; for burst mode, construct from path
+          const mediaUri = item.media_source_uri 
+            || item.media_content_id 
+            || `media-source://media_source${item.path}`;
           const resolved = await this.hass.callWS({
             type: 'media_source/resolve_media',
             media_content_id: mediaUri,
@@ -6214,14 +6344,18 @@ export class MediaCard extends LitElement {
 
     return html`
       <div class="thumbnail-strip">
-        ${this._panelQueue.map((item, index) => {
-          const isActive = index === this._panelQueueIndex;
-          const itemUri = item.media_source_uri || item.path;
+        ${displayItems.map((item, displayIndex) => {
+          const actualIndex = this._panelMode === 'queue' ? displayStartIndex + displayIndex : displayIndex;
+          const isActive = this._panelMode === 'queue' 
+            ? actualIndex === this.navigationIndex 
+            : displayIndex === this._panelQueueIndex;
+          const itemUri = item.media_source_uri || item.media_content_id || item.path;
           const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(itemUri);
           
-          // Format time offset for burst mode
+          // Format badge based on mode
           let badge = '';
           if (this._panelMode === 'burst' && item.seconds_offset !== undefined) {
+            // Time offset for burst mode
             const absSeconds = Math.abs(item.seconds_offset);
             if (absSeconds < 1) {
               badge = '0s';
@@ -6235,12 +6369,17 @@ export class MediaCard extends LitElement {
             // Add sign prefix
             if (item.seconds_offset > 0) badge = `+${badge}`;
             else if (item.seconds_offset < 0) badge = `-${badge}`;
+          } else if (this._panelMode === 'queue') {
+            // Position indicator for queue mode
+            const queuePos = actualIndex + 1;
+            const queueTotal = items.length;
+            badge = `${queuePos}/${queueTotal}`;
           }
 
           return html`
             <div 
               class="thumbnail ${isActive ? 'active' : ''} ${isFavorited ? 'favorited' : ''}"
-              @click=${() => this._loadPanelItem(index)}
+              @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(displayIndex)}
               title="${item.filename || item.path}"
             >
               ${item._resolvedUrl ? html`

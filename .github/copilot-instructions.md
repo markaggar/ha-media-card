@@ -4,12 +4,45 @@ A feature-rich custom Lovelace card for displaying images and videos with metada
 
 ## Project Overview
 
-**Current Version**: v5.0 (Complete rebuild with unified provider architecture)
+**Current Version**: v5.x (Complete rebuild with unified provider architecture)
 **Status**: Production ready - v4→v5 migration complete
 **Main File**: `ha-media-card.js` - Single-file Lit-Element web component (10K+ lines)
 
+### Where to Make Changes
+
+NEVER MAKE CHANGES TO HA-MEDIA-CARD.JS DIRECTLY! THIS IS LAW!
+
+- Edit source files only under `src/`:
+  - `src/core/` for shared utilities and base classes
+  - `src/providers/` for provider implementations and queues
+  - `src/ui/media-card.js` for the main LitElement card
+  - `src/editor/media-card-editor.js` for the visual editor
+  - `src/main.js` for custom element registration
+
+### Build Process
+The card uses a custom concatenation build script that preserves class names and structure:
+- `npm run build:concat` → concatenates modules in a deterministic order
+- Strips internal `import` statements and converts `export class` → `class`
+- Ensures a single CDN import for Lit is present at the top
+- Preserves exact class names (unlike Rollup which renames to avoid collisions)
+
+### Validation Steps
+1. Build: `npm run build:concat`
+2. Line count check (optional for regression-style diffs):
+   - `(Get-Content "ha-media-card.js" | Measure-Object -Line).Lines`
+3. Deploy to HADev:
+   - `Copy-Item "ha-media-card.js" "\\10.0.0.62\config\www\cards\ha-media-card.js" -Force`
+4. Hard refresh browser (Ctrl+Shift+R)
+5. Verify console shows `MEDIA-CARD v5.4.0 Loaded` and test card behavior
+
+### Commit & Push
+- Work on `dev` branch only
+- Commit modular source and build scripts
+- The built `ha-media-card.js` may be committed when validating diffs; otherwise regenerate on demand
+
 ## Project Structure
 
+- `src/*` - Modular source files within folders (ES modules)
 - `ha-media-card.js` - **Main v5 card** (production file)
 - `dev-docs/ha-media-card-v4.js` - **V4 reference** (for regression checking only)
 - `dev-docs/` - Architecture specs, implementation plans, v5 migration docs
@@ -136,37 +169,7 @@ The card is now developed under `src/` as ES modules and bundled into a single d
 - To release: Update `package.json` version → run `npm run build:concat`
 - Never hardcode version numbers in source files
 
-### Where to Make Changes
 
-NEVER MAKE CHANGES TO HA-MEDIA-CARD.JS DIRECTLY!
-
-- Edit source files only under `src/`:
-  - `src/core/` for shared utilities and base classes
-  - `src/providers/` for provider implementations and queues
-  - `src/ui/media-card.js` for the main LitElement card
-  - `src/editor/media-card-editor.js` for the visual editor
-  - `src/main.js` for custom element registration
-
-### Build Process
-The card uses a custom concatenation build script that preserves class names and structure:
-- `npm run build:concat` → concatenates modules in a deterministic order
-- Strips internal `import` statements and converts `export class` → `class`
-- Ensures a single CDN import for Lit is present at the top
-- Preserves exact class names (unlike Rollup which renames to avoid collisions)
-
-### Validation Steps
-1. Build: `npm run build:concat`
-2. Line count check (optional for regression-style diffs):
-   - `(Get-Content "ha-media-card.js" | Measure-Object -Line).Lines`
-3. Deploy to HADev:
-   - `Copy-Item "ha-media-card.js" "\\10.0.0.62\config\www\cards\ha-media-card.js" -Force`
-4. Hard refresh browser (Ctrl+Shift+R)
-5. Verify console shows `MEDIA-CARD v5.4.0 Loaded` and test card behavior
-
-### Commit & Push
-- Work on `dev` branch only
-- Commit modular source and build scripts
-- The built `ha-media-card.js` may be committed when validating diffs; otherwise regenerate on demand
 
 ### Common Pitfalls & Fixes
 - Duplicate CDN imports can cause `Identifier 'LitElement' has already been declared`
