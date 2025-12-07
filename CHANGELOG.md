@@ -1,5 +1,17 @@
 ## v5.5.0 (In Development)
 ### Added
+- **Queue Preview Feature**
+  - New "Queue Preview" button in action buttons (playlist icon)
+  - Displays upcoming items from navigation queue in side panel
+  - Page-based thumbnail navigation with Previous/Next buttons
+  - Dynamic thumbnail count based on viewport height
+  - Works in both sequential and random modes
+  - Configuration options:
+    - `action_buttons.enable_queue_preview`: Enable/disable feature
+    - `action_buttons.auto_open_queue_preview`: Auto-open panel on card load
+  - Smart paging: manually page through queue or auto-adjust when clicking thumbnails
+  - Integrates with burst review: saves and restores queue panel state
+
 - **Burst Metadata Persistence**
   - Save burst review session metadata to all files in a burst group
   - New `burst_favorites` (JSON array) and `burst_count` (integer) metadata fields

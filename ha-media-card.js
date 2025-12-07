@@ -3724,7 +3724,8 @@ class MediaCard extends LitElement {
     currentMedia: { state: true },
     mediaUrl: { state: true },
     isLoading: { state: true },
-    _actionButtonsVisible: { state: true }
+    _actionButtonsVisible: { state: true },
+    _queuePageStartIndex: { state: true }
   };
 
   // V4: Image Zoom Helpers
@@ -4407,8 +4408,10 @@ class MediaCard extends LitElement {
           await this._loadNext();
         }
         
-        // V5.6: Auto-open queue preview if configured
-        if (this.config.action_buttons?.auto_open_queue_preview === true && 
+        // V5.6: Auto-open queue preview if configured (but not in editor mode)
+        const isEditorContext = this.closest('hui-card-preview') !== null;
+        if (!isEditorContext &&
+            this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
           // Small delay to ensure first item is loaded
           setTimeout(() => this._enterQueuePreviewMode(), 100);
@@ -4962,6 +4965,10 @@ class MediaCard extends LitElement {
 
     // Update navigation index
     this.navigationIndex = queueIndex;
+    
+    // Clear manual page flag - user is now navigating to items, allow auto-adjustment
+    this._manualPageChange = false;
+    this._manualPageRenderCount = 0;
 
     // Load the item from the queue
     const item = this.navigationQueue[queueIndex];
@@ -6491,9 +6498,10 @@ class MediaCard extends LitElement {
     // V5.5: Burst review feature (At This Moment)
     const enableBurstReview = this.config.action_buttons?.enable_burst_review === true;
     
-    // V5.6: Queue Preview mode (Show Queue)
+    // V5.6: Queue Preview mode (Show Queue) - works without media_index
     const enableQueuePreview = this.config.action_buttons?.enable_queue_preview === true;
-    const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length > 1;
+    // Show button if enabled and queue has items (or still loading)
+    const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length >= 1;
     
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
@@ -6560,16 +6568,16 @@ class MediaCard extends LitElement {
           <button
             class="action-btn burst-btn ${isBurstActive ? 'active' : ''} ${this._burstLoading ? 'loading' : ''}"
             @click=${this._handleBurstClick}
-            title="${isBurstActive ? 'Exit Burst Review' : 'At This Moment'}">
-            <ha-icon icon="${isBurstActive ? 'mdi:close' : 'mdi:camera-burst'}"></ha-icon>
+            title="${isBurstActive ? 'Burst Review Active' : 'At This Moment'}">
+            <ha-icon icon="mdi:camera-burst"></ha-icon>
           </button>
         ` : ''}
         ${showQueueButton ? html`
           <button
             class="action-btn queue-btn ${isQueueActive ? 'active' : ''}"
             @click=${this._handleQueueClick}
-            title="${isQueueActive ? 'Close Queue' : 'Show Queue'}">
-            <ha-icon icon="${isQueueActive ? 'mdi:close' : 'mdi:playlist-play'}"></ha-icon>
+            title="${isQueueActive ? 'Queue Preview Active' : 'Coming Up'}">
+            <ha-icon icon="mdi:playlist-play"></ha-icon>
           </button>
         ` : ''}
         ${showMediaIndexButtons && enableFavorite ? html`
@@ -7123,6 +7131,10 @@ class MediaCard extends LitElement {
       // Exit queue preview mode
       await this._exitPanelMode();
     } else {
+      // If in burst mode, exit it first before entering queue preview
+      if (this._panelMode === 'burst') {
+        await this._exitPanelMode();
+      }
       // Enter queue preview mode
       await this._enterQueuePreviewMode();
     }
@@ -7838,6 +7850,9 @@ class MediaCard extends LitElement {
       this._panelMode = 'queue';
       this._panelOpen = true;
       
+      // Reset page index to show current position
+      this._queuePageStartIndex = this.navigationIndex;
+      
       // Load current item to show in panel
       const currentItem = this.navigationQueue[this.navigationIndex];
       if (currentItem) {
@@ -7959,6 +7974,38 @@ class MediaCard extends LitElement {
       this._panelMode = null;
       this.requestUpdate();
     }
+  }
+  
+  /**
+   * Page through queue preview thumbnails
+   * @param {string} direction - 'prev' or 'next'
+   */
+  _pageQueueThumbnails(direction) {
+    if (this._panelMode !== 'queue') return;
+
+    const oldIndex = this._queuePageStartIndex;
+    const queueLength = this.navigationQueue?.length || 0;
+
+    // Calculate max display count (same logic as _renderThumbnailStrip)
+    const viewportHeight = window.innerHeight;
+    const headerHeight = 60; // Panel header
+    const thumbnailHeight = 100; // Approximate thumbnail with gap
+    const availableHeight = viewportHeight - headerHeight - 40; // 40px margin
+    const rows = Math.max(2, Math.floor(availableHeight / thumbnailHeight));
+    const maxDisplay = rows * 2; // 2 columns
+
+    if (direction === 'prev') {
+      this._queuePageStartIndex = Math.max(0, this._queuePageStartIndex - maxDisplay);
+    } else if (direction === 'next') {
+      const maxStartIndex = Math.max(0, queueLength - maxDisplay);
+      const newIndex = this._queuePageStartIndex + maxDisplay;
+      this._queuePageStartIndex = Math.min(maxStartIndex, newIndex);
+    }
+
+    // Mark that user manually paged - don't auto-adjust until they navigate
+    this._manualPageChange = true;
+    
+    // No need to call requestUpdate() - _queuePageStartIndex is now a reactive property
   }
   
   /**
@@ -9411,6 +9458,26 @@ class MediaCard extends LitElement {
       background: rgba(3, 169, 244, 0.25);
     }
     
+    .burst-btn.active {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.15);
+    }
+
+    .burst-btn.active:hover {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.25);
+    }
+    
+    .queue-btn.active {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.15);
+    }
+
+    .queue-btn.active:hover {
+      color: var(--primary-color, #03a9f4);
+      background: rgba(3, 169, 244, 0.25);
+    }
+    
     .placeholder {
       text-align: center;
       padding: 32px;
@@ -9584,6 +9651,41 @@ class MediaCard extends LitElement {
       grid-template-columns: repeat(2, 1fr);
       gap: 16px;
       align-content: start;
+    }
+
+    .page-nav-button {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px;
+      background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.1);
+      border: 1px solid var(--primary-color, #03a9f4);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      color: var(--primary-text-color);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .page-nav-button:hover {
+      background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.2);
+      transform: scale(1.02);
+    }
+
+    .page-nav-button:active {
+      transform: scale(0.98);
+    }
+
+    .page-nav-button ha-icon {
+      --mdc-icon-size: 20px;
+      color: var(--primary-color, #03a9f4);
+    }
+
+    .page-nav-label {
+      color: var(--primary-text-color);
     }
 
     .thumbnail {
@@ -10027,7 +10129,28 @@ class MediaCard extends LitElement {
       const maxRows = Math.floor(availableHeight / rowHeight);
       const maxDisplay = Math.max(4, maxRows * 2); // At least 4 items (2 rows), 2 per row
       
-      displayStartIndex = this.navigationIndex;
+      // Initialize page start index if not set or panel was just opened
+      if (this._queuePageStartIndex === undefined || this._queuePageStartIndex === null) {
+        this._queuePageStartIndex = this.navigationIndex;
+      }
+      
+      // Don't auto-adjust page if user manually paged
+      if (!this._manualPageChange) {
+        // Check if current navigation index is outside the current page
+        const currentPageEnd = this._queuePageStartIndex + maxDisplay;
+        
+        if (this.navigationIndex < this._queuePageStartIndex) {
+          // Navigated backward beyond current page - show previous page
+          this._queuePageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
+        } else if (this.navigationIndex >= currentPageEnd) {
+          // Navigated forward beyond current page - show next page
+          this._queuePageStartIndex = this.navigationIndex;
+        }
+        // Otherwise, stay on current page
+      }
+      // Flag will be cleared when user clicks a thumbnail or navigates with arrow keys
+      
+      displayStartIndex = this._queuePageStartIndex;
       displayItems = items.slice(displayStartIndex, displayStartIndex + maxDisplay);
     }
 
@@ -10055,8 +10178,19 @@ class MediaCard extends LitElement {
       }
     });
 
+    // Calculate if we have previous/next pages (for queue mode)
+    const hasPreviousPage = this._panelMode === 'queue' && displayStartIndex > 0;
+    const hasNextPage = this._panelMode === 'queue' && (displayStartIndex + displayItems.length) < items.length;
+
     return html`
       <div class="thumbnail-strip">
+        ${hasPreviousPage ? html`
+          <button class="page-nav-button prev-page" @click=${() => this._pageQueueThumbnails('prev')}>
+            <ha-icon icon="mdi:chevron-up"></ha-icon>
+            <div class="page-nav-label">Previous</div>
+          </button>
+        ` : ''}
+        
         ${displayItems.map((item, displayIndex) => {
           const actualIndex = this._panelMode === 'queue' ? displayStartIndex + displayIndex : displayIndex;
           const isActive = this._panelMode === 'queue' 
@@ -10105,6 +10239,13 @@ class MediaCard extends LitElement {
             </div>
           `;
         })}
+        
+        ${hasNextPage ? html`
+          <button class="page-nav-button next-page" @click=${() => this._pageQueueThumbnails('next')}>
+            <div class="page-nav-label">Next</div>
+            <ha-icon icon="mdi:chevron-down"></ha-icon>
+          </button>
+        ` : ''}
       </div>
     `;
   }
