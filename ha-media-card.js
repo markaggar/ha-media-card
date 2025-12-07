@@ -7990,17 +7990,11 @@ class MediaCard extends LitElement {
   }
   
   /**
-   * V5.6: Get cached video thumbnail URL or initiate load
+   * V5.6: Check if video thumbnail is loaded
    */
-  _getVideoThumbnailUrl(item, resolvedUrl) {
-    if (!resolvedUrl) return null;
-    
+  _isVideoThumbnailLoaded(item) {
     const cacheKey = item.media_content_id || item.path;
-    if (this._videoThumbnailCache.has(cacheKey)) {
-      return this._videoThumbnailCache.get(cacheKey);
-    }
-    
-    return null; // Will trigger video element render
+    return this._videoThumbnailCache.has(cacheKey);
   }
   
   /**
@@ -8010,12 +8004,11 @@ class MediaCard extends LitElement {
     const videoElement = e.target;
     const cacheKey = item.media_content_id || item.path;
     
-    // Cache the loaded state
-    this._videoThumbnailCache.set(cacheKey, videoElement.currentSrc);
+    // Mark as loaded in cache (video element stays rendered)
+    this._videoThumbnailCache.set(cacheKey, true);
     
-    // Mark as loaded and trigger re-render to show cached version
+    // Mark as loaded for CSS styling
     videoElement.dataset.loaded = 'true';
-    this.requestUpdate();
   }
   
   /**
@@ -9770,10 +9763,13 @@ class MediaCard extends LitElement {
       object-fit: contain !important;
       display: block !important;
       background: var(--primary-background-color);
+      opacity: 0.5;
+      transition: opacity 0.3s ease;
     }
     
-    .thumbnail-video:not([data-loaded]) {
-      opacity: 0.8;
+    .thumbnail-video.loaded,
+    .thumbnail-video[data-loaded="true"] {
+      opacity: 1;
     }
 
     .thumbnail-loading {
@@ -10282,7 +10278,7 @@ class MediaCard extends LitElement {
 
           const isVideo = this._isVideoItem(item);
           const videoThumbnailTime = this.config.video_thumbnail_time || 1;
-          const cachedThumbnail = isVideo ? this._getVideoThumbnailUrl(item, item._resolvedUrl) : null;
+          const isVideoLoaded = isVideo && this._isVideoThumbnailLoaded(item);
           
           return html`
             <div 
@@ -10291,21 +10287,17 @@ class MediaCard extends LitElement {
               title="${item.filename || item.path}"
             >
               ${item._resolvedUrl ? (
-                isVideo ? (
-                  cachedThumbnail ? html`
-                    <img src="${cachedThumbnail}" alt="${item.filename || 'Video thumbnail'}" />
-                  ` : html`
-                    <video 
-                      class="thumbnail-video"
-                      preload="metadata"
-                      muted
-                      playsinline
-                      src="${item._resolvedUrl}#t=${videoThumbnailTime}"
-                      @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
-                      @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
-                    ></video>
-                  `
-                ) : html`
+                isVideo ? html`
+                  <video 
+                    class="thumbnail-video ${isVideoLoaded ? 'loaded' : ''}"
+                    preload="metadata"
+                    muted
+                    playsinline
+                    src="${item._resolvedUrl}#t=${videoThumbnailTime}"
+                    @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
+                    @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
+                  ></video>
+                ` : html`
                   <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
                 `
               ) : html`
