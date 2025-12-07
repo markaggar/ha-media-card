@@ -1,8 +1,21 @@
 ## v5.5.0 (In Development)
 ### Added
-- **Similar Items Features** (planned)
-  - Three distinct memory/burst review modes
-  - Media Index v1.5 integration for burst detection
+- **Burst Metadata Persistence**
+  - Save burst review session metadata to all files in a burst group
+  - New `burst_favorites` (JSON array) and `burst_count` (integer) metadata fields
+  - Metadata persists across sessions and survives file deletions
+  - Enables future features: favorite indicators, burst filtering, review status tracking
+  
+- **Burst Review Improvements**
+  - Favorite state restoration when re-entering reviewed burst
+  - Heart icons show on thumbnails and main image for pre-favorited photos
+  - Session favorites tracked separately and merged with database favorites
+  - Always save metadata on panel exit (even with no favorites)
+
+### Changed
+- **Backend Integration**: Simplified URI handling - `media_index` now provides `media_source_uri` in burst results
+- **Favorite Detection**: Check both session state and database metadata for displaying hearts
+- **Logging**: Removed excessive debug logging from folder display rendering
 
 ## v5.4.0
 ### Added
