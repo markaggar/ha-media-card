@@ -3725,7 +3725,7 @@ class MediaCard extends LitElement {
     mediaUrl: { state: true },
     isLoading: { state: true },
     _actionButtonsVisible: { state: true },
-    _queuePageStartIndex: { state: true }
+    _panelPageStartIndex: { state: true } // Unified paging for all panel modes
   };
 
   // V4: Image Zoom Helpers
@@ -4984,9 +4984,82 @@ class MediaCard extends LitElement {
     this._fullMetadata = null;
     this._folderDisplayCache = null;
 
-    // Update display
+    // Resolve and display media
     await this._resolveMediaUrl();
     this.requestUpdate();
+  }
+
+  /**
+   * Insert panel items into navigation queue at current position and start playing
+   */
+  async _playPanelItems() {
+    if (!this._panelQueue || this._panelQueue.length === 0) {
+      console.warn('No panel items to play');
+      return;
+    }
+
+    console.warn(`🎬 Inserting ${this._panelQueue.length} items into navigation queue at position ${this.navigationIndex + 1}`);
+
+    // Convert panel items to navigation queue format
+    const queueItems = this._panelQueue.map(item => ({
+      media_content_id: item.media_source_uri || item.media_content_id || `media-source://media_source${item.path}`,
+      media_content_type: item.file_type === 'video' ? 'video' : 'image',
+      title: item.filename || item.path.split('/').pop(),
+      metadata: {
+        filename: item.filename,
+        path: item.path,
+        date_taken: item.date_taken,
+        created_time: item.created_time,
+        is_favorited: item.is_favorited,
+        rating: item.rating,
+        folder: item.folder
+      },
+      // Keep original item data
+      ...item
+    }));
+
+    // Remove duplicates from queue first (items that exist elsewhere in the queue)
+    const itemUris = new Set(queueItems.map(item => item.media_content_id));
+    let removedCount = 0;
+    let adjustedIndex = this.navigationIndex;
+    
+    for (let i = this.navigationQueue.length - 1; i >= 0; i--) {
+      const queueItem = this.navigationQueue[i];
+      const queueItemUri = queueItem.media_content_id || queueItem.media_source_uri;
+      
+      if (itemUris.has(queueItemUri)) {
+        this.navigationQueue.splice(i, 1);
+        removedCount++;
+        
+        // Adjust current index if we removed items before it
+        if (i < this.navigationIndex) {
+          adjustedIndex--;
+        }
+      }
+    }
+
+    console.warn(`🗑️ Removed ${removedCount} duplicate items from queue`);
+
+    // Update navigation index after removals
+    this.navigationIndex = adjustedIndex;
+
+    // Insert items into navigation queue after current position
+    const insertPosition = this.navigationIndex + 1;
+    this.navigationQueue.splice(insertPosition, 0, ...queueItems);
+
+    console.warn(`✅ Inserted ${queueItems.length} items at position ${insertPosition}, queue now has ${this.navigationQueue.length} items`);
+
+    // Close panel WITHOUT restoring queue (we want to keep our insertions)
+    this._panelOpen = false;
+    this._panelMode = null;
+    this._panelQueue = [];
+    this._panelQueueIndex = 0;
+    this._panelPageStartIndex = null;
+    this._burstMode = false; // Clear deprecated flag
+    this.requestUpdate();
+    
+    // Jump to first inserted item
+    await this._jumpToQueuePosition(insertPosition);
   }
 
   // V5: Setup auto-advance timer (copied from V4 lines 1611-1680)
@@ -6502,6 +6575,9 @@ class MediaCard extends LitElement {
     // V5.5: Burst review feature (At This Moment)
     const enableBurstReview = this.config.action_buttons?.enable_burst_review === true;
     
+    // V5.5: Related photos feature (same timeframe)
+    const enableRelatedPhotos = this.config.action_buttons?.enable_related_photos === true;
+    
     // V5.6: Queue Preview mode (Show Queue) - works without media_index
     const enableQueuePreview = this.config.action_buttons?.enable_queue_preview === true;
     // Show button if enabled and queue has items (or still loading)
@@ -6509,7 +6585,7 @@ class MediaCard extends LitElement {
     
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
-                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview)) ||
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos)) ||
                             showQueueButton;
     if (!anyButtonEnabled) {
       return html``;
@@ -6523,6 +6599,7 @@ class MediaCard extends LitElement {
     const isPaused = this._isPaused || false;
     const isInfoActive = this._showInfoOverlay || false;
     const isBurstActive = this._burstMode || false;
+    const isRelatedActive = this._panelMode === 'related';
     const isQueueActive = this._panelMode === 'queue';
     const position = config.position || 'top-right';
 
@@ -6574,6 +6651,14 @@ class MediaCard extends LitElement {
             @click=${this._handleBurstClick}
             title="${isBurstActive ? 'Burst Review Active' : 'At This Moment'}">
             <ha-icon icon="mdi:camera-burst"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && enableRelatedPhotos ? html`
+          <button
+            class="action-btn related-btn ${isRelatedActive ? 'active' : ''} ${this._relatedLoading ? 'loading' : ''}"
+            @click=${this._handleRelatedClick}
+            title="${isRelatedActive ? 'Related Photos Active' : 'From This Day'}">
+            <ha-icon icon="mdi:calendar-outline"></ha-icon>
           </button>
         ` : ''}
         ${showQueueButton ? html`
@@ -7155,8 +7240,27 @@ class MediaCard extends LitElement {
       // DEPRECATED path: Exit old burst mode
       this._exitBurstMode();
     } else {
-      // Enter burst mode
-      await this._enterBurstMode();
+      // Capture media path snapshot NOW before any auto-advance can change it
+      const mediaPathSnapshot = this._currentMediaPath;
+      
+      // Enter burst mode with captured snapshot
+      await this._enterBurstMode(mediaPathSnapshot);
+    }
+  }
+
+  async _handleRelatedClick(e) {
+    e.stopPropagation();
+    
+    if (this._panelOpen && this._panelMode === 'related') {
+      // Exit related photos mode
+      this._exitRelatedMode();
+    } else {
+      // Capture metadata snapshot NOW before any auto-advance can change it
+      const metadataSnapshot = { ...this._currentMetadata };
+      const mediaPathSnapshot = this._currentMediaPath;
+      
+      // Enter related photos mode with captured snapshot
+      await this._enterRelatedMode(metadataSnapshot, mediaPathSnapshot);
     }
   }
   
@@ -7744,8 +7848,8 @@ class MediaCard extends LitElement {
   /**
    * Enter burst review mode - query service and display side panel
    */
-  async _enterBurstMode() {
-    if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) {
+  async _enterBurstMode(mediaPathSnapshot) {
+    if (!mediaPathSnapshot || !MediaProvider.isMediaIndexActive(this.config)) {
       console.warn('Cannot enter burst mode: no current media or media_index inactive');
       return;
     }
@@ -7770,7 +7874,7 @@ class MediaCard extends LitElement {
         service: 'get_related_files',
         service_data: {
           mode: 'burst',
-          media_source_uri: this._currentMediaPath,
+          media_source_uri: mediaPathSnapshot, // Use SNAPSHOT not current state
           time_window_seconds: 15, // ±15 seconds for tighter burst grouping
           prefer_same_location: true,
           location_tolerance_meters: 20, // ~20m walking distance in 30 seconds
@@ -7815,6 +7919,9 @@ class MediaCard extends LitElement {
       this._burstCurrentIndex = this._panelQueueIndex;
       this._burstMode = true;
       
+      // Initialize paging for burst panel
+      this._panelPageStartIndex = 0;
+      
       // Load first burst photo
       if (this._panelQueue.length > 0) {
         await this._loadPanelItem(0);
@@ -7837,6 +7944,112 @@ class MediaCard extends LitElement {
     }
   }
 
+  async _enterRelatedMode(metadataSnapshot, mediaPathSnapshot) {
+    if (!mediaPathSnapshot || !MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('Cannot enter related photos mode: no current media or media_index inactive');
+      return;
+    }
+    
+    // Show loading state
+    this._panelLoading = true;
+    this._relatedLoading = true;
+    this.requestUpdate();
+    
+    try {
+      // Save main queue state
+      this._mainQueue = [...this.navigationQueue];
+      this._mainQueueIndex = this.navigationIndex;
+      
+      // Save previous panel mode to restore after related closes
+      this._previousPanelMode = this._panelMode;
+      
+      // Extract date from SNAPSHOT metadata (not current, which may have changed)
+      const currentDate = metadataSnapshot?.date_taken || metadataSnapshot?.created_time;
+      if (!currentDate) {
+        throw new Error('No date available for current photo');
+      }
+      
+      // Format as YYYY-MM-DD for service call (handle string, Date object, or Unix timestamp)
+      let dateStr;
+      if (typeof currentDate === 'number') {
+        // Unix timestamp - convert to Date first
+        const dateObj = new Date(currentDate * 1000); // Convert seconds to milliseconds
+        dateStr = dateObj.toISOString().split('T')[0];
+      } else if (typeof currentDate === 'string') {
+        dateStr = currentDate.split('T')[0]; // Get just the date part
+      } else if (currentDate instanceof Date) {
+        dateStr = currentDate.toISOString().split('T')[0];
+      } else {
+        dateStr = String(currentDate).split('T')[0];
+      }
+      
+      console.warn(`📅 Using date: ${dateStr} from metadata (original: ${currentDate})`);
+      
+      // Call media_index.get_random_items with date filtering
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_random_items',
+        service_data: {
+          count: 100, // Get up to 100 photos from this day
+          date_from: dateStr,
+          date_to: dateStr
+        },
+        return_response: true
+      };
+      
+      // Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
+      
+      console.warn('📅 Related photos response:', response);
+      console.warn('📅 First item:', response.response?.items?.[0]);
+      
+      // Store panel queue and sort by time
+      const rawItems = response.response?.items || [];
+      
+      // Sort by date_taken or created_time (chronological order)
+      const sortedItems = rawItems.sort((a, b) => {
+        const timeA = String(a.date_taken || a.created_time || '');
+        const timeB = String(b.date_taken || b.created_time || '');
+        return timeA.localeCompare(timeB);
+      });
+      
+      this._panelQueue = sortedItems;
+      this._panelQueueIndex = 0;
+      this._panelMode = 'related';
+      this._panelOpen = true;
+      
+      console.warn(`📸 Related photos panel loaded: ${this._panelQueue.length} files`);
+      
+      // Initialize paging for related panel
+      this._panelPageStartIndex = 0;
+      
+      // Load first related photo
+      if (this._panelQueue.length > 0) {
+        await this._loadPanelItem(0);
+      }
+      
+      // Pause auto-advance while in related mode
+      if (!this._isPaused) {
+        this._setPauseState(true);
+      }
+      
+      console.warn(`✅ Entered related photos mode with ${this._panelQueue.length} photos`);
+      
+    } catch (error) {
+      console.error('Failed to enter related photos mode:', error);
+      alert('Failed to load related photos: ' + error.message);
+    } finally {
+      this._panelLoading = false;
+      this._relatedLoading = false;
+      this.requestUpdate();
+    }
+  }
+
   async _enterQueuePreviewMode() {
     if (!this.navigationQueue || this.navigationQueue.length <= 1) {
       console.warn('Cannot enter queue preview: insufficient items in queue');
@@ -7854,8 +8067,8 @@ class MediaCard extends LitElement {
       this._panelMode = 'queue';
       this._panelOpen = true;
       
-      // Reset page index to show current position
-      this._queuePageStartIndex = this.navigationIndex;
+      // Initialize paging for queue preview
+      this._panelPageStartIndex = this.navigationIndex;
       
       // Load current item to show in panel
       const currentItem = this.navigationQueue[this.navigationIndex];
@@ -7873,6 +8086,11 @@ class MediaCard extends LitElement {
     }
   }
   
+  _exitRelatedMode() {
+    console.warn('🚪 Exiting related photos mode');
+    this._exitPanelMode();
+  }
+
   /**
    * Exit panel mode - restore main queue and handle burst metadata updates
    */
@@ -8016,10 +8234,12 @@ class MediaCard extends LitElement {
    * @param {string} direction - 'prev' or 'next'
    */
   _pageQueueThumbnails(direction) {
-    if (this._panelMode !== 'queue') return;
+    // Works for queue, burst, and related modes
+    if (!['queue', 'burst', 'related'].includes(this._panelMode)) return;
 
-    const oldIndex = this._queuePageStartIndex;
-    const queueLength = this.navigationQueue?.length || 0;
+    const oldIndex = this._panelPageStartIndex || 0;
+    const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
+    const totalLength = items?.length || 0;
 
     // Calculate max display count (same logic as _renderThumbnailStrip)
     const viewportHeight = window.innerHeight;
@@ -8030,17 +8250,17 @@ class MediaCard extends LitElement {
     const maxDisplay = rows * 2; // 2 columns
 
     if (direction === 'prev') {
-      this._queuePageStartIndex = Math.max(0, this._queuePageStartIndex - maxDisplay);
+      this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
     } else if (direction === 'next') {
-      const maxStartIndex = Math.max(0, queueLength - maxDisplay);
-      const newIndex = this._queuePageStartIndex + maxDisplay;
-      this._queuePageStartIndex = Math.min(maxStartIndex, newIndex);
+      const maxStartIndex = Math.max(0, totalLength - maxDisplay);
+      const newIndex = this._panelPageStartIndex + maxDisplay;
+      this._panelPageStartIndex = Math.min(maxStartIndex, newIndex);
     }
 
     // Mark that user manually paged - don't auto-adjust until they navigate
     this._manualPageChange = true;
     
-    // No need to call requestUpdate() - _queuePageStartIndex is now a reactive property
+    this.requestUpdate();
   }
   
   /**
@@ -9659,6 +9879,33 @@ class MediaCard extends LitElement {
       opacity: 0.7;
     }
 
+    .panel-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-action-button {
+      background: var(--primary-color, #03a9f4);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+    }
+
+    .panel-action-button:hover {
+      opacity: 0.9;
+    }
+
+    .panel-action-button:active {
+      opacity: 0.7;
+    }
+
     .panel-close-button {
       background: transparent;
       border: none;
@@ -10123,6 +10370,9 @@ class MediaCard extends LitElement {
     if (this._panelMode === 'burst') {
       title = '📸 Burst Review';
       subtitle = `${this._panelQueue.length} photos in this moment`;
+    } else if (this._panelMode === 'related') {
+      title = '📅 From This Day';
+      subtitle = `${this._panelQueue.length} photos from this timeframe`;
     } else if (this._panelMode === 'queue') {
       title = '📋 Coming Up';
       const queueLength = this.navigationQueue?.length || 0;
@@ -10139,9 +10389,19 @@ class MediaCard extends LitElement {
           <div class="title-text">${title}</div>
           ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
         </div>
-        <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
-          ✕
-        </button>
+        <div class="panel-header-actions">
+          ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
+            <button 
+              class="panel-action-button" 
+              @click=${this._playPanelItems} 
+              title="Insert into queue and play">
+              ▶️ Play These
+            </button>
+          ` : ''}
+          <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+            ✕
+          </button>
+        </div>
       </div>
     `;
   }
@@ -10161,52 +10421,47 @@ class MediaCard extends LitElement {
       `;
     }
 
-    // For queue mode, calculate how many items to show based on viewport height
-    let displayItems = items;
-    let displayStartIndex = 0;
+    // Calculate available height for thumbnails (unified for all panel modes)
+    const viewportHeight = window.innerHeight;
+    const panelHeaderHeight = 60; // Approximate header height
+    const panelPadding = 24; // Top and bottom padding
+    const availableHeight = viewportHeight - panelHeaderHeight - panelPadding;
     
-    if (this._panelMode === 'queue') {
-      // Calculate available height for thumbnails
-      const viewportHeight = window.innerHeight;
-      const panelHeaderHeight = 60; // Approximate header height
-      const panelPadding = 24; // Top and bottom padding
-      const availableHeight = viewportHeight - panelHeaderHeight - panelPadding;
-      
-      // Calculate thumbnail dimensions (2 columns, aspect ratio 4:3)
-      const panelWidth = 320;
-      const gridGap = 16;
-      const thumbnailWidth = (panelWidth - gridGap - 24) / 2; // 24 for padding
-      const thumbnailHeight = thumbnailWidth * (3 / 4); // 4:3 aspect ratio
-      const rowHeight = thumbnailHeight + gridGap;
-      
-      // Calculate how many rows can fit
-      const maxRows = Math.floor(availableHeight / rowHeight);
-      const maxDisplay = Math.max(4, maxRows * 2); // At least 4 items (2 rows), 2 per row
-      
-      // Initialize page start index if not set or panel was just opened
-      if (this._queuePageStartIndex === undefined || this._queuePageStartIndex === null) {
-        this._queuePageStartIndex = this.navigationIndex;
+    // Calculate thumbnail dimensions (2 columns, aspect ratio 4:3)
+    const panelWidth = 320;
+    const gridGap = 16;
+    const thumbnailWidth = (panelWidth - gridGap - 24) / 2; // 24 for padding
+    const thumbnailHeight = thumbnailWidth * (3 / 4); // 4:3 aspect ratio
+    const rowHeight = thumbnailHeight + gridGap;
+    
+    // Calculate how many rows can fit
+    const maxRows = Math.floor(availableHeight / rowHeight);
+    const maxDisplay = Math.max(4, maxRows * 2); // At least 4 items (2 rows), 2 per row
+    
+    // Initialize unified page start index
+    if (this._panelPageStartIndex === undefined || this._panelPageStartIndex === null) {
+      if (this._panelMode === 'queue') {
+        this._panelPageStartIndex = this.navigationIndex;
+      } else {
+        this._panelPageStartIndex = 0; // Start at beginning for burst/related
       }
-      
-      // Don't auto-adjust page if user manually paged
-      if (!this._manualPageChange) {
-        // Check if current navigation index is outside the current page
-        const currentPageEnd = this._queuePageStartIndex + maxDisplay;
-        
-        if (this.navigationIndex < this._queuePageStartIndex) {
-          // Navigated backward beyond current page - show previous page
-          this._queuePageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
-        } else if (this.navigationIndex >= currentPageEnd) {
-          // Navigated forward beyond current page - show next page
-          this._queuePageStartIndex = this.navigationIndex;
-        }
-        // Otherwise, stay on current page
-      }
-      // Flag will be cleared when user clicks a thumbnail or navigates with arrow keys
-      
-      displayStartIndex = this._queuePageStartIndex;
-      displayItems = items.slice(displayStartIndex, displayStartIndex + maxDisplay);
     }
+    
+    // Auto-adjust page for queue mode only (burst/related stay on current page)
+    if (this._panelMode === 'queue' && !this._manualPageChange) {
+      const currentPageEnd = this._panelPageStartIndex + maxDisplay;
+      
+      if (this.navigationIndex < this._panelPageStartIndex) {
+        // Navigated backward beyond current page
+        this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
+      } else if (this.navigationIndex >= currentPageEnd) {
+        // Navigated forward beyond current page
+        this._panelPageStartIndex = this.navigationIndex;
+      }
+    }
+    
+    const displayStartIndex = this._panelPageStartIndex;
+    const displayItems = items.slice(displayStartIndex, displayStartIndex + maxDisplay);
 
     // Resolve all thumbnail URLs upfront (async but doesn't block render)
     displayItems.forEach(async (item) => {
@@ -10232,9 +10487,9 @@ class MediaCard extends LitElement {
       }
     });
 
-    // Calculate if we have previous/next pages (for queue mode)
-    const hasPreviousPage = this._panelMode === 'queue' && displayStartIndex > 0;
-    const hasNextPage = this._panelMode === 'queue' && (displayStartIndex + displayItems.length) < items.length;
+    // Calculate if we have previous/next pages (for all panel modes)
+    const hasPreviousPage = displayStartIndex > 0;
+    const hasNextPage = (displayStartIndex + displayItems.length) < items.length;
 
     return html`
       <div class="thumbnail-strip">
@@ -10246,10 +10501,10 @@ class MediaCard extends LitElement {
         ` : ''}
         
         ${displayItems.map((item, displayIndex) => {
-          const actualIndex = this._panelMode === 'queue' ? displayStartIndex + displayIndex : displayIndex;
+          const actualIndex = displayStartIndex + displayIndex;
           const isActive = this._panelMode === 'queue' 
             ? actualIndex === this.navigationIndex 
-            : displayIndex === this._panelQueueIndex;
+            : actualIndex === this._panelQueueIndex;
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
           const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(itemUri);
           
@@ -10284,7 +10539,7 @@ class MediaCard extends LitElement {
           return html`
             <div 
               class="thumbnail ${isActive ? 'active' : ''} ${isFavorited ? 'favorited' : ''}"
-              @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(displayIndex)}
+              @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
               title="${item.filename || item.path}"
             >
               ${item._resolvedUrl ? (
@@ -11417,6 +11672,17 @@ class MediaCardEditor extends LitElement {
       action_buttons: {
         ...this._config.action_buttons,
         enable_burst_review: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableRelatedPhotosChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_related_photos: ev.target.checked
       }
     };
     this._fireConfigChanged();
@@ -13759,6 +14025,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableBurstReviewChanged}
                 />
                 <div class="help-text">Show "At This Moment" button to review burst photos (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Enable Related Photos</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_related_photos === true}
+                  @change=${this._actionButtonsEnableRelatedPhotosChanged}
+                />
+                <div class="help-text">Show "From This Day" button to view photos from same timeframe (requires media_index)</div>
               </div>
             </div>
           </div>

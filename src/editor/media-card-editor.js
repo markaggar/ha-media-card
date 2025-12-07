@@ -1092,6 +1092,17 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsEnableRelatedPhotosChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_related_photos: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -3429,6 +3440,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableBurstReviewChanged}
                 />
                 <div class="help-text">Show "At This Moment" button to review burst photos (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Enable Related Photos</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_related_photos === true}
+                  @change=${this._actionButtonsEnableRelatedPhotosChanged}
+                />
+                <div class="help-text">Show "From This Day" button to view photos from same timeframe (requires media_index)</div>
               </div>
             </div>
           </div>
