@@ -6380,16 +6380,6 @@ class MediaCard extends LitElement {
       }
     }
     
-    // Debug logging (only when cache miss)
-    if (this.config?.debug_mode) {
-      console.log('[_formatFolderForDisplay]', {
-        fullFolderPath,
-        mediaPath,
-        scanPrefix,
-        showRoot
-      });
-    }
-    
     // Normalize folder path to absolute if it's relative
     let absoluteFolderPath = fullFolderPath;
     if (!absoluteFolderPath.startsWith('/')) {
@@ -6407,10 +6397,6 @@ class MediaCard extends LitElement {
     
     // Split into parts
     const parts = relativePath.split('/').filter(p => p.length > 0);
-    
-    if (this.config?.debug_mode) {
-      console.log('[_formatFolderForDisplay] relativePath:', relativePath, 'parts:', parts);
-    }
     
     if (parts.length === 0) return '';
     if (parts.length === 1) return parts[0]; // Only one folder level
@@ -6479,7 +6465,11 @@ class MediaCard extends LitElement {
       return html``;
     }
 
-    const isFavorite = this._currentMetadata?.is_favorited || false;
+    // Check both metadata AND burst session favorites
+    const currentUri = this._currentMediaPath;
+    const isFavorite = this._currentMetadata?.is_favorited || 
+                       (this._burstFavoritedFiles && this._burstFavoritedFiles.includes(currentUri)) || 
+                       false;
     const isPaused = this._isPaused || false;
     const isInfoActive = this._showInfoOverlay || false;
     const isBurstActive = this._burstMode || false;
@@ -6885,7 +6875,9 @@ class MediaCard extends LitElement {
     
     // CRITICAL: Capture current state NOW before async operations
     const targetUri = this._currentMediaPath;
-    const isFavorite = this._currentMetadata?.is_favorited || false;
+    const isFavorite = this._currentMetadata?.is_favorited || 
+                       (this._burstFavoritedFiles && this._burstFavoritedFiles.includes(targetUri)) ||
+                       false;
     const newState = !isFavorite;
     
     console.warn(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
@@ -7718,14 +7710,11 @@ class MediaCard extends LitElement {
       const response = await this.hass.callWS(wsCall);
       
       console.warn('🎥 Burst photos response:', response);
+      console.warn('🎥 First item:', response.response?.items?.[0]);
       
-      // Store panel queue - convert filesystem paths to media-source URIs
+      // Store panel queue - items already have media_source_uri from backend
       const rawItems = response.response?.items || [];
-      this._panelQueue = rawItems.map(item => ({
-        ...item,
-        media_source_uri: item.media_source_uri || 
-          (item.path ? `media-source://media_source${item.path}` : null)
-      }));
+      this._panelQueue = rawItems;
       this._panelQueueIndex = 0; // Start with first photo in burst
       this._panelMode = 'burst';
       this._panelOpen = true;
@@ -7736,7 +7725,13 @@ class MediaCard extends LitElement {
         metadata: { ...this._currentMetadata }
       };
       this._burstAllFiles = [...this._panelQueue]; // Track for metadata update
-      this._burstFavoritedFiles = []; // Reset favorites tracking
+      
+      // Initialize favorites from existing metadata
+      this._burstFavoritedFiles = this._panelQueue
+        .filter(item => item.is_favorited || item.rating >= 4)
+        .map(item => item.media_source_uri || item.path);
+      
+      console.warn(`📸 Burst panel loaded: ${this._panelQueue.length} files, ${this._burstFavoritedFiles.length} pre-favorited`);
       
       // Deprecated state (for compatibility)
       this._burstPhotos = this._panelQueue;
@@ -7769,22 +7764,22 @@ class MediaCard extends LitElement {
    * Exit panel mode - restore main queue and handle burst metadata updates
    */
   async _exitPanelMode() {
-    console.warn(`🚪 Exiting panel mode: ${this._panelMode}`);
+    console.warn(`🚪 Exiting panel mode: ${this._panelMode}, burstAllFiles: ${this._burstAllFiles?.length || 0}`);
     
     try {
-      // Handle burst-specific exit actions
-      if (this._panelMode === 'burst' && this._burstFavoritedFiles.length > 0) {
-        console.warn(`💾 Writing burst_favorites metadata to ${this._burstAllFiles.length} files`);
+      // Handle burst-specific exit actions - always save metadata to record burst_count
+      if (this._panelMode === 'burst' && this._burstAllFiles && this._burstAllFiles.length > 0) {
+        console.warn(`💾 Writing burst metadata to ${this._burstAllFiles.length} files (${this._burstFavoritedFiles?.length || 0} favorited)`);
         
-        // Call update_burst_metadata service (to be implemented in media_index)
+        // Call update_burst_metadata service
         try {
           const wsCall = {
             type: 'call_service',
             domain: 'media_index',
             service: 'update_burst_metadata',
             service_data: {
-              burst_files: this._burstAllFiles.map(item => item.path),
-              favorited_files: this._burstFavoritedFiles
+              burst_files: this._burstAllFiles.map(item => item.media_source_uri || item.path),
+              favorited_files: this._burstFavoritedFiles  // Already URIs from _handleFavoriteClick
             },
             return_response: true
           };
@@ -7794,7 +7789,7 @@ class MediaCard extends LitElement {
           }
           
           const response = await this.hass.callWS(wsCall);
-          console.warn('✅ Burst metadata updated:', response);
+          console.warn('✅ Burst metadata saved:', `${response.response.files_updated} files, ${response.response.favorites_count} favorited`);
         } catch (metadataError) {
           console.error('Failed to update burst metadata:', metadataError);
           // Don't block exit on metadata failure
