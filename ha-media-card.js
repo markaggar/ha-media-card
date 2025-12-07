@@ -9765,6 +9765,7 @@ class MediaCard extends LitElement {
       background: var(--primary-background-color);
       opacity: 0.5;
       transition: opacity 0.3s ease;
+      pointer-events: none; /* Prevent video from intercepting clicks */
     }
     
     .thumbnail-video.loaded,
@@ -10293,6 +10294,9 @@ class MediaCard extends LitElement {
                     preload="metadata"
                     muted
                     playsinline
+                    disablepictureinpicture
+                    @click=${(e) => e.preventDefault()}
+                    @play=${(e) => e.target.pause()}
                     src="${item._resolvedUrl}#t=${videoThumbnailTime}"
                     @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
                     @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
