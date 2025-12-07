@@ -1,5 +1,13 @@
 ## v5.5.0 (In Development)
 ### Added
+- **Video Thumbnail Support (v5.6)**
+  - Dynamic video thumbnail generation in queue preview using HTML5 video elements
+  - Browser-native frame extraction at configurable timestamp
+  - Session-based caching for improved performance
+  - Configuration: `video_thumbnail_time` (seconds, default: 1)
+  - Automatic video detection via file extension
+  - Fallback to video icon if thumbnail fails to load
+
 - **Queue Preview Feature**
   - New "Queue Preview" button in action buttons (playlist icon)
   - Displays upcoming items from navigation queue in side panel

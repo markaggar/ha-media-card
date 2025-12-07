@@ -867,6 +867,12 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, video_max_duration: duration };
     this._fireConfigChanged();
   }
+  
+  _videoThumbnailTimeChanged(ev) {
+    const time = parseFloat(ev.target.value) || 1;
+    this._config = { ...this._config, video_thumbnail_time: time };
+    this._fireConfigChanged();
+  }
 
   _navigationZonesChanged(ev) {
     this._config = { ...this._config, enable_navigation_zones: ev.target.checked };
@@ -3001,6 +3007,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   placeholder="0"
                 />
                 <div class="help-text">Maximum time to play videos in seconds (0 = play to completion)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Video Thumbnail Time</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  .value=${this._config.video_thumbnail_time || 1}
+                  @change=${this._videoThumbnailTimeChanged}
+                  placeholder="1"
+                />
+                <div class="help-text">Timestamp (seconds) to use for video thumbnails in queue preview (default: 1)</div>
               </div>
             </div>
           </div>
