@@ -3838,6 +3838,10 @@ class MediaCard extends LitElement {
     this._last404Time = 0;
     this._errorAutoAdvanceTimeout = null;
     
+    // V5.6: Video thumbnail cache (session-scoped)
+    this._videoThumbnailCache = new Map();
+    this._thumbnailObserver = null;
+    
     // Auto-hide action buttons for touch screens
     this._showButtonsExplicitly = false; // true = show via touch tap (independent of hover)
     this._hideButtonsTimer = null;
@@ -7977,6 +7981,44 @@ class MediaCard extends LitElement {
   }
   
   /**
+   * V5.6: Check if item is a video file
+   */
+  _isVideoItem(item) {
+    if (!item) return false;
+    const path = item.media_content_id || item.path || '';
+    return MediaUtils.detectFileType(path) === 'video';
+  }
+  
+  /**
+   * V5.6: Get cached video thumbnail URL or initiate load
+   */
+  _getVideoThumbnailUrl(item, resolvedUrl) {
+    if (!resolvedUrl) return null;
+    
+    const cacheKey = item.media_content_id || item.path;
+    if (this._videoThumbnailCache.has(cacheKey)) {
+      return this._videoThumbnailCache.get(cacheKey);
+    }
+    
+    return null; // Will trigger video element render
+  }
+  
+  /**
+   * V5.6: Handle video thumbnail loaded event
+   */
+  _handleVideoThumbnailLoaded(e, item) {
+    const videoElement = e.target;
+    const cacheKey = item.media_content_id || item.path;
+    
+    // Cache the loaded state
+    this._videoThumbnailCache.set(cacheKey, videoElement.currentSrc);
+    
+    // Mark as loaded and trigger re-render to show cached version
+    videoElement.dataset.loaded = 'true';
+    this.requestUpdate();
+  }
+  
+  /**
    * Page through queue preview thumbnails
    * @param {string} direction - 'prev' or 'next'
    */
@@ -9718,6 +9760,21 @@ class MediaCard extends LitElement {
       object-fit: contain !important;
       display: block !important;
     }
+    
+    /* V5.6: Video thumbnail styling */
+    .thumbnail-video {
+      max-width: 100% !important;
+      max-height: 100% !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain !important;
+      display: block !important;
+      background: var(--primary-background-color);
+    }
+    
+    .thumbnail-video:not([data-loaded]) {
+      opacity: 0.8;
+    }
 
     .thumbnail-loading {
       width: 100%;
@@ -10223,15 +10280,35 @@ class MediaCard extends LitElement {
             badge = `${queuePos}/${queueTotal}`;
           }
 
+          const isVideo = this._isVideoItem(item);
+          const videoThumbnailTime = this.config.video_thumbnail_time || 1;
+          const cachedThumbnail = isVideo ? this._getVideoThumbnailUrl(item, item._resolvedUrl) : null;
+          
           return html`
             <div 
               class="thumbnail ${isActive ? 'active' : ''} ${isFavorited ? 'favorited' : ''}"
               @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(displayIndex)}
               title="${item.filename || item.path}"
             >
-              ${item._resolvedUrl ? html`
-                <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
-              ` : html`
+              ${item._resolvedUrl ? (
+                isVideo ? (
+                  cachedThumbnail ? html`
+                    <img src="${cachedThumbnail}" alt="${item.filename || 'Video thumbnail'}" />
+                  ` : html`
+                    <video 
+                      class="thumbnail-video"
+                      preload="metadata"
+                      muted
+                      playsinline
+                      src="${item._resolvedUrl}#t=${videoThumbnailTime}"
+                      @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
+                      @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
+                    ></video>
+                  `
+                ) : html`
+                  <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
+                `
+              ) : html`
                 <div class="thumbnail-loading">⏳</div>
               `}
               ${badge ? html`<div class="time-badge">${badge}</div>` : ''}
@@ -11122,6 +11199,12 @@ class MediaCardEditor extends LitElement {
   _videoMaxDurationChanged(ev) {
     const duration = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, video_max_duration: duration };
+    this._fireConfigChanged();
+  }
+  
+  _videoThumbnailTimeChanged(ev) {
+    const time = parseFloat(ev.target.value) || 1;
+    this._config = { ...this._config, video_thumbnail_time: time };
     this._fireConfigChanged();
   }
 
@@ -13258,6 +13341,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   placeholder="0"
                 />
                 <div class="help-text">Maximum time to play videos in seconds (0 = play to completion)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Video Thumbnail Time</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  .value=${this._config.video_thumbnail_time || 1}
+                  @change=${this._videoThumbnailTimeChanged}
+                  placeholder="1"
+                />
+                <div class="help-text">Timestamp (seconds) to use for video thumbnails in queue preview (default: 1)</div>
               </div>
             </div>
           </div>
