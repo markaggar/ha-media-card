@@ -2,11 +2,13 @@
 ### Added
 - **Video Thumbnail Support (v5.6)**
   - Dynamic video thumbnail generation in queue preview using HTML5 video elements
-  - Browser-native frame extraction at configurable timestamp
-  - Session-based caching for improved performance
-  - Configuration: `video_thumbnail_time` (seconds, default: 1)
-  - Automatic video detection via file extension
-  - Fallback to video icon if thumbnail fails to load
+  - Browser-native frame extraction at configurable timestamp (e.g., 1 second into video)
+  - Video elements display the extracted frame persistently as thumbnails
+  - Session-based state tracking to prevent redundant loading
+  - Configuration: `video_thumbnail_time` (seconds, default: 1, supports decimals)
+  - Automatic video detection via file extension (.mp4, .mov, .webm, .m4v, .ogg)
+  - Smooth opacity transition as thumbnails load (50% → 100%)
+  - Muted and paused at specified timestamp for optimal thumbnail display
 
 - **Queue Preview Feature**
   - New "Queue Preview" button in action buttons (playlist icon)
