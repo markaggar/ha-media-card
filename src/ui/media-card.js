@@ -3212,6 +3212,11 @@ export class MediaCard extends LitElement {
         this._currentMetadata.is_favorited = newState;
       }
       
+      // Update panel queue item if in panel mode
+      if (this._panelOpen && this._panelQueue[this._panelQueueIndex]) {
+        this._panelQueue[this._panelQueueIndex].is_favorited = newState;
+      }
+      
       // If in burst mode AND favoriting (not unfavoriting), track for burst metadata
       if (this._panelOpen && this._panelMode === 'burst' && newState === true) {
         if (!this._burstFavoritedFiles.includes(targetUri)) {
@@ -3579,7 +3584,53 @@ export class MediaCard extends LitElement {
         this._log(`📚 Removed from navigation queue at index ${navIndex} (${this.navigationQueue.length} remaining)`);
       }
       
-      // Advance to next media after delete
+      // V5.5: Remove from panel queue if in panel mode
+      if (this._panelOpen && this._panelQueue.length > 0) {
+        // Also remove from saved main queue to prevent 404 on exit
+        const mainIndex = this._mainQueue.findIndex(item => item.media_content_id === targetUri);
+        if (mainIndex >= 0) {
+          this._mainQueue.splice(mainIndex, 1);
+          // Adjust saved index if we removed an earlier item
+          if (mainIndex <= this._mainQueueIndex) {
+            this._mainQueueIndex--;
+          }
+          this._log(`🗑️ Removed from saved main queue at index ${mainIndex}`);
+        }
+        
+        const panelIndex = this._panelQueue.findIndex(item => {
+          const itemUri = item.media_source_uri || item.path;
+          return itemUri === targetUri || `media-source://media_source${item.path}` === targetUri;
+        });
+        if (panelIndex >= 0) {
+          this._panelQueue.splice(panelIndex, 1);
+          this._log(`🗑️ Removed from panel queue at index ${panelIndex} (${this._panelQueue.length} remaining)`);
+          
+          // If we deleted the current panel item, advance to next
+          if (panelIndex === this._panelQueueIndex) {
+            if (this._panelQueue.length === 0) {
+              // No more items in panel, exit panel mode
+              this._exitPanelMode();
+              return; // Don't call _loadNext, _exitPanelMode handles it
+            } else {
+              // Load next panel item (or wrap to first if we were at end)
+              const nextIndex = panelIndex < this._panelQueue.length ? panelIndex : 0;
+              await this._loadPanelItem(nextIndex);
+              return; // Don't call _loadNext, stay in panel
+            }
+          } else if (panelIndex < this._panelQueueIndex) {
+            // Deleted an earlier item, adjust current index
+            this._panelQueueIndex--;
+            this.requestUpdate();
+            return; // Don't advance, stay on current
+          } else {
+            // Deleted a later item, just update display
+            this.requestUpdate();
+            return; // Don't advance, stay on current
+          }
+        }
+      }
+      
+      // Advance to next media after delete (only if not in panel mode)
       await this._loadNext();
       
     } catch (error) {
@@ -3861,7 +3912,53 @@ export class MediaCard extends LitElement {
         this._log(`📚 Removed from navigation queue at index ${navIndex} (${this.navigationQueue.length} remaining)`);
       }
       
-      // V4 CODE: Automatically advance to next media (line 6030-6032)
+      // V5.5: Remove from panel queue if in panel mode
+      if (this._panelOpen && this._panelQueue.length > 0) {
+        // Also remove from saved main queue to prevent 404 on exit
+        const mainIndex = this._mainQueue.findIndex(item => item.media_content_id === targetUri);
+        if (mainIndex >= 0) {
+          this._mainQueue.splice(mainIndex, 1);
+          // Adjust saved index if we removed an earlier item
+          if (mainIndex <= this._mainQueueIndex) {
+            this._mainQueueIndex--;
+          }
+          this._log(`✏️ Removed from saved main queue at index ${mainIndex}`);
+        }
+        
+        const panelIndex = this._panelQueue.findIndex(item => {
+          const itemUri = item.media_source_uri || item.path;
+          return itemUri === targetUri || `media-source://media_source${item.path}` === targetUri;
+        });
+        if (panelIndex >= 0) {
+          this._panelQueue.splice(panelIndex, 1);
+          this._log(`✏️ Removed from panel queue at index ${panelIndex} (${this._panelQueue.length} remaining)`);
+          
+          // If we edited the current panel item, advance to next
+          if (panelIndex === this._panelQueueIndex) {
+            if (this._panelQueue.length === 0) {
+              // No more items in panel, exit panel mode
+              this._exitPanelMode();
+              return; // Don't call _loadNext, _exitPanelMode handles it
+            } else {
+              // Load next panel item (or wrap to first if we were at end)
+              const nextIndex = panelIndex < this._panelQueue.length ? panelIndex : 0;
+              await this._loadPanelItem(nextIndex);
+              return; // Don't call _loadNext, stay in panel
+            }
+          } else if (panelIndex < this._panelQueueIndex) {
+            // Edited an earlier item, adjust current index
+            this._panelQueueIndex--;
+            this.requestUpdate();
+            return; // Don't advance, stay on current
+          } else {
+            // Edited a later item, just update display
+            this.requestUpdate();
+            return; // Don't advance, stay on current
+          }
+        }
+      }
+      
+      // V4 CODE: Automatically advance to next media (line 6030-6032) (only if not in panel mode)
       await this._loadNext();
       
     } catch (error) {
@@ -3899,9 +3996,9 @@ export class MediaCard extends LitElement {
         service_data: {
           mode: 'burst',
           media_source_uri: this._currentMediaPath,
-          time_window_seconds: 120, // ±2 minutes
+          time_window_seconds: 15, // ±15 seconds for tighter burst grouping
           prefer_same_location: true,
-          location_tolerance_meters: 50,
+          location_tolerance_meters: 20, // ~20m walking distance in 30 seconds
           sort_order: 'time_asc'
         },
         return_response: true
@@ -3916,8 +4013,13 @@ export class MediaCard extends LitElement {
       
       console.warn('🎥 Burst photos response:', response);
       
-      // Store panel queue
-      this._panelQueue = response.response?.items || [];
+      // Store panel queue - convert filesystem paths to media-source URIs
+      const rawItems = response.response?.items || [];
+      this._panelQueue = rawItems.map(item => ({
+        ...item,
+        media_source_uri: item.media_source_uri || 
+          (item.path ? `media-source://media_source${item.path}` : null)
+      }));
       this._panelQueueIndex = 0; // Start with first photo in burst
       this._panelMode = 'burst';
       this._panelOpen = true;
@@ -4001,8 +4103,18 @@ export class MediaCard extends LitElement {
         // Restore the media item we were on before entering panel
         const restoredItem = this.navigationQueue[this.navigationIndex];
         if (restoredItem) {
-          this._currentMediaPath = restoredItem.path;
-          this._currentMetadata = { ...restoredItem };
+          // Properly restore display state (same as _loadNext)
+          this.currentMedia = restoredItem;
+          this._currentMediaPath = restoredItem.media_content_id;
+          this._currentMetadata = restoredItem.metadata || null;
+          
+          // Clear caches
+          this._fullMetadata = null;
+          this._folderDisplayCache = null;
+          
+          // Resolve media URL to update display
+          await this._resolveMediaUrl();
+          
           console.warn(`↩️ Restored main queue position ${this.navigationIndex + 1}/${this.navigationQueue.length}`);
         }
       }
@@ -6109,7 +6221,8 @@ export class MediaCard extends LitElement {
       <div class="thumbnail-strip">
         ${this._panelQueue.map((item, index) => {
           const isActive = index === this._panelQueueIndex;
-          const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(item.path);
+          const itemUri = item.media_source_uri || item.path;
+          const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(itemUri);
           
           // Format time offset for burst mode
           let badge = '';
