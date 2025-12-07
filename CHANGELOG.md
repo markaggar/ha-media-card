@@ -1,6 +1,15 @@
 ## v5.5.0 (In Development)
 ### Added
-- **Video Thumbnail Support (v5.6)**
+- **Related Photos Feature**
+  - New "From This Day" button showing photos from same calendar date
+  - Uses `media_index.get_random_items` service with date filtering
+  - Displays up to 100 random photos from the selected day
+  - Calendar icon (`mdi:calendar-outline`) matches metadata styling
+  - Unified paging system with burst and queue preview
+  - "Play These" button to inject panel items into navigation queue
+  - Configuration: `action_buttons.enable_related_photos`
+
+- **Video Thumbnail Support**
   - Dynamic video thumbnail generation in queue preview using HTML5 video elements
   - Browser-native frame extraction at configurable timestamp (e.g., 1 second into video)
   - Video elements display the extracted frame persistently as thumbnails
@@ -86,6 +95,10 @@
 - Added card editor UI input for `metadata.scale` (range 0.3–4.0; default 1.0)
 
 ### Fixed
+- **Race Condition on Panel Entry**: Fixed race condition where auto-advance could change the displayed photo between button click and panel mode entry
+  - Burst and related panels now capture metadata/path snapshots at click time
+  - Snapshots passed to `_enterBurstMode()` and `_enterRelatedMode()` methods
+  - Ensures panels always show photos related to the exact photo that was visible when button was clicked
 - **Navigation After Delete/Edit**: Fixed regression where deleting or editing a photo prevented navigating back to previous images
   - Root cause: Delete/edit handlers were removing items from old v4 `history` array instead of v5.3 `navigationQueue`
   - Solution: Updated both `_performDelete()` and `_performEdit()` to correctly remove from `navigationQueue` and adjust `navigationIndex`
