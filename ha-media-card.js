@@ -4406,6 +4406,13 @@ class MediaCard extends LitElement {
           
           await this._loadNext();
         }
+        
+        // V5.6: Auto-open queue preview if configured
+        if (this.config.action_buttons?.auto_open_queue_preview === true && 
+            this.config.action_buttons?.enable_queue_preview === true) {
+          // Small delay to ensure first item is loaded
+          setTimeout(() => this._enterQueuePreviewMode(), 100);
+        }
       } else {
         console.error('[MediaCard] Provider initialization failed');
         this._errorState = 'Provider initialization failed';
@@ -6482,10 +6489,10 @@ class MediaCard extends LitElement {
     const enableDebugButton = this.config.debug_button === true;
     
     // V5.5: Burst review feature (At This Moment)
-    const enableBurstReview = this.config.filters?.burst_review?.enabled === true;
+    const enableBurstReview = this.config.action_buttons?.enable_burst_review === true;
     
     // V5.6: Queue Preview mode (Show Queue)
-    const enableQueuePreview = this.config.filters?.queue_preview?.enabled === true;
+    const enableQueuePreview = this.config.action_buttons?.enable_queue_preview === true;
     const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length > 1;
     
     // Don't render anything if all buttons are disabled
@@ -7737,6 +7744,9 @@ class MediaCard extends LitElement {
       this._mainQueue = [...this.navigationQueue];
       this._mainQueueIndex = this.navigationIndex;
       
+      // Save previous panel mode to restore after burst closes
+      this._previousPanelMode = this._panelMode; // Could be 'queue' or null
+      
       // Call media_index.get_related_files service with burst mode
       const wsCall = {
         type: 'call_service',
@@ -7904,7 +7914,8 @@ class MediaCard extends LitElement {
         }
       }
       
-      // Clear panel state
+      // Clear panel state (but might restore queue panel below)
+      const previousPanelMode = this._previousPanelMode;
       this._panelOpen = false;
       this._panelMode = null;
       this._panelQueue = [];
@@ -7924,9 +7935,17 @@ class MediaCard extends LitElement {
       // Clear saved main queue
       this._mainQueue = [];
       this._mainQueueIndex = 0;
+      this._previousPanelMode = null;
       
-      // Resume auto-advance if it was paused for panel mode
-      if (this._isPaused) {
+      // Restore previous panel mode if we were in queue preview before burst
+      if (previousPanelMode === 'queue') {
+        this._panelMode = 'queue';
+        this._panelOpen = true;
+        console.warn('↩️ Restored queue preview panel after burst review');
+      }
+      
+      // Resume auto-advance if it was paused for panel mode (but not if we restored queue panel)
+      if (this._isPaused && this._panelMode !== 'queue') {
         this._setPauseState(false);
       }
       
@@ -11172,6 +11191,39 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsEnableBurstReviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_burst_review: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableQueuePreviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_queue_preview: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsAutoOpenQueuePreviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        auto_open_queue_preview: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsPositionChanged(ev) {
     this._config = {
       ...this._config,
@@ -13462,8 +13514,50 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
               </div>
             </div>
+            
+            <div class="config-row">
+              <label>Enable Burst Review</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_burst_review === true}
+                  @change=${this._actionButtonsEnableBurstReviewChanged}
+                />
+                <div class="help-text">Show "At This Moment" button to review burst photos (requires media_index)</div>
+              </div>
+            </div>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">📋 Queue Preview</div>
+          
+          <div class="config-row">
+            <label>Enable Queue Preview</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.action_buttons?.enable_queue_preview === true}
+                @change=${this._actionButtonsEnableQueuePreviewChanged}
+              />
+              <div class="help-text">Show "Coming Up" button to preview upcoming media in queue</div>
+            </div>
+          </div>
+          
+          ${this._config.action_buttons?.enable_queue_preview === true ? html`
+            <div class="config-row">
+              <label>Auto-open Queue on Load</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.auto_open_queue_preview === true}
+                  @change=${this._actionButtonsAutoOpenQueuePreviewChanged}
+                />
+                <div class="help-text">Automatically open queue preview panel when card loads</div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
 
         <div class="section">
           <div class="section-title">👆 Interactions</div>
