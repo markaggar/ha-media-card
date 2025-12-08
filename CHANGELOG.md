@@ -1,5 +1,15 @@
 ## v5.5.0 (In Development)
 ### Added
+- **On This Day Feature**
+  - New "On This Day" button showing photos from same date across all years (anniversary mode)
+  - Uses `media_index.get_random_items` service with anniversary wildcard parameters
+  - Supports `anniversary_month`, `anniversary_day`, and `anniversary_window_days` parameters
+  - Multiple icon (`mdi:calendar-multiple`) distinguishes from single-year related photos
+  - Displays up to 100 random photos from matching dates across entire photo library
+  - Results sorted chronologically by year (oldest to newest)
+  - Configuration: `action_buttons.enable_on_this_day`
+  - Window size control (coming soon: dynamic panel header selector)
+
 - **Related Photos Feature**
   - New "From This Day" button showing photos from same calendar date
   - Uses `media_index.get_random_items` service with date filtering
