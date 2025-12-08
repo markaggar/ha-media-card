@@ -268,6 +268,23 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining)`);
         }
         
+        // CLIENT-SIDE SAFETY: Re-sort items to handle null date_taken gracefully
+        // Backend should already sort correctly, but this prevents issues if:
+        // - Videos have null date_taken but recent modified_time
+        // - Backend fallback logic changes
+        // - Network/caching returns stale data
+        if (this.orderBy === 'date_taken') {
+          filteredItems.sort((a, b) => {
+            // Use date_taken, fallback to modified_time, then created_time
+            const dateA = a.date_taken || a.modified_time || a.created_time || 0;
+            const dateB = b.date_taken || b.modified_time || b.created_time || 0;
+            
+            // Apply direction
+            return this.orderDirection === 'desc' ? dateB - dateA : dateA - dateB;
+          });
+          this._log('🔄 Applied client-side sort by date_taken with fallback to modified_time/created_time');
+        }
+        
         // Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
           // V5 URI: Use media_source_uri for URL resolution when available

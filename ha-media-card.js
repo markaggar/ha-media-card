@@ -3528,6 +3528,23 @@ class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining)`);
         }
         
+        // CLIENT-SIDE SAFETY: Re-sort items to handle null date_taken gracefully
+        // Backend should already sort correctly, but this prevents issues if:
+        // - Videos have null date_taken but recent modified_time
+        // - Backend fallback logic changes
+        // - Network/caching returns stale data
+        if (this.orderBy === 'date_taken') {
+          filteredItems.sort((a, b) => {
+            // Use date_taken, fallback to modified_time, then created_time
+            const dateA = a.date_taken || a.modified_time || a.created_time || 0;
+            const dateB = b.date_taken || b.modified_time || b.created_time || 0;
+            
+            // Apply direction
+            return this.orderDirection === 'desc' ? dateB - dateA : dateA - dateB;
+          });
+          this._log('🔄 Applied client-side sort by date_taken with fallback to modified_time/created_time');
+        }
+        
         // Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
           // V5 URI: Use media_source_uri for URL resolution when available
@@ -9992,10 +10009,13 @@ class MediaCard extends LitElement {
       padding: 16px;
       border-bottom: 1px solid var(--divider-color, #e0e0e0);
       background: var(--primary-background-color);
+      flex-wrap: wrap;
+      gap: 8px;
     }
 
     .panel-title {
       flex: 1;
+      min-width: 100%;
     }
 
     .title-text {
@@ -10011,10 +10031,21 @@ class MediaCard extends LitElement {
       opacity: 0.7;
     }
 
+    .panel-subtitle-below {
+      font-size: 13px;
+      color: var(--secondary-text-color);
+      opacity: 0.7;
+      width: 100%;
+      text-align: center;
+      margin-top: 4px;
+    }
+
     .panel-header-actions {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex: 1;
+      justify-content: center;
     }
 
     .panel-action-button {
@@ -10557,12 +10588,12 @@ class MediaCard extends LitElement {
 
     return html`
       <div class="panel-header">
-        <div class="panel-title">
-          <div class="title-text">${title}</div>
-          ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
-        </div>
-        <div class="panel-header-actions">
-          ${this._panelMode === 'on_this_day' ? html`
+        ${this._panelMode === 'on_this_day' ? html`
+          <!-- On This Day: Special layout with stacked elements -->
+          <div class="panel-title">
+            <div class="title-text">${title}</div>
+          </div>
+          <div class="panel-header-actions">
             <select 
               class="window-selector" 
               .value=${String(this._onThisDayWindowDays)}
@@ -10580,19 +10611,31 @@ class MediaCard extends LitElement {
               title="Insert into queue and play">
               ▶️ Play These
             </button>
-          ` : ''}
-          ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
-            <button 
-              class="panel-action-button" 
-              @click=${this._playPanelItems} 
-              title="Insert into queue and play">
-              ▶️ Play These
+            <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+              ✕
             </button>
-          ` : ''}
-          <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
-            ✕
-          </button>
-        </div>
+          </div>
+          ${subtitle ? html`<div class="panel-subtitle-below">${subtitle}</div>` : ''}
+        ` : html`
+          <!-- Standard layout for other modes -->
+          <div class="panel-title">
+            <div class="title-text">${title}</div>
+            ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
+          </div>
+          <div class="panel-header-actions">
+            ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
+              <button 
+                class="panel-action-button" 
+                @click=${this._playPanelItems} 
+                title="Insert into queue and play">
+                ▶️ Play These
+              </button>
+            ` : ''}
+            <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+              ✕
+            </button>
+          </div>
+        `}
       </div>
     `;
   }
