@@ -9978,6 +9978,22 @@ class MediaCard extends LitElement {
       }
     }
 
+    /* V5.5: Fix viewport-fit image cropping when panel is open */
+    /* When panel is open, images should fit within available card width, not full viewport */
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open img {
+      max-width: 100% !important;
+      max-height: 100vh !important;
+      width: auto !important;
+      height: auto !important;
+    }
+
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open video {
+      max-width: 100% !important;
+      max-height: 100vh !important;
+      width: auto !important;
+      height: auto !important;
+    }
+
     .side-panel {
       position: fixed;
       top: 0;
