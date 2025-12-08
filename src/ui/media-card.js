@@ -2901,6 +2901,7 @@ export class MediaCard extends LitElement {
     const isInfoActive = this._showInfoOverlay || false;
     const isBurstActive = this._burstMode || false;
     const isRelatedActive = this._panelMode === 'related';
+    const isOnThisDayActive = this._panelMode === 'on_this_day';
     const isQueueActive = this._panelMode === 'queue';
     const position = config.position || 'top-right';
 
@@ -3583,6 +3584,17 @@ export class MediaCard extends LitElement {
       // Enter on this day mode (uses today's date, no snapshot needed)
       await this._enterOnThisDayMode();
     }
+  }
+
+  /**
+   * Handle window size change for On This Day mode
+   */
+  async _handleWindowSizeChange(e) {
+    const newWindow = parseInt(e.target.value, 10);
+    this._onThisDayWindowDays = newWindow;
+    
+    // Re-query with new window size
+    await this._enterOnThisDayMode();
   }
   
   // Helper to fetch full metadata asynchronously (called from render when overlay is open)
@@ -4466,10 +4478,6 @@ export class MediaCard extends LitElement {
       const response = await this.hass.callWS(wsCall);
       const items = response?.items || [];
       
-      if (items.length === 0) {
-        throw new Error('No photos found for this day');
-      }
-      
       // Sort results chronologically by year (oldest to newest)
       items.sort((a, b) => {
         const timeA = a.date_taken || a.created_time;
@@ -4477,9 +4485,9 @@ export class MediaCard extends LitElement {
         return String(timeA).localeCompare(String(timeB));
       });
       
-      console.warn(`📅 Found ${items.length} photos from ${month}/${day} across years`);
+      console.warn(`📅 Found ${items.length} photos from ${month}/${day} across years (window: ±${windowDays})`);
       
-      // Enter panel mode
+      // Enter panel mode (even if 0 results - user can adjust window)
       this._panelMode = 'on_this_day';
       this._panelOpen = true;
       this._panelQueue = items;
@@ -4495,9 +4503,6 @@ export class MediaCard extends LitElement {
       this._panelLoading = false;
       this._onThisDayLoading = false;
       this.requestUpdate();
-      
-      // Show error to user
-      alert(`Failed to load On This Day photos: ${error.message}`);
     }
   }
 
@@ -6324,6 +6329,27 @@ export class MediaCard extends LitElement {
       opacity: 0.7;
     }
 
+    .window-selector {
+      background: var(--card-background-color, #fff);
+      color: var(--primary-text-color);
+      border: 1px solid var(--divider-color, #e0e0e0);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .window-selector:hover {
+      border-color: var(--primary-color, #03a9f4);
+    }
+
+    .window-selector:focus {
+      border-color: var(--primary-color, #03a9f4);
+      box-shadow: 0 0 0 2px rgba(3, 169, 244, 0.2);
+    }
+
     .panel-close-button {
       background: transparent;
       border: none;
@@ -6791,6 +6817,12 @@ export class MediaCard extends LitElement {
     } else if (this._panelMode === 'related') {
       title = '📅 From This Day';
       subtitle = `${this._panelQueue.length} photos from this timeframe`;
+    } else if (this._panelMode === 'on_this_day') {
+      const today = new Date();
+      const monthName = today.toLocaleDateString('en-US', { month: 'long' });
+      const day = today.getDate();
+      title = `🗓️ On This Day`;
+      subtitle = `${monthName} ${day} • ${this._panelQueue.length} photos`;
     } else if (this._panelMode === 'queue') {
       title = '📋 Coming Up';
       const queueLength = this.navigationQueue?.length || 0;
@@ -6808,6 +6840,19 @@ export class MediaCard extends LitElement {
           ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
         </div>
         <div class="panel-header-actions">
+          ${this._panelMode === 'on_this_day' ? html`
+            <select 
+              class="window-selector" 
+              .value=${String(this._onThisDayWindowDays)}
+              @change=${this._handleWindowSizeChange}
+              title="Adjust date range">
+              <option value="0">Exact</option>
+              <option value="1">±1 day</option>
+              <option value="3">±3 days</option>
+              <option value="7">±1 week</option>
+              <option value="14">±2 weeks</option>
+            </select>
+          ` : ''}
           ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
             <button 
               class="panel-action-button" 
