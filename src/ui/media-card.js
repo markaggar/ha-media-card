@@ -4476,7 +4476,10 @@ export class MediaCard extends LitElement {
       }
       
       const response = await this.hass.callWS(wsCall);
-      const items = response?.items || [];
+      
+      console.warn('📅 On This Day response:', response);
+      
+      const items = response.response?.items || [];
       
       // Sort results chronologically by year (oldest to newest)
       items.sort((a, b) => {
