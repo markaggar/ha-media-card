@@ -8,7 +8,9 @@
   - Displays up to 100 random photos from matching dates across entire photo library
   - Results sorted chronologically by year (oldest to newest)
   - Configuration: `action_buttons.enable_on_this_day`
-  - Window size control (coming soon: dynamic panel header selector)
+  - **Dynamic window control**: Dropdown in panel header to adjust date range (Exact, ±1, ±3, ±7, ±14 days)
+  - Panel opens even with 0 results so user can adjust window size
+  - Auto-requeries when window size changes
 
 - **Related Photos Feature**
   - New "From This Day" button showing photos from same calendar date
