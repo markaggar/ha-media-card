@@ -89,6 +89,17 @@
   - Removed text-shadow from metadata overlay (was causing blurry appearance)
   - Backgrounds now match HA menu bars and footers perfectly in all themes
 
+### Fixed
+- **Sequential Mode Video Looping Bug**
+  - Added client-side date sorting safety net in `SequentialMediaIndexProvider`
+  - Re-sorts items by `date_taken` with fallback to `modified_time` and `created_time`
+  - Prevents videos with null/missing dates from incorrectly appearing at position 1
+  - Fixes infinite loop where "security camera mode" replayed the same video
+  - Defense-in-depth: card now corrects sort order even if backend has issues
+- **On This Day Panel Layout**
+  - Improved panel header layout with date as title, controls centered, count below
+  - Better visual hierarchy for window selector and Play These button
+
 ### UX & Controls
 - Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:
   - Hover behavior is enabled only on mouse devices (`@media (hover: hover) and (pointer: fine)`)
