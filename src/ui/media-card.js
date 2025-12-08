@@ -6286,10 +6286,13 @@ export class MediaCard extends LitElement {
       padding: 16px;
       border-bottom: 1px solid var(--divider-color, #e0e0e0);
       background: var(--primary-background-color);
+      flex-wrap: wrap;
+      gap: 8px;
     }
 
     .panel-title {
       flex: 1;
+      min-width: 100%;
     }
 
     .title-text {
@@ -6305,10 +6308,21 @@ export class MediaCard extends LitElement {
       opacity: 0.7;
     }
 
+    .panel-subtitle-below {
+      font-size: 13px;
+      color: var(--secondary-text-color);
+      opacity: 0.7;
+      width: 100%;
+      text-align: center;
+      margin-top: 4px;
+    }
+
     .panel-header-actions {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex: 1;
+      justify-content: center;
     }
 
     .panel-action-button {
@@ -6851,12 +6865,12 @@ export class MediaCard extends LitElement {
 
     return html`
       <div class="panel-header">
-        <div class="panel-title">
-          <div class="title-text">${title}</div>
-          ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
-        </div>
-        <div class="panel-header-actions">
-          ${this._panelMode === 'on_this_day' ? html`
+        ${this._panelMode === 'on_this_day' ? html`
+          <!-- On This Day: Special layout with stacked elements -->
+          <div class="panel-title">
+            <div class="title-text">${title}</div>
+          </div>
+          <div class="panel-header-actions">
             <select 
               class="window-selector" 
               .value=${String(this._onThisDayWindowDays)}
@@ -6874,19 +6888,31 @@ export class MediaCard extends LitElement {
               title="Insert into queue and play">
               ▶️ Play These
             </button>
-          ` : ''}
-          ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
-            <button 
-              class="panel-action-button" 
-              @click=${this._playPanelItems} 
-              title="Insert into queue and play">
-              ▶️ Play These
+            <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+              ✕
             </button>
-          ` : ''}
-          <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
-            ✕
-          </button>
-        </div>
+          </div>
+          ${subtitle ? html`<div class="panel-subtitle-below">${subtitle}</div>` : ''}
+        ` : html`
+          <!-- Standard layout for other modes -->
+          <div class="panel-title">
+            <div class="title-text">${title}</div>
+            ${subtitle ? html`<div class="subtitle-text">${subtitle}</div>` : ''}
+          </div>
+          <div class="panel-header-actions">
+            ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
+              <button 
+                class="panel-action-button" 
+                @click=${this._playPanelItems} 
+                title="Insert into queue and play">
+                ▶️ Play These
+              </button>
+            ` : ''}
+            <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+              ✕
+            </button>
+          </div>
+        `}
       </div>
     `;
   }
