@@ -3828,6 +3828,10 @@ class MediaCard extends LitElement {
     this._burstCurrentIndex = 0;       // DEPRECATED: Use _panelQueueIndex
     this._burstLoading = false;        // DEPRECATED: Use _panelLoading
     
+    // V5.5: On This Day state (anniversary mode)
+    this._onThisDayLoading = false;    // Loading indicator for anniversary query
+    this._onThisDayWindowDays = 0;     // Current window size (±N days)
+    
     // Modal overlay state (gallery-card pattern)
     this._modalOpen = false;
     this._modalImageUrl = '';
@@ -6578,6 +6582,9 @@ class MediaCard extends LitElement {
     // V5.5: Related photos feature (same timeframe)
     const enableRelatedPhotos = this.config.action_buttons?.enable_related_photos === true;
     
+    // V5.5: On This Day feature (anniversary mode - same date across years)
+    const enableOnThisDay = this.config.action_buttons?.enable_on_this_day === true;
+    
     // V5.6: Queue Preview mode (Show Queue) - works without media_index
     const enableQueuePreview = this.config.action_buttons?.enable_queue_preview === true;
     // Show button if enabled and queue has items (or still loading)
@@ -6585,7 +6592,7 @@ class MediaCard extends LitElement {
     
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
-                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos)) ||
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos || enableOnThisDay)) ||
                             showQueueButton;
     if (!anyButtonEnabled) {
       return html``;
@@ -6659,6 +6666,14 @@ class MediaCard extends LitElement {
             @click=${this._handleRelatedClick}
             title="${isRelatedActive ? 'Related Photos Active' : 'From This Day'}">
             <ha-icon icon="mdi:calendar-outline"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && enableOnThisDay ? html`
+          <button
+            class="action-btn on-this-day-btn ${isOnThisDayActive ? 'active' : ''} ${this._onThisDayLoading ? 'loading' : ''}"
+            @click=${this._handleOnThisDayClick}
+            title="${isOnThisDayActive ? 'On This Day Active' : 'On This Day'}">
+            <ha-icon icon="mdi:calendar-multiple"></ha-icon>
           </button>
         ` : ''}
         ${showQueueButton ? html`
@@ -7261,6 +7276,18 @@ class MediaCard extends LitElement {
       
       // Enter related photos mode with captured snapshot
       await this._enterRelatedMode(metadataSnapshot, mediaPathSnapshot);
+    }
+  }
+
+  async _handleOnThisDayClick(e) {
+    e.stopPropagation();
+    
+    if (this._panelOpen && this._panelMode === 'on_this_day') {
+      // Exit on this day mode
+      this._exitOnThisDayMode();
+    } else {
+      // Enter on this day mode (uses today's date, no snapshot needed)
+      await this._enterOnThisDayMode();
     }
   }
   
@@ -8088,6 +8115,103 @@ class MediaCard extends LitElement {
   
   _exitRelatedMode() {
     console.warn('🚪 Exiting related photos mode');
+    this._exitPanelMode();
+  }
+
+  /**
+   * Enter "On This Day" mode - show photos from today's date across all years
+   */
+  async _enterOnThisDayMode() {
+    if (!MediaProvider.isMediaIndexActive(this.config)) {
+      console.warn('Cannot enter On This Day mode: media_index inactive');
+      return;
+    }
+    
+    // Show loading state
+    this._panelLoading = true;
+    this._onThisDayLoading = true;
+    this.requestUpdate();
+    
+    try {
+      // Save main queue state
+      this._mainQueue = [...this.navigationQueue];
+      this._mainQueueIndex = this.navigationIndex;
+      
+      // Save previous panel mode to restore after closing
+      this._previousPanelMode = this._panelMode;
+      
+      // Get today's month and day
+      const today = new Date();
+      const month = String(today.getMonth() + 1); // 1-12
+      const day = String(today.getDate()); // 1-31
+      
+      // Use current window setting (default 0 = exact match)
+      const windowDays = this._onThisDayWindowDays || 0;
+      
+      console.warn(`📅 Querying On This Day: month=${month}, day=${day}, window=±${windowDays} days`);
+      
+      // Call media_index.get_random_items with anniversary parameters
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'get_random_items',
+        service_data: {
+          count: 100, // Get up to 100 photos from this day across years
+          anniversary_month: month,
+          anniversary_day: day,
+          anniversary_window_days: windowDays
+        },
+        return_response: true
+      };
+      
+      // Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
+      const items = response?.items || [];
+      
+      if (items.length === 0) {
+        throw new Error('No photos found for this day');
+      }
+      
+      // Sort results chronologically by year (oldest to newest)
+      items.sort((a, b) => {
+        const timeA = a.date_taken || a.created_time;
+        const timeB = b.date_taken || b.created_time;
+        return String(timeA).localeCompare(String(timeB));
+      });
+      
+      console.warn(`📅 Found ${items.length} photos from ${month}/${day} across years`);
+      
+      // Enter panel mode
+      this._panelMode = 'on_this_day';
+      this._panelOpen = true;
+      this._panelQueue = items;
+      this._panelQueueIndex = 0;
+      this._panelPageStartIndex = 0; // Start at beginning
+      this._panelLoading = false;
+      this._onThisDayLoading = false;
+      
+      this.requestUpdate();
+      
+    } catch (error) {
+      console.error('Failed to enter On This Day mode:', error);
+      this._panelLoading = false;
+      this._onThisDayLoading = false;
+      this.requestUpdate();
+      
+      // Show error to user
+      alert(`Failed to load On This Day photos: ${error.message}`);
+    }
+  }
+
+  /**
+   * Exit On This Day mode
+   */
+  _exitOnThisDayMode() {
+    console.warn('🚪 Exiting On This Day mode');
     this._exitPanelMode();
   }
 
@@ -11688,6 +11812,17 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsEnableOnThisDayChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_on_this_day: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -14037,6 +14172,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableRelatedPhotosChanged}
                 />
                 <div class="help-text">Show "From This Day" button to view photos from same timeframe (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Enable On This Day</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_on_this_day === true}
+                  @change=${this._actionButtonsEnableOnThisDayChanged}
+                />
+                <div class="help-text">Show "On This Day" button to view photos from same date across all years (requires media_index)</div>
               </div>
             </div>
           </div>

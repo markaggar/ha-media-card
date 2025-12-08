@@ -1103,6 +1103,17 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsEnableOnThisDayChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_on_this_day: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -3452,6 +3463,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableRelatedPhotosChanged}
                 />
                 <div class="help-text">Show "From This Day" button to view photos from same timeframe (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Enable On This Day</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_on_this_day === true}
+                  @change=${this._actionButtonsEnableOnThisDayChanged}
+                />
+                <div class="help-text">Show "On This Day" button to view photos from same date across all years (requires media_index)</div>
               </div>
             </div>
           </div>
