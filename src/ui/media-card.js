@@ -710,8 +710,9 @@ export class MediaCard extends LitElement {
           await this._loadNext();
         }
         
-        // V5.6: Auto-open queue preview if configured (but not in editor mode)
-        const isEditorContext = this.closest('hui-card-preview') !== null;
+        // V5.5: Auto-open queue preview if configured (but not in editor mode)
+        const isEditorContext = this.closest('hui-card-preview') !== null || 
+                                this.closest('media-card-editor') !== null;
         if (!isEditorContext &&
             this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
@@ -6406,6 +6407,7 @@ export class MediaCard extends LitElement {
       flex: 1;
       overflow-y: auto;
       padding: 12px;
+      padding-top: 4px; /* V5.5: Reduced top padding to prevent thumbnail overlap with next button */
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       gap: 16px;
