@@ -6868,6 +6868,12 @@ export class MediaCard extends LitElement {
               <option value="7">±1 week</option>
               <option value="14">±2 weeks</option>
             </select>
+            <button 
+              class="panel-action-button" 
+              @click=${this._playPanelItems} 
+              title="Insert into queue and play">
+              ▶️ Play These
+            </button>
           ` : ''}
           ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
             <button 
