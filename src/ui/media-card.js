@@ -2967,7 +2967,7 @@ export class MediaCard extends LitElement {
           <button
             class="action-btn on-this-day-btn ${isOnThisDayActive ? 'active' : ''} ${this._onThisDayLoading ? 'loading' : ''}"
             @click=${this._handleOnThisDayClick}
-            title="${isOnThisDayActive ? 'On This Day Active' : 'On This Day'}">
+            title="${isOnThisDayActive ? 'On This Day Active' : `On This Day (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`}">
             <ha-icon icon="mdi:calendar-multiple"></ha-icon>
           </button>
         ` : ''}
@@ -6819,10 +6819,23 @@ export class MediaCard extends LitElement {
       subtitle = `${this._panelQueue.length} photos from this timeframe`;
     } else if (this._panelMode === 'on_this_day') {
       const today = new Date();
-      const monthName = today.toLocaleDateString('en-US', { month: 'long' });
-      const day = today.getDate();
-      title = `🗓️ On This Day`;
-      subtitle = `${monthName} ${day} • ${this._panelQueue.length} photos`;
+      const monthDay = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const currentYear = today.getFullYear();
+      // Calculate year range from photos if available, otherwise show reasonable range
+      let yearRange = '';
+      if (this._panelQueue.length > 0) {
+        const years = this._panelQueue.map(item => {
+          const timestamp = item.date_taken || item.created_time;
+          return new Date(typeof timestamp === 'number' ? timestamp * 1000 : timestamp).getFullYear();
+        }).filter(y => !isNaN(y));
+        if (years.length > 0) {
+          const minYear = Math.min(...years);
+          const maxYear = Math.max(...years);
+          yearRange = minYear === maxYear ? ` ${minYear}` : ` (${minYear}-${maxYear})`;
+        }
+      }
+      title = `🗓️ ${monthDay}${yearRange}`;
+      subtitle = `${this._panelQueue.length} photos across years`;
     } else if (this._panelMode === 'queue') {
       title = '📋 Coming Up';
       const queueLength = this.navigationQueue?.length || 0;
