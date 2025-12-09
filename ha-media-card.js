@@ -5442,7 +5442,9 @@ class MediaCard extends LitElement {
       // Reload navigation queue by copying from provider's queue (don't call getNext!)
       // Calling getNext() repeatedly advances the provider's cursor incorrectly
       if (providerQueue && providerQueue.length > 0) {
-        const itemsToCopy = Math.min(providerQueue.length, previousQueueSize || 20, 20);
+        // Copy all items from provider queue to navigation queue
+        // Don't limit to 20 - we need the full queue for proper navigation
+        const itemsToCopy = providerQueue.length;
         this._log('🔄 Copying', itemsToCopy, 'items from provider queue (size:', providerQueue.length, ')');
         
         for (let i = 0; i < itemsToCopy; i++) {
@@ -9120,6 +9122,15 @@ class MediaCard extends LitElement {
       justify-content: center;
     }
     
+    /* When panel is open, viewport-fit uses card height, not viewport */
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .media-container {
+      height: 100%;
+      max-height: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
     :host([data-aspect-mode="viewport-fill"]) img {
       width: 100vw;
       height: 100vh;
@@ -9132,6 +9143,23 @@ class MediaCard extends LitElement {
       align-items: center;
       justify-content: center;
       min-height: 50vh;
+    }
+    
+    /* Smart-scale with panel open should fill available space */
+    :host([data-aspect-mode="smart-scale"]) .card.panel-open .media-container {
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) .card.panel-open img {
+      max-height: 100%;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
     }
     
     :host([data-aspect-mode="smart-scale"]) img {
@@ -10053,16 +10081,35 @@ class MediaCard extends LitElement {
       color: var(--text-primary-color, #fff);
     }
 
-    /* Side Panel Styles */
+    /* Side Panel Styles - Side-by-side mode */
+    .card {
+      position: relative;
+      transition: all 0.3s ease-out;
+      overflow: hidden;
+    }
+    
     .card.panel-open {
-      margin-right: 320px;
-      transition: margin-right 0.3s ease-out;
+      display: flex;
     }
 
-    @media (max-width: 768px) {
-      .card.panel-open {
-        margin-right: 0; /* Don't shift on mobile */
-      }
+    /* Main content area (everything except panel) */
+    .main-content {
+      flex: 1;
+      min-width: 0; /* Allow flexbox shrinking */
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Media container should fill available space */
+    .main-content .media-container {
+      flex: 1;
+      min-height: 0; /* Allow flexbox shrinking */
+      overflow: hidden;
+      position: relative; /* For absolute positioned overlays */
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     /* V5.5: Fix viewport-fit image cropping when panel is open */
@@ -10082,18 +10129,29 @@ class MediaCard extends LitElement {
     }
 
     .side-panel {
-      position: fixed;
-      top: 0;
-      right: 0;
+      position: relative;
       width: 320px;
-      max-width: 90vw;
-      height: 100vh;
+      max-width: 40%; /* Limit panel width on small screens */
+      flex-shrink: 0;
       background: var(--card-background-color, #fff);
-      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
-      z-index: 999998;
+      box-shadow: -4px 0 8px rgba(0, 0, 0, 0.1);
       display: flex;
       flex-direction: column;
       animation: slideInRight 0.3s ease-out;
+      overflow: hidden;
+      max-height: 100%; /* Don't exceed card height */
+    }
+
+    @media (max-width: 768px) {
+      .side-panel {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 100%;
+        z-index: 10;
+      }
     }
 
     @keyframes slideInRight {
@@ -10106,10 +10164,11 @@ class MediaCard extends LitElement {
     }
 
     .panel-header {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 16px;
+      padding: 16px 48px 16px 16px; /* Extra right padding for close button */
       border-bottom: 1px solid var(--divider-color, #e0e0e0);
       background: var(--primary-background-color);
       flex-wrap: wrap;
@@ -10194,6 +10253,9 @@ class MediaCard extends LitElement {
     }
 
     .panel-close-button {
+      position: absolute;
+      top: 8px;
+      right: 8px;
       background: transparent;
       border: none;
       font-size: 24px;
@@ -10206,6 +10268,7 @@ class MediaCard extends LitElement {
       border-radius: 50%;
       color: var(--primary-text-color);
       transition: background 0.2s;
+      z-index: 10;
     }
 
     .panel-close-button:hover {
@@ -10415,11 +10478,14 @@ class MediaCard extends LitElement {
         <div class="card ${this._panelOpen ? 'panel-open' : ''}"
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0">
-          ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
-          ${this._renderMedia()}
-          ${this._renderPauseIndicator()}
-          ${this._renderKioskIndicator()}
-          ${this._renderControls()}
+          <div class="main-content">
+            ${this.config.title ? html`<div class="title">${this.config.title}</div>` : ''}
+            ${this._renderMedia()}
+            ${this._renderPauseIndicator()}
+            ${this._renderKioskIndicator()}
+            ${this._renderControls()}
+          </div>
+          ${this._renderPanel()}
         </div>
         ${this._confirmationDialogMessage ? html`
           <div class="confirmation-backdrop" @click=${this._handleConfirmationCancel}>
@@ -10432,7 +10498,6 @@ class MediaCard extends LitElement {
             </div>
           </div>
         ` : ''}
-        ${this._renderPanel()}
       </ha-card>
     `;
   }
@@ -10714,10 +10779,10 @@ class MediaCard extends LitElement {
               title="Insert into queue and play">
               ▶️ Play These
             </button>
-            <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
-              ✕
-            </button>
           </div>
+          <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+            ✕
+          </button>
           ${subtitle ? html`<div class="panel-subtitle-below">${subtitle}</div>` : ''}
         ` : html`
           <!-- Standard layout for other modes -->
@@ -10734,10 +10799,10 @@ class MediaCard extends LitElement {
                 ▶️ Play These
               </button>
             ` : ''}
-            <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
-              ✕
-            </button>
           </div>
+          <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
+            ✕
+          </button>
         `}
       </div>
     `;
@@ -10748,9 +10813,9 @@ class MediaCard extends LitElement {
    */
   _renderThumbnailStrip() {
     // For queue mode, read directly from navigationQueue
-    const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
+    const allItems = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
     
-    if (!items || items.length === 0) {
+    if (!allItems || allItems.length === 0) {
       return html`
         <div class="thumbnail-strip">
           <div class="no-items">No items in ${this._panelMode || 'panel'}</div>
@@ -10758,22 +10823,8 @@ class MediaCard extends LitElement {
       `;
     }
 
-    // Calculate available height for thumbnails (unified for all panel modes)
-    const viewportHeight = window.innerHeight;
-    const panelHeaderHeight = 60; // Approximate header height
-    const panelPadding = 24; // Top and bottom padding
-    const availableHeight = viewportHeight - panelHeaderHeight - panelPadding;
-    
-    // Calculate thumbnail dimensions (2 columns, aspect ratio 4:3)
-    const panelWidth = 320;
-    const gridGap = 16;
-    const thumbnailWidth = (panelWidth - gridGap - 24) / 2; // 24 for padding
-    const thumbnailHeight = thumbnailWidth * (3 / 4); // 4:3 aspect ratio
-    const rowHeight = thumbnailHeight + gridGap;
-    
-    // Calculate how many rows can fit
-    const maxRows = Math.floor(availableHeight / rowHeight);
-    const maxDisplay = Math.max(4, maxRows * 2); // At least 4 items (2 rows), 2 per row
+    // Hardcode to 5 rows (10 thumbnails) for now - dynamic calculation not working
+    const maxDisplay = 10; // 5 rows × 2 columns
     
     // Initialize unified page start index
     if (this._panelPageStartIndex === undefined || this._panelPageStartIndex === null) {
@@ -10798,7 +10849,11 @@ class MediaCard extends LitElement {
     }
     
     const displayStartIndex = this._panelPageStartIndex;
-    const displayItems = items.slice(displayStartIndex, displayStartIndex + maxDisplay);
+    const displayItems = allItems.slice(displayStartIndex, displayStartIndex + maxDisplay);
+
+    // Calculate if we have previous/next pages (for all panel modes)
+    const hasPreviousPage = displayStartIndex > 0;
+    const hasNextPage = (displayStartIndex + maxDisplay) < allItems.length;
 
     // Resolve all thumbnail URLs upfront (async but doesn't block render)
     displayItems.forEach(async (item) => {
@@ -10823,10 +10878,6 @@ class MediaCard extends LitElement {
         }
       }
     });
-
-    // Calculate if we have previous/next pages (for all panel modes)
-    const hasPreviousPage = displayStartIndex > 0;
-    const hasNextPage = (displayStartIndex + displayItems.length) < items.length;
 
     return html`
       <div class="thumbnail-strip">
@@ -10865,7 +10916,7 @@ class MediaCard extends LitElement {
           } else if (this._panelMode === 'queue') {
             // Position indicator for queue mode
             const queuePos = actualIndex + 1;
-            const queueTotal = items.length;
+            const queueTotal = allItems.length;
             badge = `${queuePos}/${queueTotal}`;
           }
 
