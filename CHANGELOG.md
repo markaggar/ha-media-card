@@ -39,7 +39,7 @@
   - Works in both sequential and random modes
   - Configuration options:
     - `action_buttons.enable_queue_preview`: Enable/disable feature
-    - `action_buttons.auto_open_queue_preview`: Auto-open panel on card load
+    - `action_buttons.auto_open_queue_preview`: Auto-open panel on card load (detects editor mode properly)
   - Smart paging: manually page through queue or auto-adjust when clicking thumbnails
   - Integrates with burst review: saves and restores queue panel state
 
@@ -48,6 +48,18 @@
   - New `burst_favorites` (JSON array) and `burst_count` (integer) metadata fields
   - Metadata persists across sessions and survives file deletions
   - Enables future features: favorite indicators, burst filtering, review status tracking
+
+### Fixed
+- **Sequential Mode Carousel**
+  - New file detection now runs when wrapping from end of queue back to position 1
+  - Fixes issue where files arriving mid-carousel weren't shown until next full cycle
+  - Example: 10-camera carousel, new file arrives at position 5 → now shown when wrapping to position 1
+  - Optimal balance: checks at position 1 and wrap point (not every position)
+
+- **Queue Preview Auto-Open in Editor**
+  - Fixed queue preview opening while card editor is open, causing jarring resize
+  - Now detects editor mode by walking DOM tree to find `HUI-DIALOG-EDIT-CARD` parent
+  - Auto-open only happens after closing editor and loading card normally
   
 - **Burst Review Improvements**
   - Favorite state restoration when re-entering reviewed burst
