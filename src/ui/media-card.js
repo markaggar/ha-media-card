@@ -98,6 +98,7 @@ export class MediaCard extends LitElement {
     this._lastLogTime = {}; // V4 log throttling
     this._isPaused = false; // V4 pause state for slideshow
     this._showInfoOverlay = false; // Info overlay toggle
+    this._editorPreview = false; // V5.5: Flag to indicate card is in config editor preview
     
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -711,9 +712,25 @@ export class MediaCard extends LitElement {
         }
         
         // V5.5: Auto-open queue preview if configured (but not in editor mode)
-        const isEditorContext = this.closest('hui-card-preview') !== null || 
-                                this.closest('media-card-editor') !== null;
-        if (!isEditorContext &&
+        // Only auto-open if we're in the main HA UI (not editor) and queue preview is enabled
+        // Detection: Check if we're inside a hui-dialog-edit-card by walking up parent chain
+        let inEditorDialog = false;
+        let element = this;
+        while (element) {
+          const parent = element.parentElement || element.getRootNode()?.host;
+          if (parent?.tagName === 'HUI-DIALOG-EDIT-CARD') {
+            inEditorDialog = true;
+            break;
+          }
+          if (!parent || parent === document.body || parent === document.documentElement) {
+            break;
+          }
+          element = parent;
+        }
+        
+        const inMainUI = this.hass && !inEditorDialog;
+        
+        if (inMainUI &&
             this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
           // Small delay to ensure first item is loaded
@@ -938,6 +955,15 @@ export class MediaCard extends LitElement {
         // V5.3: If this was a pre-loaded small collection, don't load more - just wrap
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
+          
+          // V5.4: Check for new files before wrapping back to position 1
+          // This ensures files that arrived mid-carousel are shown immediately
+          const queueRefreshed = await this._checkForNewFiles();
+          if (queueRefreshed) {
+            // Queue was refreshed and reset to position 1 with new files
+            return;
+          }
+          
           this.navigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
@@ -972,6 +998,13 @@ export class MediaCard extends LitElement {
                 return;
               }
               
+              // V5.4: Check for new files before wrapping back to position 1
+              const queueRefreshed = await this._checkForNewFiles();
+              if (queueRefreshed) {
+                // Queue was refreshed and reset to position 1 with new files
+                return;
+              }
+              
               this.navigationIndex = 0;
               return;
             }
@@ -984,6 +1017,13 @@ export class MediaCard extends LitElement {
               if (this.navigationQueue.length === 0) {
                 this._log('ERROR: Cannot wrap - navigation queue is empty');
                 this._errorState = 'No media available in navigation queue';
+                return;
+              }
+              
+              // V5.4: Check for new files before wrapping back to position 1
+              const queueRefreshed = await this._checkForNewFiles();
+              if (queueRefreshed) {
+                // Queue was refreshed and reset to position 1 with new files
                 return;
               }
               
@@ -1019,6 +1059,13 @@ export class MediaCard extends LitElement {
               return;
             }
             
+            // V5.4: Check for new files before wrapping back to position 1
+            const queueRefreshed = await this._checkForNewFiles();
+            if (queueRefreshed) {
+              // Queue was refreshed and reset to position 1 with new files
+              return;
+            }
+            
             this.navigationIndex = 0;
           }
         }
@@ -1041,7 +1088,10 @@ export class MediaCard extends LitElement {
         
         // V5: Dynamic history size formula
         const queueSize = this.config.slideshow_window || 100;
-        const autoAdvanceInterval = this.config.auto_advance_interval || 5;
+        // Support legacy field names
+        const autoAdvanceInterval = this.config.auto_advance_seconds || 
+                                    this.config.auto_advance_interval || 
+                                    this.config.auto_advance_duration || 5;
         const discoveryWindow = this.config.folder?.new_files_threshold_seconds || 3600;
         
         const minQueueMultiplier = 5;
@@ -1368,6 +1418,7 @@ export class MediaCard extends LitElement {
       this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
+      this._timerStoppedForVideo = false; // Reset flag when manually stopping timer
     }
 
     // Don't set up auto-refresh if paused
@@ -1392,7 +1443,10 @@ export class MediaCard extends LitElement {
       isRefreshMode = true; // Single media always reloads current
     } else {
       // In folder mode: auto_advance takes priority
-      const autoAdvance = this.config?.auto_advance_seconds || 0;
+      // Support legacy field names: auto_advance_interval, auto_advance_duration
+      const autoAdvance = this.config?.auto_advance_seconds || 
+                         this.config?.auto_advance_interval || 
+                         this.config?.auto_advance_duration || 0;
       const autoRefresh = this.config?.auto_refresh_seconds || 0;
       
       if (autoAdvance > 0) {
@@ -1457,7 +1511,13 @@ export class MediaCard extends LitElement {
           // V4 CODE REUSE: Check if we should wait for video to complete
           // Based on V4 lines 3259-3302
           if (await this._shouldWaitForVideoCompletion()) {
-            this._log('🔄 Auto-timer skipped - waiting for video to complete');
+            // Stop the timer to prevent unnecessary database queries while video plays
+            if (!this._timerStoppedForVideo) {
+              this._log('🔄 Stopping auto-timer while waiting for video to complete');
+              clearInterval(this._refreshInterval);
+              this._refreshInterval = null;
+              this._timerStoppedForVideo = true;
+            }
             return;
           }
           
@@ -2408,27 +2468,53 @@ export class MediaCard extends LitElement {
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
-    // V4: Trigger immediate navigation to next media in folder/slideshow mode
-    if (this.provider) {
-      // Security camera mode: If at position 1 in sequential mode, stay there instead of advancing
+    // Restart timer if it was stopped for video playback, then trigger immediate action
+    if (this._timerStoppedForVideo) {
+      this._log('🎬 Restarting auto-timer after video completion');
+      this._timerStoppedForVideo = false;
+      this._setupAutoRefresh();
+      
+      // Trigger immediate action instead of waiting for next timer interval
+      const hasAutoRefresh = (this.config?.auto_refresh_seconds || 0) > 0;
+      const hasAutoAdvance = (this.config?.auto_advance_seconds || 
+                             this.config?.auto_advance_interval || 
+                             this.config?.auto_advance_duration || 0) > 0;
+      
+      if (hasAutoRefresh || hasAutoAdvance) {
+        this._log('🎬 Triggering immediate action after video completion');
+        setTimeout(async () => {
+          // Check for new files first (at position 1 in sequential mode)
+          const queueRefreshed = await this._checkForNewFiles();
+          
+          // If queue wasn't refreshed and we have auto_advance, advance to next
+          if (!queueRefreshed && hasAutoAdvance) {
+            this._loadNext().catch(err => {
+              console.error('Error advancing after video:', err);
+            });
+          } else if (!queueRefreshed && hasAutoRefresh) {
+            // Reload current media
+            await this._resolveMediaUrl();
+            this.requestUpdate();
+          }
+        }, 100);
+        return; // Skip manual mode logic below
+      }
+    }
+    
+    // V4: For slideshow mode without auto-advance/refresh, trigger immediate navigation
+    if (this.provider && !this.config?.auto_advance_seconds && 
+        !this.config?.auto_advance_interval && !this.config?.auto_advance_duration &&
+        !this.config?.auto_refresh_seconds) {
+      // Manual mode: advance to next media
       const isSeq = this._isSequentialMode();
       const atPositionOne = this.navigationIndex === 0;
       
       if (isSeq && atPositionOne) {
-        this._log(`🎬 Security camera mode: Video ended at position 1 (${endTime.toLocaleTimeString()}) - replaying same video until newer file arrives`);
-        this._log('🎬 Current media:', this.mediaUrl);
-        this._log('🎬 Next auto-refresh timer check in:', this._getTimeUntilNextRefresh(), 'seconds');
-        // Reset the video to replay by reloading current media
-        setTimeout(() => {
-          this._resolveMediaUrl().then(() => {
-            this.requestUpdate();
-          }).catch(err => {
-            console.error('Error reloading current media:', err);
-          });
-        }, 100);
+        // At position 1 in sequential mode: stay there (no auto-advance configured)
+        this._log(`🎬 Manual mode: Video ended at position 1 (${endTime.toLocaleTimeString()}) - staying at position 1`);
       } else {
-        this._log('🎬 Video ended - triggering immediate next media');
-        // Small delay to ensure video ended event is fully processed
+        // Not at position 1: advance to next
+        this._log('🎬 Manual mode: Video ended - advancing to next media');
         setTimeout(() => {
           this._loadNext().catch(err => {
             console.error('Error advancing to next media after video end:', err);
@@ -6407,7 +6493,6 @@ export class MediaCard extends LitElement {
       flex: 1;
       overflow-y: auto;
       padding: 12px;
-      padding-top: 4px; /* V5.5: Reduced top padding to prevent thumbnail overlap with next button */
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       gap: 16px;
