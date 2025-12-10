@@ -28,8 +28,14 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 ### **Intelligent Navigation**
 - ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
+- 📋 **Queue Preview Panel**: View upcoming items in your slideshow queue with thumbnail navigation
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
+### **Media Discovery Features** (requires Media Index)
+- 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot
+- 📅 **Same Date**: View other media items from the same date/time as the current photo
+- 📆 **Through the Years**: See photos from today's date across all years in your library (with adjustable ±N day window)
+- 💾 **Burst Metadata Persistence**: Save favorite selections from burst reviews to file metadata for future reference
 ### **Advanced Capabilities**
 - 🖱️ **Point-and-click file and folder selection** with real image thumbnails. No more typing paths!
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata

@@ -3376,7 +3376,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <div class="section-title">🖼️ Fullscreen</div>
           
           <div class="config-row">
-            <label>Enable Fullscreen Button</label>
+            <label>Fullscreen Button</label>
             <div>
               <input
                 type="checkbox"
@@ -3393,7 +3393,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div class="section-title">⭐ Action Buttons</div>
             
             <div class="config-row">
-              <label>Enable Favorite Button</label>
+              <label>Favorite Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -3405,7 +3405,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
             
             <div class="config-row">
-              <label>Enable Delete Button</label>
+              <label>Delete Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -3431,7 +3431,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             ` : ''}
             
             <div class="config-row">
-              <label>Enable Edit Button</label>
+              <label>Edit Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -3443,38 +3443,38 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
             
             <div class="config-row">
-              <label>Enable Burst Review</label>
+              <label>Burst Review Button</label>
               <div>
                 <input
                   type="checkbox"
                   .checked=${this._config.action_buttons?.enable_burst_review === true}
                   @change=${this._actionButtonsEnableBurstReviewChanged}
                 />
-                <div class="help-text">Show "At This Moment" button to review burst photos (requires media_index)</div>
+                <div class="help-text">Review rapid-fire photos taken at the same time as current media item (requires media_index)</div>
               </div>
             </div>
             
             <div class="config-row">
-              <label>Enable Related Photos</label>
+              <label>Same Date Button</label>
               <div>
                 <input
                   type="checkbox"
                   .checked=${this._config.action_buttons?.enable_related_photos === true}
                   @change=${this._actionButtonsEnableRelatedPhotosChanged}
                 />
-                <div class="help-text">Show "From This Day" button to view photos from same timeframe (requires media_index)</div>
+                <div class="help-text">View other media items from the same date/time as current media item (requires media_index)</div>
               </div>
             </div>
             
             <div class="config-row">
-              <label>Enable On This Day</label>
+              <label>Through the Years Button</label>
               <div>
                 <input
                   type="checkbox"
                   .checked=${this._config.action_buttons?.enable_on_this_day === true}
                   @change=${this._actionButtonsEnableOnThisDayChanged}
                 />
-                <div class="help-text">Show "On This Day" button to view photos from same date across all years (requires media_index)</div>
+                <div class="help-text">View media items from today's date across all years in your library (requires media_index)</div>
               </div>
             </div>
           </div>
@@ -3484,14 +3484,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <div class="section-title">📋 Queue Preview</div>
           
           <div class="config-row">
-            <label>Enable Queue Preview</label>
+            <label>Queue Button</label>
             <div>
               <input
                 type="checkbox"
                 .checked=${this._config.action_buttons?.enable_queue_preview === true}
                 @change=${this._actionButtonsEnableQueuePreviewChanged}
               />
-              <div class="help-text">Show "Coming Up" button to preview upcoming media in queue</div>
+              <div class="help-text">View navigation queue (sequential: past and upcoming, random: recent history)</div>
             </div>
           </div>
           

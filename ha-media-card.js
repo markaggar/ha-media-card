@@ -4032,6 +4032,26 @@ class MediaCard extends LitElement {
     }
   }
 
+  /**
+   * Utility: Check if card is currently in editor mode
+   * Walks up parent chain to detect if inside hui-dialog-edit-card
+   * @returns {boolean} True if card is being edited in the card editor
+   */
+  _isInEditorMode() {
+    let element = this;
+    while (element) {
+      const parent = element.parentElement || element.getRootNode()?.host;
+      if (parent?.tagName === 'HUI-DIALOG-EDIT-CARD') {
+        return true;
+      }
+      if (!parent || parent === document.body || parent === document.documentElement) {
+        break;
+      }
+      element = parent;
+    }
+    return false;
+  }
+
   // V4 → V5a Config Migration
   _migrateV4ConfigToV5a(v4Config) {
     this._log('🔄 Starting V4 → V5a config migration');
@@ -4434,30 +4454,24 @@ class MediaCard extends LitElement {
           await this._loadNext();
         }
         
-        // V5.5: Auto-open queue preview if configured (but not in editor mode)
-        // Only auto-open if we're in the main HA UI (not editor) and queue preview is enabled
-        // Detection: Check if we're inside a hui-dialog-edit-card by walking up parent chain
-        let inEditorDialog = false;
-        let element = this;
-        while (element) {
-          const parent = element.parentElement || element.getRootNode()?.host;
-          if (parent?.tagName === 'HUI-DIALOG-EDIT-CARD') {
-            inEditorDialog = true;
-            break;
-          }
-          if (!parent || parent === document.body || parent === document.documentElement) {
-            break;
-          }
-          element = parent;
-        }
-        
-        const inMainUI = this.hass && !inEditorDialog;
-        
-        if (inMainUI &&
-            this.config.action_buttons?.auto_open_queue_preview === true && 
+        // V5.5: Auto-open queue preview if configured
+        // Now that panel renders inside card, no need to prevent opening in editor mode
+        if (this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
-          // Small delay to ensure first item is loaded
-          setTimeout(() => this._enterQueuePreviewMode(), 100);
+          // Wait for navigation queue to be populated before opening preview
+          // Use requestAnimationFrame to ensure DOM is ready and queue is populated
+          requestAnimationFrame(() => {
+            if (this.navigationQueue && this.navigationQueue.length > 1) {
+              this._enterQueuePreviewMode();
+            } else {
+              // Queue not ready yet, wait a bit longer
+              setTimeout(() => {
+                if (this.navigationQueue && this.navigationQueue.length > 1) {
+                  this._enterQueuePreviewMode();
+                }
+              }, 500);
+            }
+          });
         }
       } else {
         console.error('[MediaCard] Provider initialization failed');
@@ -5059,6 +5073,9 @@ class MediaCard extends LitElement {
     // Resolve and display media
     await this._resolveMediaUrl();
     this.requestUpdate();
+    
+    // V5: Setup auto-advance after jumping to position
+    this._setupAutoRefresh();
   }
 
   /**
@@ -6763,7 +6780,7 @@ class MediaCard extends LitElement {
           <button
             class="action-btn burst-btn ${isBurstActive ? 'active' : ''} ${this._burstLoading ? 'loading' : ''}"
             @click=${this._handleBurstClick}
-            title="${isBurstActive ? 'Burst Review Active' : 'At This Moment'}">
+            title="${isBurstActive ? 'Burst Review Active' : 'Burst Review'}">
             <ha-icon icon="mdi:camera-burst"></ha-icon>
           </button>
         ` : ''}
@@ -6771,7 +6788,7 @@ class MediaCard extends LitElement {
           <button
             class="action-btn related-btn ${isRelatedActive ? 'active' : ''} ${this._relatedLoading ? 'loading' : ''}"
             @click=${this._handleRelatedClick}
-            title="${isRelatedActive ? 'Related Photos Active' : 'From This Day'}">
+            title="${isRelatedActive ? 'Same Date Active' : 'Same Date'}">
             <ha-icon icon="mdi:calendar-outline"></ha-icon>
           </button>
         ` : ''}
@@ -6779,7 +6796,7 @@ class MediaCard extends LitElement {
           <button
             class="action-btn on-this-day-btn ${isOnThisDayActive ? 'active' : ''} ${this._onThisDayLoading ? 'loading' : ''}"
             @click=${this._handleOnThisDayClick}
-            title="${isOnThisDayActive ? 'On This Day Active' : `On This Day (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`}">
+            title="${isOnThisDayActive ? 'Through Years Active' : `Through Years (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`}">
             <ha-icon icon="mdi:calendar-multiple"></ha-icon>
           </button>
         ` : ''}
@@ -6787,7 +6804,7 @@ class MediaCard extends LitElement {
           <button
             class="action-btn queue-btn ${isQueueActive ? 'active' : ''}"
             @click=${this._handleQueueClick}
-            title="${isQueueActive ? 'Queue Preview Active' : 'Coming Up'}">
+            title="${isQueueActive ? 'Queue Active' : 'Show Queue'}">
             <ha-icon icon="mdi:playlist-play"></ha-icon>
           </button>
         ` : ''}
@@ -10723,8 +10740,8 @@ class MediaCard extends LitElement {
       title = '📸 Burst Review';
       subtitle = `${this._panelQueue.length} photos in this moment`;
     } else if (this._panelMode === 'related') {
-      title = '📅 From This Day';
-      subtitle = `${this._panelQueue.length} photos from this timeframe`;
+      title = '📅 Same Date';
+      subtitle = `${this._panelQueue.length} media items from this date/time`;
     } else if (this._panelMode === 'on_this_day') {
       const today = new Date();
       const monthDay = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -10742,10 +10759,10 @@ class MediaCard extends LitElement {
           yearRange = minYear === maxYear ? ` ${minYear}` : ` (${minYear}-${maxYear})`;
         }
       }
-      title = `🗓️ ${monthDay}${yearRange}`;
-      subtitle = `${this._panelQueue.length} photos across years`;
+      title = `📆 ${monthDay} Through the Years${yearRange}`;
+      subtitle = `${this._panelQueue.length} media items across years`;
     } else if (this._panelMode === 'queue') {
-      title = '📋 Coming Up';
+      title = '📋 Queue';
       const queueLength = this.navigationQueue?.length || 0;
       const currentPos = this.navigationIndex + 1;
       subtitle = `Position ${currentPos} of ${queueLength}`;
@@ -14349,7 +14366,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <div class="section-title">🖼️ Fullscreen</div>
           
           <div class="config-row">
-            <label>Enable Fullscreen Button</label>
+            <label>Fullscreen Button</label>
             <div>
               <input
                 type="checkbox"
@@ -14366,7 +14383,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div class="section-title">⭐ Action Buttons</div>
             
             <div class="config-row">
-              <label>Enable Favorite Button</label>
+              <label>Favorite Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -14378,7 +14395,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
             
             <div class="config-row">
-              <label>Enable Delete Button</label>
+              <label>Delete Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -14404,7 +14421,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             ` : ''}
             
             <div class="config-row">
-              <label>Enable Edit Button</label>
+              <label>Edit Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -14416,38 +14433,38 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
             
             <div class="config-row">
-              <label>Enable Burst Review</label>
+              <label>Burst Review Button</label>
               <div>
                 <input
                   type="checkbox"
                   .checked=${this._config.action_buttons?.enable_burst_review === true}
                   @change=${this._actionButtonsEnableBurstReviewChanged}
                 />
-                <div class="help-text">Show "At This Moment" button to review burst photos (requires media_index)</div>
+                <div class="help-text">Review rapid-fire photos taken at the same time as current media item (requires media_index)</div>
               </div>
             </div>
             
             <div class="config-row">
-              <label>Enable Related Photos</label>
+              <label>Same Date Button</label>
               <div>
                 <input
                   type="checkbox"
                   .checked=${this._config.action_buttons?.enable_related_photos === true}
                   @change=${this._actionButtonsEnableRelatedPhotosChanged}
                 />
-                <div class="help-text">Show "From This Day" button to view photos from same timeframe (requires media_index)</div>
+                <div class="help-text">View other media items from the same date/time as current media item (requires media_index)</div>
               </div>
             </div>
             
             <div class="config-row">
-              <label>Enable On This Day</label>
+              <label>Through the Years Button</label>
               <div>
                 <input
                   type="checkbox"
                   .checked=${this._config.action_buttons?.enable_on_this_day === true}
                   @change=${this._actionButtonsEnableOnThisDayChanged}
                 />
-                <div class="help-text">Show "On This Day" button to view photos from same date across all years (requires media_index)</div>
+                <div class="help-text">View media items from today's date across all years in your library (requires media_index)</div>
               </div>
             </div>
           </div>
@@ -14457,14 +14474,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <div class="section-title">📋 Queue Preview</div>
           
           <div class="config-row">
-            <label>Enable Queue Preview</label>
+            <label>Queue Button</label>
             <div>
               <input
                 type="checkbox"
                 .checked=${this._config.action_buttons?.enable_queue_preview === true}
                 @change=${this._actionButtonsEnableQueuePreviewChanged}
               />
-              <div class="help-text">Show "Coming Up" button to preview upcoming media in queue</div>
+              <div class="help-text">View navigation queue (sequential: past and upcoming, random: recent history)</div>
             </div>
           </div>
           
