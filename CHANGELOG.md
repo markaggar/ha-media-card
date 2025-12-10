@@ -1,7 +1,17 @@
 ## v5.5.0 (In Development)
 ### Added
-- **On This Day Feature**
-  - New "On This Day" button showing photos from same date across all years (anniversary mode)
+- **Burst Review Feature**
+  - New "Burst Review" button to review rapid-fire photos taken at the same moment
+  - Uses `media_index.get_related_files` service with burst detection mode
+  - Time-based filtering (±N seconds) with optional GPS proximity matching
+  - Camera burst icon (`mdi:camera-burst`) for quick identification
+  - Side panel displays all photos in the burst with thumbnail navigation
+  - "Play These" button to inject burst items into navigation queue
+  - Favorite selections from burst review can be saved to file metadata
+  - Configuration: `action_buttons.enable_burst_review`
+
+- **Through the Years Feature**
+  - New "Through the Years" button showing photos from same date across all years (anniversary mode)
   - Uses `media_index.get_random_items` service with anniversary wildcard parameters
   - Supports `anniversary_month`, `anniversary_day`, and `anniversary_window_days` parameters
   - Multiple icon (`mdi:calendar-multiple`) distinguishes from single-year related photos
@@ -12,8 +22,8 @@
   - Panel opens even with 0 results so user can adjust window size
   - Auto-requeries when window size changes
 
-- **Related Photos Feature**
-  - New "From This Day" button showing photos from same calendar date
+- **Same Date Feature**
+  - New "Same Date" button showing photos from same calendar date
   - Uses `media_index.get_random_items` service with date filtering
   - Displays up to 100 random photos from the selected day
   - Calendar icon (`mdi:calendar-outline`) matches metadata styling
@@ -68,6 +78,14 @@
   - Always save metadata on panel exit (even with no favorites)
 
 ### Changed
+- **Feature Naming Consistency**
+  - Renamed "At This Moment" → "Burst Review" for clarity
+  - Renamed "From This Day" → "Same Date" to avoid confusion with "Through the Years"
+  - Renamed "On This Day" → "Through the Years" to better convey cross-year nature
+  - Config labels now follow "[Feature] Button" pattern (removed "Enable" prefix from all action buttons)
+  - Help text made action-oriented and context-aware (clarifies current media vs today's date)
+  - Button tooltips concise (Through the Years includes dynamic date)
+  - Panel title icons match action button Material Design Icons (📸=mdi:camera-burst, 📅=mdi:calendar-outline, 📆=mdi:calendar-multiple, 📋=mdi:playlist-play)
 - **Backend Integration**: Simplified URI handling - `media_index` now provides `media_source_uri` in burst results
 - **Favorite Detection**: Check both session state and database metadata for displaying hearts
 - **Logging**: Removed excessive debug logging from folder display rendering

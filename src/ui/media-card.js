@@ -309,6 +309,26 @@ export class MediaCard extends LitElement {
     }
   }
 
+  /**
+   * Utility: Check if card is currently in editor mode
+   * Walks up parent chain to detect if inside hui-dialog-edit-card
+   * @returns {boolean} True if card is being edited in the card editor
+   */
+  _isInEditorMode() {
+    let element = this;
+    while (element) {
+      const parent = element.parentElement || element.getRootNode()?.host;
+      if (parent?.tagName === 'HUI-DIALOG-EDIT-CARD') {
+        return true;
+      }
+      if (!parent || parent === document.body || parent === document.documentElement) {
+        break;
+      }
+      element = parent;
+    }
+    return false;
+  }
+
   // V4 → V5a Config Migration
   _migrateV4ConfigToV5a(v4Config) {
     this._log('🔄 Starting V4 → V5a config migration');
@@ -711,30 +731,24 @@ export class MediaCard extends LitElement {
           await this._loadNext();
         }
         
-        // V5.5: Auto-open queue preview if configured (but not in editor mode)
-        // Only auto-open if we're in the main HA UI (not editor) and queue preview is enabled
-        // Detection: Check if we're inside a hui-dialog-edit-card by walking up parent chain
-        let inEditorDialog = false;
-        let element = this;
-        while (element) {
-          const parent = element.parentElement || element.getRootNode()?.host;
-          if (parent?.tagName === 'HUI-DIALOG-EDIT-CARD') {
-            inEditorDialog = true;
-            break;
-          }
-          if (!parent || parent === document.body || parent === document.documentElement) {
-            break;
-          }
-          element = parent;
-        }
-        
-        const inMainUI = this.hass && !inEditorDialog;
-        
-        if (inMainUI &&
-            this.config.action_buttons?.auto_open_queue_preview === true && 
+        // V5.5: Auto-open queue preview if configured
+        // Now that panel renders inside card, no need to prevent opening in editor mode
+        if (this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
-          // Small delay to ensure first item is loaded
-          setTimeout(() => this._enterQueuePreviewMode(), 100);
+          // Wait for navigation queue to be populated before opening preview
+          // Use requestAnimationFrame to ensure DOM is ready and queue is populated
+          requestAnimationFrame(() => {
+            if (this.navigationQueue && this.navigationQueue.length > 1) {
+              this._enterQueuePreviewMode();
+            } else {
+              // Queue not ready yet, wait a bit longer
+              setTimeout(() => {
+                if (this.navigationQueue && this.navigationQueue.length > 1) {
+                  this._enterQueuePreviewMode();
+                }
+              }, 500);
+            }
+          });
         }
       } else {
         console.error('[MediaCard] Provider initialization failed');
@@ -1336,6 +1350,9 @@ export class MediaCard extends LitElement {
     // Resolve and display media
     await this._resolveMediaUrl();
     this.requestUpdate();
+    
+    // V5: Setup auto-advance after jumping to position
+    this._setupAutoRefresh();
   }
 
   /**
@@ -3040,7 +3057,7 @@ export class MediaCard extends LitElement {
           <button
             class="action-btn burst-btn ${isBurstActive ? 'active' : ''} ${this._burstLoading ? 'loading' : ''}"
             @click=${this._handleBurstClick}
-            title="${isBurstActive ? 'Burst Review Active' : 'At This Moment'}">
+            title="${isBurstActive ? 'Burst Review Active' : 'Burst Review'}">
             <ha-icon icon="mdi:camera-burst"></ha-icon>
           </button>
         ` : ''}
@@ -3048,7 +3065,7 @@ export class MediaCard extends LitElement {
           <button
             class="action-btn related-btn ${isRelatedActive ? 'active' : ''} ${this._relatedLoading ? 'loading' : ''}"
             @click=${this._handleRelatedClick}
-            title="${isRelatedActive ? 'Related Photos Active' : 'From This Day'}">
+            title="${isRelatedActive ? 'Same Date Active' : 'Same Date'}">
             <ha-icon icon="mdi:calendar-outline"></ha-icon>
           </button>
         ` : ''}
@@ -3056,7 +3073,7 @@ export class MediaCard extends LitElement {
           <button
             class="action-btn on-this-day-btn ${isOnThisDayActive ? 'active' : ''} ${this._onThisDayLoading ? 'loading' : ''}"
             @click=${this._handleOnThisDayClick}
-            title="${isOnThisDayActive ? 'On This Day Active' : `On This Day (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`}">
+            title="${isOnThisDayActive ? 'Through Years Active' : `Through Years (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`}">
             <ha-icon icon="mdi:calendar-multiple"></ha-icon>
           </button>
         ` : ''}
@@ -3064,7 +3081,7 @@ export class MediaCard extends LitElement {
           <button
             class="action-btn queue-btn ${isQueueActive ? 'active' : ''}"
             @click=${this._handleQueueClick}
-            title="${isQueueActive ? 'Queue Preview Active' : 'Coming Up'}">
+            title="${isQueueActive ? 'Queue Active' : 'Show Queue'}">
             <ha-icon icon="mdi:playlist-play"></ha-icon>
           </button>
         ` : ''}
@@ -7000,8 +7017,8 @@ export class MediaCard extends LitElement {
       title = '📸 Burst Review';
       subtitle = `${this._panelQueue.length} photos in this moment`;
     } else if (this._panelMode === 'related') {
-      title = '📅 From This Day';
-      subtitle = `${this._panelQueue.length} photos from this timeframe`;
+      title = '📅 Same Date';
+      subtitle = `${this._panelQueue.length} media items from this date/time`;
     } else if (this._panelMode === 'on_this_day') {
       const today = new Date();
       const monthDay = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -7019,10 +7036,10 @@ export class MediaCard extends LitElement {
           yearRange = minYear === maxYear ? ` ${minYear}` : ` (${minYear}-${maxYear})`;
         }
       }
-      title = `🗓️ ${monthDay}${yearRange}`;
-      subtitle = `${this._panelQueue.length} photos across years`;
+      title = `📆 ${monthDay} Through the Years${yearRange}`;
+      subtitle = `${this._panelQueue.length} media items across years`;
     } else if (this._panelMode === 'queue') {
-      title = '📋 Coming Up';
+      title = '📋 Queue';
       const queueLength = this.navigationQueue?.length || 0;
       const currentPos = this.navigationIndex + 1;
       subtitle = `Position ${currentPos} of ${queueLength}`;
