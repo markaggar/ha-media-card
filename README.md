@@ -3,9 +3,9 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/frontend)
 
 # HA Media Card 🎬
-A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed in VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed with VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
-It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, favoriting, editing and deleting photos.
+It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, favoriting, editing and deleting photos and related photos support.
 
 <img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
 
@@ -28,12 +28,12 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 ### **Intelligent Navigation**
 - ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
-- 📋 **Queue Preview Panel**: View upcoming items in your slideshow queue with thumbnail navigation
+- 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
 ### **Media Discovery Features** (requires Media Index)
 - 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot
-- 📅 **Same Date**: View other media items from the same date/time as the current photo
+- 📅 **Same Date**: View other media items from the same date as the current photo
 - 📆 **Through the Years**: See photos from today's date across all years in your library (with adjustable ±N day window)
 - 💾 **Burst Metadata Persistence**: Save favorite selections from burst reviews to file metadata for future reference
 ### **Advanced Capabilities**
