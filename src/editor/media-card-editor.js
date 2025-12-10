@@ -867,6 +867,12 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, video_max_duration: duration };
     this._fireConfigChanged();
   }
+  
+  _videoThumbnailTimeChanged(ev) {
+    const time = parseFloat(ev.target.value) || 1;
+    this._config = { ...this._config, video_thumbnail_time: time };
+    this._fireConfigChanged();
+  }
 
   _navigationZonesChanged(ev) {
     this._config = { ...this._config, enable_navigation_zones: ev.target.checked };
@@ -1070,6 +1076,61 @@ export class MediaCardEditor extends LitElement {
       action_buttons: {
         ...this._config.action_buttons,
         enable_fullscreen: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableBurstReviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_burst_review: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableRelatedPhotosChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_related_photos: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableOnThisDayChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_on_this_day: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsEnableQueuePreviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        enable_queue_preview: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsAutoOpenQueuePreviewChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        auto_open_queue_preview: ev.target.checked
       }
     };
     this._fireConfigChanged();
@@ -2970,6 +3031,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Maximum time to play videos in seconds (0 = play to completion)</div>
               </div>
             </div>
+            
+            <div class="config-row">
+              <label>Video Thumbnail Time</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  .value=${this._config.video_thumbnail_time || 1}
+                  @change=${this._videoThumbnailTimeChanged}
+                  placeholder="1"
+                />
+                <div class="help-text">Timestamp (seconds) to use for video thumbnails in queue preview (default: 1)</div>
+              </div>
+            </div>
           </div>
         ` : ''}
 
@@ -3300,7 +3376,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <div class="section-title">🖼️ Fullscreen</div>
           
           <div class="config-row">
-            <label>Enable Fullscreen Button</label>
+            <label>Fullscreen Button</label>
             <div>
               <input
                 type="checkbox"
@@ -3317,7 +3393,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div class="section-title">⭐ Action Buttons</div>
             
             <div class="config-row">
-              <label>Enable Favorite Button</label>
+              <label>Favorite Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -3329,7 +3405,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
             
             <div class="config-row">
-              <label>Enable Delete Button</label>
+              <label>Delete Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -3355,7 +3431,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             ` : ''}
             
             <div class="config-row">
-              <label>Enable Edit Button</label>
+              <label>Edit Button</label>
               <div>
                 <input
                   type="checkbox"
@@ -3365,8 +3441,74 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
               </div>
             </div>
+            
+            <div class="config-row">
+              <label>Burst Review Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_burst_review === true}
+                  @change=${this._actionButtonsEnableBurstReviewChanged}
+                />
+                <div class="help-text">Review rapid-fire photos taken at the same time as current media item (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Same Date Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_related_photos === true}
+                  @change=${this._actionButtonsEnableRelatedPhotosChanged}
+                />
+                <div class="help-text">View other media items from the same date/time as current media item (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Through the Years Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.enable_on_this_day === true}
+                  @change=${this._actionButtonsEnableOnThisDayChanged}
+                />
+                <div class="help-text">View media items from today's date across all years in your library (requires media_index)</div>
+              </div>
+            </div>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">📋 Queue Preview</div>
+          
+          <div class="config-row">
+            <label>Queue Button</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.action_buttons?.enable_queue_preview === true}
+                @change=${this._actionButtonsEnableQueuePreviewChanged}
+              />
+              <div class="help-text">View navigation queue (sequential: past and upcoming, random: recent history)</div>
+            </div>
+          </div>
+          
+          ${this._config.action_buttons?.enable_queue_preview === true ? html`
+            <div class="config-row">
+              <label>Auto-open Queue on Load</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.auto_open_queue_preview === true}
+                  @change=${this._actionButtonsAutoOpenQueuePreviewChanged}
+                />
+                <div class="help-text">Automatically open queue preview panel when card loads</div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
 
         <div class="section">
           <div class="section-title">👆 Interactions</div>
