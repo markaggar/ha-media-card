@@ -139,7 +139,7 @@ kiosk_mode_auto_enable: true
 kiosk_mode_show_indicator: true
 ```
 
-## 🕒 Custom Date/Time Extraction (Beta)
+## 🕒 Custom Date/Time Extraction
 
 Add support for parsing dates and times directly from your filenames and/or folder paths using simple, declarative patterns.
 
