@@ -1,3 +1,95 @@
+## v5.5.0 (In Development)
+### Added
+- **Burst Review Feature**
+  - New "Burst Review" button to review rapid-fire photos taken at the same moment
+  - Uses `media_index.get_related_files` service with burst detection mode
+  - Time-based filtering (±N seconds) with optional GPS proximity matching
+  - Camera burst icon (`mdi:camera-burst`) for quick identification
+  - Side panel displays all photos in the burst with thumbnail navigation
+  - "Play These" button to inject burst items into navigation queue
+  - Favorite selections from burst review can be saved to file metadata
+  - Configuration: `action_buttons.enable_burst_review`
+
+- **Through the Years Feature**
+  - New "Through the Years" button showing photos from same date across all years (anniversary mode)
+  - Uses `media_index.get_random_items` service with anniversary wildcard parameters
+  - Supports `anniversary_month`, `anniversary_day`, and `anniversary_window_days` parameters
+  - Multiple icon (`mdi:calendar-multiple`) distinguishes from single-year related photos
+  - Displays up to 100 random photos from matching dates across entire photo library
+  - Results sorted chronologically by year (oldest to newest)
+  - Configuration: `action_buttons.enable_on_this_day`
+  - **Dynamic window control**: Dropdown in panel header to adjust date range (Exact, ±1, ±3, ±7, ±14 days)
+  - Panel opens even with 0 results so user can adjust window size
+  - Auto-requeries when window size changes
+
+- **Same Date Feature**
+  - New "Same Date" button showing photos from same calendar date
+  - Uses `media_index.get_random_items` service with date filtering
+  - Displays up to 100 random photos from the selected day
+  - Calendar icon (`mdi:calendar-outline`) matches metadata styling
+  - Unified paging system with burst and queue preview
+  - "Play These" button to inject panel items into navigation queue
+  - Configuration: `action_buttons.enable_related_photos`
+
+- **Video Thumbnail Support**
+  - Dynamic video thumbnail generation in queue preview using HTML5 video elements
+  - Browser-native frame extraction at configurable timestamp (e.g., 1 second into video)
+  - Video elements display the extracted frame persistently as thumbnails
+  - Session-based state tracking to prevent redundant loading
+  - Configuration: `video_thumbnail_time` (seconds, default: 1, supports decimals)
+  - Automatic video detection via file extension (.mp4, .mov, .webm, .m4v, .ogg)
+  - Smooth opacity transition as thumbnails load (50% → 100%)
+  - Muted and paused at specified timestamp for optimal thumbnail display
+
+- **Queue Preview Feature**
+  - New "Queue Preview" button in action buttons (playlist icon)
+  - Displays upcoming items from navigation queue in side panel
+  - Page-based thumbnail navigation with Previous/Next buttons
+  - Dynamic thumbnail count based on viewport height
+  - Works in both sequential and random modes
+  - Configuration options:
+    - `action_buttons.enable_queue_preview`: Enable/disable feature
+    - `action_buttons.auto_open_queue_preview`: Auto-open panel on card load (detects editor mode properly)
+  - Smart paging: manually page through queue or auto-adjust when clicking thumbnails
+  - Integrates with burst review: saves and restores queue panel state
+
+- **Burst Metadata Persistence**
+  - Save burst review session metadata to all files in a burst group
+  - New `burst_favorites` (JSON array) and `burst_count` (integer) metadata fields
+  - Metadata persists across sessions and survives file deletions
+  - Enables future features: favorite indicators, burst filtering, review status tracking
+
+### Fixed
+- **Sequential Mode Carousel**
+  - New file detection now runs when wrapping from end of queue back to position 1
+  - Fixes issue where files arriving mid-carousel weren't shown until next full cycle
+  - Example: 10-camera carousel, new file arrives at position 5 → now shown when wrapping to position 1
+  - Optimal balance: checks at position 1 and wrap point (not every position)
+
+- **Queue Preview Auto-Open in Editor**
+  - Fixed queue preview opening while card editor is open, causing jarring resize
+  - Now detects editor mode by walking DOM tree to find `HUI-DIALOG-EDIT-CARD` parent
+  - Auto-open only happens after closing editor and loading card normally
+  
+- **Burst Review Improvements**
+  - Favorite state restoration when re-entering reviewed burst
+  - Heart icons show on thumbnails and main image for pre-favorited photos
+  - Session favorites tracked separately and merged with database favorites
+  - Always save metadata on panel exit (even with no favorites)
+
+### Changed
+- **Feature Naming Consistency**
+  - Renamed "At This Moment" → "Burst Review" for clarity
+  - Renamed "From This Day" → "Same Date" to avoid confusion with "Through the Years"
+  - Renamed "On This Day" → "Through the Years" to better convey cross-year nature
+  - Config labels now follow "[Feature] Button" pattern (removed "Enable" prefix from all action buttons)
+  - Help text made action-oriented and context-aware (clarifies current media vs today's date)
+  - Button tooltips concise (Through the Years includes dynamic date)
+  - Panel title icons match action button Material Design Icons (📸=mdi:camera-burst, 📅=mdi:calendar-outline, 📆=mdi:calendar-multiple, 📋=mdi:playlist-play)
+- **Backend Integration**: Simplified URI handling - `media_index` now provides `media_source_uri` in burst results
+- **Favorite Detection**: Check both session state and database metadata for displaying hearts
+- **Logging**: Removed excessive debug logging from folder display rendering
+
 ## v5.4.0
 ### Added
 - **Custom Date/Time Extraction**
@@ -27,6 +119,17 @@
   - Removed text-shadow from metadata overlay (was causing blurry appearance)
   - Backgrounds now match HA menu bars and footers perfectly in all themes
 
+### Fixed
+- **Sequential Mode Video Looping Bug**
+  - Added client-side date sorting safety net in `SequentialMediaIndexProvider`
+  - Re-sorts items by `date_taken` with fallback to `modified_time` and `created_time`
+  - Prevents videos with null/missing dates from incorrectly appearing at position 1
+  - Fixes infinite loop where "security camera mode" replayed the same video
+  - Defense-in-depth: card now corrects sort order even if backend has issues
+- **On This Day Panel Layout**
+  - Improved panel header layout with date as title, controls centered, count below
+  - Better visual hierarchy for window selector and Play These button
+
 ### UX & Controls
 - Action buttons and navigation zones now have consistent visibility behavior across mouse and touch:
   - Hover behavior is enabled only on mouse devices (`@media (hover: hover) and (pointer: fine)`)
@@ -45,6 +148,10 @@
 - Added card editor UI input for `metadata.scale` (range 0.3–4.0; default 1.0)
 
 ### Fixed
+- **Race Condition on Panel Entry**: Fixed race condition where auto-advance could change the displayed photo between button click and panel mode entry
+  - Burst and related panels now capture metadata/path snapshots at click time
+  - Snapshots passed to `_enterBurstMode()` and `_enterRelatedMode()` methods
+  - Ensures panels always show photos related to the exact photo that was visible when button was clicked
 - **Navigation After Delete/Edit**: Fixed regression where deleting or editing a photo prevented navigating back to previous images
   - Root cause: Delete/edit handlers were removing items from old v4 `history` array instead of v5.3 `navigationQueue`
   - Solution: Updated both `_performDelete()` and `_performEdit()` to correctly remove from `navigationQueue` and adjust `navigationIndex`
