@@ -2719,18 +2719,31 @@ export class MediaCard extends LitElement {
     if (this.config.metadata.show_date) {
       let date = null;
       
+      // DEBUG: Log metadata to diagnose date display
+      console.log('[MediaCard] _formatMetadataText - metadata:', {
+        has_date_taken: !!metadata.date_taken,
+        date_taken: metadata.date_taken,
+        date_taken_type: typeof metadata.date_taken,
+        has_created_time: !!metadata.created_time,
+        created_time: metadata.created_time,
+        created_time_type: typeof metadata.created_time,
+        filename: metadata.filename
+      });
+      
       // Priority 1: EXIF date_taken if available (from media_index)
       if (metadata.date_taken) {
         
         // Backend returns date_taken as Unix timestamp (number)
         if (typeof metadata.date_taken === 'number') {
           date = new Date(metadata.date_taken * 1000); // Convert Unix timestamp to milliseconds
+          console.log('[MediaCard] ✅ Set date from date_taken (number):', date.toISOString(), 'timestamp:', metadata.date_taken);
         } 
         // Or as string "YYYY-MM-DD HH:MM:SS" or "YYYY:MM:DD HH:MM:SS"
         else if (typeof metadata.date_taken === 'string') {
           // Replace colons in date part with dashes for proper parsing
           const dateStr = metadata.date_taken.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
           date = new Date(dateStr);
+          console.log('[MediaCard] ✅ Set date from date_taken (string):', date.toISOString());
         }
       }
       
@@ -2740,21 +2753,25 @@ export class MediaCard extends LitElement {
         // created_time is ISO string like "2019-09-24T18:51:12"
         if (typeof metadata.created_time === 'string') {
           date = new Date(metadata.created_time);
+          console.log('[MediaCard] ⚠️ Fallback to created_time (string):', date.toISOString());
         }
         // Or Unix timestamp
         else if (typeof metadata.created_time === 'number') {
           date = new Date(metadata.created_time * 1000);
+          console.log('[MediaCard] ⚠️ Fallback to created_time (number):', date.toISOString());
         }
       }
       
       // Priority 3: Filesystem date as last fallback
       if (!date && metadata.date) {
         date = metadata.date;
+        console.log('[MediaCard] ⚠️ Fallback to metadata.date:', date);
       }
       
       if (date && !isNaN(date.getTime())) {
         // Use Home Assistant's locale for date formatting
         const locale = this.hass?.locale?.language || this.hass?.language || navigator.language || 'en-US';
+        console.log('[MediaCard] 📅 FINAL DATE DISPLAYED:', date.toLocaleDateString(locale), 'ISO:', date.toISOString());
         parts.push(`📅 ${date.toLocaleDateString(locale)}`);
         
         // V5: Add time if configured
@@ -5390,14 +5407,19 @@ export class MediaCard extends LitElement {
       background: var(--primary-background-color);
       /* Enable container-based sizing for child elements (cqi/cqw units) */
       container-type: inline-size;
+      /* V5.6: Enable flex centering by default for all modes */
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     /* V4 Smart aspect ratio handling - base rules for default mode only */
+    /* V5.6: Removed width: 100% to allow proper centering */
     :host(:not([data-aspect-mode])) img,
     :host(:not([data-aspect-mode])) video {
-      width: 100%;
+      max-width: 100%;
       height: auto;
-      display: block;
+      margin: auto;
     }
     
     :host([data-aspect-mode="viewport-fit"]) img {
@@ -5406,22 +5428,40 @@ export class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      /* Explicit alignment for flex child */
+      align-self: center;
+    }
+    
+    :host([data-aspect-mode="viewport-fit"]) .card {
+      height: 100vh;
     }
     
     :host([data-aspect-mode="viewport-fit"]) .media-container {
       height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      /* Use CSS Grid for reliable centering */
+      display: grid !important;
+      place-items: center;
+      /* Override flex from base rules */
+      flex: 0 0 auto;
+      /* Constrain children to viewport */
+      max-width: 100vw;
+      max-height: 100vh;
+      overflow: hidden;
+    }
+    
+    /* Ensure main-content fills viewport in viewport-fit mode */
+    :host([data-aspect-mode="viewport-fit"]) .main-content {
+      height: 100vh;
     }
     
     /* When panel is open, viewport-fit uses card height, not viewport */
     :host([data-aspect-mode="viewport-fit"]) .card.panel-open .media-container {
       height: 100%;
       max-height: none;
-      display: flex;
-      align-items: center;
+      /* Use grid centering even with panel open */
+      display: grid !important;
+      place-items: center;
+      flex: 1;
       justify-content: center;
     }
     
@@ -5456,13 +5496,22 @@ export class MediaCard extends LitElement {
       object-fit: contain;
     }
     
+    :host([data-aspect-mode="smart-scale"]) .card.panel-open video {
+      max-height: 100%;
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: auto;
+    }
+    
     :host([data-aspect-mode="smart-scale"]) img {
       max-height: 90vh;
       max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     
     /* V5.3: Fixed card height - only applies in default mode (PR #37 by BasicCPPDev) */
@@ -5501,7 +5550,7 @@ export class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     
     /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
@@ -5517,7 +5566,7 @@ export class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     :host(:not([data-aspect-mode]):not([data-card-height])) video {
       max-height: var(--media-max-height, 400px);
@@ -5525,7 +5574,7 @@ export class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     
     /* Remove max-height constraint in fullscreen mode */
@@ -5560,17 +5609,22 @@ export class MediaCard extends LitElement {
     
     video {
       max-height: 400px;
-      object-fit: contain;
-      background: transparent;
-    }
-
-    :host([data-aspect-mode="viewport-fit"]) video {
-      max-height: 100vh;
-      max-width: 100vw;
+      max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      background: transparent;
+      margin: auto;
+    }
+
+    :host([data-aspect-mode="viewport-fit"]) video {
+      max-height: 100vh !important;
+      max-width: 100vw !important;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      /* Explicit alignment for flex child */
+      align-self: center;
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
@@ -5585,7 +5639,7 @@ export class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     
     /* V4 Navigation Zones - invisible overlay controls */
@@ -6417,7 +6471,7 @@ export class MediaCard extends LitElement {
 
     :host([data-aspect-mode="viewport-fit"]) .card.panel-open video {
       max-width: 100% !important;
-      max-height: 100vh !important;
+      max-height: 100% !important;
       width: auto !important;
       height: auto !important;
     }
@@ -6872,7 +6926,6 @@ export class MediaCard extends LitElement {
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
-            style="width: 100%; height: auto; display: block; background: transparent; max-width: 100%;"
           >
             <source src="${this.mediaUrl}" type="video/mp4">
             <source src="${this.mediaUrl}" type="video/webm">
