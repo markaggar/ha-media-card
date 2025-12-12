@@ -1,5 +1,13 @@
 ## v5.5.0 (In Development)
 ### Added
+- **Improved Aspect Mode UX**
+  - Updated dropdown labels to better describe each mode's behavior
+  - Default: "Fixed Height" 
+  - Smart Scale: "Leaves Space for Metadata"
+  - Viewport Fit: "Maximize Image Size"
+  - Viewport Fill: "Edge-to-Edge Immersive"
+  - Enhanced documentation explaining differences between modes
+
 - **Burst Review Feature**
   - New "Burst Review" button to review rapid-fire photos taken at the same moment
   - Uses `media_index.get_related_files` service with burst detection mode
@@ -60,6 +68,22 @@
   - Enables future features: favorite indicators, burst filtering, review status tracking
 
 ### Fixed
+- **Smart-Scale Aspect Mode Consistency**
+  - Unified image and video sizing at 80vh in both panel states (panel-open and panel-closed)
+  - Previously: panel-closed used 90vh (images) and 90vh (videos), panel-open used 80vh (images) and 100% (videos)
+  - Now provides consistent ~20vh buffer space for metadata visibility in all scenarios
+  - Creates clearer differentiation from viewport-fit mode (which maximizes image size)
+
+- **Viewport-Fit Thumbnail Cropping**
+  - Fixed thumbnails showing cropped/zoomed images in viewport-fit mode
+  - Scoped CSS selector from `.card.panel-open img` to `.card.panel-open .main-content img`
+  - Thumbnails now correctly show full images with `object-fit: contain` in all aspect modes
+
+- **Smart-Scale Vertical Centering**  
+  - Fixed panel-open mode not centering images like panel-closed
+  - Changed container from `height: 100%` to `height: auto` with matching `min-height: 50vh`
+  - Images now properly center vertically in both panel states
+
 - **Sequential Mode Carousel**
   - New file detection now runs when wrapping from end of queue back to position 1
   - Fixes issue where files arriving mid-carousel weren't shown until next full cycle

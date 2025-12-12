@@ -3056,10 +3056,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <label>Image Scaling</label>
             <div>
               <select @change=${this._aspectModeChanged} .value=${this._config.aspect_mode || 'default'}>
-                <option value="default">Default (fit to card width)</option>
-                <option value="smart-scale">Smart Scale (limit height, prevent scrolling)</option>
-                <option value="viewport-fit">Viewport Fit (fit entire image in viewport)</option>
-                <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
+                <option value="default">Default (Fixed Height)</option>
+                <option value="smart-scale">Smart Scale (Leaves Space for Metadata)</option>
+                <option value="viewport-fit">Viewport Fit (Maximize Image Size)</option>
+                <option value="viewport-fill">Viewport Fill (Edge-to-Edge Immersive)</option>
               </select>
               <div class="help-text">How images should be scaled</div>
             </div>
