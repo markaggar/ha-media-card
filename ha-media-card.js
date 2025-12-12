@@ -9333,7 +9333,7 @@ class MediaCard extends LitElement {
     :host([data-aspect-mode="smart-scale"]) .media-container {
       display: grid !important;
       place-items: center;
-      min-height: var(--available-viewport-height, 100vh); /* Dynamic height for centering without scrolling */
+      min-height: var(--available-viewport-height, 50vh); /* Dynamic height for centering without scrolling */
     }
     
     /* Smart-scale with panel open should fill available space */
