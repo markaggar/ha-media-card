@@ -97,6 +97,7 @@ export class MediaCard extends LitElement {
     this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
     this._lastLogTime = {}; // V4 log throttling
     this._isPaused = false; // V4 pause state for slideshow
+    this._pauseLogShown = false; // Track if pause log message has been shown
     this._showInfoOverlay = false; // Info overlay toggle
     this._editorPreview = false; // V5.5: Flag to indicate card is in config editor preview
     
