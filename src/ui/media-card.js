@@ -3613,8 +3613,6 @@ export class MediaCard extends LitElement {
   // V4: Handle pause button click
   _handlePauseClick(e) {
     e.stopPropagation();
-    
-    const wasPaused = this._isPaused;
     this._setPauseState(!this._isPaused);
     
     // Stop timer when pausing, restart when resuming
