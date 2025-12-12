@@ -5575,11 +5575,8 @@ export class MediaCard extends LitElement {
       justify-content: center;
     }
     
-    /* Viewport-fill: Images absolutely positioned to fill container */
+    /* Viewport-fill: Use grid layout with cover to fill viewport */
     :host([data-aspect-mode="viewport-fill"]) img {
-      position: absolute;
-      top: 0;
-      left: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
@@ -5591,16 +5588,13 @@ export class MediaCard extends LitElement {
     
     :host([data-aspect-mode="viewport-fill"]) .media-container {
       height: var(--available-viewport-height, 100vh);
-      width: 100%;
-      position: relative;
-      display: block !important;
+      width: 100vw;
+      display: grid !important;
+      place-items: center;
       overflow: hidden;
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
-      position: absolute;
-      top: 0;
-      left: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
@@ -6609,12 +6603,6 @@ export class MediaCard extends LitElement {
       max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
       height: auto !important;
-    }
-
-    /* Viewport-fill with panel open: ensure positioning context maintained */
-    :host([data-aspect-mode="viewport-fill"]) .card.panel-open .media-container {
-      position: relative !important;
-      height: var(--available-viewport-height, 100vh) !important;
     }
 
     /* Viewport-fill with panel open: only affect thumbnails in side panel */
