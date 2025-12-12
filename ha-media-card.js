@@ -9336,16 +9336,16 @@ class MediaCard extends LitElement {
       min-height: var(--available-viewport-height, 50vh); /* Dynamic height for centering without scrolling */
     }
     
-    /* Smart-scale with panel open should fill available space */
+    /* Smart-scale with panel open should use min-height like panel-closed for centering */
     :host([data-aspect-mode="smart-scale"]) .card.panel-open .media-container {
-      min-height: 0;
-      height: 100%;
+      min-height: var(--available-viewport-height, 50vh);
+      height: auto; /* Allow container to size to content */
       display: grid !important;
       place-items: center;
     }
     
     :host([data-aspect-mode="smart-scale"]) .card.panel-open img {
-      max-height: 100%;
+      max-height: 80vh; /* Match centering behavior with panel-closed */
       max-width: 100%;
       width: auto;
       height: auto;
