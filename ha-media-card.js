@@ -4101,10 +4101,10 @@ class MediaCard extends LitElement {
     if (isHeaderVisible) {
       // Header is visible, subtract its height
       availableHeight = windowHeight - headerHeight;
-      console.log(`📐 [${this._cardId}] Header visible (${matchedSelector}): ${availableHeight}px available (window: ${windowHeight}px, header: ${headerHeight}px)`);
+      this._log(`📐 [${this._cardId}] Header visible (${matchedSelector}): ${availableHeight}px available (window: ${windowHeight}px, header: ${headerHeight}px)`);
     } else {
       // Header is hidden or not found, use full viewport
-      console.log(`📐 [${this._cardId}] Header hidden: Using full viewport ${windowHeight}px (selector: ${matchedSelector}, found: ${!!header}, height: ${headerHeight})`);
+      this._log(`📐 [${this._cardId}] Header hidden: Using full viewport ${windowHeight}px (selector: ${matchedSelector}, found: ${!!header}, height: ${headerHeight})`);
     }
     
     // Set CSS variable for use in styles
