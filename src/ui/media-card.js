@@ -5176,6 +5176,10 @@ export class MediaCard extends LitElement {
       (event) => {
         if (event.data.entity_id === entity) {
           this._log('🖼️ Kiosk mode entity state changed:', event.data.new_state.state);
+          // Delay viewport height recalculation to allow header transition to complete
+          setTimeout(() => {
+            this._updateAvailableHeight();
+          }, 100);
           this.requestUpdate(); // Re-render to show/hide kiosk indicator
         }
       },
