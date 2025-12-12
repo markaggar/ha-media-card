@@ -9298,27 +9298,35 @@ class MediaCard extends LitElement {
       justify-content: center;
     }
     
+    /* Viewport-fill: Images absolutely positioned to fill container */
     :host([data-aspect-mode="viewport-fill"]) img {
+      position: absolute;
+      top: 0;
+      left: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
-      margin: 0;
-    }
-    
-    /* Viewport-fill container should fill available space */
-    :host([data-aspect-mode="viewport-fill"]) .media-container {
-      height: var(--available-viewport-height, 100vh);
-      width: 100%;
-      display: grid !important;
-      place-items: center;
     }
     
     :host([data-aspect-mode="viewport-fill"]) .card {
       height: var(--available-viewport-height, 100vh);
     }
     
-    :host([data-aspect-mode="viewport-fill"]) .main-content {
+    :host([data-aspect-mode="viewport-fill"]) .media-container {
       height: var(--available-viewport-height, 100vh);
+      width: 100%;
+      position: relative;
+      display: block !important;
+      overflow: hidden;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) video {
+      max-height: var(--available-viewport-height, 100vh);
+      max-width: 100vw;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      align-self: center;
     }
     
     :host([data-aspect-mode="smart-scale"]) .media-container {
@@ -9475,9 +9483,12 @@ class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
+      position: absolute;
+      top: 0;
+      left: 0;
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: fill;  /* Stretch to fill entire viewport, correcting anamorphic video */
     }
     
     :host([data-aspect-mode="smart-scale"]) video {
@@ -10321,6 +10332,16 @@ class MediaCard extends LitElement {
       max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
       height: auto !important;
+    }
+
+    /* Viewport-fill with panel open: only affect thumbnails in side panel */
+    :host([data-aspect-mode="viewport-fill"]) .side-panel img {
+      position: static !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain !important;
     }
 
     .side-panel {
