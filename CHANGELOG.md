@@ -7,6 +7,7 @@
   - Viewport Fit: "Maximize Image Size"
   - Viewport Fill: "Edge-to-Edge Immersive"
   - Enhanced documentation explaining differences between modes
+  - Fixed video thumbnail CSS scoping to prevent cropping in viewport-fit/viewport-fill modes
 
 - **Burst Review Feature**
   - New "Burst Review" button to review rapid-fire photos taken at the same moment
@@ -74,10 +75,12 @@
   - Now provides consistent ~20vh buffer space for metadata visibility in all scenarios
   - Creates clearer differentiation from viewport-fit mode (which maximizes image size)
 
-- **Viewport-Fit Thumbnail Cropping**
-  - Fixed thumbnails showing cropped/zoomed images in viewport-fit mode
-  - Scoped CSS selector from `.card.panel-open img` to `.card.panel-open .main-content img`
-  - Thumbnails now correctly show full images with `object-fit: contain` in all aspect modes
+- **Viewport-Fit and Viewport-Fill Thumbnail Cropping**
+  - Fixed thumbnails showing cropped/zoomed images in viewport-fit and viewport-fill modes
+  - Scoped CSS selectors to `.main-content` to prevent affecting `.thumbnail-video` elements
+  - Image thumbnails: Scoped from `.card.panel-open img` to `.card.panel-open .main-content img`
+  - Video thumbnails: Scoped from `video` to `.main-content video` for both modes
+  - Thumbnails now correctly show full content with `object-fit: contain` in all aspect modes
 
 - **Smart-Scale Vertical Centering**  
   - Fixed panel-open mode not centering images like panel-closed
