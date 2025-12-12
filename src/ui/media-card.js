@@ -5630,7 +5630,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) .card.panel-open video {
-      max-height: 100%;
+      max-height: 80vh;
       max-width: 100%;
       width: auto;
       height: auto;
@@ -5639,7 +5639,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) img {
-      max-height: 90vh;
+      max-height: 80vh;
       max-width: 100%;
       width: auto;
       height: auto;
@@ -5761,7 +5761,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) video {
-      max-height: 90vh;
+      max-height: 80vh;
       max-width: 100%;
       width: auto;
       height: auto;
