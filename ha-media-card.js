@@ -4011,17 +4011,13 @@ class MediaCard extends LitElement {
     // Calculate and set initial height
     this._updateAvailableHeight();
     
-    // Setup resize observer to recalculate on window resize
+    // Setup resize observer to recalculate on window resize and element changes
     if (!this._viewportResizeObserver) {
       this._viewportResizeObserver = new ResizeObserver(() => {
         this._updateAvailableHeight();
       });
       this._viewportResizeObserver.observe(document.body);
     }
-    
-    // Also listen for visibility changes (e.g., HA header showing/hiding)
-    this._viewportVisibilityHandler = () => this._updateAvailableHeight();
-    window.addEventListener('resize', this._viewportVisibilityHandler);
   }
   
   /**
@@ -4031,11 +4027,6 @@ class MediaCard extends LitElement {
     if (this._viewportResizeObserver) {
       this._viewportResizeObserver.disconnect();
       this._viewportResizeObserver = null;
-    }
-    
-    if (this._viewportVisibilityHandler) {
-      window.removeEventListener('resize', this._viewportVisibilityHandler);
-      this._viewportVisibilityHandler = null;
     }
   }
   
