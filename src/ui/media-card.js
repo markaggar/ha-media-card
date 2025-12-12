@@ -5598,7 +5598,7 @@ export class MediaCard extends LitElement {
       object-position: center center;
     }
     
-    :host([data-aspect-mode="viewport-fill"]) video {
+    :host([data-aspect-mode="viewport-fill"]) .main-content video {
       width: 100% !important;
       height: 100% !important;
       max-width: none !important;
@@ -5750,7 +5750,7 @@ export class MediaCard extends LitElement {
       margin: auto;
     }
 
-    :host([data-aspect-mode="viewport-fit"]) video {
+    :host([data-aspect-mode="viewport-fit"]) .main-content video {
       max-height: var(--available-viewport-height, 100vh) !important;
       max-width: 100vw !important;
       width: auto;
