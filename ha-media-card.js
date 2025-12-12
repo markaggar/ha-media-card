@@ -9321,12 +9321,12 @@ class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="viewport-fill"]) video {
-      max-height: var(--available-viewport-height, 100vh);
-      max-width: 100vw;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      align-self: center;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
     }
     
     :host([data-aspect-mode="smart-scale"]) .media-container {
@@ -10332,6 +10332,12 @@ class MediaCard extends LitElement {
       max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
       height: auto !important;
+    }
+
+    /* Viewport-fill with panel open: ensure positioning context maintained */
+    :host([data-aspect-mode="viewport-fill"]) .card.panel-open .media-container {
+      position: relative !important;
+      height: var(--available-viewport-height, 100vh) !important;
     }
 
     /* Viewport-fill with panel open: only affect thumbnails in side panel */
