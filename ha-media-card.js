@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.0
+ * Media Card v5.5.0
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -14839,7 +14839,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.5.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
