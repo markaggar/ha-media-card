@@ -10312,14 +10312,15 @@ class MediaCard extends LitElement {
 
     /* V5.6: Fix viewport-fit image sizing when panel is open */
     /* When panel is open, images should fit within available space using dynamic height */
-    :host([data-aspect-mode="viewport-fit"]) .card.panel-open img {
+    /* Scope to .main-content to avoid affecting thumbnail images */
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .main-content img {
       max-width: 100% !important;
       max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
       height: auto !important;
     }
 
-    :host([data-aspect-mode="viewport-fit"]) .card.panel-open video {
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .main-content video {
       max-width: 100% !important;
       max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
