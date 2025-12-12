@@ -5493,6 +5493,8 @@ export class MediaCard extends LitElement {
   static styles = css`
     :host {
       display: block;
+      /* Smart-scale mode max-height - leaves ~20vh buffer for metadata visibility */
+      --smart-scale-max-height: 80vh;
     }
     .card {
       position: relative;
@@ -5613,7 +5615,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) .card.panel-open img {
-      max-height: 80vh; /* Match centering behavior with panel-closed */
+      max-height: var(--smart-scale-max-height); /* Match centering behavior with panel-closed */
       max-width: 100%;
       width: auto;
       height: auto;
@@ -5621,7 +5623,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) .card.panel-open video {
-      max-height: 80vh;
+      max-height: var(--smart-scale-max-height);
       max-width: 100%;
       width: auto;
       height: auto;
@@ -5630,7 +5632,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) img {
-      max-height: 80vh;
+      max-height: var(--smart-scale-max-height);
       max-width: 100%;
       width: auto;
       height: auto;
@@ -5752,7 +5754,7 @@ export class MediaCard extends LitElement {
     }
     
     :host([data-aspect-mode="smart-scale"]) video {
-      max-height: 80vh;
+      max-height: var(--smart-scale-max-height);
       max-width: 100%;
       width: auto;
       height: auto;
