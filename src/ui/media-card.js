@@ -5575,29 +5575,38 @@ export class MediaCard extends LitElement {
       justify-content: center;
     }
     
-    /* Viewport-fill: Use grid layout with cover to fill viewport */
-    :host([data-aspect-mode="viewport-fill"]) img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    
+    /* Viewport-fill: Fill entire viewport with media */
     :host([data-aspect-mode="viewport-fill"]) .card {
       height: var(--available-viewport-height, 100vh);
     }
     
+    :host([data-aspect-mode="viewport-fill"]) .main-content {
+      height: 100%;
+    }
+    
     :host([data-aspect-mode="viewport-fill"]) .media-container {
-      height: var(--available-viewport-height, 100vh);
-      width: 100vw;
-      display: grid !important;
-      place-items: center;
+      height: 100%;
+      width: 100%;
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
       overflow: hidden;
     }
     
-    :host([data-aspect-mode="viewport-fill"]) video {
+    :host([data-aspect-mode="viewport-fill"]) img {
       width: 100%;
       height: 100%;
       object-fit: cover;
+      object-position: center center;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) video {
+      width: 100% !important;
+      height: 100% !important;
+      max-width: none !important;
+      max-height: none !important;
+      object-fit: cover !important;
+      object-position: center center;
     }
     
     :host([data-aspect-mode="smart-scale"]) .media-container {
@@ -5746,20 +5755,11 @@ export class MediaCard extends LitElement {
     :host([data-aspect-mode="viewport-fit"]) video {
       max-height: var(--available-viewport-height, 100vh) !important;
       max-width: 100vw !important;
-      width: 100%;
-      height: 100%;
+      width: auto;
+      height: auto;
       object-fit: contain;
       /* Explicit alignment for flex child */
       align-self: center;
-    }
-    
-    :host([data-aspect-mode="viewport-fill"]) video {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: fill;  /* Stretch to fill entire viewport, correcting anamorphic video */
     }
     
     :host([data-aspect-mode="smart-scale"]) video {
