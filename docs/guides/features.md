@@ -179,25 +179,32 @@ Smart scaling for different dashboard layouts:
 - Height adjusts automatically to maintain aspect ratio
 - Best for standard card layouts
 
-**Smart Scale**
-- Limits image height to 90% of viewport
+**Smart Scale** - *Conservative, metadata-friendly*
+- Limits image height to 90% of viewport (80% when panel open)
+- Leaves room for metadata overlays without covering the image
 - Prevents scrolling on tall portrait images
-- Ideal for panel layouts with mixed orientations
+- Centers images vertically for balanced composition
+- **Best for**: Dashboards where you want to see metadata clearly without obstruction
 
-**Viewport Fit**
-- Scales image to fit entirely within viewport
+**Viewport Fit** - *Aggressive, maximize image size*
+- Scales image to fit entirely within viewport, maximizing size
 - No cropping, entire image always visible
-- Perfect for fullscreen panel displays
+- Fills available space as much as possible (may reach screen edges)
+- Metadata overlays will typically appear on top of the image
+- **Best for**: Fullscreen panel displays where image size is priority
 
-**Viewport Fill**
-- Scales image to fill entire viewport
-- May crop edges to eliminate letterboxing
-- Best for background/wallpaper displays
+**Viewport Fill** - *Immersive, edge-to-edge*
+- Scales image to fill entire viewport completely
+- May crop edges to eliminate letterboxing/pillarboxing
+- Creates immersive edge-to-edge display
+- Centers crop point for balanced composition
+- **Best for**: Kiosk mode, background/wallpaper displays, artistic presentations
 
-**Use Cases**
-- Panel mode dashboards: Use `smart-scale` or `viewport-fit`
-- Standard cards: Use `default` mode
-- Fullscreen displays: Use `viewport-fill`
+**Quick Selection Guide**
+- Want metadata visible without covering image? → `smart-scale`
+- Want biggest possible image that fits completely? → `viewport-fit`  
+- Want edge-to-edge immersive display? → `viewport-fill`
+- Using standard card layout? → `default`
 
 ## Kiosk Mode Integration
 

@@ -72,7 +72,7 @@ auto_advance_duration: 5
 |--------|------|---------|-------------|
 | `title` | string | `null` | Card title (shown in header) |
 | `hide_title` | boolean | `false` | Hide the card title |
-| `aspect_mode` | string | `default` | Image scaling: `default`, `smart-scale`, `viewport-fit`, `viewport-fill` |
+| `aspect_mode` | string | `default` | Image scaling mode (see [Aspect Modes](features.md#aspect-modes)): `default` (fixed height), `smart-scale` (metadata-friendly), `viewport-fit` (maximize size), `viewport-fill` (edge-to-edge) |
 | `max_height_pixels` | number | `null` | Maximum media height in pixels (applies only in default aspect mode) |
 
 ### Auto-Refresh
