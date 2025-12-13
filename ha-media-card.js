@@ -4028,24 +4028,33 @@ class MediaCard extends LitElement {
     if (!this._headerVisibilityInterval) {
       this._lastHeaderVisible = null;
       this._headerVisibilityInterval = setInterval(() => {
-        const haRoot = document.querySelector('home-assistant');
-        if (!haRoot?.shadowRoot) return;
+        // Use cached header element if available, otherwise search once
+        let header = this._cachedHeaderElement;
         
-        // Find header element
-        const findHeader = (root) => {
-          const element = root.querySelector('div.header, .header, app-header, app-toolbar');
-          if (element) return element;
-          const elementsWithShadow = root.querySelectorAll('*');
-          for (const el of elementsWithShadow) {
-            if (el.shadowRoot) {
-              const found = findHeader(el.shadowRoot);
-              if (found) return found;
+        if (!header) {
+          const haRoot = document.querySelector('home-assistant');
+          if (!haRoot?.shadowRoot) return;
+          
+          // Find and cache header element (only happens once)
+          const findHeader = (root) => {
+            const element = root.querySelector('div.header, .header, app-header, app-toolbar');
+            if (element) return element;
+            const elementsWithShadow = root.querySelectorAll('*');
+            for (const el of elementsWithShadow) {
+              if (el.shadowRoot) {
+                const found = findHeader(el.shadowRoot);
+                if (found) return found;
+              }
             }
+            return null;
+          };
+          
+          header = findHeader(haRoot.shadowRoot);
+          if (header) {
+            this._cachedHeaderElement = header;
           }
-          return null;
-        };
+        }
         
-        const header = findHeader(haRoot.shadowRoot);
         if (header) {
           const isVisible = header.offsetHeight > 0;
           
