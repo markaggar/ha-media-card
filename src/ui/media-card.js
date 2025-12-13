@@ -5659,11 +5659,15 @@ export class MediaCard extends LitElement {
     :host([data-aspect-mode="smart-scale"]) .media-container {
       display: grid !important;
       place-items: center;
-      min-height: var(--available-viewport-height, 50vh); /* Dynamic height for centering without scrolling */
+      /* Dynamic height for centering without scrolling. Fallback 50vh ensures minimum vertical centering space 
+         when dynamic height unavailable (e.g., during initial render). 50vh chosen as safe minimum that leaves 
+         room for metadata overlay while preventing content from being pushed off-screen. */
+      min-height: var(--available-viewport-height, 50vh);
     }
     
     /* Smart-scale with panel open should use min-height like panel-closed for centering */
     :host([data-aspect-mode="smart-scale"]) .card.panel-open .media-container {
+      /* Same fallback value as panel-closed for consistent behavior */
       min-height: var(--available-viewport-height, 50vh);
       height: auto; /* Allow container to size to content */
       display: grid !important;

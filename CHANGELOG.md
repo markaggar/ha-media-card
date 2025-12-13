@@ -71,7 +71,8 @@
 ### Fixed
 - **Smart-Scale Aspect Mode Consistency**
   - Unified image and video sizing at 80vh in both panel states (panel-open and panel-closed)
-  - Previously: panel-closed used 90vh (images) and 90vh (videos), panel-open used 80vh (images) and 100% (videos)
+  - Previously: panel-closed used 90vh (images and videos), panel-open used 80vh (images) and 100% (videos)
+  - Changed: Reduced panel-closed max-height from 90vh to 80vh to match panel-open behavior
   - Now provides consistent ~20vh buffer space for metadata visibility in all scenarios
   - Creates clearer differentiation from viewport-fit mode (which maximizes image size)
 
