@@ -1584,12 +1584,16 @@ export class MediaCard extends LitElement {
 
   // V5: Setup auto-advance timer (copied from V4 lines 1611-1680)
   _setupAutoRefresh() {
-    // Clear any existing interval FIRST to prevent multiple timers
+    // Clear any existing interval/timeout FIRST to prevent multiple timers
     if (this._refreshInterval) {
       this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
       this._timerStoppedForVideo = false; // Reset flag when manually stopping timer
+    }
+    if (this._refreshTimeout) {
+      clearTimeout(this._refreshTimeout);
+      this._refreshTimeout = null;
     }
 
     // Don't set up auto-refresh if paused
@@ -1632,11 +1636,25 @@ export class MediaCard extends LitElement {
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       const modeLabel = isRefreshMode ? 'auto-refresh (reload current)' : 'auto-advance (next media)';
       const intervalMs = refreshSeconds * 1000;
-      this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
       
-      this._refreshInterval = setInterval(async () => {
-        // Track when timer fires
+      // Check if resuming from pause with remaining time
+      const remainingMs = this._pausedRemainingMs || intervalMs;
+      if (this._pausedRemainingMs) {
+        this._log(`🔄 Resuming ${modeLabel} with ${Math.round(remainingMs / 1000)}s remaining (was ${refreshSeconds}s total)`);
+        this._pausedRemainingMs = null; // Clear saved time
+      } else {
+        this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
+      }
+      
+      // Track when timer started for pause calculation
+      this._timerStartTime = Date.now();
+      this._timerIntervalMs = intervalMs;
+      
+      // Define the timer callback
+      const timerCallback = async () => {
+        // Track when timer fires and reset start time
         this._lastRefreshCheckTime = Date.now();
+        this._timerStartTime = Date.now(); // Reset for next interval
         
         // If in error state, clear it and attempt reload
         if (this._errorState) {
@@ -1708,9 +1726,23 @@ export class MediaCard extends LitElement {
             this._pauseLogShown = true;
           }
         }
-      }, refreshSeconds * 1000);
+      };
       
-      this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
+      // If resuming with remaining time, use setTimeout first, then setInterval
+      if (remainingMs < intervalMs) {
+        this._log(`⏱️ Using timeout for remaining ${Math.round(remainingMs / 1000)}s, then switching to interval`);
+        this._refreshTimeout = setTimeout(() => {
+          timerCallback();
+          // After first fire, switch to regular interval
+          this._refreshInterval = setInterval(timerCallback, intervalMs);
+          this._log('✅ Switched to regular interval after resume, ID:', this._refreshInterval);
+        }, remainingMs);
+        this._log('✅ Resume timeout started with ID:', this._refreshTimeout);
+      } else {
+        // Normal startup - use setInterval from the beginning
+        this._refreshInterval = setInterval(timerCallback, intervalMs);
+        this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
+      }
     } else {
       this._log('🔄 Auto-advance disabled or not configured:', {
         refreshSeconds,
@@ -2759,15 +2791,29 @@ export class MediaCard extends LitElement {
     
     // Pause/resume the auto-advance timer
     if (this._isPaused) {
-      // Pause: Clear the interval
-      if (this._refreshInterval) {
-        this._log('🔄 Clearing interval on pause, ID:', this._refreshInterval);
-        clearInterval(this._refreshInterval);
-        this._refreshInterval = null;
+      // Pause: Calculate remaining time and clear the interval
+      if (this._refreshInterval || this._refreshTimeout) {
+        if (this._timerStartTime && this._timerIntervalMs) {
+          const elapsed = Date.now() - this._timerStartTime;
+          const remaining = Math.max(0, this._timerIntervalMs - elapsed);
+          this._pausedRemainingMs = remaining;
+          this._log(`⏸️ Pausing with ${Math.round(elapsed / 1000)}s elapsed, ${Math.round(remaining / 1000)}s remaining`);
+        }
+        
+        if (this._refreshInterval) {
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+        if (this._refreshTimeout) {
+          clearTimeout(this._refreshTimeout);
+          this._refreshTimeout = null;
+        }
       }
     } else {
-      // Resume: Restart auto-advance
+      // Resume: Restart auto-advance with remaining time
       this._setupAutoRefresh();
+      // Reset pause log flag (timer is active again)
+      this._pauseLogShown = false;
     }
   }
   
