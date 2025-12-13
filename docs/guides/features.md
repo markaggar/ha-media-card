@@ -180,7 +180,7 @@ Smart scaling for different dashboard layouts:
 - Best for standard card layouts
 
 **Smart Scale** - *Conservative, metadata-friendly*
-- Limits image height to 90% of viewport (80% when panel open)
+- Limits image height to 80% of viewport
 - Leaves room for metadata overlays without covering the image
 - Prevents scrolling on tall portrait images
 - Centers images vertically for balanced composition
