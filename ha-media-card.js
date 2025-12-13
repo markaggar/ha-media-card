@@ -3823,6 +3823,8 @@ class MediaCard extends LitElement {
     this._pauseLogShown = false; // Track if pause log message has been shown
     this._showInfoOverlay = false; // Info overlay toggle
     this._editorPreview = false; // V5.5: Flag to indicate card is in config editor preview
+    this._cachedHeaderElement = null; // V5.6: Cached HA header element for viewport height calculation
+    this._cachedHeaderSelector = null; // V5.6: Selector that found the cached header
     
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -4080,48 +4082,56 @@ class MediaCard extends LitElement {
   _updateAvailableHeight() {
     // Get actual window height
     const windowHeight = window.innerHeight;
+
+    // V5.6: Use cached header if available, otherwise search for it
+    let header = this._cachedHeaderElement;
+    let matchedSelector = this._cachedHeaderSelector;
     
-    // Helper to search through shadow DOM recursively
-    const findInShadowDOM = (root, selector) => {
-      // Try in current root
-      const element = root.querySelector(selector);
-      if (element) return element;
-      
-      // Search recursively in shadow roots
-      const elementsWithShadow = root.querySelectorAll('*');
-      for (const el of elementsWithShadow) {
-        if (el.shadowRoot) {
-          const found = findInShadowDOM(el.shadowRoot, selector);
-          if (found) return found;
+    if (!header) {
+      // Helper to search through shadow DOM recursively with depth limit
+      const findInShadowDOM = (root, selector, depth = 0, maxDepth = 5) => {
+        // Limit recursion depth to avoid performance issues
+        if (depth > maxDepth) return null;
+        
+        // Try in current root
+        const element = root.querySelector(selector);
+        if (element) return element;
+        
+        // Search recursively in shadow roots
+        const elementsWithShadow = root.querySelectorAll('*');
+        for (const el of elementsWithShadow) {
+          if (el.shadowRoot) {
+            const found = findInShadowDOM(el.shadowRoot, selector, depth + 1, maxDepth);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      // Try to find header in shadow DOM (Home Assistant hides it there)
+      // Start from home-assistant root element
+      const haRoot = document.querySelector('home-assistant');
+      if (haRoot?.shadowRoot) {
+        const headerSelectors = [
+          'div.header',
+          '.header',
+          'app-header',
+          'app-toolbar'
+        ];
+        
+        for (const selector of headerSelectors) {
+          header = findInShadowDOM(haRoot.shadowRoot, selector);
+          if (header) {
+            matchedSelector = selector;
+            // Cache for future calls
+            this._cachedHeaderElement = header;
+            this._cachedHeaderSelector = selector;
+            this._log('📍 Cached header element:', matchedSelector);
+            break;
+          }
         }
       }
-      return null;
-    };
-    
-    // Try to find header in shadow DOM (Home Assistant hides it there)
-    let header = null;
-    let matchedSelector = null;
-    
-    // Start from home-assistant root element
-    const haRoot = document.querySelector('home-assistant');
-    if (haRoot?.shadowRoot) {
-      const headerSelectors = [
-        'div.header',
-        '.header',
-        'app-header',
-        'app-toolbar'
-      ];
-      
-      for (const selector of headerSelectors) {
-        header = findInShadowDOM(haRoot.shadowRoot, selector);
-        if (header) {
-          matchedSelector = selector;
-          break;
-        }
-      }
-    }
-    
-    const headerHeight = header?.offsetHeight || 0;
+    }    const headerHeight = header?.offsetHeight || 0;
     
     // Check if header is actually visible (offsetHeight > 0 and not hidden)
     const isHeaderVisible = headerHeight > 0 && 
@@ -4823,6 +4833,10 @@ class MediaCard extends LitElement {
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
+    // V5.6: Set flag FIRST to ignore video pause events during navigation
+    // The browser auto-pauses videos when they're removed from DOM
+    this._navigatingAway = true;
+
     // V5.5: Panel Navigation Override
     if (this._panelOpen && this._panelQueue.length > 0) {
       return await this._loadNextPanel();
@@ -4830,6 +4844,7 @@ class MediaCard extends LitElement {
     
     if (!this.provider) {
       this._log('_loadNext called but no provider');
+      this._navigatingAway = false;
       return;
     }
 
@@ -5020,6 +5035,12 @@ class MediaCard extends LitElement {
       // V5: Setup auto-advance after successfully loading media
       this._setupAutoRefresh();
 
+      // V5.6: Clear navigation flag after render cycle completes
+      // Use setTimeout to ensure old video element is removed from DOM first
+      setTimeout(() => {
+        this._navigatingAway = false;
+      }, 0);
+
       // Reset timer if buttons are explicitly showing (restart 3s countdown)
       if (this._showButtonsExplicitly) {
         // Restart 3s timer after navigation when buttons are showing
@@ -5035,6 +5056,9 @@ class MediaCard extends LitElement {
   }
 
   async _loadPrevious() {
+    // V5.6: Set flag FIRST to ignore video pause events during navigation
+    this._navigatingAway = true;
+
     // V5.5: Panel Navigation Override
     if (this._panelOpen && this._panelQueue.length > 0) {
       return await this._loadPreviousPanel();
@@ -5042,6 +5066,7 @@ class MediaCard extends LitElement {
     
     if (!this.provider) {
       this._log('_loadPrevious called but no provider');
+      this._navigatingAway = false;
       return;
     }
 
@@ -5086,6 +5111,11 @@ class MediaCard extends LitElement {
     
     // V5: Setup auto-advance after successfully loading media  
     this._setupAutoRefresh();
+
+    // V5.6: Clear navigation flag after render cycle completes
+    setTimeout(() => {
+      this._navigatingAway = false;
+    }, 0);
 
     // Reset timer if buttons are explicitly showing (restart 3s countdown)
     if (this._showButtonsExplicitly) {
@@ -6307,6 +6337,13 @@ class MediaCard extends LitElement {
     // Browser fires pause AFTER disconnectedCallback when navigating away
     if (!this.isConnected) {
       this._log('⏸️ Ignoring video pause - card is disconnected');
+      return;
+    }
+    
+    // V5.6: Ignore pause events during navigation
+    // Browser auto-pauses videos when navigating away (clicking next/prev)
+    if (this._navigatingAway) {
+      this._log('⏸️ Ignoring video pause - navigating away');
       return;
     }
     
@@ -9001,6 +9038,9 @@ class MediaCard extends LitElement {
         if (event.data.entity_id === entity) {
           const newState = event.data.new_state.state;
           this._log('🖼️ Kiosk mode entity state changed:', newState);
+          // V5.6: Invalidate header cache - kiosk mode changes header visibility
+          this._cachedHeaderElement = null;
+          this._cachedHeaderSelector = null;
           // Delay viewport height recalculation to allow header transition to complete
           setTimeout(() => {
             this._log('🖼️ Triggering viewport height recalculation after kiosk toggle to:', newState);
