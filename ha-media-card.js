@@ -3820,8 +3820,11 @@ class MediaCard extends LitElement {
     this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
     this._lastLogTime = {}; // V4 log throttling
     this._isPaused = false; // V4 pause state for slideshow
+    this._pauseLogShown = false; // Track if pause log message has been shown
     this._showInfoOverlay = false; // Info overlay toggle
     this._editorPreview = false; // V5.5: Flag to indicate card is in config editor preview
+    this._cachedHeaderElement = null; // V5.6: Cached HA header element for viewport height calculation
+    this._cachedHeaderSelector = null; // V5.6: Selector that found the cached header
     
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -3890,6 +3893,9 @@ class MediaCard extends LitElement {
       this._setupKioskModeMonitoring();
     }
     
+    // V5.6: Setup dynamic viewport height calculation
+    this._setupDynamicViewportHeight();
+    
     // V5: Restart auto-refresh if it was running before disconnect
     // Only restart if we have a provider, currentMedia, and auto_advance is configured
     if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
@@ -3905,6 +3911,9 @@ class MediaCard extends LitElement {
     
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
+    
+    // V5.6: Cleanup viewport height observer
+    this._cleanupDynamicViewportHeight();
     
     // Cleanup provider subscriptions to prevent memory leaks
     if (this.provider?.dispose) {
@@ -3994,6 +4003,172 @@ class MediaCard extends LitElement {
         }
       });
     }
+  }
+  
+  /**
+   * V5.6: Setup dynamic viewport height calculation
+   * Detects panel mode and adjusts CSS variable to account for HA header
+   * In panel mode (fullscreen), use full viewport; otherwise subtract header height
+   */
+  _setupDynamicViewportHeight() {
+    // Calculate and set initial height
+    this._updateAvailableHeight();
+    
+    // Setup resize observer to recalculate on window resize and element changes
+    if (!this._viewportResizeObserver) {
+      this._viewportResizeObserver = new ResizeObserver(() => {
+        this._updateAvailableHeight();
+      });
+      this._viewportResizeObserver.observe(document.body);
+    }
+    
+    // Setup polling-based header visibility check for kiosk mode
+    // This is more reliable than MutationObserver since kiosk integration may
+    // manipulate DOM in ways that don't trigger observers
+    if (!this._headerVisibilityInterval) {
+      this._lastHeaderVisible = null;
+      this._headerVisibilityInterval = setInterval(() => {
+        // Use cached header element if available, otherwise search once
+        let header = this._cachedHeaderElement;
+        
+        if (!header) {
+          const haRoot = document.querySelector('home-assistant');
+          if (!haRoot?.shadowRoot) return;
+          
+          // Find and cache header element (only happens once)
+          const findHeader = (root) => {
+            const element = root.querySelector('div.header, .header, app-header, app-toolbar');
+            if (element) return element;
+            const elementsWithShadow = root.querySelectorAll('*');
+            for (const el of elementsWithShadow) {
+              if (el.shadowRoot) {
+                const found = findHeader(el.shadowRoot);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          
+          header = findHeader(haRoot.shadowRoot);
+          if (header) {
+            this._cachedHeaderElement = header;
+          }
+        }
+        
+        if (header) {
+          const isVisible = header.offsetHeight > 0;
+          
+          // Only recalculate if visibility state changed
+          if (this._lastHeaderVisible !== isVisible) {
+            this._log(`📐 Header visibility changed: ${isVisible ? 'visible' : 'hidden'}`);
+            this._lastHeaderVisible = isVisible;
+            this._updateAvailableHeight();
+          }
+        }
+      }, 200); // Check every 200ms
+    }
+  }
+  
+  /**
+   * V5.6: Cleanup viewport height observer
+   */
+  _cleanupDynamicViewportHeight() {
+    if (this._viewportResizeObserver) {
+      this._viewportResizeObserver.disconnect();
+      this._viewportResizeObserver = null;
+    }
+    if (this._headerVisibilityInterval) {
+      clearInterval(this._headerVisibilityInterval);
+      this._headerVisibilityInterval = null;
+    }
+  }
+  
+  /**
+   * V5.6: Calculate actual available viewport height
+   * Detects if HA header is visible and adjusts accordingly
+   * Sets CSS variable --available-viewport-height for use in styles
+   */
+  _updateAvailableHeight() {
+    // Get actual window height
+    const windowHeight = window.innerHeight;
+
+    // V5.6: Use cached header if available, otherwise search for it
+    let header = this._cachedHeaderElement;
+    let matchedSelector = this._cachedHeaderSelector;
+    
+    if (!header) {
+      // Helper to search through shadow DOM recursively with depth limit
+      const findInShadowDOM = (root, selector, depth = 0, maxDepth = 5) => {
+        // Limit recursion depth to avoid performance issues
+        if (depth > maxDepth) return null;
+        
+        // Try in current root
+        const element = root.querySelector(selector);
+        if (element) return element;
+        
+        // Search recursively in shadow roots
+        const elementsWithShadow = root.querySelectorAll('*');
+        for (const el of elementsWithShadow) {
+          if (el.shadowRoot) {
+            const found = findInShadowDOM(el.shadowRoot, selector, depth + 1, maxDepth);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      // Try to find header in shadow DOM (Home Assistant hides it there)
+      // Start from home-assistant root element
+      const haRoot = document.querySelector('home-assistant');
+      if (haRoot?.shadowRoot) {
+        const headerSelectors = [
+          'div.header',
+          '.header',
+          'app-header',
+          'app-toolbar'
+        ];
+        
+        for (const selector of headerSelectors) {
+          header = findInShadowDOM(haRoot.shadowRoot, selector);
+          if (header) {
+            matchedSelector = selector;
+            // Cache for future calls
+            this._cachedHeaderElement = header;
+            this._cachedHeaderSelector = selector;
+            this._log('📍 Cached header element:', matchedSelector);
+            break;
+          }
+        }
+      }
+    }
+    
+    const headerHeight = header?.offsetHeight || 0;
+    
+    // Check if header is actually visible (offsetHeight > 0 and not hidden)
+    const isHeaderVisible = headerHeight > 0 && 
+                           header && 
+                           window.getComputedStyle(header).display !== 'none' &&
+                           window.getComputedStyle(header).visibility !== 'hidden';
+    
+    let availableHeight = windowHeight;
+    
+    if (isHeaderVisible) {
+      // Header is visible, subtract its height
+      availableHeight = windowHeight - headerHeight;
+    }
+    
+    // Only log if available height actually changed (throttle logging)
+    if (this._lastLoggedHeight !== availableHeight) {
+      if (isHeaderVisible) {
+        this._log(`📐 [${this._cardId}] Header visible (${matchedSelector}): ${availableHeight}px available (window: ${windowHeight}px, header: ${headerHeight}px)`);
+      } else {
+        this._log(`📐 [${this._cardId}] Header hidden: Using full viewport ${windowHeight}px (selector: ${matchedSelector}, found: ${!!header}, height: ${headerHeight})`);
+      }
+      this._lastLoggedHeight = availableHeight;
+    }
+    
+    // Set CSS variable for use in styles
+    this.style.setProperty('--available-viewport-height', `${availableHeight}px`);
   }
   
   // V4: Debug logging with throttling
@@ -4669,13 +4844,19 @@ class MediaCard extends LitElement {
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
+    // V5.6: Set flag FIRST to ignore video pause events during navigation
+    // The browser auto-pauses videos when they're removed from DOM
+    this._navigatingAway = true;
+
     // V5.5: Panel Navigation Override
     if (this._panelOpen && this._panelQueue.length > 0) {
+      this._navigatingAway = false;
       return await this._loadNextPanel();
     }
     
     if (!this.provider) {
       this._log('_loadNext called but no provider');
+      this._navigatingAway = false;
       return;
     }
 
@@ -4866,6 +5047,12 @@ class MediaCard extends LitElement {
       // V5: Setup auto-advance after successfully loading media
       this._setupAutoRefresh();
 
+      // V5.6: Clear navigation flag after render cycle completes
+      // Use setTimeout to ensure old video element is removed from DOM first
+      setTimeout(() => {
+        this._navigatingAway = false;
+      }, 0);
+
       // Reset timer if buttons are explicitly showing (restart 3s countdown)
       if (this._showButtonsExplicitly) {
         // Restart 3s timer after navigation when buttons are showing
@@ -4881,13 +5068,18 @@ class MediaCard extends LitElement {
   }
 
   async _loadPrevious() {
+    // V5.6: Set flag FIRST to ignore video pause events during navigation
+    this._navigatingAway = true;
+
     // V5.5: Panel Navigation Override
     if (this._panelOpen && this._panelQueue.length > 0) {
+      this._navigatingAway = false;
       return await this._loadPreviousPanel();
     }
     
     if (!this.provider) {
       this._log('_loadPrevious called but no provider');
+      this._navigatingAway = false;
       return;
     }
 
@@ -4932,6 +5124,11 @@ class MediaCard extends LitElement {
     
     // V5: Setup auto-advance after successfully loading media  
     this._setupAutoRefresh();
+
+    // V5.6: Clear navigation flag after render cycle completes
+    setTimeout(() => {
+      this._navigatingAway = false;
+    }, 0);
 
     // Reset timer if buttons are explicitly showing (restart 3s countdown)
     if (this._showButtonsExplicitly) {
@@ -5153,12 +5350,16 @@ class MediaCard extends LitElement {
 
   // V5: Setup auto-advance timer (copied from V4 lines 1611-1680)
   _setupAutoRefresh() {
-    // Clear any existing interval FIRST to prevent multiple timers
+    // Clear any existing interval/timeout FIRST to prevent multiple timers
     if (this._refreshInterval) {
       this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
       this._timerStoppedForVideo = false; // Reset flag when manually stopping timer
+    }
+    if (this._refreshTimeout) {
+      clearTimeout(this._refreshTimeout);
+      this._refreshTimeout = null;
     }
 
     // Don't set up auto-refresh if paused
@@ -5201,13 +5402,25 @@ class MediaCard extends LitElement {
     if (refreshSeconds && refreshSeconds > 0 && this.hass) {
       const modeLabel = isRefreshMode ? 'auto-refresh (reload current)' : 'auto-advance (next media)';
       const intervalMs = refreshSeconds * 1000;
-      this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
-      this._log(`🔄 Timer will fire at: ${new Date(Date.now() + intervalMs).toLocaleTimeString()}`);
       
-      this._refreshInterval = setInterval(async () => {
-        // Track when timer fires
+      // Check if resuming from pause with remaining time
+      const remainingMs = this._pausedRemainingMs || intervalMs;
+      if (this._pausedRemainingMs) {
+        this._log(`🔄 Resuming ${modeLabel} with ${Math.round(remainingMs / 1000)}s remaining (was ${refreshSeconds}s total)`);
+        this._pausedRemainingMs = null; // Clear saved time
+      } else {
+        this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
+      }
+      
+      // Track when timer started for pause calculation
+      this._timerStartTime = Date.now();
+      this._timerIntervalMs = intervalMs;
+      
+      // Define the timer callback
+      const timerCallback = async () => {
+        // Track when timer fires and reset start time
         this._lastRefreshCheckTime = Date.now();
-        this._log(`🔄 ⏰ Timer fired at ${new Date().toLocaleTimeString()}`);
+        this._timerStartTime = Date.now(); // Reset for next interval
         
         // If in error state, clear it and attempt reload
         if (this._errorState) {
@@ -5230,21 +5443,18 @@ class MediaCard extends LitElement {
         
         // Check pause states before advancing
         if (!this._isPaused && !this._backgroundPaused) {
+          // Reset pause log flag (timer is active again)
+          this._pauseLogShown = false;
+          
           // Check for new files FIRST (before video completion check)
           // This allows queue refresh to interrupt video playback in manual mode at position 1
-          this._log('🔄 Timer fired - checking provider type:', this.provider?.constructor?.name);
           let queueWasRefreshed = false;
           if (this.provider && this.provider.constructor.name !== 'SingleMediaProvider') {
-            this._log('🔄 Calling _checkForNewFiles()...');
             queueWasRefreshed = await this._checkForNewFiles();
-            this._log('🔄 _checkForNewFiles() returned:', queueWasRefreshed);
-          } else {
-            this._log('🔄 Skipping _checkForNewFiles() - SingleMediaProvider detected');
           }
           
           // If queue was refreshed, skip the rest of the timer logic
           if (queueWasRefreshed) {
-            this._log('🔄 Queue was refreshed - skipping normal timer behavior');
             return;
           }
           
@@ -5276,11 +5486,29 @@ class MediaCard extends LitElement {
             this._loadNext();
           }
         } else {
-          this._log(`🔄 ${modeLabel} skipped - isPaused:`, this._isPaused, 'backgroundPaused:', this._backgroundPaused);
+          // Only log ONCE when paused, not every timer tick
+          if (!this._pauseLogShown) {
+            this._log(`🔄 ${modeLabel} paused - timer will continue firing but no action taken`);
+            this._pauseLogShown = true;
+          }
         }
-      }, refreshSeconds * 1000);
+      };
       
-      this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
+      // If resuming with remaining time, use setTimeout first, then setInterval
+      if (remainingMs < intervalMs) {
+        this._log(`⏱️ Using timeout for remaining ${Math.round(remainingMs / 1000)}s, then switching to interval`);
+        this._refreshTimeout = setTimeout(() => {
+          timerCallback();
+          // After first fire, switch to regular interval
+          this._refreshInterval = setInterval(timerCallback, intervalMs);
+          this._log('✅ Switched to regular interval after resume, ID:', this._refreshInterval);
+        }, remainingMs);
+        this._log('✅ Resume timeout started with ID:', this._refreshTimeout);
+      } else {
+        // Normal startup - use setInterval from the beginning
+        this._refreshInterval = setInterval(timerCallback, intervalMs);
+        this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
+      }
     } else {
       this._log('🔄 Auto-advance disabled or not configured:', {
         refreshSeconds,
@@ -5331,16 +5559,23 @@ class MediaCard extends LitElement {
       this._log('🔄 Rescan result:', scanResult);
       this._log('🔄 Current time:', new Date().toLocaleTimeString());
       
+      // If this is the first scan (previousFirstItem is null), don't trigger refresh
+      // This prevents unnecessary reload on the first timer fire after initial load
+      if (scanResult.previousFirstItem === null) {
+        this._log('✅ First scan complete - establishing baseline, no refresh needed');
+        return false;
+      }
+      
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
         this._log(`🆕 Queue changed - new first item detected! Refreshing display...`);
-        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || 'none'}`);
-        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || 'none'}`);
+        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || scanResult.previousFirstItem || 'none'}`);
+        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
         await this._refreshQueue();
         return true; // Queue was refreshed
       } else {
         this._log('✅ Rescan complete - no change in first item, display stays the same');
-        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || 'none'}`);
+        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
         return false;
       }
     } catch (error) {
@@ -6118,6 +6353,13 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // V5.6: Ignore pause events during navigation
+    // Browser auto-pauses videos when navigating away (clicking next/prev)
+    if (this._navigatingAway) {
+      this._log('⏸️ Ignoring video pause - navigating away');
+      return;
+    }
+    
     // Mark that user has interacted with the video
     this._videoUserInteracted = true;
     this._log('🎬 User interacted with video (pause) - will play to completion');
@@ -6329,15 +6571,29 @@ class MediaCard extends LitElement {
     
     // Pause/resume the auto-advance timer
     if (this._isPaused) {
-      // Pause: Clear the interval
-      if (this._refreshInterval) {
-        this._log('🔄 Clearing interval on pause, ID:', this._refreshInterval);
-        clearInterval(this._refreshInterval);
-        this._refreshInterval = null;
+      // Pause: Calculate remaining time and clear the interval
+      if (this._refreshInterval || this._refreshTimeout) {
+        if (this._timerStartTime && this._timerIntervalMs) {
+          const elapsed = Date.now() - this._timerStartTime;
+          const remaining = Math.max(0, this._timerIntervalMs - elapsed);
+          this._pausedRemainingMs = remaining;
+          this._log(`⏸️ Pausing with ${Math.round(elapsed / 1000)}s elapsed, ${Math.round(remaining / 1000)}s remaining`);
+        }
+        
+        if (this._refreshInterval) {
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+        if (this._refreshTimeout) {
+          clearTimeout(this._refreshTimeout);
+          this._refreshTimeout = null;
+        }
       }
     } else {
-      // Resume: Restart auto-advance
+      // Resume: Restart auto-advance with remaining time
       this._setupAutoRefresh();
+      // Reset pause log flag (timer is active again)
+      this._pauseLogShown = false;
     }
   }
   
@@ -6444,7 +6700,6 @@ class MediaCard extends LitElement {
       
       // Priority 1: EXIF date_taken if available (from media_index)
       if (metadata.date_taken) {
-        
         // Backend returns date_taken as Unix timestamp (number)
         if (typeof metadata.date_taken === 'number') {
           date = new Date(metadata.date_taken * 1000); // Convert Unix timestamp to milliseconds
@@ -6459,7 +6714,6 @@ class MediaCard extends LitElement {
       
       // Priority 2: File created_time if no EXIF date (from media_index file metadata)
       if (!date && metadata.created_time) {
-        
         // created_time is ISO string like "2019-09-24T18:51:12"
         if (typeof metadata.created_time === 'string') {
           date = new Date(metadata.created_time);
@@ -7225,7 +7479,35 @@ class MediaCard extends LitElement {
   _handlePauseClick(e) {
     e.stopPropagation();
     this._setPauseState(!this._isPaused);
-    this._log(`🎮 ${this._isPaused ? 'PAUSED' : 'RESUMED'} slideshow (action button)`);
+    
+    // Stop timer when pausing, restart when resuming
+    if (this._isPaused) {
+      // Pause: Calculate remaining time and clear the interval/timeout
+      if (this._refreshInterval || this._refreshTimeout) {
+        if (this._timerStartTime && this._timerIntervalMs) {
+          const elapsed = Date.now() - this._timerStartTime;
+          const remaining = Math.max(0, this._timerIntervalMs - elapsed);
+          this._pausedRemainingMs = remaining;
+          this._log(`⏸️ Pausing with ${Math.round(elapsed / 1000)}s elapsed, ${Math.round(remaining / 1000)}s remaining`);
+        }
+        
+        if (this._refreshInterval) {
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+        if (this._refreshTimeout) {
+          clearTimeout(this._refreshTimeout);
+          this._refreshTimeout = null;
+        }
+        this._log('🎮 PAUSED slideshow - timer stopped');
+      }
+    } else {
+      // Resume: Restart auto-advance with remaining time
+      this._setupAutoRefresh();
+      this._log('▶️ RESUMED slideshow - timer restarted');
+      // Reset pause log flag (timer is active again)
+      this._pauseLogShown = false;
+    }
   }
   
   // Handle debug button click - toggle debug mode dynamically
@@ -8778,15 +9060,26 @@ class MediaCard extends LitElement {
     
     // Set up state monitoring to track entity changes
     // This allows the card to react when kiosk mode is manually toggled
+    this._log('🖼️ Setting up kiosk mode state listener for entity:', entity);
     this._kioskStateSubscription = this.hass.connection.subscribeEvents(
       (event) => {
         if (event.data.entity_id === entity) {
-          this._log('🖼️ Kiosk mode entity state changed:', event.data.new_state.state);
+          const newState = event.data.new_state.state;
+          this._log('🖼️ Kiosk mode entity state changed:', newState);
+          // V5.6: Invalidate header cache - kiosk mode changes header visibility
+          this._cachedHeaderElement = null;
+          this._cachedHeaderSelector = null;
+          // Delay viewport height recalculation to allow header transition to complete
+          setTimeout(() => {
+            this._log('🖼️ Triggering viewport height recalculation after kiosk toggle to:', newState);
+            this._updateAvailableHeight();
+          }, 300);
           this.requestUpdate(); // Re-render to show/hide kiosk indicator
         }
       },
       'state_changed'
     );
+    this._log('🖼️ Kiosk mode state listener subscribed');
   }
 
   _cleanupKioskModeMonitoring() {
@@ -9100,6 +9393,8 @@ class MediaCard extends LitElement {
   static styles = css`
     :host {
       display: block;
+      /* Smart-scale mode max-height - leaves ~20vh buffer for metadata visibility */
+      --smart-scale-max-height: 80vh;
     }
     .card {
       position: relative;
@@ -9113,79 +9408,140 @@ class MediaCard extends LitElement {
       background: var(--primary-background-color);
       /* Enable container-based sizing for child elements (cqi/cqw units) */
       container-type: inline-size;
+      /* V5.6: Enable flex centering by default for all modes */
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     /* V4 Smart aspect ratio handling - base rules for default mode only */
+    /* V5.6: Removed width: 100% to allow proper centering */
     :host(:not([data-aspect-mode])) img,
     :host(:not([data-aspect-mode])) video {
-      width: 100%;
+      max-width: 100%;
       height: auto;
-      display: block;
+      margin: auto;
     }
     
     :host([data-aspect-mode="viewport-fit"]) img {
-      max-height: 100vh;
+      max-height: var(--available-viewport-height, 100vh);
       max-width: 100vw;
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      /* Explicit alignment for flex child */
+      align-self: center;
+    }
+    
+    :host([data-aspect-mode="viewport-fit"]) .card {
+      height: var(--available-viewport-height, 100vh); /* Dynamic height accounts for HA header */
     }
     
     :host([data-aspect-mode="viewport-fit"]) .media-container {
-      height: 100vh;
-      display: flex;
-      align-items: center;
+      height: var(--available-viewport-height, 100vh);
+      /* Use CSS Grid for reliable centering */
+      display: grid !important;
+      place-items: center;
+      /* Override flex from base rules */
+      flex: 0 0 auto;
+      /* Constrain children to viewport */
+      max-width: 100vw;
+      max-height: var(--available-viewport-height, 100vh);
+      overflow: hidden;
+    }
+    
+    /* Ensure main-content fills viewport in viewport-fit mode */
+    :host([data-aspect-mode="viewport-fit"]) .main-content {
+      height: var(--available-viewport-height, 100vh);
+    }
+    
+    /* When panel is open, viewport-fit still uses dynamic viewport height */
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .media-container {
+      height: var(--available-viewport-height, 100vh);
+      max-height: var(--available-viewport-height, 100vh);
+      /* Use grid centering even with panel open */
+      display: grid !important;
+      place-items: center;
+      flex: 1;
       justify-content: center;
     }
     
-    /* When panel is open, viewport-fit uses card height, not viewport */
-    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .media-container {
+    /* Viewport-fill: Fill entire viewport with media */
+    :host([data-aspect-mode="viewport-fill"]) .card {
+      height: var(--available-viewport-height, 100vh);
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) .main-content {
       height: 100%;
-      max-height: none;
-      display: flex;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) .media-container {
+      height: 100%;
+      width: 100%;
+      display: flex !important;
       align-items: center;
       justify-content: center;
+      overflow: hidden;
     }
     
     :host([data-aspect-mode="viewport-fill"]) img {
-      width: 100vw;
-      height: 100vh;
+      width: 100%;
+      height: 100%;
       object-fit: cover;
-      margin: 0;
+      object-position: center center;
+    }
+    
+    :host([data-aspect-mode="viewport-fill"]) .main-content video {
+      width: 100% !important;
+      height: 100% !important;
+      max-width: none !important;
+      max-height: none !important;
+      object-fit: cover !important;
+      object-position: center center;
     }
     
     :host([data-aspect-mode="smart-scale"]) .media-container {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 50vh;
+      display: grid !important;
+      place-items: center;
+      /* Dynamic height for centering without scrolling. Fallback 50vh ensures minimum vertical centering space 
+         when dynamic height unavailable (e.g., during initial render). 50vh chosen as safe minimum that leaves 
+         room for metadata overlay while preventing content from being pushed off-screen. */
+      min-height: var(--available-viewport-height, 50vh);
     }
     
-    /* Smart-scale with panel open should fill available space */
+    /* Smart-scale with panel open should use min-height like panel-closed for centering */
     :host([data-aspect-mode="smart-scale"]) .card.panel-open .media-container {
-      min-height: 0;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      /* Same fallback value as panel-closed for consistent behavior */
+      min-height: var(--available-viewport-height, 50vh);
+      height: auto; /* Allow container to size to content */
+      display: grid !important;
+      place-items: center;
     }
     
     :host([data-aspect-mode="smart-scale"]) .card.panel-open img {
-      max-height: 100%;
+      max-height: var(--smart-scale-max-height); /* Match centering behavior with panel-closed */
       max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
     }
     
-    :host([data-aspect-mode="smart-scale"]) img {
-      max-height: 90vh;
+    :host([data-aspect-mode="smart-scale"]) .card.panel-open video {
+      max-height: var(--smart-scale-max-height);
       max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) img {
+      max-height: var(--smart-scale-max-height);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: auto;
     }
     
     /* V5.3: Fixed card height - only applies in default mode (PR #37 by BasicCPPDev) */
@@ -9224,7 +9580,7 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     
     /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
@@ -9240,7 +9596,7 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     :host(:not([data-aspect-mode]):not([data-card-height])) video {
       max-height: var(--media-max-height, 400px);
@@ -9248,7 +9604,7 @@ class MediaCard extends LitElement {
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      margin: auto;
     }
     
     /* Remove max-height constraint in fullscreen mode */
@@ -9283,32 +9639,31 @@ class MediaCard extends LitElement {
     
     video {
       max-height: 400px;
-      object-fit: contain;
-      background: transparent;
-    }
-
-    :host([data-aspect-mode="viewport-fit"]) video {
-      max-height: 100vh;
-      max-width: 100vw;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      display: block;
-    }
-    
-    :host([data-aspect-mode="viewport-fill"]) video {
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-    }
-    
-    :host([data-aspect-mode="smart-scale"]) video {
-      max-height: 90vh;
       max-width: 100%;
       width: auto;
       height: auto;
       object-fit: contain;
-      display: block;
+      background: transparent;
+      margin: auto;
+    }
+
+    :host([data-aspect-mode="viewport-fit"]) .main-content video {
+      max-height: var(--available-viewport-height, 100vh) !important;
+      max-width: 100vw !important;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      /* Explicit alignment for flex child */
+      align-self: center;
+    }
+    
+    :host([data-aspect-mode="smart-scale"]) video {
+      max-height: var(--smart-scale-max-height);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      margin: auto;
     }
     
     /* V4 Navigation Zones - invisible overlay controls */
@@ -10129,20 +10484,31 @@ class MediaCard extends LitElement {
       justify-content: center;
     }
 
-    /* V5.5: Fix viewport-fit image cropping when panel is open */
-    /* When panel is open, images should fit within available card width, not full viewport */
-    :host([data-aspect-mode="viewport-fit"]) .card.panel-open img {
+    /* V5.6: Fix viewport-fit image sizing when panel is open */
+    /* When panel is open, images should fit within available space using dynamic height */
+    /* Scope to .main-content to avoid affecting thumbnail images */
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .main-content img {
       max-width: 100% !important;
-      max-height: 100vh !important;
+      max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
       height: auto !important;
     }
 
-    :host([data-aspect-mode="viewport-fit"]) .card.panel-open video {
+    :host([data-aspect-mode="viewport-fit"]) .card.panel-open .main-content video {
       max-width: 100% !important;
-      max-height: 100vh !important;
+      max-height: var(--available-viewport-height, 100vh) !important;
       width: auto !important;
       height: auto !important;
+    }
+
+    /* Viewport-fill with panel open: only affect thumbnails in side panel */
+    :host([data-aspect-mode="viewport-fill"]) .side-panel img {
+      position: static !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain !important;
     }
 
     .side-panel {
@@ -10595,7 +10961,6 @@ class MediaCard extends LitElement {
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
-            style="width: 100%; height: auto; display: block; background: transparent; max-width: 100%;"
           >
             <source src="${this.mediaUrl}" type="video/mp4">
             <source src="${this.mediaUrl}" type="video/webm">
@@ -14046,10 +14411,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <label>Image Scaling</label>
             <div>
               <select @change=${this._aspectModeChanged} .value=${this._config.aspect_mode || 'default'}>
-                <option value="default">Default (fit to card width)</option>
-                <option value="smart-scale">Smart Scale (limit height, prevent scrolling)</option>
-                <option value="viewport-fit">Viewport Fit (fit entire image in viewport)</option>
-                <option value="viewport-fill">Viewport Fill (fill entire viewport)</option>
+                <option value="default">Default (Fixed Height)</option>
+                <option value="smart-scale">Smart Scale (Leaves Space for Metadata)</option>
+                <option value="viewport-fit">Viewport Fit (Maximize Image Size)</option>
+                <option value="viewport-fill">Viewport Fill (Edge-to-Edge Immersive)</option>
               </select>
               <div class="help-text">How images should be scaled</div>
             </div>
