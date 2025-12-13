@@ -3748,16 +3748,31 @@ export class MediaCard extends LitElement {
     
     // Stop timer when pausing, restart when resuming
     if (this._isPaused) {
-      // Pause: Clear the interval
-      if (this._refreshInterval) {
-        clearInterval(this._refreshInterval);
-        this._refreshInterval = null;
+      // Pause: Calculate remaining time and clear the interval/timeout
+      if (this._refreshInterval || this._refreshTimeout) {
+        if (this._timerStartTime && this._timerIntervalMs) {
+          const elapsed = Date.now() - this._timerStartTime;
+          const remaining = Math.max(0, this._timerIntervalMs - elapsed);
+          this._pausedRemainingMs = remaining;
+          this._log(`⏸️ Pausing with ${Math.round(elapsed / 1000)}s elapsed, ${Math.round(remaining / 1000)}s remaining`);
+        }
+        
+        if (this._refreshInterval) {
+          clearInterval(this._refreshInterval);
+          this._refreshInterval = null;
+        }
+        if (this._refreshTimeout) {
+          clearTimeout(this._refreshTimeout);
+          this._refreshTimeout = null;
+        }
         this._log('🎮 PAUSED slideshow - timer stopped');
       }
     } else {
-      // Resume: Restart auto-advance
+      // Resume: Restart auto-advance with remaining time
       this._setupAutoRefresh();
       this._log('▶️ RESUMED slideshow - timer restarted');
+      // Reset pause log flag (timer is active again)
+      this._pauseLogShown = false;
     }
   }
   
