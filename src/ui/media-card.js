@@ -1793,16 +1793,23 @@ export class MediaCard extends LitElement {
       this._log('🔄 Rescan result:', scanResult);
       this._log('🔄 Current time:', new Date().toLocaleTimeString());
       
+      // If this is the first scan (previousFirstItem is null), don't trigger refresh
+      // This prevents unnecessary reload on the first timer fire after initial load
+      if (scanResult.previousFirstItem === null) {
+        this._log('✅ First scan complete - establishing baseline, no refresh needed');
+        return false;
+      }
+      
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
         this._log(`🆕 Queue changed - new first item detected! Refreshing display...`);
-        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || 'none'}`);
-        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || 'none'}`);
+        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || scanResult.previousFirstItem || 'none'}`);
+        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
         await this._refreshQueue();
         return true; // Queue was refreshed
       } else {
         this._log('✅ Rescan complete - no change in first item, display stays the same');
-        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || 'none'}`);
+        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
         return false;
       }
     } catch (error) {
