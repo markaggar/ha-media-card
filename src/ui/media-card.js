@@ -408,7 +408,9 @@ export class MediaCard extends LitElement {
           }
         }
       }
-    }    const headerHeight = header?.offsetHeight || 0;
+    }
+    
+    const headerHeight = header?.offsetHeight || 0;
     
     // Check if header is actually visible (offsetHeight > 0 and not hidden)
     const isHeaderVisible = headerHeight > 0 && 
