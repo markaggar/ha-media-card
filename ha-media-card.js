@@ -4019,6 +4019,43 @@ class MediaCard extends LitElement {
       });
       this._viewportResizeObserver.observe(document.body);
     }
+    
+    // Setup polling-based header visibility check for kiosk mode
+    // This is more reliable than MutationObserver since kiosk integration may
+    // manipulate DOM in ways that don't trigger observers
+    if (!this._headerVisibilityInterval) {
+      this._lastHeaderVisible = null;
+      this._headerVisibilityInterval = setInterval(() => {
+        const haRoot = document.querySelector('home-assistant');
+        if (!haRoot?.shadowRoot) return;
+        
+        // Find header element
+        const findHeader = (root) => {
+          const element = root.querySelector('div.header, .header, app-header, app-toolbar');
+          if (element) return element;
+          const elementsWithShadow = root.querySelectorAll('*');
+          for (const el of elementsWithShadow) {
+            if (el.shadowRoot) {
+              const found = findHeader(el.shadowRoot);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        
+        const header = findHeader(haRoot.shadowRoot);
+        if (header) {
+          const isVisible = header.offsetHeight > 0;
+          
+          // Only recalculate if visibility state changed
+          if (this._lastHeaderVisible !== isVisible) {
+            this._log(`📐 Header visibility changed: ${isVisible ? 'visible' : 'hidden'}`);
+            this._lastHeaderVisible = isVisible;
+            this._updateAvailableHeight();
+          }
+        }
+      }, 200); // Check every 200ms
+    }
   }
   
   /**
@@ -4028,6 +4065,10 @@ class MediaCard extends LitElement {
     if (this._viewportResizeObserver) {
       this._viewportResizeObserver.disconnect();
       this._viewportResizeObserver = null;
+    }
+    if (this._headerVisibilityInterval) {
+      clearInterval(this._headerVisibilityInterval);
+      this._headerVisibilityInterval = null;
     }
   }
   
@@ -8895,19 +8936,23 @@ class MediaCard extends LitElement {
     
     // Set up state monitoring to track entity changes
     // This allows the card to react when kiosk mode is manually toggled
+    this._log('🖼️ Setting up kiosk mode state listener for entity:', entity);
     this._kioskStateSubscription = this.hass.connection.subscribeEvents(
       (event) => {
         if (event.data.entity_id === entity) {
-          this._log('🖼️ Kiosk mode entity state changed:', event.data.new_state.state);
+          const newState = event.data.new_state.state;
+          this._log('🖼️ Kiosk mode entity state changed:', newState);
           // Delay viewport height recalculation to allow header transition to complete
           setTimeout(() => {
+            this._log('🖼️ Triggering viewport height recalculation after kiosk toggle to:', newState);
             this._updateAvailableHeight();
-          }, 100);
+          }, 300);
           this.requestUpdate(); // Re-render to show/hide kiosk indicator
         }
       },
       'state_changed'
     );
+    this._log('🖼️ Kiosk mode state listener subscribed');
   }
 
   _cleanupKioskModeMonitoring() {
