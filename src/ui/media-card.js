@@ -1127,6 +1127,7 @@ export class MediaCard extends LitElement {
 
     // V5.5: Panel Navigation Override
     if (this._panelOpen && this._panelQueue.length > 0) {
+      this._navigatingAway = false;
       return await this._loadNextPanel();
     }
     
@@ -1349,6 +1350,7 @@ export class MediaCard extends LitElement {
 
     // V5.5: Panel Navigation Override
     if (this._panelOpen && this._panelQueue.length > 0) {
+      this._navigatingAway = false;
       return await this._loadPreviousPanel();
     }
     
