@@ -1,4 +1,23 @@
 ## v5.5.0 (In Development)
+### Fixed
+- **Panel Opening Position with Fixed Card Height**
+  - Panel now opens on right side (not bottom) when using fixed card height in default scaling mode
+  - Override `flex-direction` to `row` when panel is open to maintain consistent side-by-side layout
+  - Fixes regression where thumbnails appeared below media instead of alongside it
+
+- **Video Thumbnail Click Pause Bug**
+  - Fixed slideshow pausing when clicking video thumbnails in panel
+  - Root cause: Old video's pause event firing during thumbnail navigation
+  - Added `_navigatingAway` flag to `_loadPanelItem()` and `_jumpToQueuePosition()` methods
+  - Prevents video pause events from triggering slideshow pause during thumbnail navigation
+  - Consistent with existing `_loadNext()` and `_loadPrevious()` flag handling
+
+- **Video Controls Display**
+  - Changed default: "Video options: ..." text now hidden by default
+  - Logic changed from `if (config.hide_video_controls_display)` to `if (config.hide_video_controls_display !== false)`
+  - Removed "Hide Options Display" checkbox from editor UI (no longer needed)
+  - Users can still set `hide_video_controls_display: false` in YAML to show text if desired
+
 ### Added
 - **Improved Aspect Mode UX**
   - Updated dropdown labels to better describe each mode's behavior

@@ -1473,9 +1473,13 @@ export class MediaCard extends LitElement {
   }
 
   async _loadPanelItem(index) {
+    // V5.6: Set flag to ignore video pause events during thumbnail click
+    this._navigatingAway = true;
+    
     const item = this._panelQueue[index];
     if (!item) {
       console.error('[MediaCard] No item at panel index:', index);
+      this._navigatingAway = false;
       return;
     }
     
@@ -1517,11 +1521,18 @@ export class MediaCard extends LitElement {
     // Update display
     await this._resolveMediaUrl();
     this.requestUpdate();
+    
+    // Clear navigation flag after display updates
+    this._navigatingAway = false;
   }
 
   async _jumpToQueuePosition(queueIndex) {
+    // V5.6: Set flag to ignore video pause events during thumbnail click
+    this._navigatingAway = true;
+    
     if (!this.navigationQueue || queueIndex < 0 || queueIndex >= this.navigationQueue.length) {
       console.error('[MediaCard] Invalid queue position:', queueIndex);
+      this._navigatingAway = false;
       return;
     }
 
@@ -3193,8 +3204,8 @@ export class MediaCard extends LitElement {
   
   // V4: Video info overlay
   _renderVideoInfo() {
-    // Check if we should hide video controls display
-    if (this.config.hide_video_controls_display) {
+    // Check if we should hide video controls display (default: true)
+    if (this.config.hide_video_controls_display !== false) {
       return '';
     }
     
@@ -5834,6 +5845,11 @@ export class MediaCard extends LitElement {
     :host([data-card-height]:not([data-aspect-mode])) .card {
       display: flex;
       flex-direction: column;
+    }
+    
+    /* Override to horizontal layout when panel is open */
+    :host([data-card-height]:not([data-aspect-mode])) .card.panel-open {
+      flex-direction: row;
     }
     
     :host([data-card-height]:not([data-aspect-mode])) .title {
