@@ -1559,6 +1559,9 @@ export class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
+    // Clear navigation flag after display updates
+    this._navigatingAway = false;
+    
     // V5: Setup auto-advance after jumping to position
     this._setupAutoRefresh();
   }
