@@ -18,6 +18,13 @@
   - Removed "Hide Options Display" checkbox from editor UI (no longer needed)
   - Users can still set `hide_video_controls_display: false` in YAML to show text if desired
 
+### Changed
+- **Code Quality: Timer Management Refactoring**
+  - Extracted duplicated timer pause/resume logic into helper methods `_pauseTimer()` and `_resumeTimer()`
+  - Eliminates code duplication between `_handleCenterClick` and `_handlePauseClick` methods
+  - Ensures consistent timer behavior across all pause/resume interactions
+  - Makes future timer-related updates easier to maintain
+
 ### Added
 - **Improved Aspect Mode UX**
   - Updated dropdown labels to better describe each mode's behavior
