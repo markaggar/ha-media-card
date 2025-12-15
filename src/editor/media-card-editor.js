@@ -857,11 +857,6 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
-  _hideVideoControlsDisplayChanged(ev) {
-    this._config = { ...this._config, hide_video_controls_display: ev.target.checked };
-    this._fireConfigChanged();
-  }
-
   _videoMaxDurationChanged(ev) {
     const duration = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, video_max_duration: duration };
@@ -3003,18 +2998,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._mutedChanged}
                 />
                 <div class="help-text">Start video without sound</div>
-              </div>
-            </div>
-            
-            <div class="config-row">
-              <label>Hide Options Display</label>
-              <div>
-                <input
-                  type="checkbox"
-                  .checked=${this._config.hide_video_controls_display || false}
-                  @change=${this._hideVideoControlsDisplayChanged}
-                />
-                <div class="help-text">Hide the "Video options: ..." text below the video</div>
               </div>
             </div>
             
