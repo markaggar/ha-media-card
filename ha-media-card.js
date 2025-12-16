@@ -3816,6 +3816,22 @@ class MediaCard extends LitElement {
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
     this._tapTimeout = null; // V4 tap action double-tap detection
+    this._frontLayerUrl = ''; // V5.6: Front layer for crossfade
+    this._backLayerUrl = ''; // V5.6: Back layer for crossfade
+    this._frontLayerActive = true; // V5.6: Which layer is currently visible
+    this._pendingLayerSwap = false; // V5.6: Flag to trigger swap after image loads
+    
+    // V5.6: Display Entities System
+    this._displayEntitiesVisible = false; // Current visibility state
+    this._currentEntityIndex = 0; // Index in filtered entities array
+    this._entityStates = new Map(); // entity_id -> state object
+    this._entityCycleTimer = null; // Timer for rotating entities
+    this._entityFadeTimeout = null; // Timeout for fade transitions
+    this._recentlyChangedEntities = new Set(); // Track entities that changed recently
+    this._unsubscribeEntities = null; // Unsubscribe function for entity state changes
+    this._entityConditionCache = new Map(); // entity_id -> boolean (cached condition results)
+    this._evaluatingConditions = false; // Flag to prevent concurrent evaluations
+    
     this._holdTimeout = null; // V4 hold action detection
     this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
     this._lastLogTime = {}; // V4 log throttling
@@ -3967,6 +3983,9 @@ class MediaCard extends LitElement {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
     }
+    
+    // V5.6: Cleanup display entities
+    this._cleanupDisplayEntities();
   }
 
   // V4: Force video reload when URL changes
@@ -4421,6 +4440,17 @@ class MediaCard extends LitElement {
         show_root_folder: true,
         position: 'bottom-left',
         ...config.metadata
+      },
+      // V5.6: Display Entities defaults
+      display_entities: {
+        enabled: false,
+        position: 'top-left',
+        entities: [], // Array of entity configs (YAML only)
+        cycle_interval: 10, // seconds
+        transition_duration: 500, // milliseconds
+        prefer_recent_changes: false,
+        recent_change_window: 60, // seconds
+        ...config.display_entities
       }
     };
     
@@ -4491,6 +4521,11 @@ class MediaCard extends LitElement {
     if (hass && !this.provider) {
       this._log('💎 Triggering provider initialization');
       this._initializeProvider();
+    }
+    
+    // V5.6: Subscribe to display entities when hass is available
+    if (hass && this.config?.display_entities?.enabled) {
+      this._initDisplayEntities();
     }
     
     // V5.4: Monitor media_index entity state for auto-recovery after HA restart
@@ -5900,6 +5935,41 @@ class MediaCard extends LitElement {
     }
   }
 
+  // V5.6: Helper to set mediaUrl with crossfade transition
+  _setMediaUrl(url) {
+    this.mediaUrl = url;
+    
+    // Only use crossfade for images, not videos
+    const isVideo = this._isVideoFile(url);
+    
+    if (!isVideo) {
+      const duration = this.config?.transition?.duration ?? 300;
+      
+      // For instant transitions (0ms), bypass double-buffering entirely
+      if (duration === 0) {
+        // Just update - render will show single image directly
+        this.requestUpdate();
+      } else {
+        // Crossfade: set new image on hidden layer, then swap after it loads
+        if (this._frontLayerActive) {
+          this._backLayerUrl = url;
+        } else {
+          this._frontLayerUrl = url;
+        }
+        
+        // Set flag to trigger swap when the new image loads
+        this._pendingLayerSwap = true;
+        this._transitionDuration = duration;
+        this.requestUpdate();
+      }
+    } else {
+      // For videos, just clear the image layers immediately
+      this._frontLayerUrl = '';
+      this._backLayerUrl = '';
+      this.requestUpdate();
+    }
+  }
+
   async _resolveMediaUrl() {
     if (!this.currentMedia || !this.hass) {
       this._log('Cannot resolve URL - missing currentMedia or hass');
@@ -5921,7 +5991,7 @@ class MediaCard extends LitElement {
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
       this._log('Using direct HTTP URL');
-      this.mediaUrl = mediaId;
+      this._setMediaUrl(mediaId);
       this.requestUpdate();
       return;
     }
@@ -5945,11 +6015,12 @@ class MediaCard extends LitElement {
           this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
         }
         
-        this.mediaUrl = finalUrl;
+        this._setMediaUrl(finalUrl);
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCard] Failed to resolve media URL:', error);
-        this.mediaUrl = '';
+        this._setMediaUrl('');
+        this._nextMediaUrl = '';
         this.requestUpdate();
       }
       return;
@@ -5973,7 +6044,7 @@ class MediaCard extends LitElement {
         });
         this._log('✅ File exists and resolved to:', resolved.url);
         this._validationDepth = 0; // Reset on success
-        this.mediaUrl = resolved.url;
+        this._setMediaUrl(resolved.url);
         this.requestUpdate();
         return; // Success - don't fall through to fallback
       } catch (error) {
@@ -6000,7 +6071,7 @@ class MediaCard extends LitElement {
         }
         
         // Clear the current media to avoid showing broken state
-        this.mediaUrl = '';
+        this._setMediaUrl('');
         
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
@@ -6019,7 +6090,7 @@ class MediaCard extends LitElement {
 
     // Fallback: use as-is
     this._log('Using media ID as-is (fallback)');
-    this.mediaUrl = mediaId;
+    this._setMediaUrl(mediaId);
     this.requestUpdate();
   }
 
@@ -6379,8 +6450,10 @@ class MediaCard extends LitElement {
     this._log('🎬 User interacted with video (pause) - will play to completion');
     
     // Only pause slideshow if video was manually paused (not ended)
+    // Also verify we're actually showing a video (not navigated to image)
     const videoElement = this.renderRoot?.querySelector('video');
-    if (videoElement && !videoElement.ended && !this._isPaused) {
+    const isCurrentlyVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    if (videoElement && !videoElement.ended && !this._isPaused && isCurrentlyVideo) {
       this._log('🎬 Video manually paused - pausing slideshow');
       this._pausedByVideo = true;
       this._setPauseState(true);
@@ -6606,7 +6679,7 @@ class MediaCard extends LitElement {
     this.requestUpdate();
   }
 
-  _onMediaLoaded() {
+  _onMediaLoaded(e) {
     // V4: Only log once when media initially loads
     if (!this._mediaLoadedLogged) {
       this._log('Media loaded successfully:', this.mediaUrl);
@@ -6617,6 +6690,32 @@ class MediaCard extends LitElement {
     this._errorState = null;
     if (this._retryAttempts.has(this.mediaUrl)) {
       this._retryAttempts.delete(this.mediaUrl);
+    }
+    
+    // V5.6: Handle crossfade layer swap when new image loads
+    if (this._pendingLayerSwap) {
+      const loadedUrl = e?.target?.src;
+      const newLayerUrl = this._frontLayerActive ? this._backLayerUrl : this._frontLayerUrl;
+      
+      // Only swap if the loaded image is the new layer (not the old one)
+      if (loadedUrl && newLayerUrl && loadedUrl.includes(newLayerUrl.split('?')[0])) {
+        this._pendingLayerSwap = false;
+        
+        // Swap layers to trigger crossfade
+        this._frontLayerActive = !this._frontLayerActive;
+        this.requestUpdate();
+        
+        // Clear old layer after transition
+        const duration = this._transitionDuration || 300;
+        setTimeout(() => {
+          if (this._frontLayerActive) {
+            this._backLayerUrl = '';
+          } else {
+            this._frontLayerUrl = '';
+          }
+          this.requestUpdate();
+        }, duration + 100);
+      }
     }
     
     // V5.3: Apply default zoom AFTER image loads (PR #37 by BasicCPPDev)
@@ -6643,6 +6742,25 @@ class MediaCard extends LitElement {
     
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
+  }
+  
+  // V5.6: Handle image load for specific layer (transition system)
+  _onLayerLoaded(e, layer) {
+    this._log(`Image layer ${layer} loaded successfully`);
+    
+    // If this is the next layer (not currently active), trigger transition
+    if (layer !== this._currentLayer) {
+      this._log(`Swapping to layer ${layer} - transitioning from ${this._currentLayer} to ${layer}`);
+      
+      // Update mediaUrl to match the newly visible layer
+      this.mediaUrl = this._nextMediaUrl;
+      this._currentLayer = layer;
+      
+      this._log(`Updated mediaUrl to: ${this.mediaUrl}`);
+    }
+    
+    // Call the regular media loaded handler for other processing
+    this._onMediaLoaded();
   }
   
   // V4: Metadata display methods
@@ -6851,6 +6969,47 @@ class MediaCard extends LitElement {
     return parts.join(' • ');
   }
   
+  // Render display entities overlay
+  _renderDisplayEntities() {
+    const config = this.config?.display_entities;
+    if (!config?.enabled || !config.entities?.length) {
+      return html``;
+    }
+
+    const entities = this._getFilteredEntities();
+    if (!entities.length) {
+      return html``;
+    }
+
+    // Get current entity
+    const entityId = entities[this._currentEntityIndex % entities.length];
+    const entityConfig = config.entities.find(e => e.entity === entityId);
+    const state = this.hass?.states?.[entityId];
+
+    if (!state) {
+      return html``;
+    }
+
+    // Format entity display
+    const label = entityConfig?.label || '';
+    const stateText = state.state;
+    const unit = state.attributes?.unit_of_measurement || '';
+    const displayText = label 
+      ? `${label} ${stateText}${unit}` 
+      : `${stateText}${unit}`;
+
+    // Position class
+    const position = config.position || 'top-left';
+    const positionClass = `position-${position}`;
+    const visibleClass = this._displayEntitiesVisible ? 'visible' : '';
+
+    return html`
+      <div class="display-entities ${positionClass} ${visibleClass}">
+        ${displayText}
+      </div>
+    `;
+  }
+
   // V4: Format folder path for display
   _formatFolderForDisplay(fullFolderPath, showRoot) {
     if (!fullFolderPath) return '';
@@ -7396,6 +7555,204 @@ class MediaCard extends LitElement {
 
   getCardSize() {
     return 3;
+  }
+  
+  // V5.6: Display Entities System
+  _initDisplayEntities() {
+    if (!this.hass || !this.config?.display_entities?.enabled) return;
+    
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length === 0) return;
+    
+    // Extract entity IDs
+    const entityIds = entities.map(e => typeof e === 'string' ? e : e.entity).filter(Boolean);
+    if (entityIds.length === 0) return;
+    
+    // Only initialize once - don't restart timer on every hass update
+    if (this._entityCycleTimer) {
+      // Already initialized, just update state tracking and re-evaluate conditions
+      let stateChanged = false;
+      entityIds.forEach(entityId => {
+        const state = this.hass.states[entityId];
+        if (state) {
+          const oldState = this._entityStates.get(entityId);
+          if (oldState && oldState.state !== state.state) {
+            // State changed - track it
+            this._recentlyChangedEntities.add(entityId);
+            const recentWindow = (this.config.display_entities.recent_change_window || 60) * 1000;
+            setTimeout(() => {
+              this._recentlyChangedEntities.delete(entityId);
+            }, recentWindow);
+            stateChanged = true;
+          }
+          this._entityStates.set(entityId, state);
+        }
+      });
+      
+      // Re-evaluate conditions when state changes
+      if (stateChanged) {
+        this._evaluateAllConditions();
+      }
+      return;
+    }
+    
+    this._log('📊 Initializing display entities:', entityIds.length, 'entities');
+    
+    // Initialize state tracking
+    entityIds.forEach(entityId => {
+      const state = this.hass.states[entityId];
+      if (state) {
+        this._entityStates.set(entityId, state);
+      }
+    });
+    
+    // Evaluate conditions before starting cycle
+    this._evaluateAllConditions().then(() => {
+      // Start cycle timer if multiple entities pass conditions
+      const filteredCount = this._getFilteredEntities().length;
+      if (filteredCount > 1) {
+        this._startEntityCycle();
+      } else if (filteredCount === 1) {
+        // Single entity - just show it
+        this._displayEntitiesVisible = true;
+        this.requestUpdate();
+      }
+    });
+  }
+
+  
+  _startEntityCycle() {
+    // Clear existing timer
+    if (this._entityCycleTimer) {
+      clearInterval(this._entityCycleTimer);
+    }
+    
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length <= 1) return;
+    
+    // Show first entity immediately
+    this._currentEntityIndex = 0;
+    this._displayEntitiesVisible = true;
+    this.requestUpdate();
+    
+    // Set up rotation timer
+    const interval = (this.config.display_entities.cycle_interval || 10) * 1000;
+    this._entityCycleTimer = setInterval(() => {
+      this._cycleToNextEntity();
+    }, interval);
+    
+    this._log('📊 Started entity cycle timer, interval:', interval, 'ms');
+  }
+  
+  _cycleToNextEntity() {
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length <= 1) return;
+    
+    // Fade out
+    this._displayEntitiesVisible = false;
+    this.requestUpdate();
+    
+    // Wait for fade transition, then update and fade in
+    const duration = this.config.display_entities.transition_duration || 500;
+    setTimeout(() => {
+      this._currentEntityIndex = (this._currentEntityIndex + 1) % entities.length;
+      this._displayEntitiesVisible = true;
+      this.requestUpdate();
+    }, duration / 2); // Half duration for fade out, half for fade in
+  }
+  
+  async _evaluateEntityCondition(condition) {
+    if (!condition || !this.hass) return true;
+    
+    try {
+      // render_template is a subscription API - we need to subscribe, get result, unsubscribe
+      return await new Promise((resolve, reject) => {
+        let unsubscribe;
+        const timeout = setTimeout(() => {
+          if (unsubscribe) unsubscribe();
+          reject(new Error('Template evaluation timeout'));
+        }, 5000);
+        
+        this.hass.connection.subscribeMessage(
+          (message) => {
+            clearTimeout(timeout);
+            if (unsubscribe) unsubscribe();
+            
+            // Extract the actual result from the message object
+            const result = message?.result !== undefined ? message.result : message;
+            this._log('🔍 Template result:', condition, '→', result);
+            
+            // Handle different result formats
+            const resultStr = String(result).trim().toLowerCase();
+            const passes = resultStr === 'true' || result === true;
+            
+            resolve(passes);
+          },
+          {
+            type: "render_template",
+            template: condition
+          }
+        ).then(unsub => {
+          unsubscribe = unsub;
+        });
+      });
+    } catch (error) {
+      console.warn('[MediaCard] Failed to evaluate entity condition:', condition, error);
+      return false;
+    }
+  }
+  
+  async _evaluateAllConditions() {
+    if (this._evaluatingConditions || !this.hass) return;
+    this._evaluatingConditions = true;
+    
+    const entities = this.config.display_entities.entities || [];
+    const promises = entities.map(async (entityConfig) => {
+      const entityId = typeof entityConfig === 'string' ? entityConfig : entityConfig.entity;
+      if (!entityId) return;
+      
+      const condition = typeof entityConfig === 'object' ? entityConfig.condition : null;
+      const result = await this._evaluateEntityCondition(condition);
+      this._entityConditionCache.set(entityId, result);
+    });
+    
+    await Promise.all(promises);
+    this._evaluatingConditions = false;
+    this.requestUpdate();
+  }
+  
+  _getFilteredEntities() {
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length === 0) return [];
+    
+    // Filter entities based on cached condition results
+    return entities
+      .map(e => typeof e === 'string' ? e : e.entity)
+      .filter(entityId => {
+        if (!entityId) return false;
+        // If condition not yet evaluated, assume true (will evaluate async)
+        if (!this._entityConditionCache.has(entityId)) return true;
+        return this._entityConditionCache.get(entityId);
+      });
+  }
+  
+  _cleanupDisplayEntities() {
+    if (this._entityCycleTimer) {
+      clearInterval(this._entityCycleTimer);
+      this._entityCycleTimer = null;
+    }
+    
+    if (this._entityFadeTimeout) {
+      clearTimeout(this._entityFadeTimeout);
+      this._entityFadeTimeout = null;
+    }
+    
+    this._entityConditionCache.clear();
+    this._evaluatingConditions = false;
+    
+    this._entityStates.clear();
+    this._recentlyChangedEntities.clear();
+    this._displayEntitiesVisible = false;
   }
   
   // V4: Action Button Handlers
@@ -8737,12 +9094,20 @@ class MediaCard extends LitElement {
   }
   
   /**
+   * V5.6: Check if file path/URL is a video
+   */
+  _isVideoFile(path) {
+    if (!path) return false;
+    return MediaUtils.detectFileType(path) === 'video';
+  }
+  
+  /**
    * V5.6: Check if item is a video file
    */
   _isVideoItem(item) {
     if (!item) return false;
     const path = item.media_content_id || item.path || '';
-    return MediaUtils.detectFileType(path) === 'video';
+    return this._isVideoFile(path);
   }
   
   /**
@@ -9415,8 +9780,29 @@ class MediaCard extends LitElement {
       justify-content: center;
     }
     
+    /* V5.6: Crossfade layers - both images stacked on top of each other */
+    .media-container .image-layer {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      transition: opacity var(--transition-duration, 300ms) ease-in-out;
+    }
+    
+    .media-container .image-layer.active {
+      opacity: 1;
+      z-index: 2;
+    }
+    
+    .media-container .image-layer.inactive {
+      opacity: 0;
+      z-index: 1;
+    }
+    
     /* V4 Smart aspect ratio handling - base rules for default mode only */
-    /* V5.6: Removed width: 100% to allow proper centering */
     :host(:not([data-aspect-mode])) img,
     :host(:not([data-aspect-mode])) video {
       max-width: 100%;
@@ -9680,8 +10066,8 @@ class MediaCard extends LitElement {
       width: 100%;
       height: 100%;
       pointer-events: none;
-      /* Keep below overlays and HA header */
-      z-index: 1;
+      /* V5.6: Increase z-index to show over images */
+      z-index: 10;
     }
 
     .nav-zone {
@@ -9717,7 +10103,7 @@ class MediaCard extends LitElement {
     /* On mouse devices, show background overlay on hover */
     @media (hover: hover) and (pointer: fine) {
       .nav-zone:hover {
-        background: rgba(0, 0, 0, 0.2);
+        background: rgba(0, 0, 0, 0.4);
       }
     }
 
@@ -9726,7 +10112,7 @@ class MediaCard extends LitElement {
       content: '◀';
       color: white;
       font-size: 1.5em;
-      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      text-shadow: 0 0 12px rgba(0, 0, 0, 1), 0 0 4px rgba(0, 0, 0, 1);
       opacity: 0;
       transition: opacity 0.2s ease;
     }
@@ -9734,7 +10120,7 @@ class MediaCard extends LitElement {
       content: '▶';
       color: white;
       font-size: 1.5em;
-      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      text-shadow: 0 0 12px rgba(0, 0, 0, 1), 0 0 4px rgba(0, 0, 0, 1);
       opacity: 0;
       transition: opacity 0.2s ease;
     }
@@ -9756,7 +10142,7 @@ class MediaCard extends LitElement {
     /* Show background when visible (not just hover) */
     /* In touch-explicit mode, show background overlay */
     .nav-zone.show-buttons {
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(0, 0, 0, 0.4);
     }
     
     /* V4: Metadata overlay */
@@ -9798,6 +10184,52 @@ class MediaCard extends LitElement {
 
     .metadata-overlay.metadata-top-right {
       top: 8px;
+      right: 8px;
+    }
+
+    /* Display Entities Overlay */
+    .display-entities {
+      position: absolute;
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.70);
+      color: var(--primary-text-color);
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(1.0rem, 1.6cqi, 2.2rem));
+      font-weight: 500;
+      line-height: 1.3;
+      pointer-events: none;
+      z-index: 2;
+      backdrop-filter: blur(15px);
+      -webkit-backdrop-filter: blur(15px);
+      opacity: 0;
+      transition: opacity var(--display-entities-transition, 500ms) ease;
+      max-width: calc(100% - 16px);
+      word-break: break-word;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    .display-entities.visible {
+      opacity: 1;
+    }
+
+    /* Display entities positioning */
+    .display-entities.position-top-left {
+      top: 8px;
+      left: 8px;
+    }
+
+    .display-entities.position-top-right {
+      top: 8px;
+      right: 8px;
+    }
+
+    .display-entities.position-bottom-left {
+      bottom: 8px;
+      left: 8px;
+    }
+
+    .display-entities.position-bottom-right {
+      bottom: 8px;
       right: 8px;
     }
 
@@ -10862,8 +11294,11 @@ class MediaCard extends LitElement {
       `;
     }
 
+    // V5.6: Set transition duration CSS variable (default 300ms)
+    const transitionDuration = this.config.transition?.duration ?? 300;
+    
     return html`
-      <ha-card>
+      <ha-card style="--transition-duration: ${transitionDuration}ms">
         <div class="card ${this._panelOpen ? 'panel-open' : ''}"
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0">
@@ -10936,10 +11371,12 @@ class MediaCard extends LitElement {
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
     const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
 
+    const displayEntitiesTransition = this.config?.display_entities?.transition_duration || 500;
+
     return html`
       <div 
         class="media-container"
-        style="--ha-media-metadata-scale: ${metadataScale}"
+        style="--ha-media-metadata-scale: ${metadataScale}; --display-entities-transition: ${displayEntitiesTransition}ms"
         @click=${this._handleTap}
         @dblclick=${this._handleDoubleTap}
         @pointerdown=${this._handlePointerDown}
@@ -10974,16 +11411,38 @@ class MediaCard extends LitElement {
             <p>Your browser does not support the video tag. <a href="${this.mediaUrl}" target="_blank">Download the video</a> instead.</p>
           </video>
           ${this._renderVideoInfo()}
-        ` : html`
+        ` : (this.config?.transition?.duration ?? 300) === 0 ? html`
+          <!-- V5.6: Instant mode - single image, no layers -->
           <img 
             src="${this.mediaUrl}" 
             alt="${this.currentMedia.title || 'Media'}"
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
           />
-        `}
+        ` : (this._frontLayerUrl || this._backLayerUrl) ? html`
+          <!-- V5.6: Crossfade with two layers (only render when we have image URLs) -->
+          ${this._frontLayerUrl ? html`
+            <img 
+              class="image-layer ${this._frontLayerActive ? 'active' : 'inactive'}"
+              src="${this._frontLayerUrl}" 
+              alt="${this.currentMedia.title || 'Media'}"
+              @error=${this._onMediaError}
+              @load=${this._onMediaLoaded}
+            />
+          ` : ''}
+          ${this._backLayerUrl ? html`
+            <img 
+              class="image-layer ${!this._frontLayerActive ? 'active' : 'inactive'}"
+              src="${this._backLayerUrl}" 
+              alt="${this.currentMedia.title || 'Media'}"
+              @error=${this._onMediaError}
+              @load=${this._onMediaLoaded}
+            />
+          ` : ''}
+        ` : ''}
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
+        ${this._renderDisplayEntities()}
         ${this._renderActionButtons()}
         ${this._renderNavigationIndicators()}
         ${this._renderInfoOverlay()}
@@ -12263,6 +12722,41 @@ class MediaCardEditor extends LitElement {
 
   _autoAdvanceModeChanged(ev) {
     this._config = { ...this._config, auto_advance_mode: ev.target.value };
+    this._fireConfigChanged();
+  }
+
+  // V5.6: Transition duration change handler
+  _transitionDurationChanged(ev) {
+    const duration = parseInt(ev.target.value, 10);
+    this._config = {
+      ...this._config,
+      transition: {
+        ...this._config.transition,
+        duration: duration
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        position: ev.target.value
+      }
+    };
     this._fireConfigChanged();
   }
 
@@ -14552,6 +15046,27 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         ` : ''}
 
+        <!-- V5.6: Transition Settings -->
+        <div class="section">
+          <div class="section-title">🎨 Transitions</div>
+          
+          <div class="config-row">
+            <label>Transition Duration</label>
+            <div>
+              <input
+                type="range"
+                min="0"
+                max="1000"
+                step="50"
+                .value=${this._config.transition?.duration ?? 300}
+                @input=${this._transitionDurationChanged}
+              />
+              <span>${this._config.transition?.duration ?? 300}ms</span>
+              <div class="help-text">Fade duration between photos (0 = instant). Default: 300ms</div>
+            </div>
+          </div>
+        </div>
+
         <div class="section">
           <div class="section-title">📋 Metadata Display</div>
           
@@ -14713,6 +15228,33 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Corner position for "X of Y" counter (only shown in folder mode)</div>
             </div>
           </div>
+          
+          <div class="config-row">
+            <label>Display Entities</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.display_entities?.enabled === true}
+                @change=${this._displayEntitiesEnabledChanged}
+              />
+              <div class="help-text">Show Home Assistant entity states with fade transitions. Configure entities in YAML (see documentation).</div>
+            </div>
+          </div>
+          
+          ${this._config.display_entities?.enabled ? html`
+            <div class="config-row">
+              <label>Display Entities Position</label>
+              <div>
+                <select @change=${this._displayEntitiesPositionChanged} .value=${this._config.display_entities?.position || 'top-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                </select>
+                <div class="help-text">Where to display entity states overlay</div>
+              </div>
+            </div>
+          ` : ''}
         </div>
 
         <!-- Fullscreen Button (always available) -->

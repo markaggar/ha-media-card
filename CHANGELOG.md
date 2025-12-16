@@ -1,3 +1,40 @@
+## v5.6.0 (In Development)
+### Added
+- **Photo Transitions (Kiosk Enhancement)**
+  - Configurable crossfade transitions between images (0-1000ms duration)
+  - Visual editor with slider control (default: 300ms)
+  - Smooth opacity-based crossfade using double-buffered image layers
+  - Instant mode (0ms) bypasses transition system for maximum performance
+  - Smart handling: Videos bypass transitions, images crossfade seamlessly
+  - Load-triggered swap ensures both images ready before crossfade begins
+  - No black flashes or gaps during transitions
+
+- **Display Entities Overlay**
+  - Display entity states as overlay on media with automatic rotation
+  - Configurable position (top-left, top-right, bottom-left, bottom-right)
+  - Cycle through multiple entities with configurable interval (default: 10s)
+  - Smooth fade transitions between entities with configurable duration
+  - Optional labels for each entity
+  - Glassmorphism styling with backdrop blur
+  - Jinja2 template conditions to show/hide entities dynamically
+  - Recent changes tracking - prioritize entities that changed recently
+  - Example config:
+    ```yaml
+    display_entities:
+      enabled: true
+      position: top-right
+      cycle_interval: 5
+      transition_duration: 500
+      prefer_recent_changes: true
+      recent_change_window: 60
+      entities:
+        - entity: sensor.temperature
+          label: "Temp:"
+          condition: "{{ states('sensor.temperature') | float > 70 }}"
+        - entity: binary_sensor.motion
+          label: "Motion -"
+    ```
+
 ## v5.5.0 (In Development)
 ### Fixed
 - **Panel Opening Position with Fixed Card Height**
