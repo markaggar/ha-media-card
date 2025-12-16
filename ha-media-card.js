@@ -6998,13 +6998,16 @@ class MediaCard extends LitElement {
       ? `${label} ${stateText}${unit}` 
       : `${stateText}${unit}`;
 
+    // Evaluate JavaScript styles
+    const customStyles = this._evaluateEntityStyles(entityConfig, state);
+
     // Position class
     const position = config.position || 'top-left';
     const positionClass = `position-${position}`;
     const visibleClass = this._displayEntitiesVisible ? 'visible' : '';
 
     return html`
-      <div class="display-entities ${positionClass} ${visibleClass}">
+      <div class="display-entities ${positionClass} ${visibleClass}" style="${customStyles}">
         ${displayText}
       </div>
     `;
@@ -7645,8 +7648,8 @@ class MediaCard extends LitElement {
   }
   
   _cycleToNextEntity() {
-    const entities = this.config.display_entities.entities || [];
-    if (entities.length <= 1) return;
+    const filteredEntities = this._getFilteredEntities();
+    if (filteredEntities.length <= 1) return;
     
     // Fade out
     this._displayEntitiesVisible = false;
@@ -7655,7 +7658,8 @@ class MediaCard extends LitElement {
     // Wait for fade transition, then update and fade in
     const duration = this.config.display_entities.transition_duration || 500;
     setTimeout(() => {
-      this._currentEntityIndex = (this._currentEntityIndex + 1) % entities.length;
+      // Increment based on filtered count, not total count
+      this._currentEntityIndex = (this._currentEntityIndex + 1) % filteredEntities.length;
       this._displayEntitiesVisible = true;
       this.requestUpdate();
     }, duration / 2); // Half duration for fade out, half for fade in
@@ -7700,6 +7704,51 @@ class MediaCard extends LitElement {
       console.warn('[MediaCard] Failed to evaluate entity condition:', condition, error);
       return false;
     }
+  }
+  
+  _evaluateEntityStyles(entityConfig, state) {
+    if (!entityConfig?.styles) return '';
+    
+    // Create context for JavaScript evaluation
+    const entity = state;
+    const stateStr = state.state;
+    const stateValue = parseFloat(state.state);
+    
+    const styles = [];
+    
+    try {
+      // Evaluate each style property
+      Object.entries(entityConfig.styles).forEach(([property, template]) => {
+        let value;
+        
+        if (typeof template === 'string' && template.includes('[[[') && template.includes(']]]')) {
+          // JavaScript template syntax: [[[ return ... ]]]
+          const jsCode = template.match(/\[\[\[(.*?)\]\]\]/s)?.[1];
+          if (jsCode) {
+            // Create function with entity context
+            // state = string value (for binary sensors like "on"/"off")
+            // stateNum = numeric value (for sensors with numbers)
+            const func = new Function('entity', 'state', 'stateNum', jsCode);
+            value = func(entity, stateStr, stateValue);
+            this._log('🎨 Style evaluated:', property, '→', value, 'for state:', stateStr);
+          }
+        } else {
+          // Static value
+          value = template;
+        }
+        
+        if (value !== undefined && value !== null && value !== '') {
+          // Convert camelCase to kebab-case for CSS properties
+          const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
+          // Add !important to override base CSS
+          styles.push(`${cssProperty}: ${value} !important`);
+        }
+      });
+    } catch (error) {
+      console.warn('[MediaCard] Failed to evaluate entity styles:', error);
+    }
+    
+    return styles.join('; ');
   }
   
   async _evaluateAllConditions() {
@@ -10195,7 +10244,6 @@ class MediaCard extends LitElement {
       padding: 8px 14px;
       border-radius: 6px;
       font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(1.0rem, 1.6cqi, 2.2rem));
-      font-weight: 500;
       line-height: 1.3;
       pointer-events: none;
       z-index: 2;
