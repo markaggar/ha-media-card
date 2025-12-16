@@ -93,6 +93,10 @@ export class MediaCard extends LitElement {
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
     this._tapTimeout = null; // V4 tap action double-tap detection
+    this._frontLayerUrl = ''; // V5.6: Front layer for crossfade
+    this._backLayerUrl = ''; // V5.6: Back layer for crossfade
+    this._frontLayerActive = true; // V5.6: Which layer is currently visible
+    this._pendingLayerSwap = false; // V5.6: Flag to trigger swap after image loads
     this._holdTimeout = null; // V4 hold action detection
     this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
     this._lastLogTime = {}; // V4 log throttling
@@ -2177,6 +2181,41 @@ export class MediaCard extends LitElement {
     }
   }
 
+  // V5.6: Helper to set mediaUrl with crossfade transition
+  _setMediaUrl(url) {
+    this.mediaUrl = url;
+    
+    // Only use crossfade for images, not videos
+    const isVideo = this._isVideoFile(url);
+    
+    if (!isVideo) {
+      const duration = this.config?.transition?.duration ?? 300;
+      
+      // For instant transitions (0ms), bypass double-buffering entirely
+      if (duration === 0) {
+        // Just update - render will show single image directly
+        this.requestUpdate();
+      } else {
+        // Crossfade: set new image on hidden layer, then swap after it loads
+        if (this._frontLayerActive) {
+          this._backLayerUrl = url;
+        } else {
+          this._frontLayerUrl = url;
+        }
+        
+        // Set flag to trigger swap when the new image loads
+        this._pendingLayerSwap = true;
+        this._transitionDuration = duration;
+        this.requestUpdate();
+      }
+    } else {
+      // For videos, just clear the image layers immediately
+      this._frontLayerUrl = '';
+      this._backLayerUrl = '';
+      this.requestUpdate();
+    }
+  }
+
   async _resolveMediaUrl() {
     if (!this.currentMedia || !this.hass) {
       this._log('Cannot resolve URL - missing currentMedia or hass');
@@ -2198,7 +2237,7 @@ export class MediaCard extends LitElement {
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
       this._log('Using direct HTTP URL');
-      this.mediaUrl = mediaId;
+      this._setMediaUrl(mediaId);
       this.requestUpdate();
       return;
     }
@@ -2222,11 +2261,12 @@ export class MediaCard extends LitElement {
           this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
         }
         
-        this.mediaUrl = finalUrl;
+        this._setMediaUrl(finalUrl);
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCard] Failed to resolve media URL:', error);
-        this.mediaUrl = '';
+        this._setMediaUrl('');
+        this._nextMediaUrl = '';
         this.requestUpdate();
       }
       return;
@@ -2250,7 +2290,7 @@ export class MediaCard extends LitElement {
         });
         this._log('✅ File exists and resolved to:', resolved.url);
         this._validationDepth = 0; // Reset on success
-        this.mediaUrl = resolved.url;
+        this._setMediaUrl(resolved.url);
         this.requestUpdate();
         return; // Success - don't fall through to fallback
       } catch (error) {
@@ -2277,7 +2317,7 @@ export class MediaCard extends LitElement {
         }
         
         // Clear the current media to avoid showing broken state
-        this.mediaUrl = '';
+        this._setMediaUrl('');
         
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
@@ -2296,7 +2336,7 @@ export class MediaCard extends LitElement {
 
     // Fallback: use as-is
     this._log('Using media ID as-is (fallback)');
-    this.mediaUrl = mediaId;
+    this._setMediaUrl(mediaId);
     this.requestUpdate();
   }
 
@@ -2656,8 +2696,10 @@ export class MediaCard extends LitElement {
     this._log('🎬 User interacted with video (pause) - will play to completion');
     
     // Only pause slideshow if video was manually paused (not ended)
+    // Also verify we're actually showing a video (not navigated to image)
     const videoElement = this.renderRoot?.querySelector('video');
-    if (videoElement && !videoElement.ended && !this._isPaused) {
+    const isCurrentlyVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    if (videoElement && !videoElement.ended && !this._isPaused && isCurrentlyVideo) {
       this._log('🎬 Video manually paused - pausing slideshow');
       this._pausedByVideo = true;
       this._setPauseState(true);
@@ -2883,7 +2925,7 @@ export class MediaCard extends LitElement {
     this.requestUpdate();
   }
 
-  _onMediaLoaded() {
+  _onMediaLoaded(e) {
     // V4: Only log once when media initially loads
     if (!this._mediaLoadedLogged) {
       this._log('Media loaded successfully:', this.mediaUrl);
@@ -2894,6 +2936,32 @@ export class MediaCard extends LitElement {
     this._errorState = null;
     if (this._retryAttempts.has(this.mediaUrl)) {
       this._retryAttempts.delete(this.mediaUrl);
+    }
+    
+    // V5.6: Handle crossfade layer swap when new image loads
+    if (this._pendingLayerSwap) {
+      const loadedUrl = e?.target?.src;
+      const newLayerUrl = this._frontLayerActive ? this._backLayerUrl : this._frontLayerUrl;
+      
+      // Only swap if the loaded image is the new layer (not the old one)
+      if (loadedUrl && newLayerUrl && loadedUrl.includes(newLayerUrl.split('?')[0])) {
+        this._pendingLayerSwap = false;
+        
+        // Swap layers to trigger crossfade
+        this._frontLayerActive = !this._frontLayerActive;
+        this.requestUpdate();
+        
+        // Clear old layer after transition
+        const duration = this._transitionDuration || 300;
+        setTimeout(() => {
+          if (this._frontLayerActive) {
+            this._backLayerUrl = '';
+          } else {
+            this._frontLayerUrl = '';
+          }
+          this.requestUpdate();
+        }, duration + 100);
+      }
     }
     
     // V5.3: Apply default zoom AFTER image loads (PR #37 by BasicCPPDev)
@@ -2920,6 +2988,25 @@ export class MediaCard extends LitElement {
     
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
+  }
+  
+  // V5.6: Handle image load for specific layer (transition system)
+  _onLayerLoaded(e, layer) {
+    this._log(`Image layer ${layer} loaded successfully`);
+    
+    // If this is the next layer (not currently active), trigger transition
+    if (layer !== this._currentLayer) {
+      this._log(`Swapping to layer ${layer} - transitioning from ${this._currentLayer} to ${layer}`);
+      
+      // Update mediaUrl to match the newly visible layer
+      this.mediaUrl = this._nextMediaUrl;
+      this._currentLayer = layer;
+      
+      this._log(`Updated mediaUrl to: ${this.mediaUrl}`);
+    }
+    
+    // Call the regular media loaded handler for other processing
+    this._onMediaLoaded();
   }
   
   // V4: Metadata display methods
@@ -5014,12 +5101,20 @@ export class MediaCard extends LitElement {
   }
   
   /**
+   * V5.6: Check if file path/URL is a video
+   */
+  _isVideoFile(path) {
+    if (!path) return false;
+    return MediaUtils.detectFileType(path) === 'video';
+  }
+  
+  /**
    * V5.6: Check if item is a video file
    */
   _isVideoItem(item) {
     if (!item) return false;
     const path = item.media_content_id || item.path || '';
-    return MediaUtils.detectFileType(path) === 'video';
+    return this._isVideoFile(path);
   }
   
   /**
@@ -5692,8 +5787,29 @@ export class MediaCard extends LitElement {
       justify-content: center;
     }
     
+    /* V5.6: Crossfade layers - both images stacked on top of each other */
+    .media-container .image-layer {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      transition: opacity var(--transition-duration, 300ms) ease-in-out;
+    }
+    
+    .media-container .image-layer.active {
+      opacity: 1;
+      z-index: 2;
+    }
+    
+    .media-container .image-layer.inactive {
+      opacity: 0;
+      z-index: 1;
+    }
+    
     /* V4 Smart aspect ratio handling - base rules for default mode only */
-    /* V5.6: Removed width: 100% to allow proper centering */
     :host(:not([data-aspect-mode])) img,
     :host(:not([data-aspect-mode])) video {
       max-width: 100%;
@@ -5957,8 +6073,8 @@ export class MediaCard extends LitElement {
       width: 100%;
       height: 100%;
       pointer-events: none;
-      /* Keep below overlays and HA header */
-      z-index: 1;
+      /* V5.6: Increase z-index to show over images */
+      z-index: 10;
     }
 
     .nav-zone {
@@ -5994,7 +6110,7 @@ export class MediaCard extends LitElement {
     /* On mouse devices, show background overlay on hover */
     @media (hover: hover) and (pointer: fine) {
       .nav-zone:hover {
-        background: rgba(0, 0, 0, 0.2);
+        background: rgba(0, 0, 0, 0.4);
       }
     }
 
@@ -6003,7 +6119,7 @@ export class MediaCard extends LitElement {
       content: '◀';
       color: white;
       font-size: 1.5em;
-      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      text-shadow: 0 0 12px rgba(0, 0, 0, 1), 0 0 4px rgba(0, 0, 0, 1);
       opacity: 0;
       transition: opacity 0.2s ease;
     }
@@ -6011,7 +6127,7 @@ export class MediaCard extends LitElement {
       content: '▶';
       color: white;
       font-size: 1.5em;
-      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+      text-shadow: 0 0 12px rgba(0, 0, 0, 1), 0 0 4px rgba(0, 0, 0, 1);
       opacity: 0;
       transition: opacity 0.2s ease;
     }
@@ -6033,7 +6149,7 @@ export class MediaCard extends LitElement {
     /* Show background when visible (not just hover) */
     /* In touch-explicit mode, show background overlay */
     .nav-zone.show-buttons {
-      background: rgba(0, 0, 0, 0.2);
+      background: rgba(0, 0, 0, 0.4);
     }
     
     /* V4: Metadata overlay */
@@ -7139,8 +7255,11 @@ export class MediaCard extends LitElement {
       `;
     }
 
+    // V5.6: Set transition duration CSS variable (default 300ms)
+    const transitionDuration = this.config.transition?.duration ?? 300;
+    
     return html`
-      <ha-card>
+      <ha-card style="--transition-duration: ${transitionDuration}ms">
         <div class="card ${this._panelOpen ? 'panel-open' : ''}"
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0">
@@ -7251,14 +7370,35 @@ export class MediaCard extends LitElement {
             <p>Your browser does not support the video tag. <a href="${this.mediaUrl}" target="_blank">Download the video</a> instead.</p>
           </video>
           ${this._renderVideoInfo()}
-        ` : html`
+        ` : (this.config?.transition?.duration ?? 300) === 0 ? html`
+          <!-- V5.6: Instant mode - single image, no layers -->
           <img 
             src="${this.mediaUrl}" 
             alt="${this.currentMedia.title || 'Media'}"
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
           />
-        `}
+        ` : (this._frontLayerUrl || this._backLayerUrl) ? html`
+          <!-- V5.6: Crossfade with two layers (only render when we have image URLs) -->
+          ${this._frontLayerUrl ? html`
+            <img 
+              class="image-layer ${this._frontLayerActive ? 'active' : 'inactive'}"
+              src="${this._frontLayerUrl}" 
+              alt="${this.currentMedia.title || 'Media'}"
+              @error=${this._onMediaError}
+              @load=${this._onMediaLoaded}
+            />
+          ` : ''}
+          ${this._backLayerUrl ? html`
+            <img 
+              class="image-layer ${!this._frontLayerActive ? 'active' : 'inactive'}"
+              src="${this._backLayerUrl}" 
+              alt="${this.currentMedia.title || 'Media'}"
+              @error=${this._onMediaError}
+              @load=${this._onMediaLoaded}
+            />
+          ` : ''}
+        ` : ''}
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
         ${this._renderActionButtons()}

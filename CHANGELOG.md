@@ -1,3 +1,14 @@
+## v5.6.0 (In Development)
+### Added
+- **Photo Transitions (Kiosk Enhancement)**
+  - Configurable crossfade transitions between images (0-1000ms duration)
+  - Visual editor with slider control (default: 300ms)
+  - Smooth opacity-based crossfade using double-buffered image layers
+  - Instant mode (0ms) bypasses transition system for maximum performance
+  - Smart handling: Videos bypass transitions, images crossfade seamlessly
+  - Load-triggered swap ensures both images ready before crossfade begins
+  - No black flashes or gaps during transitions
+
 ## v5.5.0 (In Development)
 ### Fixed
 - **Panel Opening Position with Fixed Card Height**

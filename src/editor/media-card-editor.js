@@ -905,6 +905,19 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  // V5.6: Transition duration change handler
+  _transitionDurationChanged(ev) {
+    const duration = parseInt(ev.target.value, 10);
+    this._config = {
+      ...this._config,
+      transition: {
+        ...this._config.transition,
+        duration: duration
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataShowFolderChanged(ev) {
     this._config = {
       ...this._config,
@@ -3190,6 +3203,27 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
         ` : ''}
+
+        <!-- V5.6: Transition Settings -->
+        <div class="section">
+          <div class="section-title">🎨 Transitions</div>
+          
+          <div class="config-row">
+            <label>Transition Duration</label>
+            <div>
+              <input
+                type="range"
+                min="0"
+                max="1000"
+                step="50"
+                .value=${this._config.transition?.duration ?? 300}
+                @input=${this._transitionDurationChanged}
+              />
+              <span>${this._config.transition?.duration ?? 300}ms</span>
+              <div class="help-text">Fade duration between photos (0 = instant). Default: 300ms</div>
+            </div>
+          </div>
+        </div>
 
         <div class="section">
           <div class="section-title">📋 Metadata Display</div>
