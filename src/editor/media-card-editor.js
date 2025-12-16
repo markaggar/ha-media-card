@@ -905,6 +905,41 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  // V5.6: Transition duration change handler
+  _transitionDurationChanged(ev) {
+    const duration = parseInt(ev.target.value, 10);
+    this._config = {
+      ...this._config,
+      transition: {
+        ...this._config.transition,
+        duration: duration
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        position: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataShowFolderChanged(ev) {
     this._config = {
       ...this._config,
@@ -3191,6 +3226,27 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         ` : ''}
 
+        <!-- V5.6: Transition Settings -->
+        <div class="section">
+          <div class="section-title">🎨 Transitions</div>
+          
+          <div class="config-row">
+            <label>Transition Duration</label>
+            <div>
+              <input
+                type="range"
+                min="0"
+                max="1000"
+                step="50"
+                .value=${this._config.transition?.duration ?? 300}
+                @input=${this._transitionDurationChanged}
+              />
+              <span>${this._config.transition?.duration ?? 300}ms</span>
+              <div class="help-text">Fade duration between photos (0 = instant). Default: 300ms</div>
+            </div>
+          </div>
+        </div>
+
         <div class="section">
           <div class="section-title">📋 Metadata Display</div>
           
@@ -3352,6 +3408,33 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Corner position for "X of Y" counter (only shown in folder mode)</div>
             </div>
           </div>
+          
+          <div class="config-row">
+            <label>Display Entities</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.display_entities?.enabled === true}
+                @change=${this._displayEntitiesEnabledChanged}
+              />
+              <div class="help-text">Show Home Assistant entity states with fade transitions. Configure entities in YAML (see documentation).</div>
+            </div>
+          </div>
+          
+          ${this._config.display_entities?.enabled ? html`
+            <div class="config-row">
+              <label>Display Entities Position</label>
+              <div>
+                <select @change=${this._displayEntitiesPositionChanged} .value=${this._config.display_entities?.position || 'top-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                </select>
+                <div class="help-text">Where to display entity states overlay</div>
+              </div>
+            </div>
+          ` : ''}
         </div>
 
         <!-- Fullscreen Button (always available) -->
