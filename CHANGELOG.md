@@ -16,7 +16,8 @@
   - Smooth fade transitions between entities with configurable duration
   - Optional labels for each entity
   - Glassmorphism styling with backdrop blur
-  - Jinja2 template conditions to show/hide entities dynamically
+  - **Jinja2 template conditions** to show/hide entities dynamically
+  - **JavaScript styling templates** for dynamic colors, fonts, backgrounds based on state
   - Recent changes tracking - prioritize entities that changed recently
   - Example config:
     ```yaml
@@ -31,9 +32,28 @@
         - entity: sensor.temperature
           label: "Temp:"
           condition: "{{ states('sensor.temperature') | float > 70 }}"
+          styles:
+            color: |
+              [[[ 
+                return stateNum > 80 ? 'red' : 
+                       stateNum > 70 ? 'orange' : 'lightblue';
+              ]]]
+            fontWeight: |
+              [[[
+                return stateNum > 75 ? 'bold' : 'normal';
+              ]]]
         - entity: binary_sensor.motion
           label: "Motion -"
+          styles:
+            color: |
+              [[[ 
+                return state == "on" ? 'red' : 'lightblue';
+              ]]]
     ```
+  - **Available in JavaScript context:**
+    - `entity` - Full entity state object
+    - `state` - String state value (e.g., "on"/"off")
+    - `stateNum` - Parsed numeric value
 
 ## v5.5.0 (In Development)
 ### Fixed
