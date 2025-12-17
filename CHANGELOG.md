@@ -17,17 +17,14 @@
   - Optional labels for each entity
   - Glassmorphism styling with backdrop blur
   - **Jinja2 template conditions** to show/hide entities dynamically
-  - **JavaScript styling templates** for dynamic colors, fonts, backgrounds based on state
+  - **Dual template styling support** - JavaScript OR Jinja2 for dynamic styling
   - Recent changes tracking - prioritize entities that changed recently
-  - Example config:
+  - Example config with **JavaScript templates** (synchronous):
     ```yaml
     display_entities:
       enabled: true
       position: top-right
       cycle_interval: 5
-      transition_duration: 500
-      prefer_recent_changes: true
-      recent_change_window: 60
       entities:
         - entity: sensor.temperature
           label: "Temp:"
@@ -42,20 +39,35 @@
               [[[
                 return stateNum > 75 ? 'bold' : 'normal';
               ]]]
-        - entity: binary_sensor.motion
-          label: "Motion -"
-          styles:
-            color: |
-              [[[ 
-                return state == "on" ? 'red' : 'lightblue';
-              ]]]
     ```
-  - **Available in JavaScript context:**
+  - Example config with **Jinja2 templates** (like Mushroom cards):
+    ```yaml
+    display_entities:
+      enabled: true
+      position: bottom-left
+      entities:
+        - entity: binary_sensor.motion_kitchen
+          label: "Kitchen -"
+          condition: "{{ is_state('binary_sensor.motion_kitchen', 'on') }}"
+          styles:
+            color: "{% if is_state('binary_sensor.motion_kitchen', 'on') %}red{% else %}lightblue{% endif %}"
+            fontSize: "{{ '24px' if is_state('binary_sensor.motion_kitchen', 'on') else '16px' }}"
+        - entity: sensor.temperature
+          styles:
+            color: "{{ 'red' if states('sensor.temperature') | float > 80 else 'orange' if states('sensor.temperature') | float > 70 else 'lightblue' }}"
+            fontWeight: "{{ 'bold' if states('sensor.temperature') | float > 75 else 'normal' }}"
+    ```
+  - **JavaScript template context** (synchronous evaluation):
     - `entity` - Full entity state object
     - `state` - String state value (e.g., "on"/"off")
     - `stateNum` - Parsed numeric value
+  - **Jinja2 templates** (async with caching):
+    - Use Home Assistant's full Jinja2 environment
+    - Access to `states()`, `is_state()`, `state_attr()`, etc.
+    - Results cached for performance
+    - Re-evaluated when entity states change
 
-## v5.5.0 (In Development)
+## v5.5.0
 ### Fixed
 - **Panel Opening Position with Fixed Card Height**
   - Panel now opens on right side (not bottom) when using fixed card height in default scaling mode
