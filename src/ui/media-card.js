@@ -147,6 +147,9 @@ export class MediaCard extends LitElement {
     this._onThisDayLoading = false;    // Loading indicator for anniversary query
     this._onThisDayWindowDays = 0;     // Current window size (±N days)
     
+    // V5.6.0: Play randomized option for panels
+    this._playRandomized = false;      // Toggle for randomizing panel playback order
+    
     // Modal overlay state (gallery-card pattern)
     this._modalOpen = false;
     this._modalImageUrl = '';
@@ -1634,8 +1637,21 @@ export class MediaCard extends LitElement {
 
     console.warn(`🎬 Inserting ${this._panelQueue.length} items into navigation queue at position ${this.navigationIndex + 1}`);
 
+    // Get panel items (may randomize if checkbox is enabled)
+    let panelItems = [...this._panelQueue]; // Copy array
+    
+    // V5.6.0: Randomize if checkbox is enabled
+    if (this._playRandomized) {
+      console.warn('🎲 Randomizing panel items for playback');
+      // Fisher-Yates shuffle
+      for (let i = panelItems.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [panelItems[i], panelItems[j]] = [panelItems[j], panelItems[i]];
+      }
+    }
+
     // Convert panel items to navigation queue format
-    const queueItems = this._panelQueue.map(item => ({
+    const queueItems = panelItems.map(item => ({
       media_content_id: item.media_source_uri || item.media_content_id || `media-source://media_source${item.path}`,
       media_content_type: item.file_type === 'video' ? 'video' : 'image',
       title: item.filename || item.path.split('/').pop(),
@@ -1690,6 +1706,13 @@ export class MediaCard extends LitElement {
     this._panelQueueIndex = 0;
     this._panelPageStartIndex = null;
     this._burstMode = false; // Clear deprecated flag
+    
+    // V5.6.0: Resume playback if paused
+    if (this._isPaused) {
+      console.warn('▶️ Resuming playback to play panel items');
+      this._isPaused = false;
+    }
+    
     this.requestUpdate();
     
     // Jump to first inserted item
@@ -5710,13 +5733,8 @@ export class MediaCard extends LitElement {
     const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
     const totalLength = items?.length || 0;
 
-    // Calculate max display count (same logic as _renderThumbnailStrip)
-    const viewportHeight = window.innerHeight;
-    const headerHeight = 60; // Panel header
-    const thumbnailHeight = 100; // Approximate thumbnail with gap
-    const availableHeight = viewportHeight - headerHeight - 40; // 40px margin
-    const rows = Math.max(2, Math.floor(availableHeight / thumbnailHeight));
-    const maxDisplay = rows * 2; // 2 columns
+    // V5.6: Use same calculation as _renderThumbnailStrip for consistency
+    const maxDisplay = this._calculateOptimalThumbnailCount(items);
 
     if (direction === 'prev') {
       this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
@@ -6650,8 +6668,10 @@ export class MediaCard extends LitElement {
       left: 8px;
       top: 50%;
       transform: translateY(-50%);
-      width: 60px;
-      height: 120px;
+      width: 80px;
+      height: 60%;
+      min-height: 120px;
+      max-height: 600px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -6660,8 +6680,10 @@ export class MediaCard extends LitElement {
       right: 8px;
       top: 50%;
       transform: translateY(-50%);
-      width: 60px;
-      height: 120px;
+      width: 80px;
+      height: 60%;
+      min-height: 120px;
+      max-height: 600px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -7758,6 +7780,28 @@ export class MediaCard extends LitElement {
       opacity: 0.7;
     }
 
+    .randomize-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--primary-text-color);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .randomize-checkbox input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--primary-color, #03a9f4);
+    }
+
+    .randomize-checkbox:hover {
+      opacity: 0.8;
+    }
+
     .window-selector {
       background: var(--card-background-color, #fff);
       color: var(--primary-text-color);
@@ -8352,6 +8396,14 @@ export class MediaCard extends LitElement {
               <option value="7">±1 week</option>
               <option value="14">±2 weeks</option>
             </select>
+            <label class="randomize-checkbox" title="Randomize playback order">
+              <input 
+                type="checkbox" 
+                .checked=${this._playRandomized}
+                @change=${(e) => { this._playRandomized = e.target.checked; this.requestUpdate(); }}
+              />
+              <span>🎲 Randomize</span>
+            </label>
             <button 
               class="panel-action-button" 
               @click=${this._playPanelItems} 
@@ -8371,6 +8423,14 @@ export class MediaCard extends LitElement {
           </div>
           <div class="panel-header-actions">
             ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
+              <label class="randomize-checkbox" title="Randomize playback order">
+                <input 
+                  type="checkbox" 
+                  .checked=${this._playRandomized}
+                  @change=${(e) => { this._playRandomized = e.target.checked; this.requestUpdate(); }}
+                />
+                <span>🎲 Randomize</span>
+              </label>
               <button 
                 class="panel-action-button" 
                 @click=${this._playPanelItems} 
