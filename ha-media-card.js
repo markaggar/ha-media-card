@@ -7775,6 +7775,7 @@ class MediaCard extends LitElement {
     });
     
     // Evaluate conditions and styles before starting cycle
+    // CRITICAL: Wait for conditions before showing any entities
     Promise.all([
       this._evaluateAllConditions(),
       this._evaluateAllEntityStyles()
@@ -7786,6 +7787,10 @@ class MediaCard extends LitElement {
       } else if (filteredCount === 1) {
         // Single entity - just show it
         this._displayEntitiesVisible = true;
+        this.requestUpdate();
+      } else {
+        // No entities pass conditions - hide display entities
+        this._displayEntitiesVisible = false;
         this.requestUpdate();
       }
     });
@@ -8027,8 +8032,8 @@ class MediaCard extends LitElement {
       .map(e => typeof e === 'string' ? e : e.entity)
       .filter(entityId => {
         if (!entityId) return false;
-        // If condition not yet evaluated, assume true (will evaluate async)
-        if (!this._entityConditionCache.has(entityId)) return true;
+        // If condition not yet evaluated, exclude it (don't show until evaluated)
+        if (!this._entityConditionCache.has(entityId)) return false;
         return this._entityConditionCache.get(entityId);
       });
   }
