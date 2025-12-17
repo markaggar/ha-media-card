@@ -1831,7 +1831,8 @@ export class MediaCard extends LitElement {
           
           // V4 CODE REUSE: Check if we should wait for video to complete
           // Based on V4 lines 3259-3302
-          if (await this._shouldWaitForVideoCompletion()) {
+          // V5.6: Don't stop timer if video_loop is enabled - let timer interrupt the loop
+          if (await this._shouldWaitForVideoCompletion() && !this.config.video_loop) {
             // Stop the timer to prevent unnecessary database queries while video plays
             if (!this._timerStoppedForVideo) {
               this._log('🔄 Stopping auto-timer while waiting for video to complete');
@@ -2858,6 +2859,13 @@ export class MediaCard extends LitElement {
   _onVideoEnded() {
     const endTime = new Date();
     this._log(`🎬 Video ended at ${endTime.toLocaleTimeString()}:`, this.mediaUrl);
+    
+    // V5.6: If video_loop is enabled, don't advance - video will loop until auto-refresh timer
+    if (this.config.video_loop) {
+      this._log('🔁 Video loop enabled - video will restart automatically, waiting for auto-refresh timer');
+      return;
+    }
+    
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
