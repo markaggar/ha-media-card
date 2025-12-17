@@ -190,6 +190,11 @@ export class MediaCard extends LitElement {
     // V5.6: Setup dynamic viewport height calculation
     this._setupDynamicViewportHeight();
     
+    // V5.6: Start clock update timer if clock enabled
+    if (this.config.clock?.enabled) {
+      this._startClockTimer();
+    }
+    
     // V5: Restart auto-refresh if it was running before disconnect
     // Only restart if we have a provider, currentMedia, and auto_advance is configured
     if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
@@ -264,6 +269,9 @@ export class MediaCard extends LitElement {
     
     // V5.6: Cleanup display entities
     this._cleanupDisplayEntities();
+    
+    // V5.6: Cleanup clock timer
+    this._stopClockTimer();
   }
 
   // V4: Force video reload when URL changes
@@ -729,7 +737,20 @@ export class MediaCard extends LitElement {
         prefer_recent_changes: false,
         recent_change_window: 60, // seconds
         ...config.display_entities
-      }
+      },
+      // V5.6: Clock/Date Overlay defaults
+      clock: {
+        enabled: false,
+        position: 'bottom-left',
+        show_time: true,
+        show_date: true,
+        format: '12h', // or '24h'
+        date_format: 'long', // or 'short'
+        show_background: true, // V5.6: Optional background
+        ...config.clock
+      },
+      // V5.6: Global overlay opacity control
+      overlay_opacity: config.overlay_opacity ?? 0.25
     };
     
     // V4: Set debug mode from config
@@ -3270,7 +3291,52 @@ export class MediaCard extends LitElement {
 
     // Format entity display
     const label = entityConfig?.label || '';
-    const stateText = state.state;
+    
+    // Format state value
+    let stateText = state.state;
+    
+    // Use device_class friendly names if available (all HA binary sensor device classes)
+    const deviceClass = state.attributes?.device_class;
+    if (deviceClass) {
+      const friendlyStates = {
+        'battery': { 'on': 'Low', 'off': 'Normal' },
+        'battery_charging': { 'on': 'Charging', 'off': 'Not Charging' },
+        'cold': { 'on': 'Cold', 'off': 'Normal' },
+        'connectivity': { 'on': 'Connected', 'off': 'Disconnected' },
+        'door': { 'on': 'Open', 'off': 'Closed' },
+        'garage_door': { 'on': 'Open', 'off': 'Closed' },
+        'gas': { 'on': 'Detected', 'off': 'Clear' },
+        'heat': { 'on': 'Hot', 'off': 'Normal' },
+        'light': { 'on': 'Detected', 'off': 'Clear' },
+        'lock': { 'locked': 'Locked', 'unlocked': 'Unlocked' },
+        'moisture': { 'on': 'Wet', 'off': 'Dry' },
+        'motion': { 'on': 'Detected', 'off': 'Clear' },
+        'occupancy': { 'on': 'Detected', 'off': 'Clear' },
+        'opening': { 'on': 'Open', 'off': 'Closed' },
+        'plug': { 'on': 'Plugged In', 'off': 'Unplugged' },
+        'power': { 'on': 'On', 'off': 'Off' },
+        'presence': { 'on': 'Home', 'off': 'Away' },
+        'problem': { 'on': 'Problem', 'off': 'OK' },
+        'running': { 'on': 'Running', 'off': 'Not Running' },
+        'safety': { 'on': 'Unsafe', 'off': 'Safe' },
+        'smoke': { 'on': 'Detected', 'off': 'Clear' },
+        'sound': { 'on': 'Detected', 'off': 'Clear' },
+        'tamper': { 'on': 'Tampered', 'off': 'OK' },
+        'update': { 'on': 'Available', 'off': 'Up-to-date' },
+        'vibration': { 'on': 'Detected', 'off': 'Clear' },
+        'window': { 'on': 'Open', 'off': 'Closed' }
+      };
+      
+      if (friendlyStates[deviceClass]?.[stateText]) {
+        stateText = friendlyStates[deviceClass][stateText];
+      }
+    }
+    
+    // Round numeric values to 1 decimal place
+    if (!isNaN(parseFloat(stateText)) && isFinite(stateText)) {
+      stateText = parseFloat(stateText).toFixed(1);
+    }
+    
     const unit = state.attributes?.unit_of_measurement || '';
     const displayText = label 
       ? `${label} ${stateText}${unit}` 
@@ -3294,6 +3360,63 @@ export class MediaCard extends LitElement {
       <div class="display-entities ${positionClass} ${visibleClass}" style="${containerStyles}">
         ${icon ? html`<ha-icon icon="${icon}" style="color: ${iconColor};"></ha-icon>` : ''}
         ${displayText}
+      </div>
+    `;
+  }
+
+  // V5.6: Clock/Date Overlay
+  _renderClock() {
+    const config = this.config?.clock;
+    if (!config?.enabled) {
+      return html``;
+    }
+
+    // Don't show clock if neither time nor date is enabled
+    if (!config.show_time && !config.show_date) {
+      return html``;
+    }
+
+    const now = new Date();
+    const position = config.position || 'bottom-left';
+    const positionClass = `clock-${position}`;
+
+    // Format time
+    let timeDisplay = '';
+    if (config.show_time !== false) {
+      const format = config.format || '12h';
+      if (format === '24h') {
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        timeDisplay = `${hours}:${minutes}`;
+      } else {
+        // 12-hour format
+        let hours = now.getHours();
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12 || 12;
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        timeDisplay = `${hours}:${minutes} ${ampm}`;
+      }
+    }
+
+    // Format date
+    let dateDisplay = '';
+    if (config.show_date !== false) {
+      const dateFormat = config.date_format || 'long';
+      if (dateFormat === 'short') {
+        dateDisplay = now.toLocaleDateString();
+      } else {
+        // Long format
+        const options = { year: 'numeric', month: 'long', day: 'numeric' };
+        dateDisplay = now.toLocaleDateString(undefined, options);
+      }
+    }
+
+    const backgroundClass = config.show_background === false ? 'no-background' : '';
+    
+    return html`
+      <div class="clock-overlay ${positionClass} ${backgroundClass}">
+        ${timeDisplay ? html`<div class="clock-time">${timeDisplay}</div>` : ''}
+        ${dateDisplay ? html`<div class="clock-date">${dateDisplay}</div>` : ''}
       </div>
     `;
   }
@@ -4174,6 +4297,28 @@ export class MediaCard extends LitElement {
     this._entityStates.clear();
     this._recentlyChangedEntities.clear();
     this._displayEntitiesVisible = false;
+  }
+
+  // V5.6: Clock Timer Management
+  _startClockTimer() {
+    if (this._clockTimer) {
+      clearInterval(this._clockTimer);
+    }
+    
+    // Update every second
+    this._clockTimer = setInterval(() => {
+      this.requestUpdate();
+    }, 1000);
+    
+    this._log('⏰ Started clock update timer');
+  }
+
+  _stopClockTimer() {
+    if (this._clockTimer) {
+      clearInterval(this._clockTimer);
+      this._clockTimer = null;
+      this._log('⏰ Stopped clock update timer');
+    }
   }
   
   // V4: Action Button Handlers
@@ -6569,7 +6714,7 @@ export class MediaCard extends LitElement {
     /* V4: Metadata overlay */
     .metadata-overlay {
       position: absolute;
-      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.60);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
       color: var(--primary-text-color);
       padding: 6px 12px;
       border-radius: 4px;
@@ -6580,11 +6725,14 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       /* Above nav zones, below HA header */
       z-index: 2;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
       animation: fadeIn 0.3s ease;
       max-width: calc(100% - 16px);
       word-break: break-word;
+    }
+    
+    .media-container:not(.transparent-overlays) .metadata-overlay {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
 
     /* Metadata positioning */
@@ -6608,10 +6756,22 @@ export class MediaCard extends LitElement {
       right: 8px;
     }
 
+    .metadata-overlay.metadata-center-top {
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .metadata-overlay.metadata-center-bottom {
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
     /* Display Entities Overlay */
     .display-entities {
       position: absolute;
-      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.70);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
       color: var(--primary-text-color);
       padding: 8px 14px;
       border-radius: 6px;
@@ -6619,16 +6779,19 @@ export class MediaCard extends LitElement {
       line-height: 1.3;
       pointer-events: none;
       z-index: 2;
-      backdrop-filter: blur(15px);
-      -webkit-backdrop-filter: blur(15px);
       opacity: 0;
       transition: opacity var(--display-entities-transition, 500ms) ease;
       max-width: calc(100% - 16px);
       word-break: break-word;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
       display: flex;
       align-items: center;
       gap: 4px;
+    }
+    
+    .media-container:not(.transparent-overlays) .display-entities {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
     
     .display-entities ha-icon {
@@ -6659,6 +6822,94 @@ export class MediaCard extends LitElement {
     .display-entities.position-bottom-right {
       bottom: 8px;
       right: 8px;
+    }
+
+    .display-entities.position-center-top {
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .display-entities.position-center-bottom {
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    /* V5.6: Clock/Date Overlay */
+    .clock-overlay {
+      position: absolute;
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
+      color: var(--primary-text-color);
+      padding: 8px 16px;
+      border-radius: 8px;
+      pointer-events: none;
+      z-index: 2;
+      text-align: center;
+    }
+    
+    /* Only apply backdrop-filter if opacity > 0.05 to allow true transparency */
+    .media-container:not(.transparent-overlays) .clock-overlay {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    
+    .clock-overlay.no-background {
+      background: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      box-shadow: none;
+      text-shadow: 
+        0 0 8px rgba(0, 0, 0, 0.8),
+        0 0 16px rgba(0, 0, 0, 0.6),
+        2px 2px 4px rgba(0, 0, 0, 0.9);
+    }
+
+    .clock-time {
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(2.5rem, 6cqi, 5rem));
+      font-weight: 300;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+
+    .clock-date {
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(1.0rem, 2cqi, 1.8rem));
+      margin-top: 2px;
+      opacity: 0.9;
+    }
+
+    /* Clock positioning */
+    .clock-overlay.clock-top-left {
+      top: 12px;
+      left: 12px;
+    }
+
+    .clock-overlay.clock-top-right {
+      top: 12px;
+      right: 12px;
+    }
+
+    .clock-overlay.clock-bottom-left {
+      bottom: 12px;
+      left: 12px;
+    }
+
+    .clock-overlay.clock-bottom-right {
+      bottom: 12px;
+      right: 12px;
+    }
+
+    .clock-overlay.clock-center-top {
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .clock-overlay.clock-center-bottom {
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
     }
 
     /* V4: Action Buttons (Favorite/Delete/Edit) */
@@ -6704,6 +6955,18 @@ export class MediaCard extends LitElement {
     .action-buttons-bottom-left {
       bottom: 8px;
       left: 8px;
+    }
+
+    .action-buttons-center-top {
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .action-buttons-center-bottom {
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
     }
 
     .action-btn {
@@ -6893,7 +7156,7 @@ export class MediaCard extends LitElement {
     /* Copied from V4 lines 1362-1425 */
     .position-indicator {
       position: absolute;
-      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.60);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
       color: var(--primary-text-color);
       padding: 4px 8px;
       border-radius: 12px;
@@ -6904,8 +7167,11 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       /* Above nav zones, below HA header */
       z-index: 2;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+    }
+    
+    .media-container:not(.transparent-overlays) .position-indicator {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
     
     /* Position indicator corner positioning - bottom-right is default */
@@ -6930,9 +7196,21 @@ export class MediaCard extends LitElement {
       left: 12px;
     }
 
+    :host([data-position-indicator-position="center-top"]) .position-indicator {
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    :host([data-position-indicator-position="center-bottom"]) .position-indicator {
+      bottom: 4px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
     .dots-indicator {
       position: absolute;
-      bottom: 12px;
+      bottom: 4px;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
@@ -7800,11 +8078,16 @@ export class MediaCard extends LitElement {
     const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
 
     const displayEntitiesTransition = this.config?.display_entities?.transition_duration || 500;
+    
+    const overlayOpacity = Math.max(0, Math.min(1, Number(this.config?.overlay_opacity) ?? 0.25));
+    
+    // Disable backdrop-filter when opacity <= 0.05 to allow true transparency
+    const transparentClass = overlayOpacity <= 0.05 ? 'transparent-overlays' : '';
 
     return html`
       <div 
-        class="media-container"
-        style="--ha-media-metadata-scale: ${metadataScale}; --display-entities-transition: ${displayEntitiesTransition}ms"
+        class="media-container ${transparentClass}"
+        style="--ha-media-metadata-scale: ${metadataScale}; --display-entities-transition: ${displayEntitiesTransition}ms; --ha-overlay-opacity: ${overlayOpacity}"
         @click=${this._handleTap}
         @dblclick=${this._handleDoubleTap}
         @pointerdown=${this._handlePointerDown}
@@ -7871,6 +8154,7 @@ export class MediaCard extends LitElement {
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
         ${this._renderDisplayEntities()}
+        ${this._renderClock()}
         ${this._renderActionButtons()}
         ${this._renderNavigationIndicators()}
         ${this._renderInfoOverlay()}

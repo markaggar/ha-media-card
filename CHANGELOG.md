@@ -1,5 +1,48 @@
 ## v5.6.0 (In Development)
 ### Added
+- **Clock/Date Overlay**
+  - Real-time clock and date display as overlay on media
+  - Independent toggles for time and date (can show date-only, time-only, or both)
+  - Time formats: 12-hour (3:45 PM) or 24-hour (15:45)
+  - Date formats: Long (December 16, 2025) or Short (12/16/2025)
+  - Optional background with glassmorphism styling
+  - Configurable position (all 6 positions: corners + center-top/center-bottom)
+  - Updates every second with proper lifecycle management
+  - Example config:
+    ```yaml
+    clock:
+      enabled: true
+      position: center-bottom
+      show_time: true
+      show_date: true
+      format: 12h
+      date_format: long
+      show_background: false  # Optional: transparent with text shadow
+    ```
+
+- **Center Positioning for All Overlays**
+  - Added `center-top` and `center-bottom` positions to all overlays
+  - Available for: metadata, action buttons, position indicator, display entities, clock
+  - Center positioning uses `transform: translateX(-50%)` for perfect centering
+  - Position indicator dots moved to 4px from bottom when in center-bottom position
+
+- **Global Overlay Opacity Control**
+  - Single `overlay_opacity` setting controls ALL overlay backgrounds (default: 0.25)
+  - Range: 0 (transparent) to 1 (opaque), adjustable in 0.05 increments
+  - Applies to: metadata, clock, display entities, position indicator
+  - When opacity ≤ 0.05, backdrop-filter disabled for true transparency
+  - Allows opacity as low as 1% (0.01) for minimal visual interference
+  - UI control in "Metadata" section of visual editor
+
+- **Friendly State Names for Display Entities**
+  - All Home Assistant binary sensor device classes now show user-friendly states
+  - Examples: "Detected/Clear" instead of "on/off" for motion sensors
+  - "Locked/Unlocked" for locks, "Open/Closed" for doors/windows
+  - "Charging/Not Charging" for battery sensors, "Wet/Dry" for moisture
+  - Complete mapping for all 26 standard device classes
+  - Numeric values automatically rounded to 1 decimal place
+  - Falls back to raw state if device class not recognized
+
 - **Photo Transitions (Kiosk Enhancement)**
   - Configurable crossfade transitions between images (0-1000ms duration)
   - Visual editor with slider control (default: 300ms)

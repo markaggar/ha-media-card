@@ -940,6 +940,94 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _clockEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        position: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockShowTimeChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        show_time: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockFormatChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        format: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockShowDateChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        show_date: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockDateFormatChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        date_format: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockShowBackgroundChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        show_background: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _overlayOpacityChanged(ev) {
+    const value = parseFloat(ev.target.value);
+    if (!isNaN(value)) {
+      this._config = {
+        ...this._config,
+        overlay_opacity: value
+      };
+      this._fireConfigChanged();
+    }
+  }
+
   _metadataShowFolderChanged(ev) {
     this._config = {
       ...this._config,
@@ -3350,6 +3438,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
 
           <div class="config-row">
+            <label>Overlay Opacity</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                .value=${this._config.overlay_opacity ?? ''}
+                @input=${this._overlayOpacityChanged}
+                placeholder="0.25"
+              />
+              <div class="help-text">Background opacity for ALL overlays (metadata, clock, display entities). Range: 0 (transparent) to 1 (opaque). Default: 0.25</div>
+            </div>
+          </div>
+
+          <div class="config-row">
             <label>Overlay Scale</label>
             <div>
               <input
@@ -3378,6 +3482,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="bottom-right">Bottom Right</option>
                 <option value="top-left">Top Left</option>
                 <option value="top-right">Top Right</option>
+                <option value="center-top">Center Top</option>
+                <option value="center-bottom">Center Bottom</option>
               </select>
               <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
             </div>
@@ -3391,8 +3497,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
                 <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
                 <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+                <option value="center-top" .selected=${this._config.action_buttons?.position === 'center-top'}>Center Top</option>
+                <option value="center-bottom" .selected=${this._config.action_buttons?.position === 'center-bottom'}>Center Bottom</option>
               </select>
-              <div class="help-text">Corner position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
+              <div class="help-text">Position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
             </div>
           </div>
           
@@ -3404,8 +3512,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="bottom-left">Bottom Left</option>
                 <option value="top-right">Top Right</option>
                 <option value="top-left">Top Left</option>
+                <option value="center-top">Center Top</option>
+                <option value="center-bottom">Center Bottom</option>
               </select>
-              <div class="help-text">Corner position for "X of Y" counter (only shown in folder mode)</div>
+              <div class="help-text">Position for "X of Y" counter (only shown in folder mode)</div>
             </div>
           </div>
           
@@ -3430,8 +3540,101 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   <option value="top-right">Top Right</option>
                   <option value="bottom-left">Bottom Left</option>
                   <option value="bottom-right">Bottom Right</option>
+                  <option value="center-top">Center Top</option>
+                  <option value="center-bottom">Center Bottom</option>
                 </select>
                 <div class="help-text">Where to display entity states overlay</div>
+              </div>
+            </div>
+          ` : ''}
+          
+          <div class="config-row">
+            <label>Clock/Date</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.clock?.enabled === true}
+                @change=${this._clockEnabledChanged}
+              />
+              <div class="help-text">Show clock and/or date overlay (perfect for kiosk mode)</div>
+            </div>
+          </div>
+          
+          ${this._config.clock?.enabled ? html`
+            <div class="config-row">
+              <label>Clock Position</label>
+              <div>
+                <select @change=${this._clockPositionChanged} .value=${this._config.clock?.position || 'bottom-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="center-top">Center Top</option>
+                  <option value="center-bottom">Center Bottom</option>
+                </select>
+                <div class="help-text">Where to display clock/date overlay</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Show Time</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.clock?.show_time !== false}
+                  @change=${this._clockShowTimeChanged}
+                />
+                <div class="help-text">Display the current time</div>
+              </div>
+            </div>
+            
+            ${this._config.clock?.show_time !== false ? html`
+              <div class="config-row">
+                <label>Time Format</label>
+                <div>
+                  <select @change=${this._clockFormatChanged} .value=${this._config.clock?.format || '12h'}>
+                    <option value="12h">12-hour (3:45 PM)</option>
+                    <option value="24h">24-hour (15:45)</option>
+                  </select>
+                  <div class="help-text">Clock time format</div>
+                </div>
+              </div>
+            ` : ''}
+            
+            <div class="config-row">
+              <label>Show Date</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.clock?.show_date !== false}
+                  @change=${this._clockShowDateChanged}
+                />
+                <div class="help-text">Display the current date</div>
+              </div>
+            </div>
+            
+            ${this._config.clock?.show_date !== false ? html`
+              <div class="config-row">
+                <label>Date Format</label>
+                <div>
+                  <select @change=${this._clockDateFormatChanged} .value=${this._config.clock?.date_format || 'long'}>
+                    <option value="long">Long (December 16, 2025)</option>
+                    <option value="short">Short (12/16/2025)</option>
+                  </select>
+                  <div class="help-text">Date display format</div>
+                </div>
+              </div>
+            ` : ''}
+            
+            <div class="config-row">
+              <label>Show Background</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.clock?.show_background !== false}
+                  @change=${this._clockShowBackgroundChanged}
+                />
+                <div class="help-text">Display subtle background behind clock/date (when unchecked, text will have shadow for readability)</div>
               </div>
             </div>
           ` : ''}
