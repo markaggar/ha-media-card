@@ -3831,6 +3831,7 @@ class MediaCard extends LitElement {
     this._unsubscribeEntities = null; // Unsubscribe function for entity state changes
     this._entityConditionCache = new Map(); // entity_id -> boolean (cached condition results)
     this._evaluatingConditions = false; // Flag to prevent concurrent evaluations
+    this._entityStyleCache = new Map(); // entity_id -> string (cached style results)
     
     this._holdTimeout = null; // V4 hold action detection
     this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
@@ -7592,9 +7593,10 @@ class MediaCard extends LitElement {
         }
       });
       
-      // Re-evaluate conditions when state changes
+      // Re-evaluate conditions and styles when state changes
       if (stateChanged) {
         this._evaluateAllConditions();
+        this._evaluateAllEntityStyles();
       }
       return;
     }
@@ -7609,8 +7611,11 @@ class MediaCard extends LitElement {
       }
     });
     
-    // Evaluate conditions before starting cycle
-    this._evaluateAllConditions().then(() => {
+    // Evaluate conditions and styles before starting cycle
+    Promise.all([
+      this._evaluateAllConditions(),
+      this._evaluateAllEntityStyles()
+    ]).then(() => {
       // Start cycle timer if multiple entities pass conditions
       const filteredCount = this._getFilteredEntities().length;
       if (filteredCount > 1) {
@@ -7709,7 +7714,13 @@ class MediaCard extends LitElement {
   _evaluateEntityStyles(entityConfig, state) {
     if (!entityConfig?.styles) return '';
     
-    // Create context for JavaScript evaluation
+    // Use cached styles if available (updated async by _evaluateAllEntityStyles)
+    const entityId = state.entity_id;
+    if (this._entityStyleCache?.has(entityId)) {
+      return this._entityStyleCache.get(entityId);
+    }
+    
+    // Fallback: Evaluate synchronously for JavaScript templates only
     const entity = state;
     const stateStr = state.state;
     const stateValue = parseFloat(state.state);
@@ -7717,7 +7728,6 @@ class MediaCard extends LitElement {
     const styles = [];
     
     try {
-      // Evaluate each style property
       Object.entries(entityConfig.styles).forEach(([property, template]) => {
         let value;
         
@@ -7725,22 +7735,16 @@ class MediaCard extends LitElement {
           // JavaScript template syntax: [[[ return ... ]]]
           const jsCode = template.match(/\[\[\[(.*?)\]\]\]/s)?.[1];
           if (jsCode) {
-            // Create function with entity context
-            // state = string value (for binary sensors like "on"/"off")
-            // stateNum = numeric value (for sensors with numbers)
             const func = new Function('entity', 'state', 'stateNum', jsCode);
             value = func(entity, stateStr, stateValue);
-            this._log('🎨 Style evaluated:', property, '→', value, 'for state:', stateStr);
           }
         } else {
-          // Static value
+          // Static value (Jinja2 templates are evaluated async)
           value = template;
         }
         
         if (value !== undefined && value !== null && value !== '') {
-          // Convert camelCase to kebab-case for CSS properties
           const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
-          // Add !important to override base CSS
           styles.push(`${cssProperty}: ${value} !important`);
         }
       });
@@ -7749,6 +7753,90 @@ class MediaCard extends LitElement {
     }
     
     return styles.join('; ');
+  }
+  
+  async _evaluateAllEntityStyles() {
+    if (!this.hass || !this.config?.display_entities?.enabled) return;
+    
+    const entities = this.config.display_entities.entities || [];
+    
+    for (const entityConfig of entities) {
+      const entityId = typeof entityConfig === 'string' ? entityConfig : entityConfig.entity;
+      if (!entityId || !entityConfig.styles) continue;
+      
+      const state = this.hass.states[entityId];
+      if (!state) continue;
+      
+      const styles = [];
+      
+      // Evaluate each style property
+      for (const [property, template] of Object.entries(entityConfig.styles)) {
+        let value;
+        
+        if (typeof template === 'string') {
+          if (template.includes('[[[') && template.includes(']]]')) {
+            // JavaScript template - handle synchronously in _evaluateEntityStyles
+            continue;
+          } else if (template.includes('{{') || template.includes('{%')) {
+            // Jinja2 template - evaluate async
+            try {
+              value = await this._evaluateJinjaTemplate(template);
+              this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
+            } catch (error) {
+              console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+            }
+          } else {
+            // Static value
+            value = template;
+          }
+          
+          if (value !== undefined && value !== null && value !== '') {
+            const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
+            styles.push(`${cssProperty}: ${value} !important`);
+          }
+        }
+      }
+      
+      // Cache the evaluated styles
+      if (!this._entityStyleCache) {
+        this._entityStyleCache = new Map();
+      }
+      this._entityStyleCache.set(entityId, styles.join('; '));
+    }
+    
+    this.requestUpdate();
+  }
+  
+  async _evaluateJinjaTemplate(template) {
+    if (!this.hass) return null;
+    
+    try {
+      return await new Promise((resolve, reject) => {
+        let unsubscribe;
+        const timeout = setTimeout(() => {
+          if (unsubscribe) unsubscribe();
+          reject(new Error('Template evaluation timeout'));
+        }, 5000);
+        
+        this.hass.connection.subscribeMessage(
+          (message) => {
+            clearTimeout(timeout);
+            if (unsubscribe) unsubscribe();
+            const result = message?.result !== undefined ? message.result : message;
+            resolve(result);
+          },
+          {
+            type: "render_template",
+            template: template
+          }
+        ).then(unsub => {
+          unsubscribe = unsub;
+        });
+      });
+    } catch (error) {
+      console.warn('[MediaCard] Failed to evaluate Jinja2 template:', template, error);
+      return null;
+    }
   }
   
   async _evaluateAllConditions() {
@@ -7797,6 +7885,7 @@ class MediaCard extends LitElement {
     }
     
     this._entityConditionCache.clear();
+    this._entityStyleCache.clear();
     this._evaluatingConditions = false;
     
     this._entityStates.clear();
