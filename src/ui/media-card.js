@@ -3877,10 +3877,12 @@ export class MediaCard extends LitElement {
         }
       });
       
-      // Re-evaluate conditions and styles when state changes
+      // Re-evaluate conditions when state changes
       if (stateChanged) {
         this._evaluateAllConditions();
-        this._evaluateAllEntityStyles();
+        // Note: JS templates re-evaluate on every render (synchronous)
+        // Only trigger Jinja2 re-evaluation for changed entities
+        this.requestUpdate();
       }
       return;
     }
@@ -3998,19 +4000,13 @@ export class MediaCard extends LitElement {
   _evaluateEntityStyles(entityConfig, state) {
     if (!entityConfig?.styles) return { containerStyles: '', iconColor: null };
     
-    // Use cached styles if available (updated async by _evaluateAllEntityStyles)
-    const entityId = state.entity_id;
-    if (this._entityStyleCache?.has(entityId)) {
-      return this._entityStyleCache.get(entityId);
-    }
-    
-    // Fallback: Evaluate synchronously for JavaScript templates only
     const entity = state;
     const stateStr = state.state;
     const stateValue = parseFloat(state.state);
     
     const styles = [];
     let iconColor = null;
+    const entityId = state.entity_id;
     
     try {
       Object.entries(entityConfig.styles).forEach(([property, template]) => {
@@ -4023,8 +4019,17 @@ export class MediaCard extends LitElement {
             const func = new Function('entity', 'state', 'stateNum', jsCode);
             value = func(entity, stateStr, stateValue);
           }
+        } else if (typeof template === 'string' && (template.includes('{{') || template.includes('{%'))) {
+          // Jinja2 template - use cached value if available
+          const cacheKey = `${entityId}:${property}`;
+          if (this._entityStyleCache?.has(cacheKey)) {
+            value = this._entityStyleCache.get(cacheKey);
+          } else {
+            // No cache yet, will be filled by async evaluation
+            value = null;
+          }
         } else {
-          // Static value (Jinja2 templates are evaluated async)
+          // Static value
           value = template;
         }
         
@@ -4057,50 +4062,29 @@ export class MediaCard extends LitElement {
       const state = this.hass.states[entityId];
       if (!state) continue;
       
-      const styles = [];
-      let iconColor = null;
-      
-      // Evaluate each style property
+      // Evaluate each Jinja2 style property and cache individually
       for (const [property, template] of Object.entries(entityConfig.styles)) {
-        let value;
-        
         if (typeof template === 'string') {
           if (template.includes('[[[') && template.includes(']]]')) {
-            // JavaScript template - handle synchronously in _evaluateEntityStyles
+            // JavaScript template - skip (evaluated synchronously on render)
             continue;
           } else if (template.includes('{{') || template.includes('{%')) {
-            // Jinja2 template - evaluate async
+            // Jinja2 template - evaluate async and cache per property
             try {
-              value = await this._evaluateJinjaTemplate(template);
+              const value = await this._evaluateJinjaTemplate(template);
+              const cacheKey = `${entityId}:${property}`;
+              if (!this._entityStyleCache) {
+                this._entityStyleCache = new Map();
+              }
+              this._entityStyleCache.set(cacheKey, value);
               this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
             } catch (error) {
               console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
             }
-          } else {
-            // Static value
-            value = template;
           }
-          
-          if (value !== undefined && value !== null && value !== '') {
-            // Special handling for iconColor
-            if (property === 'iconColor') {
-              iconColor = value;
-            } else {
-              const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
-              styles.push(`${cssProperty}: ${value} !important`);
-            }
-          }
+          // Static values don't need caching
         }
       }
-      
-      // Cache the evaluated styles as an object
-      if (!this._entityStyleCache) {
-        this._entityStyleCache = new Map();
-      }
-      this._entityStyleCache.set(entityId, {
-        containerStyles: styles.join('; '),
-        iconColor
-      });
     }
     
     this.requestUpdate();
