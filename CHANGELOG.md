@@ -14,6 +14,14 @@
   - Auto-advance can interrupt loop at configured interval
   - Consistent with expected behavior: loop video, advance when timer expires
 
+- **Display Entities Condition Initialization**
+  - Fixed display entities showing all entities initially, ignoring conditions for first few seconds
+  - Root cause: `_getFilteredEntities()` assumed `true` for uncached conditions during initialization
+  - All entities showed immediately, then filtered correctly after async condition evaluation
+  - Solution: Changed to exclude entities with unevaluated conditions (`return false` instead of `return true`)
+  - Added else case to hide display when no entities pass conditions
+  - Display entities now respect conditions from card initialization
+
 ### Added
 - **UI/UX Refinements**
   - Standardized all bottom overlay positions to 12px from edge for visual consistency
