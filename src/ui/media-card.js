@@ -4577,7 +4577,23 @@ export class MediaCard extends LitElement {
         const response = await this.hass.callWS(wsCall);
         
         // Store full metadata for overlay rendering
-        this._fullMetadata = response.response;
+        // V5.6: Normalize metadata structure - flatten exif fields to top level
+        const rawMetadata = response.response;
+        this._fullMetadata = {
+          ...rawMetadata,
+          // Flatten exif.date_taken to top level if it exists
+          date_taken: rawMetadata.date_taken || rawMetadata.exif?.date_taken,
+          latitude: rawMetadata.latitude || rawMetadata.exif?.latitude,
+          longitude: rawMetadata.longitude || rawMetadata.exif?.longitude,
+          location_name: rawMetadata.location_name || rawMetadata.exif?.location_name,
+          location_city: rawMetadata.location_city || rawMetadata.exif?.location_city,
+          location_state: rawMetadata.location_state || rawMetadata.exif?.location_state,
+          location_country: rawMetadata.location_country || rawMetadata.exif?.location_country,
+          camera_make: rawMetadata.camera_make || rawMetadata.exif?.camera_make,
+          camera_model: rawMetadata.camera_model || rawMetadata.exif?.camera_model,
+          is_favorited: rawMetadata.is_favorited ?? rawMetadata.exif?.is_favorited,
+          rating: rawMetadata.rating ?? rawMetadata.exif?.rating
+        };
         this._log('📊 Fetched full metadata for info overlay:', this._fullMetadata);
         
       } catch (error) {
