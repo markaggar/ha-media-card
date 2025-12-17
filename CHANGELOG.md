@@ -1,14 +1,26 @@
 ## v5.6.0 (In Development)
+### Fixed
+- **Metadata Display Bug**
+  - Fixed metadata overlay not displaying even when data available (filename, location, dates)
+  - Root cause: `item.metadata` could be `undefined` instead of `null`
+  - Setting `_pendingMetadata = undefined` passed null check but rendered empty
+  - Solution: Added `|| null` fallback when setting `_pendingMetadata` to normalize undefined values
+  - Metadata now displays reliably for all available fields
+
+- **Video Loop Behavior**
+  - Videos now loop continuously until auto-advance timer fires
+  - `_onVideoEnded` exits early when `video_loop` enabled (doesn't trigger advance)
+  - Timer keeps running during looped video (not stopped)
+  - Auto-advance can interrupt loop at configured interval
+  - Consistent with expected behavior: loop video, advance when timer expires
+
 ### Added
 - **UI/UX Refinements**
   - Standardized all bottom overlay positions to 12px from edge for visual consistency
   - Position indicator dots visible with higher z-index (z-index: 5)
   - Navigation zones reduced to 60x120px (from 80x200px) to avoid interfering with action buttons
-  - Tighter clock/date spacing: reduced padding (8px 16px) and date margin (2px)
   - Video icon with white background badge for clear distinction
   - Favorite badge with higher z-index and box shadow for visibility
-
-### Added
 - **Clock/Date Overlay**
   - Real-time clock and date display as overlay on media
   - Independent toggles for time and date (can show date-only, time-only, or both)
