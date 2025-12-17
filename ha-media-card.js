@@ -13374,6 +13374,48 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _displayEntitiesCycleIntervalChanged(ev) {
+    const value = parseInt(ev.target.value, 10);
+    if (isNaN(value) || value < 1 || value > 60) return;
+    
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        cycle_interval: value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesTransitionDurationChanged(ev) {
+    const value = parseInt(ev.target.value, 10);
+    if (isNaN(value) || value < 0 || value > 2000) return;
+    
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        transition_duration: value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesRecentChangeWindowChanged(ev) {
+    const value = parseInt(ev.target.value, 10);
+    if (isNaN(value) || value < 0 || value > 300) return;
+    
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        recent_change_window: value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _clockEnabledChanged(ev) {
     this._config = {
       ...this._config,
@@ -15978,6 +16020,78 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   <option value="center-bottom">Center Bottom</option>
                 </select>
                 <div class="help-text">Where to display entity states overlay</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Cycle Interval (seconds)</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  step="1"
+                  .value=${this._config.display_entities?.cycle_interval || 10}
+                  @input=${this._displayEntitiesCycleIntervalChanged}
+                  style="width: 80px;"
+                />
+                <div class="help-text">Time to display each entity before cycling to next (default: 10)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Transition Duration (ms)</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  max="2000"
+                  step="100"
+                  .value=${this._config.display_entities?.transition_duration || 500}
+                  @input=${this._displayEntitiesTransitionDurationChanged}
+                  style="width: 80px;"
+                />
+                <div class="help-text">Fade animation speed (0 = instant, default: 500)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Recent Change Window (seconds)</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  max="300"
+                  step="30"
+                  .value=${this._config.display_entities?.recent_change_window || 60}
+                  @input=${this._displayEntitiesRecentChangeWindowChanged}
+                  style="width: 80px;"
+                />
+                <div class="help-text">Prioritize recently changed entities (0 = disabled, default: 60)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <div style="padding: 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--primary-color); margin-top: 8px;">
+                <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
+                <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
+                <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
+                  <li>Close this editor</li>
+                  <li>Click the ⋮ menu on this card → "Edit in YAML"</li>
+                  <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
+                </ol>
+                <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
+                  <div style="color: var(--secondary-text-color);">display_entities:</div>
+                  <div style="color: var(--secondary-text-color); padding-left: 20px;">enabled: true</div>
+                  <div style="color: var(--secondary-text-color); padding-left: 20px;">entities:</div>
+                  <div style="padding-left: 40px;">- entity: sensor.temperature</div>
+                  <div style="padding-left: 40px; padding-left: 60px;">label: "Temp:"</div>
+                  <div style="padding-left: 40px;">- entity: binary_sensor.motion</div>
+                  <div style="padding-left: 40px; padding-left: 60px;">icon: mdi:motion-sensor</div>
+                </div>
+                <div style="margin-top: 8px;">
+                  <a href="https://github.com/markaggar/ha-media-card#display-entities" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
+                </div>
               </div>
             </div>
           ` : ''}

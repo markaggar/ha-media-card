@@ -23,6 +23,19 @@
   - Display entities now respect conditions from card initialization
 
 ### Added
+- **Display Entities Configuration Controls**
+  - Added GUI controls for display entities timing configuration (Phase 1 implementation)
+  - Three new sliders in card editor when display entities enabled:
+    - **Cycle Interval**: 1-60 seconds (default: 10) - time between entity rotations
+    - **Transition Duration**: 0-2000ms (default: 500) - fade animation speed
+    - **Recent Change Window**: 0-300 seconds (default: 60) - prioritize recently changed entities
+  - Enhanced YAML configuration guidance with:
+    - Step-by-step instructions to open YAML editor
+    - Example configuration snippet with proper indentation
+    - Direct link to full documentation
+    - Visual callout box with warning icon for better visibility
+  - Entity list still configured in YAML (conditions, icons, styling require YAML flexibility)
+
 - **UI/UX Refinements**
   - Standardized all bottom overlay positions to 12px from edge for visual consistency
   - Position indicator dots visible with higher z-index (z-index: 5)
