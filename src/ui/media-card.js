@@ -3276,8 +3276,14 @@ export class MediaCard extends LitElement {
       ? `${label} ${stateText}${unit}` 
       : `${stateText}${unit}`;
 
-    // Evaluate JavaScript styles
-    const customStyles = this._evaluateEntityStyles(entityConfig, state);
+    // Icon support
+    const icon = entityConfig?.icon;
+    const baseIconColor = entityConfig?.icon_color || 'currentColor';
+
+    // Evaluate JavaScript/Jinja2 styles (returns { containerStyles, iconColor })
+    const styleResult = this._evaluateEntityStyles(entityConfig, state);
+    const containerStyles = styleResult.containerStyles || '';
+    const iconColor = styleResult.iconColor || baseIconColor;
 
     // Position class
     const position = config.position || 'top-left';
@@ -3285,7 +3291,8 @@ export class MediaCard extends LitElement {
     const visibleClass = this._displayEntitiesVisible ? 'visible' : '';
 
     return html`
-      <div class="display-entities ${positionClass} ${visibleClass}" style="${customStyles}">
+      <div class="display-entities ${positionClass} ${visibleClass}" style="${containerStyles}">
+        ${icon ? html`<ha-icon icon="${icon}" style="color: ${iconColor};"></ha-icon>` : ''}
         ${displayText}
       </div>
     `;
@@ -3989,7 +3996,7 @@ export class MediaCard extends LitElement {
   }
   
   _evaluateEntityStyles(entityConfig, state) {
-    if (!entityConfig?.styles) return '';
+    if (!entityConfig?.styles) return { containerStyles: '', iconColor: null };
     
     // Use cached styles if available (updated async by _evaluateAllEntityStyles)
     const entityId = state.entity_id;
@@ -4003,6 +4010,7 @@ export class MediaCard extends LitElement {
     const stateValue = parseFloat(state.state);
     
     const styles = [];
+    let iconColor = null;
     
     try {
       Object.entries(entityConfig.styles).forEach(([property, template]) => {
@@ -4021,15 +4029,20 @@ export class MediaCard extends LitElement {
         }
         
         if (value !== undefined && value !== null && value !== '') {
-          const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
-          styles.push(`${cssProperty}: ${value} !important`);
+          // Special handling for iconColor
+          if (property === 'iconColor') {
+            iconColor = value;
+          } else {
+            const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
+            styles.push(`${cssProperty}: ${value} !important`);
+          }
         }
       });
     } catch (error) {
       console.warn('[MediaCard] Failed to evaluate entity styles:', error);
     }
     
-    return styles.join('; ');
+    return { containerStyles: styles.join('; '), iconColor };
   }
   
   async _evaluateAllEntityStyles() {
@@ -4045,6 +4058,7 @@ export class MediaCard extends LitElement {
       if (!state) continue;
       
       const styles = [];
+      let iconColor = null;
       
       // Evaluate each style property
       for (const [property, template] of Object.entries(entityConfig.styles)) {
@@ -4068,17 +4082,25 @@ export class MediaCard extends LitElement {
           }
           
           if (value !== undefined && value !== null && value !== '') {
-            const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
-            styles.push(`${cssProperty}: ${value} !important`);
+            // Special handling for iconColor
+            if (property === 'iconColor') {
+              iconColor = value;
+            } else {
+              const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
+              styles.push(`${cssProperty}: ${value} !important`);
+            }
           }
         }
       }
       
-      // Cache the evaluated styles
+      // Cache the evaluated styles as an object
       if (!this._entityStyleCache) {
         this._entityStyleCache = new Map();
       }
-      this._entityStyleCache.set(entityId, styles.join('; '));
+      this._entityStyleCache.set(entityId, {
+        containerStyles: styles.join('; '),
+        iconColor
+      });
     }
     
     this.requestUpdate();
@@ -6620,6 +6642,14 @@ export class MediaCard extends LitElement {
       max-width: calc(100% - 16px);
       word-break: break-word;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .display-entities ha-icon {
+      flex-shrink: 0;
+      --mdc-icon-size: 1em;
     }
 
     .display-entities.visible {

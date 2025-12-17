@@ -15,6 +15,7 @@
   - Cycle through multiple entities with configurable interval (default: 10s)
   - Smooth fade transitions between entities with configurable duration
   - Optional labels for each entity
+  - **Icon support** with optional icon and icon_color per entity
   - Glassmorphism styling with backdrop blur
   - **Jinja2 template conditions** to show/hide entities dynamically
   - **Dual template styling support** - JavaScript OR Jinja2 for dynamic styling
@@ -40,20 +41,24 @@
                 return stateNum > 75 ? 'bold' : 'normal';
               ]]]
     ```
-  - Example config with **Jinja2 templates** (like Mushroom cards):
+  - Example config with **Jinja2 templates** and **icons**:
     ```yaml
     display_entities:
       enabled: true
       position: bottom-left
       entities:
         - entity: binary_sensor.motion_kitchen
-          label: "Kitchen -"
+          icon: mdi:motion-sensor
+          icon_color: red
+          label: "Kitchen"
           condition: "{{ is_state('binary_sensor.motion_kitchen', 'on') }}"
           styles:
             color: "{% if is_state('binary_sensor.motion_kitchen', 'on') %}red{% else %}lightblue{% endif %}"
             fontSize: "{{ '24px' if is_state('binary_sensor.motion_kitchen', 'on') else '16px' }}"
         - entity: sensor.temperature
+          icon: mdi:thermometer
           styles:
+            iconColor: "{{ 'red' if states('sensor.temperature') | float > 80 else 'orange' }}"
             color: "{{ 'red' if states('sensor.temperature') | float > 80 else 'orange' if states('sensor.temperature') | float > 70 else 'lightblue' }}"
             fontWeight: "{{ 'bold' if states('sensor.temperature') | float > 75 else 'normal' }}"
     ```
