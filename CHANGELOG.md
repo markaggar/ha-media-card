@@ -1,5 +1,14 @@
 ## v5.6.0 (In Development)
 ### Added
+- **UI/UX Refinements**
+  - Standardized all bottom overlay positions to 12px from edge for visual consistency
+  - Position indicator dots visible with higher z-index (z-index: 5)
+  - Navigation zones reduced to 60x120px (from 80x200px) to avoid interfering with action buttons
+  - Tighter clock/date spacing: reduced padding (8px 16px) and date margin (2px)
+  - Video icon with white background badge for clear distinction
+  - Favorite badge with higher z-index and box shadow for visibility
+
+### Added
 - **Clock/Date Overlay**
   - Real-time clock and date display as overlay on media
   - Independent toggles for time and date (can show date-only, time-only, or both)
@@ -42,6 +51,15 @@
   - Complete mapping for all 26 standard device classes
   - Numeric values automatically rounded to 1 decimal place
   - Falls back to raw state if device class not recognized
+
+- **Panel Thumbnail Improvements**
+  - Adaptive thumbnail sizing based on content aspect ratio
+  - Portrait photos (< 0.9 ratio): 7 rows, Square photos (~1.0): 6 rows, Landscape photos (> 1.33): 5 rows
+  - Dynamic height calculation to fit available vertical space without overlap
+  - Video thumbnails now show 🎞️ film strip icon overlay in bottom-right corner
+  - Favorite badges (♥) displayed on favorited items in all panel modes
+  - Thumbnails properly constrained to grid width (no horizontal overflow)
+  - Improved pagination - next/previous buttons work correctly on last page
 
 - **Photo Transitions (Kiosk Enhancement)**
   - Configurable crossfade transitions between images (0-1000ms duration)

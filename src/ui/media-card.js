@@ -6650,8 +6650,8 @@ export class MediaCard extends LitElement {
       left: 8px;
       top: 50%;
       transform: translateY(-50%);
-      width: 80px;
-      height: 200px;
+      width: 60px;
+      height: 120px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -6660,8 +6660,8 @@ export class MediaCard extends LitElement {
       right: 8px;
       top: 50%;
       transform: translateY(-50%);
-      width: 80px;
-      height: 200px;
+      width: 60px;
+      height: 120px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -6737,12 +6737,12 @@ export class MediaCard extends LitElement {
 
     /* Metadata positioning */
     .metadata-overlay.metadata-bottom-left {
-      bottom: 8px;
+      bottom: 12px;
       left: 8px;
     }
 
     .metadata-overlay.metadata-bottom-right {
-      bottom: 8px;
+      bottom: 12px;
       right: 8px;
     }
 
@@ -6815,12 +6815,12 @@ export class MediaCard extends LitElement {
     }
 
     .display-entities.position-bottom-left {
-      bottom: 8px;
+      bottom: 12px;
       left: 8px;
     }
 
     .display-entities.position-bottom-right {
-      bottom: 8px;
+      bottom: 12px;
       right: 8px;
     }
 
@@ -6831,7 +6831,7 @@ export class MediaCard extends LitElement {
     }
 
     .display-entities.position-center-bottom {
-      bottom: 8px;
+      bottom: 12px;
       left: 50%;
       transform: translateX(-50%);
     }
@@ -7210,14 +7210,14 @@ export class MediaCard extends LitElement {
 
     .dots-indicator {
       position: absolute;
-      bottom: 4px;
+      bottom: 12px;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
       gap: 6px;
       pointer-events: none;
-      /* Above nav zones, below HA header */
-      z-index: 2;
+      /* Above overlays */
+      z-index: 5;
       max-width: 200px;
       overflow: hidden;
     }
@@ -7849,7 +7849,11 @@ export class MediaCard extends LitElement {
 
     .thumbnail {
       position: relative;
-      aspect-ratio: 4 / 3;
+      /* V5.6: Height set dynamically via --thumbnail-height CSS variable */
+      height: var(--thumbnail-height, 150px);
+      width: 100%; /* Fill grid column */
+      max-width: 100%; /* Prevent overflow */
+      aspect-ratio: 4 / 3; /* Base ratio, actual content uses contain */
       border-radius: 8px;
       overflow: hidden;
       cursor: pointer;
@@ -7925,7 +7929,7 @@ export class MediaCard extends LitElement {
       position: absolute;
       top: 4px;
       right: 4px;
-      background: rgba(255, 0, 0, 0.8);
+      background: rgba(255, 0, 0, 0.9);
       color: white;
       width: 24px;
       height: 24px;
@@ -7934,6 +7938,22 @@ export class MediaCard extends LitElement {
       align-items: center;
       justify-content: center;
       font-size: 14px;
+      pointer-events: none;
+      z-index: 3;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+    
+    .video-icon-overlay {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      font-size: 24px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 4px;
+      padding: 2px 4px;
+      pointer-events: none;
+      z-index: 2;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 
     .no-items {
@@ -8368,6 +8388,57 @@ export class MediaCard extends LitElement {
   }
 
   /**
+   * V5.6: Calculate optimal number of thumbnails to display
+   * Target 5-7 rows, adjust based on typical aspect ratio to avoid overlap
+   */
+  _calculateOptimalThumbnailCount(items) {
+    // Target rows (will flex between 5-7 based on content)
+    const targetMinRows = 5;
+    const targetMaxRows = 7;
+    const columns = 2;
+    
+    // Estimate aspect ratios from a sample of items
+    // Use width/height from metadata if available
+    const sampleSize = Math.min(20, items.length);
+    const aspectRatios = [];
+    
+    for (let i = 0; i < sampleSize; i++) {
+      const item = items[i];
+      const width = item.width || item.image_width;
+      const height = item.height || item.image_height;
+      
+      if (width && height) {
+        aspectRatios.push(width / height);
+      }
+    }
+    
+    // Calculate median aspect ratio (more robust than average)
+    let medianAspect = 4/3; // Default fallback
+    if (aspectRatios.length > 0) {
+      aspectRatios.sort((a, b) => a - b);
+      const mid = Math.floor(aspectRatios.length / 2);
+      medianAspect = aspectRatios.length % 2 === 0
+        ? (aspectRatios[mid - 1] + aspectRatios[mid]) / 2
+        : aspectRatios[mid];
+    }
+    
+    // Determine row count based on median aspect ratio
+    // Portrait photos (< 1.0): Use more rows (7) since they're taller
+    // Square photos (~1.0): Use middle rows (6)
+    // Landscape photos (> 1.33): Use fewer rows (5) since they're wider
+    let targetRows;
+    if (medianAspect < 0.9) {
+      targetRows = targetMaxRows; // Portrait-heavy: 7 rows
+    } else if (medianAspect < 1.1) {
+      targetRows = 6; // Square-ish: 6 rows
+    } else {
+      targetRows = targetMinRows; // Landscape: 5 rows
+    }
+    
+    return targetRows * columns;
+  }
+
+  /**
    * Render horizontal thumbnail strip with time badges
    */
   _renderThumbnailStrip() {
@@ -8382,8 +8453,9 @@ export class MediaCard extends LitElement {
       `;
     }
 
-    // Hardcode to 5 rows (10 thumbnails) for now - dynamic calculation not working
-    const maxDisplay = 10; // 5 rows × 2 columns
+    // V5.6: Calculate optimal thumbnail size to fit 5-7 rows without overlap
+    // Based on available height and median aspect ratio of content
+    const maxDisplay = this._calculateOptimalThumbnailCount(allItems);
     
     // Initialize unified page start index
     if (this._panelPageStartIndex === undefined || this._panelPageStartIndex === null) {
@@ -8412,7 +8484,15 @@ export class MediaCard extends LitElement {
 
     // Calculate if we have previous/next pages (for all panel modes)
     const hasPreviousPage = displayStartIndex > 0;
-    const hasNextPage = (displayStartIndex + maxDisplay) < allItems.length;
+    const hasNextPage = (displayStartIndex + displayItems.length) < allItems.length;
+    
+    // V5.6: Calculate thumbnail height to fit rows in available space
+    // Assumes panel height ~70% of viewport, header ~80px, padding/gap ~150px total
+    const viewportHeight = window.innerHeight;
+    const availableHeight = (viewportHeight * 0.7) - 230; // Conservative estimate
+    const rows = maxDisplay / 2; // 2 columns
+    const gapSpace = (rows - 1) * 16; // 16px gap between rows
+    const thumbnailHeight = Math.max(100, Math.min(200, (availableHeight - gapSpace) / rows));
 
     // Resolve all thumbnail URLs upfront (async but doesn't block render)
     displayItems.forEach(async (item) => {
@@ -8439,7 +8519,7 @@ export class MediaCard extends LitElement {
     });
 
     return html`
-      <div class="thumbnail-strip">
+      <div class="thumbnail-strip" style="--thumbnail-height: ${thumbnailHeight}px">
         ${hasPreviousPage ? html`
           <button class="page-nav-button prev-page" @click=${() => this._pageQueueThumbnails('prev')}>
             <ha-icon icon="mdi:chevron-up"></ha-icon>
@@ -8453,7 +8533,16 @@ export class MediaCard extends LitElement {
             ? actualIndex === this.navigationIndex 
             : actualIndex === this._panelQueueIndex;
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
-          const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(itemUri);
+          // Check multiple sources for favorite status (check rating too - 5 stars = favorite)
+          // Queue items store metadata inside item.metadata object
+          const isFavorited = item.is_favorited === true || 
+                              item.is_favorited === 1 ||
+                              item.rating === 5 ||
+                              item.metadata?.is_favorited === true ||
+                              item.metadata?.is_favorited === 1 ||
+                              item.metadata?.rating === 5 ||
+                              this._burstFavoritedFiles.includes(itemUri) ||
+                              (this.currentMedia?.media_content_id === itemUri && this.currentMedia?.metadata?.is_favorited);
           
           // Format badge based on mode
           let badge = '';
@@ -8503,6 +8592,7 @@ export class MediaCard extends LitElement {
                     @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
                     @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
                   ></video>
+                  <div class="video-icon-overlay">🎞️</div>
                 ` : html`
                   <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
                 `
