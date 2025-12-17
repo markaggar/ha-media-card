@@ -3512,83 +3512,23 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
         
-        <!-- Overlay Positioning (consolidated section) -->
+        <!-- Display Entities Section -->
         <div class="section">
-          <div class="section-title">📍 Overlay Positioning</div>
+          <div class="section-title">📊 Display Entities</div>
           
           <div class="config-row">
-            <label>Metadata Position</label>
-            <div>
-              <select @change=${this._metadataPositionChanged} .value=${this._config.metadata?.position || 'bottom-left'}>
-                <option value="bottom-left">Bottom Left</option>
-                <option value="bottom-right">Bottom Right</option>
-                <option value="top-left">Top Left</option>
-                <option value="top-right">Top Right</option>
-                <option value="center-top">Center Top</option>
-                <option value="center-bottom">Center Bottom</option>
-              </select>
-              <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Action Buttons Position</label>
-            <div>
-              <select @change=${this._actionButtonsPositionChanged}>
-                <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
-                <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
-                <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
-                <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
-                <option value="center-top" .selected=${this._config.action_buttons?.position === 'center-top'}>Center Top</option>
-                <option value="center-bottom" .selected=${this._config.action_buttons?.position === 'center-bottom'}>Center Bottom</option>
-              </select>
-              <div class="help-text">Position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Position Indicator Corner</label>
-            <div>
-              <select @change=${this._positionIndicatorPositionChanged} .value=${this._config.position_indicator?.position || 'bottom-right'}>
-                <option value="bottom-right">Bottom Right</option>
-                <option value="bottom-left">Bottom Left</option>
-                <option value="top-right">Top Right</option>
-                <option value="top-left">Top Left</option>
-                <option value="center-top">Center Top</option>
-                <option value="center-bottom">Center Bottom</option>
-              </select>
-              <div class="help-text">Position for "X of Y" counter (only shown in folder mode)</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
-            <label>Display Entities</label>
+            <label>Enable Display Entities</label>
             <div>
               <input
                 type="checkbox"
                 .checked=${this._config.display_entities?.enabled === true}
                 @change=${this._displayEntitiesEnabledChanged}
               />
-              <div class="help-text">Show Home Assistant entity states with fade transitions. Configure entities in YAML (see documentation).</div>
+              <div class="help-text">Show Home Assistant entity states with fade transitions</div>
             </div>
           </div>
           
           ${this._config.display_entities?.enabled ? html`
-            <div class="config-row">
-              <label>Display Entities Position</label>
-              <div>
-                <select @change=${this._displayEntitiesPositionChanged} .value=${this._config.display_entities?.position || 'top-left'}>
-                  <option value="top-left">Top Left</option>
-                  <option value="top-right">Top Right</option>
-                  <option value="bottom-left">Bottom Left</option>
-                  <option value="bottom-right">Bottom Right</option>
-                  <option value="center-top">Center Top</option>
-                  <option value="center-bottom">Center Bottom</option>
-                </select>
-                <div class="help-text">Where to display entity states overlay</div>
-              </div>
-            </div>
-            
             <div class="config-row">
               <label>Cycle Interval (seconds)</label>
               <div>
@@ -3637,33 +3577,36 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
             
-            <div class="config-row">
-              <div style="padding: 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--primary-color); margin-top: 8px;">
-                <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
-                <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
-                <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
-                  <li>Close this editor</li>
-                  <li>Click the ⋮ menu on this card → "Edit in YAML"</li>
-                  <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
-                </ol>
-                <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
-                  <div style="color: var(--secondary-text-color);">display_entities:</div>
-                  <div style="color: var(--secondary-text-color); padding-left: 20px;">enabled: true</div>
-                  <div style="color: var(--secondary-text-color); padding-left: 20px;">entities:</div>
-                  <div style="padding-left: 40px;">- entity: sensor.temperature</div>
-                  <div style="padding-left: 40px; padding-left: 60px;">label: "Temp:"</div>
-                  <div style="padding-left: 40px;">- entity: binary_sensor.motion</div>
-                  <div style="padding-left: 40px; padding-left: 60px;">icon: mdi:motion-sensor</div>
-                </div>
-                <div style="margin-top: 8px;">
-                  <a href="https://github.com/markaggar/ha-media-card#display-entities" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
-                </div>
+            <div style="grid-column: 1 / -1; padding: 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--primary-color); margin-top: 8px;">
+              <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
+              <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
+              <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
+                <li>Close this editor</li>
+                <li>Click the ⋮ menu on this card → "Edit in YAML"</li>
+                <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
+              </ol>
+              <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
+                <div style="color: var(--secondary-text-color);">display_entities:</div>
+                <div style="color: var(--secondary-text-color); padding-left: 20px;">enabled: true</div>
+                <div style="color: var(--secondary-text-color); padding-left: 20px;">entities:</div>
+                <div style="padding-left: 40px;">- entity: sensor.temperature</div>
+                <div style="padding-left: 40px; padding-left: 60px;">label: "Temp:"</div>
+                <div style="padding-left: 40px;">- entity: binary_sensor.motion</div>
+                <div style="padding-left: 40px; padding-left: 60px;">icon: mdi:motion-sensor</div>
+              </div>
+              <div style="margin-top: 8px;">
+                <a href="https://github.com/markaggar/ha-media-card#display-entities" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
               </div>
             </div>
           ` : ''}
+        </div>
+        
+        <!-- Clock/Date Section -->
+        <div class="section">
+          <div class="section-title">🕐 Clock/Date</div>
           
           <div class="config-row">
-            <label>Clock/Date</label>
+            <label>Enable Clock/Date</label>
             <div>
               <input
                 type="checkbox"
@@ -3675,21 +3618,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           ${this._config.clock?.enabled ? html`
-            <div class="config-row">
-              <label>Clock Position</label>
-              <div>
-                <select @change=${this._clockPositionChanged} .value=${this._config.clock?.position || 'bottom-left'}>
-                  <option value="top-left">Top Left</option>
-                  <option value="top-right">Top Right</option>
-                  <option value="bottom-left">Bottom Left</option>
-                  <option value="bottom-right">Bottom Right</option>
-                  <option value="center-top">Center Top</option>
-                  <option value="center-bottom">Center Bottom</option>
-                </select>
-                <div class="help-text">Where to display clock/date overlay</div>
-              </div>
-            </div>
-            
             <div class="config-row">
               <label>Show Time</label>
               <div>
@@ -3752,6 +3680,90 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           ` : ''}
+        </div>
+        
+        <!-- Overlay Positioning (consolidated section) -->
+        <div class="section">
+          <div class="section-title">📍 Overlay Positioning</div>
+          
+          <div class="config-row">
+            <label>Metadata Position</label>
+            <div>
+              <select @change=${this._metadataPositionChanged} .value=${this._config.metadata?.position || 'bottom-left'}>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="top-left">Top Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="center-top">Center Top</option>
+                <option value="center-bottom">Center Bottom</option>
+              </select>
+              <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
+            </div>
+          </div>
+          
+          ${this._config.display_entities?.enabled ? html`
+            <div class="config-row">
+              <label>Display Entities Position</label>
+              <div>
+                <select @change=${this._displayEntitiesPositionChanged} .value=${this._config.display_entities?.position || 'top-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="center-top">Center Top</option>
+                  <option value="center-bottom">Center Bottom</option>
+                </select>
+                <div class="help-text">Where to display entity states overlay</div>
+              </div>
+            </div>
+          ` : ''}
+          
+          ${this._config.clock?.enabled ? html`
+            <div class="config-row">
+              <label>Clock Position</label>
+              <div>
+                <select @change=${this._clockPositionChanged} .value=${this._config.clock?.position || 'bottom-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="center-top">Center Top</option>
+                  <option value="center-bottom">Center Bottom</option>
+                </select>
+                <div class="help-text">Where to display clock/date overlay</div>
+              </div>
+            </div>
+          ` : ''}
+          
+          <div class="config-row">
+            <label>Action Buttons Position</label>
+            <div>
+              <select @change=${this._actionButtonsPositionChanged}>
+                <option value="top-right" .selected=${(this._config.action_buttons?.position || 'top-right') === 'top-right'}>Top Right</option>
+                <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
+                <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
+                <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+                <option value="center-top" .selected=${this._config.action_buttons?.position === 'center-top'}>Center Top</option>
+                <option value="center-bottom" .selected=${this._config.action_buttons?.position === 'center-bottom'}>Center Bottom</option>
+              </select>
+              <div class="help-text">Position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Position Indicator Corner</label>
+            <div>
+              <select @change=${this._positionIndicatorPositionChanged} .value=${this._config.position_indicator?.position || 'bottom-right'}>
+                <option value="bottom-right">Bottom Right</option>
+                <option value="bottom-left">Bottom Left</option>
+                <option value="top-right">Top Right</option>
+                <option value="top-left">Top Left</option>
+                <option value="center-top">Center Top</option>
+                <option value="center-bottom">Center Bottom</option>
+              </select>
+              <div class="help-text">Position for "X of Y" counter (only shown in folder mode)</div>
+            </div>
+          </div>
         </div>
 
         <!-- Fullscreen Button (always available) -->
