@@ -34,7 +34,16 @@
     - Example configuration snippet with proper indentation
     - Direct link to full documentation
     - Visual callout box with warning icon for better visibility
+    - Callout now spans full width (both columns) for better visibility
   - Entity list still configured in YAML (conditions, icons, styling require YAML flexibility)
+
+- **Config UI Reorganization**
+  - Split config sections for better organization:
+    - New **📊 Display Entities** section with all display entities settings
+    - New **🕐 Clock/Date** section with all clock/date settings
+    - **📍 Overlay Positioning** section now contains only position dropdowns
+  - Conditional positioning: Display entities and clock position dropdowns only show when respective features are enabled
+  - Cleaner UI with logical grouping of related settings
 
 - **UI/UX Refinements**
   - Standardized all bottom overlay positions to 12px from edge for visual consistency
