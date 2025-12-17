@@ -1372,7 +1372,7 @@ export class MediaCard extends LitElement {
       
       // V5: Store metadata in pending state until image loads
       this._pendingMediaPath = item.media_content_id;
-      this._pendingMetadata = item.metadata;
+      this._pendingMetadata = item.metadata || null;
       
       // V5: Clear caches when media changes
       this._fullMetadata = null;
@@ -2143,7 +2143,7 @@ export class MediaCard extends LitElement {
         // CRITICAL: Update _currentMetadata and _currentMediaPath for overlay display
         this._currentMediaPath = firstItem.media_content_id;
         this._currentMetadata = firstItem.metadata || null;
-        this._pendingMetadata = firstItem.metadata;
+        this._pendingMetadata = firstItem.metadata || null;
         this._log('🔄 Updated _currentMetadata with fresh metadata:', !!this._currentMetadata);
         
         if (shouldUpdate) {
