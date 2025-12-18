@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.0
+ * Media Card v5.6.1
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -10280,6 +10280,7 @@ class MediaCard extends LitElement {
     }
     
     :host([data-card-height]:not([data-aspect-mode])) img,
+    :host([data-card-height]:not([data-aspect-mode])) .image-layer,
     :host([data-card-height]:not([data-aspect-mode])) video {
       max-height: 100%;
       max-width: 100%;
@@ -10291,9 +10292,24 @@ class MediaCard extends LitElement {
     
     /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
     :host(:not([data-aspect-mode]):not([data-card-height])) .media-container {
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: grid;
+      place-items: center;
+    }
+    
+    /* V5.6: Crossfade layers stack via grid in default mode */
+    :host(:not([data-aspect-mode]):not([data-card-height])) .image-layer {
+      position: static !important;
+      top: auto;
+      left: auto;
+      transform: none;
+      grid-area: 1 / 1;
+      max-height: var(--media-max-height, 400px);
+      max-width: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      justify-self: center;
+      align-self: center;
     }
     
     :host(:not([data-aspect-mode]):not([data-card-height])) img {
@@ -16462,7 +16478,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.1 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
