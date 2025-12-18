@@ -82,6 +82,8 @@ It is highly recommended you also install the [Media Index Integration](https://
 
 - **[Features Guide](docs/guides/features.md)** - Detailed explanation of all capabilities
 
+- **[Display Entities Guide](docs/guides/display-entities.md)** - Complete guide to entity overlays with examples
+
 - **[Troubleshooting](docs/guides/troubleshooting.md)** - Solutions to common issues
    
 **Development**   
