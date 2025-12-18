@@ -12,6 +12,36 @@ export class MediaCard extends LitElement {
   static CARD_HEIGHT_MAX = 5000;
   static CARD_HEIGHT_STEP = 50;
   
+  // Friendly state names for HA binary sensor device classes (v5.6)
+  static FRIENDLY_STATES = {
+    'battery': { 'on': 'Low', 'off': 'Normal' },
+    'battery_charging': { 'on': 'Charging', 'off': 'Not Charging' },
+    'cold': { 'on': 'Cold', 'off': 'Normal' },
+    'connectivity': { 'on': 'Connected', 'off': 'Disconnected' },
+    'door': { 'on': 'Open', 'off': 'Closed' },
+    'garage_door': { 'on': 'Open', 'off': 'Closed' },
+    'gas': { 'on': 'Detected', 'off': 'Clear' },
+    'heat': { 'on': 'Hot', 'off': 'Normal' },
+    'light': { 'on': 'Detected', 'off': 'Clear' },
+    'lock': { 'locked': 'Locked', 'unlocked': 'Unlocked' },
+    'moisture': { 'on': 'Wet', 'off': 'Dry' },
+    'motion': { 'on': 'Detected', 'off': 'Clear' },
+    'occupancy': { 'on': 'Detected', 'off': 'Clear' },
+    'opening': { 'on': 'Open', 'off': 'Closed' },
+    'plug': { 'on': 'Plugged In', 'off': 'Unplugged' },
+    'power': { 'on': 'On', 'off': 'Off' },
+    'presence': { 'on': 'Home', 'off': 'Away' },
+    'problem': { 'on': 'Problem', 'off': 'OK' },
+    'running': { 'on': 'Running', 'off': 'Not Running' },
+    'safety': { 'on': 'Unsafe', 'off': 'Safe' },
+    'smoke': { 'on': 'Detected', 'off': 'Clear' },
+    'sound': { 'on': 'Detected', 'off': 'Clear' },
+    'tamper': { 'on': 'Tampered', 'off': 'OK' },
+    'update': { 'on': 'Available', 'off': 'Up-to-date' },
+    'vibration': { 'on': 'Detected', 'off': 'Clear' },
+    'window': { 'on': 'Open', 'off': 'Closed' }
+  };
+  
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -97,6 +127,19 @@ export class MediaCard extends LitElement {
     this._backLayerUrl = ''; // V5.6: Back layer for crossfade
     this._frontLayerActive = true; // V5.6: Which layer is currently visible
     this._pendingLayerSwap = false; // V5.6: Flag to trigger swap after image loads
+    
+    // V5.6: Display Entities System
+    this._displayEntitiesVisible = false; // Current visibility state
+    this._currentEntityIndex = 0; // Index in filtered entities array
+    this._entityStates = new Map(); // entity_id -> state object
+    this._entityCycleTimer = null; // Timer for rotating entities
+    this._entityFadeTimeout = null; // Timeout for fade transitions
+    this._recentlyChangedEntities = new Set(); // Track entities that changed recently
+    this._unsubscribeEntities = null; // Unsubscribe function for entity state changes
+    this._entityConditionCache = new Map(); // entity_id -> boolean (cached condition results)
+    this._evaluatingConditions = false; // Flag to prevent concurrent evaluations
+    this._entityStyleCache = new Map(); // entity_id -> string (cached style results)
+    
     this._holdTimeout = null; // V4 hold action detection
     this._debugMode = false; // V4 debug logging (set via YAML config in setConfig)
     this._lastLogTime = {}; // V4 log throttling
@@ -133,6 +176,9 @@ export class MediaCard extends LitElement {
     // V5.5: On This Day state (anniversary mode)
     this._onThisDayLoading = false;    // Loading indicator for anniversary query
     this._onThisDayWindowDays = 0;     // Current window size (±N days)
+    
+    // V5.6.0: Play randomized option for panels
+    this._playRandomized = false;      // Toggle for randomizing panel playback order
     
     // Modal overlay state (gallery-card pattern)
     this._modalOpen = false;
@@ -176,6 +222,11 @@ export class MediaCard extends LitElement {
     
     // V5.6: Setup dynamic viewport height calculation
     this._setupDynamicViewportHeight();
+    
+    // V5.6: Start clock update timer if clock enabled
+    if (this.config.clock?.enabled) {
+      this._startClockTimer();
+    }
     
     // V5: Restart auto-refresh if it was running before disconnect
     // Only restart if we have a provider, currentMedia, and auto_advance is configured
@@ -248,6 +299,12 @@ export class MediaCard extends LitElement {
       clearTimeout(this._holdTimer);
       this._holdTimer = null;
     }
+    
+    // V5.6: Cleanup display entities
+    this._cleanupDisplayEntities();
+    
+    // V5.6: Cleanup clock timer
+    this._stopClockTimer();
   }
 
   // V4: Force video reload when URL changes
@@ -702,7 +759,31 @@ export class MediaCard extends LitElement {
         show_root_folder: true,
         position: 'bottom-left',
         ...config.metadata
-      }
+      },
+      // V5.6: Display Entities defaults
+      display_entities: {
+        enabled: false,
+        position: 'top-left',
+        entities: [], // Array of entity configs (YAML only)
+        cycle_interval: 10, // seconds
+        transition_duration: 500, // milliseconds
+        prefer_recent_changes: false,
+        recent_change_window: 60, // seconds
+        ...config.display_entities
+      },
+      // V5.6: Clock/Date Overlay defaults
+      clock: {
+        enabled: false,
+        position: 'bottom-left',
+        show_time: true,
+        show_date: true,
+        format: '12h', // or '24h'
+        date_format: 'long', // or 'short'
+        show_background: true, // V5.6: Optional background
+        ...config.clock
+      },
+      // V5.6: Global overlay opacity control
+      overlay_opacity: config.overlay_opacity ?? 0.25
     };
     
     // V4: Set debug mode from config
@@ -772,6 +853,17 @@ export class MediaCard extends LitElement {
     if (hass && !this.provider) {
       this._log('💎 Triggering provider initialization');
       this._initializeProvider();
+    }
+    
+    // V5.6: Subscribe to display entities when hass is available
+    if (hass && this.config?.display_entities?.enabled) {
+      if (!this._displayEntitiesInitialized) {
+        this._displayEntitiesInitialized = true;
+        this._initDisplayEntities();
+      } else {
+        // Just update entity states, don't re-initialize
+        this._updateDisplayEntityStates();
+      }
     }
     
     // V5.4: Monitor media_index entity state for auto-recovery after HA restart
@@ -944,24 +1036,16 @@ export class MediaCard extends LitElement {
 
   // V5.3: Smart pre-load - only for small collections that fit in window
   async _smartPreloadNavigationQueue() {
-    this._log('🔍 _smartPreloadNavigationQueue CALLED');
-    
     // Check if this is a small collection that we should pre-load
     // Need to access the actual provider (might be wrapped by FolderProvider)
     let actualProvider = this.provider;
     
-    this._log('_smartPreloadNavigationQueue - checking provider type:', actualProvider.constructor.name);
-    this._log('actualProvider properties:', Object.keys(actualProvider));
-    
     // Unwrap FolderProvider to get actual provider
     if (actualProvider.sequentialProvider) {
-      this._log('Found sequentialProvider');
       actualProvider = actualProvider.sequentialProvider;
     } else if (actualProvider.mediaIndexProvider) {
-      this._log('Found mediaIndexProvider');
       actualProvider = actualProvider.mediaIndexProvider;
     } else if (actualProvider.subfolderQueue) {
-      this._log('Found subfolderQueue');
       // File system scanning via SubfolderQueue
       const queue = actualProvider.subfolderQueue;
       const queueSize = queue.queue?.length || 0;
@@ -970,7 +1054,6 @@ export class MediaCard extends LitElement {
       // Check mode - pre-loading only makes sense for sequential mode
       // Random mode manages its own queue dynamically with refills
       const mode = this.config.folder?.mode || 'random';
-      this._log(`Checking SubfolderQueue: mode=${mode}, queue=${queueSize}, isScanning=${queue.isScanning}, discoveryInProgress=${queue.discoveryInProgress}, isScanComplete=${isScanComplete}`);
       
       // Pre-load ONLY for sequential mode if scan is complete and collection is small
       if (mode === 'sequential' && isScanComplete && queueSize > 0 && queueSize <= this.maxNavQueueSize) {
@@ -1024,12 +1107,6 @@ export class MediaCard extends LitElement {
         
         this._log(`✅ Pre-loaded ${this.navigationQueue.length} items from SubfolderQueue`);
         this.isNavigationQueuePreloaded = true;
-      } else {
-        if (mode === 'random') {
-          this._log(`Skipping pre-load: Random mode uses dynamic queue refills from ${queue.discoveredFolders?.length || 0} folders`);
-        } else {
-          this._log(`Skipping pre-load: mode=${mode}, isScanComplete=${isScanComplete}, queueSize=${queueSize}, maxNavQueueSize=${this.maxNavQueueSize}`);
-        }
       }
       
       return; // Exit early, SubfolderQueue handled
@@ -1043,26 +1120,22 @@ export class MediaCard extends LitElement {
       // SequentialMediaIndexProvider: Use hasMore flag
       isSmallCollection = actualProvider.hasMore === false;
       estimatedSize = actualProvider.queue?.length || 0;
-      this._log(`Checking sequential provider: hasMore=${actualProvider.hasMore}, queue=${estimatedSize}`);
     } else if (actualProvider.queue) {
       // MediaIndexProvider (random mode): Small if initial query returned less than requested
       estimatedSize = actualProvider.queue.length;
       const requestedSize = actualProvider.queueSize || 100;
       isSmallCollection = estimatedSize < requestedSize;
-      this._log(`Checking random provider: queue=${estimatedSize}, requested=${requestedSize}, isSmall=${isSmallCollection}`);
     }
     
     if (!isSmallCollection) {
-      this._log(`Large collection detected, skipping pre-load (estimated: ${estimatedSize})`);
       return;
     }
     
     if (estimatedSize > this.maxNavQueueSize) {
-      this._log(`Collection too large (${estimatedSize} items), skipping pre-load`);
       return;
     }
     
-    this._log(`Small collection detected (${estimatedSize} items), pre-loading all items...`);
+    this._log(`Pre-loading ${estimatedSize} items...`);
     
     // Different pre-load strategy based on provider type
     if (actualProvider.hasMore !== undefined) {
@@ -1073,7 +1146,6 @@ export class MediaCard extends LitElement {
       while (loadedCount < this.maxNavQueueSize) {
         const item = await this.provider.getNext();
         if (!item) {
-          this._log(`Pre-load complete: loaded ${loadedCount} items (provider exhausted)`);
           break;
         }
         this.navigationQueue.push(item);
@@ -1083,7 +1155,6 @@ export class MediaCard extends LitElement {
       actualProvider.disableAutoLoop = false;
     } else if (actualProvider.queue) {
       // MediaIndexProvider (random): Manually transform queue items (can't disable auto-refill)
-      this._log('Random provider: manually transforming queue items...');
       
       for (const rawItem of actualProvider.queue) {
         // Transform using same logic as getNext() (but don't shift from queue)
@@ -1115,11 +1186,9 @@ export class MediaCard extends LitElement {
         
         if (this.navigationQueue.length >= this.maxNavQueueSize) break;
       }
-      
-      this._log(`Transformed ${this.navigationQueue.length} items from provider queue`);
     }
     
-    this._log(`✅ Pre-loaded ${this.navigationQueue.length} items into navigation queue`);
+    this._log(`✅ Pre-loaded ${this.navigationQueue.length} items`);
     this.isNavigationQueuePreloaded = true; // Mark as pre-loaded
   }
 
@@ -1277,7 +1346,9 @@ export class MediaCard extends LitElement {
         return;
       }
       
-      this._log('Displaying navigation queue item:', item.title, 'at index', this.navigationIndex);
+      // Extract filename from path for logging
+      const filename = item.metadata?.filename || item.media_content_id?.split('/').pop() || 'unknown';
+      this._log('Displaying navigation queue item:', filename, 'at index', this.navigationIndex);
       
       // Add to history for tracking (providers use this for exclusion)
       // Check by media_content_id to avoid duplicate object references
@@ -1316,7 +1387,7 @@ export class MediaCard extends LitElement {
       
       // V5: Store metadata in pending state until image loads
       this._pendingMediaPath = item.media_content_id;
-      this._pendingMetadata = item.metadata;
+      this._pendingMetadata = item.metadata || null;
       
       // V5: Clear caches when media changes
       this._fullMetadata = null;
@@ -1422,13 +1493,10 @@ export class MediaCard extends LitElement {
   _handleAutoAdvanceModeOnNavigate() {
     const mode = this.config.auto_advance_mode || 'reset';
     
-    this._log(`🎮 auto_advance_mode: "${mode}" - handling manual navigation`);
-    
     switch (mode) {
       case 'pause':
         // Pause auto-refresh by clearing the interval
         if (this._refreshInterval) {
-          this._log('🔄 Pausing auto-refresh due to manual navigation (clearing interval', this._refreshInterval, ')');
           clearInterval(this._refreshInterval);
           this._refreshInterval = null;
           // Mark that we paused due to navigation (for potential resume)
@@ -1443,12 +1511,9 @@ export class MediaCard extends LitElement {
         
       case 'reset':
         // Reset the auto-refresh timer
-        const oldInterval = this._refreshInterval;
-        this._log(`🔄 Resetting auto-refresh timer due to manual navigation (clearing interval ${oldInterval}, will create new one)`);
         this._lastRefreshTime = Date.now();
         // Restart the timer (this will clear old interval and create new one)
         this._setupAutoRefresh();
-        this._log(`✅ Auto-refresh timer reset complete - old interval: ${oldInterval}, new interval: ${this._refreshInterval}`);
         break;
     }
   }
@@ -1581,8 +1646,21 @@ export class MediaCard extends LitElement {
 
     console.warn(`🎬 Inserting ${this._panelQueue.length} items into navigation queue at position ${this.navigationIndex + 1}`);
 
+    // Get panel items (may randomize if checkbox is enabled)
+    let panelItems = [...this._panelQueue]; // Copy array
+    
+    // V5.6.0: Randomize if checkbox is enabled
+    if (this._playRandomized) {
+      console.warn('🎲 Randomizing panel items for playback');
+      // Fisher-Yates shuffle
+      for (let i = panelItems.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [panelItems[i], panelItems[j]] = [panelItems[j], panelItems[i]];
+      }
+    }
+
     // Convert panel items to navigation queue format
-    const queueItems = this._panelQueue.map(item => ({
+    const queueItems = panelItems.map(item => ({
       media_content_id: item.media_source_uri || item.media_content_id || `media-source://media_source${item.path}`,
       media_content_type: item.file_type === 'video' ? 'video' : 'image',
       title: item.filename || item.path.split('/').pop(),
@@ -1637,6 +1715,13 @@ export class MediaCard extends LitElement {
     this._panelQueueIndex = 0;
     this._panelPageStartIndex = null;
     this._burstMode = false; // Clear deprecated flag
+    
+    // V5.6.0: Resume playback if paused
+    if (this._isPaused) {
+      console.warn('▶️ Resuming playback to play panel items');
+      this._isPaused = false;
+    }
+    
     this.requestUpdate();
     
     // Jump to first inserted item
@@ -1647,7 +1732,6 @@ export class MediaCard extends LitElement {
   _setupAutoRefresh() {
     // Clear any existing interval/timeout FIRST to prevent multiple timers
     if (this._refreshInterval) {
-      this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
       this._timerStoppedForVideo = false; // Reset flag when manually stopping timer
@@ -1701,10 +1785,7 @@ export class MediaCard extends LitElement {
       // Check if resuming from pause with remaining time
       const remainingMs = this._pausedRemainingMs || intervalMs;
       if (this._pausedRemainingMs) {
-        this._log(`🔄 Resuming ${modeLabel} with ${Math.round(remainingMs / 1000)}s remaining (was ${refreshSeconds}s total)`);
         this._pausedRemainingMs = null; // Clear saved time
-      } else {
-        this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
       }
       
       // Track when timer started for pause calculation
@@ -1755,10 +1836,10 @@ export class MediaCard extends LitElement {
           
           // V4 CODE REUSE: Check if we should wait for video to complete
           // Based on V4 lines 3259-3302
-          if (await this._shouldWaitForVideoCompletion()) {
+          // V5.6: Don't stop timer if video_loop is enabled - let timer interrupt the loop
+          if (await this._shouldWaitForVideoCompletion() && !this.config.video_loop) {
             // Stop the timer to prevent unnecessary database queries while video plays
             if (!this._timerStoppedForVideo) {
-              this._log('🔄 Stopping auto-timer while waiting for video to complete');
               clearInterval(this._refreshInterval);
               this._refreshInterval = null;
               this._timerStoppedForVideo = true;
@@ -1768,7 +1849,6 @@ export class MediaCard extends LitElement {
           
           if (isRefreshMode) {
             // Reload current media (for single_media or folder with auto_refresh only)
-            this._log('🔄 Auto-refresh timer triggered - reloading current media');
             if (this.currentMedia) {
               await this._resolveMediaUrl();
               this.requestUpdate();
@@ -1777,15 +1857,11 @@ export class MediaCard extends LitElement {
             }
           } else {
             // Advance to next media (folder mode with auto_advance)
-            this._log('🔄 Auto-advance timer triggered - loading next media');
             this._loadNext();
           }
         } else {
-          // Only log ONCE when paused, not every timer tick
-          if (!this._pauseLogShown) {
-            this._log(`🔄 ${modeLabel} paused - timer will continue firing but no action taken`);
-            this._pauseLogShown = true;
-          }
+          // Silently skip when paused
+          this._pauseLogShown = true;
         }
       };
       
@@ -1802,79 +1878,56 @@ export class MediaCard extends LitElement {
       } else {
         // Normal startup - use setInterval from the beginning
         this._refreshInterval = setInterval(timerCallback, intervalMs);
-        this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
       }
-    } else {
-      this._log('🔄 Auto-advance disabled or not configured:', {
-        refreshSeconds,
-        hasHass: !!this.hass
-      });
     }
   }
 
   // Check for new files in folder mode and refresh queue if needed
   // Returns true if queue was refreshed, false otherwise
   async _checkForNewFiles() {
-    this._log('🔄 _checkForNewFiles() START');
-    
     // Only for sequential mode providers
     const isSeq = this._isSequentialMode();
-    this._log('🔄 Is sequential mode?', isSeq);
     if (!isSeq) {
-      this._log('🔄 Not sequential mode - skipping');
+      return false;
+    }
+    
+    // Skip rescan on first timer tick (card just loaded)
+    if (!this._firstScanComplete) {
+      this._firstScanComplete = true;
       return false;
     }
     
     // Respect navigation grace period (avoid interrupting active navigation)
     const timeSinceLastNav = Date.now() - (this._lastNavigationTime || 0);
-    this._log('🔄 Time since last navigation:', timeSinceLastNav, 'ms');
     if (timeSinceLastNav < 5000) {
-      this._log('🔄 Skipping new file check - within navigation grace period');
       return false;
     }
     
     // Check if we're at position 1 (index 0) before rescan
     const wasAtPositionOne = this.navigationIndex === 0;
-    this._log('🔄 Currently at position 1 (index 0)?', wasAtPositionOne);
     
     if (!wasAtPositionOne) {
-      this._log('🔄 Not at position 1 - skipping rescan (manual navigation in progress)');
       return false;
     }
     
     try {
       // Trigger full rescan to detect new files
-      this._log('🔄 Triggering full folder rescan...');
       if (!this.provider || typeof this.provider.rescanForNewFiles !== 'function') {
-        this._log('🔄 Provider does not support rescanForNewFiles');
         return false;
       }
       
       const scanResult = await this.provider.rescanForNewFiles();
-      this._log('🔄 Rescan result:', scanResult);
-      this._log('🔄 Current time:', new Date().toLocaleTimeString());
-      
-      // If this is the first scan (previousFirstItem is null), don't trigger refresh
-      // This prevents unnecessary reload on the first timer fire after initial load
-      if (scanResult.previousFirstItem === null) {
-        this._log('✅ First scan complete - establishing baseline, no refresh needed');
-        return false;
-      }
       
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
-        this._log(`🆕 Queue changed - new first item detected! Refreshing display...`);
-        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || scanResult.previousFirstItem || 'none'}`);
-        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
+        this._log(`🆕 New files detected - refreshing display`);
         await this._refreshQueue();
         return true; // Queue was refreshed
       } else {
-        this._log('✅ Rescan complete - no change in first item, display stays the same');
-        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
         return false;
       }
     } catch (error) {
-      this._log('⚠️ Error checking for new files:', error);
+      console.error('Error checking for new files:', error);
     }
     
     return false; // Queue was not refreshed
@@ -2066,7 +2119,7 @@ export class MediaCard extends LitElement {
         // CRITICAL: Update _currentMetadata and _currentMediaPath for overlay display
         this._currentMediaPath = firstItem.media_content_id;
         this._currentMetadata = firstItem.metadata || null;
-        this._pendingMetadata = firstItem.metadata;
+        this._pendingMetadata = firstItem.metadata || null;
         this._log('🔄 Updated _currentMetadata with fresh metadata:', !!this._currentMetadata);
         
         if (shouldUpdate) {
@@ -2131,7 +2184,6 @@ export class MediaCard extends LitElement {
     
     // CRITICAL: Never add timestamp to signed URLs (breaks signature validation)
     if (url.includes('authSig=')) {
-      this._log('Skipping cache-busting timestamp - URL has authSig');
       return url;
     }
     
@@ -2197,16 +2249,25 @@ export class MediaCard extends LitElement {
         this.requestUpdate();
       } else {
         // Crossfade: set new image on hidden layer, then swap after it loads
-        if (this._frontLayerActive) {
-          this._backLayerUrl = url;
-        } else {
+        // Special case: If both layers are empty (first load or after video), show immediately without crossfade
+        if (!this._frontLayerUrl && !this._backLayerUrl) {
           this._frontLayerUrl = url;
+          this._frontLayerActive = true;
+          this._pendingLayerSwap = false;
+          this.requestUpdate();
+        } else {
+          // Normal crossfade: load on hidden layer then swap
+          if (this._frontLayerActive) {
+            this._backLayerUrl = url;
+          } else {
+            this._frontLayerUrl = url;
+          }
+          
+          // Set flag to trigger swap when the new image loads
+          this._pendingLayerSwap = true;
+          this._transitionDuration = duration;
+          this.requestUpdate();
         }
-        
-        // Set flag to trigger swap when the new image loads
-        this._pendingLayerSwap = true;
-        this._transitionDuration = duration;
-        this.requestUpdate();
       }
     } else {
       // For videos, just clear the image layers immediately
@@ -2231,12 +2292,8 @@ export class MediaCard extends LitElement {
       return;
     }
     
-    this._log('_resolveMediaUrl called with mediaId:', mediaId);
-    this._log('currentMedia object:', this.currentMedia);
-    
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
-      this._log('Using direct HTTP URL');
       this._setMediaUrl(mediaId);
       this.requestUpdate();
       return;
@@ -2245,21 +2302,15 @@ export class MediaCard extends LitElement {
     // If media-source:// format, resolve through HA API
     if (mediaId.startsWith('media-source://')) {
       try {
-        this._log('Resolving media-source:// URL via HA API');
-        
         // V5: Copy V4's approach - just pass through to HA without modification
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
           media_content_id: mediaId,
           expires: (60 * 60 * 3) // 3 hours
         });
-        this._log('HA resolved to:', resolved.url);
         
         // Add timestamp for auto-refresh (camera snapshots, etc.)
         const finalUrl = this._addCacheBustingTimestamp(resolved.url);
-        if (finalUrl !== resolved.url) {
-          this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
-        }
         
         this._setMediaUrl(finalUrl);
         this.requestUpdate();
@@ -2650,7 +2701,7 @@ export class MediaCard extends LitElement {
 
   // V4: Video event handlers
   _onVideoLoadStart() {
-    this._log('Video started loading:', this.mediaUrl);
+    this._log('Video load initiated:', this.mediaUrl);
     // Reset video wait timer for new video
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
@@ -2658,11 +2709,10 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoCanPlay() {
-    this._log('Video can start playing:', this.mediaUrl);
+    // Video ready to play
   }
 
   _onVideoPlay() {
-    this._log('Video started playing:', this.mediaUrl);
     // Reset video wait timer when video starts playing
     this._videoWaitStartTime = null;
     
@@ -2745,11 +2795,8 @@ export class MediaCard extends LitElement {
     const videoMaxDuration = this.config.video_max_duration || 0;
     const autoAdvanceSeconds = this.config.auto_advance_seconds || 0;
 
-    this._log('🎬 Video completion check - videoMaxDuration:', videoMaxDuration, 'autoAdvanceSeconds:', autoAdvanceSeconds);
-
     // If video_max_duration is 0, wait indefinitely for video completion
     if (videoMaxDuration === 0) {
-      this._log('🎬 Video playing - waiting for completion (no time limit set)');
       return true;
     }
 
@@ -2757,7 +2804,6 @@ export class MediaCard extends LitElement {
     const now = Date.now();
     if (!this._videoWaitStartTime) {
       this._videoWaitStartTime = now;
-      this._log('🎬 Starting video wait timer at:', new Date(now).toLocaleTimeString());
     }
 
     const waitTimeMs = now - this._videoWaitStartTime;
@@ -2782,6 +2828,13 @@ export class MediaCard extends LitElement {
   _onVideoEnded() {
     const endTime = new Date();
     this._log(`🎬 Video ended at ${endTime.toLocaleTimeString()}:`, this.mediaUrl);
+    
+    // V5.6: If video_loop is enabled, don't advance - video will loop until auto-refresh timer
+    if (this.config.video_loop) {
+      this._log('🔁 Video loop enabled - video will restart automatically, waiting for auto-refresh timer');
+      return;
+    }
+    
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
@@ -2851,7 +2904,6 @@ export class MediaCard extends LitElement {
         video.muted = false;
         video.muted = true;
       }, 50);
-      this._log('Video muted state applied:', video.muted);
     }
   }
 
@@ -2926,10 +2978,9 @@ export class MediaCard extends LitElement {
   }
 
   _onMediaLoaded(e) {
-    // V4: Only log once when media initially loads
-    if (!this._mediaLoadedLogged) {
+    // Log media loaded for images (videos log in _onVideoLoadStart)
+    if (!this._isVideoFile(this.mediaUrl)) {
       this._log('Media loaded successfully:', this.mediaUrl);
-      this._mediaLoadedLogged = true;
     }
     
     // V5: Clear error state and retry attempts on successful load
@@ -2941,26 +2992,42 @@ export class MediaCard extends LitElement {
     // V5.6: Handle crossfade layer swap when new image loads
     if (this._pendingLayerSwap) {
       const loadedUrl = e?.target?.src;
-      const newLayerUrl = this._frontLayerActive ? this._backLayerUrl : this._frontLayerUrl;
+      const expectedUrl = this.mediaUrl; // Use mediaUrl which has the resolved URL
       
-      // Only swap if the loaded image is the new layer (not the old one)
-      if (loadedUrl && newLayerUrl && loadedUrl.includes(newLayerUrl.split('?')[0])) {
-        this._pendingLayerSwap = false;
+      // Check if the loaded URL matches the expected URL (compare mediaUrl which is the resolved URL)
+      if (loadedUrl && expectedUrl) {
+        // Extract pathname from loaded URL if it's a full URL (e.g., http://10.0.0.62:8123/media/...)
+        let normalizedLoaded = loadedUrl;
+        try {
+          const url = new URL(loadedUrl);
+          normalizedLoaded = url.pathname + url.search; // Get /media/... path with query params
+        } catch (e) {
+          // If not a valid URL, use as-is (already a path)
+        }
         
-        // Swap layers to trigger crossfade
-        this._frontLayerActive = !this._frontLayerActive;
-        this.requestUpdate();
+        // Both URLs should now be paths - strip query params for comparison
+        normalizedLoaded = normalizedLoaded.split('?')[0];
+        const normalizedExpected = expectedUrl.split('?')[0];
         
-        // Clear old layer after transition
-        const duration = this._transitionDuration || 300;
-        setTimeout(() => {
-          if (this._frontLayerActive) {
-            this._backLayerUrl = '';
-          } else {
-            this._frontLayerUrl = '';
-          }
+        // Require exact normalized URL match to avoid race conditions
+        if (normalizedLoaded === normalizedExpected) {
+          this._pendingLayerSwap = false;
+          
+          // Swap layers to trigger crossfade
+          this._frontLayerActive = !this._frontLayerActive;
           this.requestUpdate();
-        }, duration + 100);
+          
+          // Clear old layer after transition
+          const duration = this._transitionDuration || 300;
+          setTimeout(() => {
+            if (this._frontLayerActive) {
+              this._backLayerUrl = '';
+            } else {
+              this._frontLayerUrl = '';
+            }
+            this.requestUpdate();
+          }, duration + 100);
+        }
       }
     }
     
@@ -3215,6 +3282,128 @@ export class MediaCard extends LitElement {
     return parts.join(' • ');
   }
   
+  // Render display entities overlay
+  _renderDisplayEntities() {
+    const config = this.config?.display_entities;
+    if (!config?.enabled || !config.entities?.length) {
+      return html``;
+    }
+
+    const entities = this._getFilteredEntities();
+    if (!entities.length) {
+      return html``;
+    }
+
+    // Get current entity
+    const entityId = entities[this._currentEntityIndex % entities.length];
+    const entityConfig = config.entities.find(e => e.entity === entityId);
+    const state = this.hass?.states?.[entityId];
+
+    if (!state) {
+      return html``;
+    }
+
+    // Format entity display
+    const label = entityConfig?.label || '';
+    
+    // Format state value
+    let stateText = state.state;
+    
+    // Use device_class friendly names if available (all HA binary sensor device classes)
+    const deviceClass = state.attributes?.device_class;
+    if (deviceClass && MediaCard.FRIENDLY_STATES[deviceClass]?.[stateText]) {
+      stateText = MediaCard.FRIENDLY_STATES[deviceClass][stateText];
+    }
+    
+    // Round numeric values to 1 decimal place
+    if (!isNaN(parseFloat(stateText)) && isFinite(stateText)) {
+      stateText = parseFloat(stateText).toFixed(1);
+    }
+    
+    const unit = state.attributes?.unit_of_measurement || '';
+    const displayText = label 
+      ? `${label} ${stateText}${unit}` 
+      : `${stateText}${unit}`;
+
+    // Icon support
+    const icon = entityConfig?.icon;
+    const baseIconColor = entityConfig?.icon_color || 'currentColor';
+
+    // Evaluate JavaScript/Jinja2 styles (returns { containerStyles, iconColor })
+    const styleResult = this._evaluateEntityStyles(entityConfig, state);
+    const containerStyles = styleResult.containerStyles || '';
+    const iconColor = styleResult.iconColor || baseIconColor;
+
+    // Position class
+    const position = config.position || 'top-left';
+    const positionClass = `position-${position}`;
+    const visibleClass = this._displayEntitiesVisible ? 'visible' : '';
+
+    return html`
+      <div class="display-entities ${positionClass} ${visibleClass}" style="${containerStyles}">
+        ${icon ? html`<ha-icon icon="${icon}" style="color: ${iconColor};"></ha-icon>` : ''}
+        ${displayText}
+      </div>
+    `;
+  }
+
+  // V5.6: Clock/Date Overlay
+  _renderClock() {
+    const config = this.config?.clock;
+    if (!config?.enabled) {
+      return html``;
+    }
+
+    // Don't show clock if neither time nor date is enabled
+    if (!config.show_time && !config.show_date) {
+      return html``;
+    }
+
+    const now = new Date();
+    const position = config.position || 'bottom-left';
+    const positionClass = `clock-${position}`;
+
+    // Format time
+    let timeDisplay = '';
+    if (config.show_time !== false) {
+      const format = config.format || '12h';
+      if (format === '24h') {
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        timeDisplay = `${hours}:${minutes}`;
+      } else {
+        // 12-hour format
+        let hours = now.getHours();
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12 || 12;
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        timeDisplay = `${hours}:${minutes} ${ampm}`;
+      }
+    }
+
+    // Format date
+    let dateDisplay = '';
+    if (config.show_date !== false) {
+      const dateFormat = config.date_format || 'long';
+      if (dateFormat === 'short') {
+        dateDisplay = now.toLocaleDateString();
+      } else {
+        // Long format
+        const options = { year: 'numeric', month: 'long', day: 'numeric' };
+        dateDisplay = now.toLocaleDateString(undefined, options);
+      }
+    }
+
+    const backgroundClass = config.show_background === false ? 'no-background' : '';
+    
+    return html`
+      <div class="clock-overlay ${positionClass} ${backgroundClass}">
+        ${timeDisplay ? html`<div class="clock-time">${timeDisplay}</div>` : ''}
+        ${dateDisplay ? html`<div class="clock-date">${dateDisplay}</div>` : ''}
+      </div>
+    `;
+  }
+
   // V4: Format folder path for display
   _formatFolderForDisplay(fullFolderPath, showRoot) {
     if (!fullFolderPath) return '';
@@ -3762,6 +3951,398 @@ export class MediaCard extends LitElement {
     return 3;
   }
   
+  // V5.6: Display Entities System
+  _initDisplayEntities() {
+    if (!this.hass || !this.config?.display_entities?.enabled) return;
+    
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length === 0) return;
+    
+    // Extract entity IDs
+    const entityIds = entities.map(e => typeof e === 'string' ? e : e.entity).filter(Boolean);
+    if (entityIds.length === 0) return;
+    
+    this._log('📊 Initializing display entities:', entityIds.length, 'entities');
+    
+    // Initialize state tracking
+    entityIds.forEach(entityId => {
+      const state = this.hass.states[entityId];
+      if (state) {
+        this._entityStates.set(entityId, state);
+      }
+    });
+    
+    // Evaluate conditions and styles before starting cycle
+    // CRITICAL: Wait for conditions before showing any entities
+    Promise.all([
+      this._evaluateAllConditions(),
+      this._evaluateAllEntityStyles()
+    ]).then(() => {
+      // Start cycle timer if multiple entities pass conditions
+      const filteredCount = this._getFilteredEntities().length;
+      if (filteredCount > 1) {
+        this._startEntityCycle();
+      } else if (filteredCount === 1) {
+        // Single entity - just show it
+        this._displayEntitiesVisible = true;
+        this.requestUpdate();
+      } else {
+        // No entities pass conditions - hide display entities
+        this._displayEntitiesVisible = false;
+        this.requestUpdate();
+      }
+    });
+  }
+
+  // Update entity states on hass changes (called after initial setup)
+  _updateDisplayEntityStates() {
+    if (!this.hass || !this.config?.display_entities?.enabled) return;
+    
+    const entities = this.config.display_entities.entities || [];
+    const entityIds = entities.map(e => typeof e === 'string' ? e : e.entity).filter(Boolean);
+    
+    let stateChanged = false;
+    entityIds.forEach(entityId => {
+      const state = this.hass.states[entityId];
+      if (state) {
+        const oldState = this._entityStates.get(entityId);
+        if (oldState && oldState.state !== state.state) {
+          // State changed - track it
+          this._recentlyChangedEntities.add(entityId);
+          const recentWindow = (this.config.display_entities.recent_change_window || 60) * 1000;
+          setTimeout(() => {
+            this._recentlyChangedEntities.delete(entityId);
+          }, recentWindow);
+          stateChanged = true;
+        }
+        this._entityStates.set(entityId, state);
+      }
+    });
+    
+    // Re-evaluate conditions when state changes (with debouncing)
+    if (stateChanged) {
+      const now = Date.now();
+      const minInterval = 500; // 500ms debounce
+      const lastEval = this._lastConditionEvalTs || 0;
+      const elapsed = now - lastEval;
+
+      const runEvaluation = () => {
+        this._lastConditionEvalTs = Date.now();
+        this._pendingConditionEval = null;
+        this._evaluateAllConditions();
+        this.requestUpdate();
+      };
+
+      if (!lastEval || elapsed >= minInterval) {
+        runEvaluation();
+      } else if (!this._pendingConditionEval) {
+        const delay = minInterval - elapsed;
+        this._pendingConditionEval = setTimeout(runEvaluation, delay);
+      }
+    }
+  }
+
+  
+  _startEntityCycle() {
+    // Clear existing timer
+    if (this._entityCycleTimer) {
+      clearInterval(this._entityCycleTimer);
+    }
+    
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length <= 1) return;
+    
+    // Show first entity immediately
+    this._currentEntityIndex = 0;
+    this._displayEntitiesVisible = true;
+    this.requestUpdate();
+    
+    // Set up rotation timer
+    const interval = (this.config.display_entities.cycle_interval || 10) * 1000;
+    this._entityCycleTimer = setInterval(() => {
+      this._cycleToNextEntity();
+    }, interval);
+    
+    this._log('📊 Started entity cycle timer, interval:', interval, 'ms');
+  }
+  
+  _cycleToNextEntity() {
+    const filteredEntities = this._getFilteredEntities();
+    if (filteredEntities.length <= 1) return;
+    
+    // Fade out
+    this._displayEntitiesVisible = false;
+    this.requestUpdate();
+    
+    // Wait for fade transition, then update and fade in
+    const duration = this.config.display_entities.transition_duration || 500;
+    setTimeout(() => {
+      // Increment based on filtered count, not total count
+      this._currentEntityIndex = (this._currentEntityIndex + 1) % filteredEntities.length;
+      this._displayEntitiesVisible = true;
+      this.requestUpdate();
+    }, duration / 2); // Half duration for fade out, half for fade in
+  }
+  
+  async _evaluateEntityCondition(condition) {
+    if (!condition || !this.hass) return true;
+    
+    try {
+      // render_template is a subscription API - we need to subscribe, get result, unsubscribe
+      return await new Promise((resolve, reject) => {
+        let unsubscribe;
+        const timeout = setTimeout(() => {
+          if (unsubscribe) unsubscribe();
+          reject(new Error('Template evaluation timeout'));
+        }, 5000);
+        
+        this.hass.connection.subscribeMessage(
+          (message) => {
+            clearTimeout(timeout);
+            if (unsubscribe) unsubscribe();
+            
+            // Don't process if card was disconnected
+            if (!this.isConnected) {
+              resolve(false);
+              return;
+            }
+            
+            // Extract the actual result from the message object
+            const result = message?.result !== undefined ? message.result : message;
+            this._log('🔍 Template result:', condition, '→', result);
+            
+            // Handle different result formats
+            const resultStr = String(result).trim().toLowerCase();
+            const passes = resultStr === 'true' || result === true;
+            
+            resolve(passes);
+          },
+          {
+            type: "render_template",
+            template: condition
+          }
+        ).then(unsub => {
+          unsubscribe = unsub;
+        });
+      });
+    } catch (error) {
+      console.warn('[MediaCard] Failed to evaluate entity condition:', condition, error);
+      return false;
+    }
+  }
+  
+  _evaluateEntityStyles(entityConfig, state) {
+    if (!entityConfig?.styles) return { containerStyles: '', iconColor: null };
+    
+    const entity = state;
+    const stateStr = state.state;
+    const stateValue = parseFloat(state.state);
+    
+    const styles = [];
+    let iconColor = null;
+    const entityId = state.entity_id;
+    
+    try {
+      Object.entries(entityConfig.styles).forEach(([property, template]) => {
+        let value;
+        
+        if (typeof template === 'string' && template.includes('[[[') && template.includes(']]]')) {
+          // JavaScript template syntax: [[[ return ... ]]]
+          const jsCode = template.match(/\[\[\[(.*?)\]\]\]/s)?.[1];
+          if (jsCode) {
+            const func = new Function('entity', 'state', 'stateNum', jsCode);
+            value = func(entity, stateStr, stateValue);
+          }
+        } else if (typeof template === 'string' && (template.includes('{{') || template.includes('{%'))) {
+          // Jinja2 template - use cached value if available
+          const cacheKey = `${entityId}:${property}`;
+          if (this._entityStyleCache?.has(cacheKey)) {
+            value = this._entityStyleCache.get(cacheKey);
+          } else {
+            // No cache yet, will be filled by async evaluation
+            value = null;
+          }
+        } else {
+          // Static value
+          value = template;
+        }
+        
+        if (value !== undefined && value !== null && value !== '') {
+          // Special handling for iconColor
+          if (property === 'iconColor') {
+            iconColor = value;
+          } else {
+            const cssProperty = property.replace(/([A-Z])/g, '-$1').toLowerCase();
+            styles.push(`${cssProperty}: ${value} !important`);
+          }
+        }
+      });
+    } catch (error) {
+      console.warn('[MediaCard] Failed to evaluate entity styles:', error);
+    }
+    
+    return { containerStyles: styles.join('; '), iconColor };
+  }
+  
+  async _evaluateAllEntityStyles() {
+    if (!this.hass || !this.config?.display_entities?.enabled) return;
+    
+    const entities = this.config.display_entities.entities || [];
+    
+    for (const entityConfig of entities) {
+      const entityId = typeof entityConfig === 'string' ? entityConfig : entityConfig.entity;
+      if (!entityId || !entityConfig.styles) continue;
+      
+      const state = this.hass.states[entityId];
+      if (!state) continue;
+      
+      // Evaluate each Jinja2 style property and cache individually
+      for (const [property, template] of Object.entries(entityConfig.styles)) {
+        if (typeof template === 'string') {
+          if (template.includes('[[[') && template.includes(']]]')) {
+            // JavaScript template - skip (evaluated synchronously on render)
+            continue;
+          } else if (template.includes('{{') || template.includes('{%')) {
+            // Jinja2 template - evaluate async and cache per property
+            try {
+              const value = await this._evaluateJinjaTemplate(template);
+              const cacheKey = `${entityId}:${property}`;
+              if (!this._entityStyleCache) {
+                this._entityStyleCache = new Map();
+              }
+              this._entityStyleCache.set(cacheKey, value);
+              this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
+            } catch (error) {
+              console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+            }
+          }
+          // Static values don't need caching
+        }
+      }
+    }
+    
+    this.requestUpdate();
+  }
+  
+  async _evaluateJinjaTemplate(template) {
+    if (!this.hass) return null;
+    
+    try {
+      return await new Promise((resolve, reject) => {
+        let unsubscribe;
+        const timeout = setTimeout(() => {
+          if (unsubscribe) unsubscribe();
+          reject(new Error('Template evaluation timeout'));
+        }, 5000);
+        
+        this.hass.connection.subscribeMessage(
+          (message) => {
+            clearTimeout(timeout);
+            if (unsubscribe) unsubscribe();
+            const result = message?.result !== undefined ? message.result : message;
+            resolve(result);
+          },
+          {
+            type: "render_template",
+            template: template
+          }
+        ).then(unsub => {
+          unsubscribe = unsub;
+        });
+      });
+    } catch (error) {
+      console.warn('[MediaCard] Failed to evaluate Jinja2 template:', template, error);
+      return null;
+    }
+  }
+  
+  async _evaluateAllConditions() {
+    if (this._evaluatingConditions || !this.hass) return;
+    this._evaluatingConditions = true;
+    
+    const entities = this.config.display_entities.entities || [];
+    const promises = entities.map(async (entityConfig) => {
+      const entityId = typeof entityConfig === 'string' ? entityConfig : entityConfig.entity;
+      if (!entityId) return;
+      
+      const condition = typeof entityConfig === 'object' ? entityConfig.condition : null;
+      const result = await this._evaluateEntityCondition(condition);
+      this._entityConditionCache.set(entityId, result);
+    });
+    
+    await Promise.all(promises);
+    this._evaluatingConditions = false;
+    this.requestUpdate();
+  }
+  
+  _getFilteredEntities() {
+    const entities = this.config.display_entities.entities || [];
+    if (entities.length === 0) return [];
+    
+    // Filter entities based on cached condition results
+    return entities
+      .map((e, index) => ({ entityId: typeof e === 'string' ? e : e.entity, index }))
+      .filter(({ entityId, index }) => {
+        if (!entityId) return false;
+        // If entity has no condition, show it. If it has a condition but not yet evaluated, exclude it.
+        const entityConfig = entities[index];
+        const hasCondition = entityConfig && typeof entityConfig === 'object' && entityConfig.condition;
+        if (hasCondition && !this._entityConditionCache.has(entityId)) return false;
+        // If no condition, default to true (show it)
+        return hasCondition ? this._entityConditionCache.get(entityId) : true;
+      })
+      .map(({ entityId }) => entityId);
+  }
+  
+  _cleanupDisplayEntities() {
+    if (this._entityCycleTimer) {
+      clearInterval(this._entityCycleTimer);
+      this._entityCycleTimer = null;
+    }
+    
+    if (this._entityFadeTimeout) {
+      clearTimeout(this._entityFadeTimeout);
+      this._entityFadeTimeout = null;
+    }
+    
+    // Cancel pending debounced evaluations
+    if (this._pendingConditionEval) {
+      clearTimeout(this._pendingConditionEval);
+      this._pendingConditionEval = null;
+    }
+    
+    this._entityConditionCache.clear();
+    this._entityStyleCache.clear();
+    this._evaluatingConditions = false;
+    
+    this._entityStates.clear();
+    this._recentlyChangedEntities.clear();
+    this._displayEntitiesVisible = false;
+    this._displayEntitiesInitialized = false;
+  }
+
+  // V5.6: Clock Timer Management
+  _startClockTimer() {
+    if (this._clockTimer) {
+      clearInterval(this._clockTimer);
+    }
+    
+    // Update every second
+    this._clockTimer = setInterval(() => {
+      this.requestUpdate();
+    }, 1000);
+    
+    this._log('⏰ Started clock update timer');
+  }
+
+  _stopClockTimer() {
+    if (this._clockTimer) {
+      clearInterval(this._clockTimer);
+      this._clockTimer = null;
+      this._log('⏰ Stopped clock update timer');
+    }
+  }
+  
   // V4: Action Button Handlers
   async _handleFavoriteClick(e) {
     e.stopPropagation();
@@ -3987,7 +4568,23 @@ export class MediaCard extends LitElement {
         const response = await this.hass.callWS(wsCall);
         
         // Store full metadata for overlay rendering
-        this._fullMetadata = response.response;
+        // V5.6: Normalize metadata structure - flatten exif fields to top level
+        const rawMetadata = response.response;
+        this._fullMetadata = {
+          ...rawMetadata,
+          // Flatten exif.date_taken to top level if it exists
+          date_taken: rawMetadata.date_taken || rawMetadata.exif?.date_taken,
+          latitude: rawMetadata.latitude || rawMetadata.exif?.latitude,
+          longitude: rawMetadata.longitude || rawMetadata.exif?.longitude,
+          location_name: rawMetadata.location_name || rawMetadata.exif?.location_name,
+          location_city: rawMetadata.location_city || rawMetadata.exif?.location_city,
+          location_state: rawMetadata.location_state || rawMetadata.exif?.location_state,
+          location_country: rawMetadata.location_country || rawMetadata.exif?.location_country,
+          camera_make: rawMetadata.camera_make || rawMetadata.exif?.camera_make,
+          camera_model: rawMetadata.camera_model || rawMetadata.exif?.camera_model,
+          is_favorited: rawMetadata.is_favorited ?? rawMetadata.exif?.is_favorited,
+          rating: rawMetadata.rating ?? rawMetadata.exif?.rating
+        };
         this._log('📊 Fetched full metadata for info overlay:', this._fullMetadata);
         
       } catch (error) {
@@ -5151,13 +5748,8 @@ export class MediaCard extends LitElement {
     const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
     const totalLength = items?.length || 0;
 
-    // Calculate max display count (same logic as _renderThumbnailStrip)
-    const viewportHeight = window.innerHeight;
-    const headerHeight = 60; // Panel header
-    const thumbnailHeight = 100; // Approximate thumbnail with gap
-    const availableHeight = viewportHeight - headerHeight - 40; // 40px margin
-    const rows = Math.max(2, Math.floor(availableHeight / thumbnailHeight));
-    const maxDisplay = rows * 2; // 2 columns
+    // V5.6: Use same calculation as _renderThumbnailStrip for consistency
+    const maxDisplay = this._calculateOptimalThumbnailCount(items);
 
     if (direction === 'prev') {
       this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
@@ -6092,7 +6684,9 @@ export class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 200px;
+      height: 60%;
+      min-height: 120px;
+      max-height: 600px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -6102,7 +6696,9 @@ export class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 200px;
+      height: 60%;
+      min-height: 120px;
+      max-height: 600px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -6155,7 +6751,7 @@ export class MediaCard extends LitElement {
     /* V4: Metadata overlay */
     .metadata-overlay {
       position: absolute;
-      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.60);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
       color: var(--primary-text-color);
       padding: 6px 12px;
       border-radius: 4px;
@@ -6166,21 +6762,24 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       /* Above nav zones, below HA header */
       z-index: 2;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
       animation: fadeIn 0.3s ease;
       max-width: calc(100% - 16px);
       word-break: break-word;
     }
+    
+    .media-container:not(.transparent-overlays) .metadata-overlay {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
 
     /* Metadata positioning */
     .metadata-overlay.metadata-bottom-left {
-      bottom: 8px;
+      bottom: 12px;
       left: 8px;
     }
 
     .metadata-overlay.metadata-bottom-right {
-      bottom: 8px;
+      bottom: 12px;
       right: 8px;
     }
 
@@ -6192,6 +6791,162 @@ export class MediaCard extends LitElement {
     .metadata-overlay.metadata-top-right {
       top: 8px;
       right: 8px;
+    }
+
+    .metadata-overlay.metadata-center-top {
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .metadata-overlay.metadata-center-bottom {
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    /* Display Entities Overlay */
+    .display-entities {
+      position: absolute;
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
+      color: var(--primary-text-color);
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(1.0rem, 1.6cqi, 2.2rem));
+      line-height: 1.3;
+      pointer-events: none;
+      z-index: 2;
+      opacity: 0;
+      transition: opacity var(--display-entities-transition, 500ms) ease;
+      max-width: calc(100% - 16px);
+      word-break: break-word;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .media-container:not(.transparent-overlays) .display-entities {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    
+    .display-entities ha-icon {
+      flex-shrink: 0;
+      --mdc-icon-size: 1em;
+    }
+
+    .display-entities.visible {
+      opacity: 1;
+    }
+
+    /* Display entities positioning */
+    .display-entities.position-top-left {
+      top: 8px;
+      left: 8px;
+    }
+
+    .display-entities.position-top-right {
+      top: 8px;
+      right: 8px;
+    }
+
+    .display-entities.position-bottom-left {
+      bottom: 12px;
+      left: 8px;
+    }
+
+    .display-entities.position-bottom-right {
+      bottom: 12px;
+      right: 8px;
+    }
+
+    .display-entities.position-center-top {
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .display-entities.position-center-bottom {
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    /* V5.6: Clock/Date Overlay */
+    .clock-overlay {
+      position: absolute;
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
+      color: var(--primary-text-color);
+      padding: 8px 16px;
+      border-radius: 8px;
+      pointer-events: none;
+      z-index: 2;
+      text-align: center;
+    }
+    
+    /* Only apply backdrop-filter if opacity > 0.05 to allow true transparency */
+    .media-container:not(.transparent-overlays) .clock-overlay {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    
+    .clock-overlay.no-background {
+      background: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      box-shadow: none;
+      text-shadow: 
+        0 0 8px rgba(0, 0, 0, 0.8),
+        0 0 16px rgba(0, 0, 0, 0.6),
+        2px 2px 4px rgba(0, 0, 0, 0.9);
+    }
+
+    .clock-time {
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(2.5rem, 6cqi, 5rem));
+      font-weight: 300;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+
+    .clock-date {
+      font-size: calc(var(--ha-media-metadata-scale, 1) * clamp(1.0rem, 2cqi, 1.8rem));
+      margin-top: 2px;
+      opacity: 0.9;
+    }
+
+    /* Clock positioning */
+    .clock-overlay.clock-top-left {
+      top: 12px;
+      left: 12px;
+    }
+
+    .clock-overlay.clock-top-right {
+      top: 12px;
+      right: 12px;
+    }
+
+    .clock-overlay.clock-bottom-left {
+      bottom: 12px;
+      left: 12px;
+    }
+
+    .clock-overlay.clock-bottom-right {
+      bottom: 12px;
+      right: 12px;
+    }
+
+    .clock-overlay.clock-center-top {
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .clock-overlay.clock-center-bottom {
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
     }
 
     /* V4: Action Buttons (Favorite/Delete/Edit) */
@@ -6237,6 +6992,18 @@ export class MediaCard extends LitElement {
     .action-buttons-bottom-left {
       bottom: 8px;
       left: 8px;
+    }
+
+    .action-buttons-center-top {
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .action-buttons-center-bottom {
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
     }
 
     .action-btn {
@@ -6426,7 +7193,7 @@ export class MediaCard extends LitElement {
     /* Copied from V4 lines 1362-1425 */
     .position-indicator {
       position: absolute;
-      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), 0.60);
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), var(--ha-overlay-opacity, 0.25));
       color: var(--primary-text-color);
       padding: 4px 8px;
       border-radius: 12px;
@@ -6437,8 +7204,11 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       /* Above nav zones, below HA header */
       z-index: 2;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+    }
+    
+    .media-container:not(.transparent-overlays) .position-indicator {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
     
     /* Position indicator corner positioning - bottom-right is default */
@@ -6463,6 +7233,18 @@ export class MediaCard extends LitElement {
       left: 12px;
     }
 
+    :host([data-position-indicator-position="center-top"]) .position-indicator {
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    :host([data-position-indicator-position="center-bottom"]) .position-indicator {
+      bottom: 4px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
     .dots-indicator {
       position: absolute;
       bottom: 12px;
@@ -6471,8 +7253,8 @@ export class MediaCard extends LitElement {
       display: flex;
       gap: 6px;
       pointer-events: none;
-      /* Above nav zones, below HA header */
-      z-index: 2;
+      /* Above overlays */
+      z-index: 5;
       max-width: 200px;
       overflow: hidden;
     }
@@ -7013,6 +7795,28 @@ export class MediaCard extends LitElement {
       opacity: 0.7;
     }
 
+    .randomize-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--primary-text-color);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .randomize-checkbox input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--primary-color, #03a9f4);
+    }
+
+    .randomize-checkbox:hover {
+      opacity: 0.8;
+    }
+
     .window-selector {
       background: var(--card-background-color, #fff);
       color: var(--primary-text-color);
@@ -7104,7 +7908,11 @@ export class MediaCard extends LitElement {
 
     .thumbnail {
       position: relative;
-      aspect-ratio: 4 / 3;
+      /* V5.6: Height set dynamically via --thumbnail-height CSS variable */
+      height: var(--thumbnail-height, 150px);
+      width: 100%; /* Fill grid column */
+      max-width: 100%; /* Prevent overflow */
+      aspect-ratio: 4 / 3; /* Base ratio, actual content uses contain */
       border-radius: 8px;
       overflow: hidden;
       cursor: pointer;
@@ -7180,7 +7988,7 @@ export class MediaCard extends LitElement {
       position: absolute;
       top: 4px;
       right: 4px;
-      background: rgba(255, 0, 0, 0.8);
+      background: rgba(255, 0, 0, 0.9);
       color: white;
       width: 24px;
       height: 24px;
@@ -7189,6 +7997,22 @@ export class MediaCard extends LitElement {
       align-items: center;
       justify-content: center;
       font-size: 14px;
+      pointer-events: none;
+      z-index: 3;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+    
+    .video-icon-overlay {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      font-size: 24px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 4px;
+      padding: 2px 4px;
+      pointer-events: none;
+      z-index: 2;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 
     .no-items {
@@ -7332,10 +8156,17 @@ export class MediaCard extends LitElement {
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
     const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
 
+    const displayEntitiesTransition = this.config?.display_entities?.transition_duration || 500;
+    
+    const overlayOpacity = Math.max(0, Math.min(1, Number(this.config?.overlay_opacity) ?? 0.25));
+    
+    // Disable backdrop-filter when opacity <= 0.05 to allow true transparency
+    const transparentClass = overlayOpacity <= 0.05 ? 'transparent-overlays' : '';
+
     return html`
       <div 
-        class="media-container"
-        style="--ha-media-metadata-scale: ${metadataScale}"
+        class="media-container ${transparentClass}"
+        style="--ha-media-metadata-scale: ${metadataScale}; --display-entities-transition: ${displayEntitiesTransition}ms; --ha-overlay-opacity: ${overlayOpacity}"
         @click=${this._handleTap}
         @dblclick=${this._handleDoubleTap}
         @pointerdown=${this._handlePointerDown}
@@ -7401,6 +8232,8 @@ export class MediaCard extends LitElement {
         ` : ''}
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
+        ${this._renderDisplayEntities()}
+        ${this._renderClock()}
         ${this._renderActionButtons()}
         ${this._renderNavigationIndicators()}
         ${this._renderInfoOverlay()}
@@ -7578,6 +8411,14 @@ export class MediaCard extends LitElement {
               <option value="7">±1 week</option>
               <option value="14">±2 weeks</option>
             </select>
+            <label class="randomize-checkbox" title="Randomize playback order">
+              <input 
+                type="checkbox" 
+                .checked=${this._playRandomized}
+                @change=${(e) => { this._playRandomized = e.target.checked; this.requestUpdate(); }}
+              />
+              <span>🎲 Randomize</span>
+            </label>
             <button 
               class="panel-action-button" 
               @click=${this._playPanelItems} 
@@ -7597,6 +8438,14 @@ export class MediaCard extends LitElement {
           </div>
           <div class="panel-header-actions">
             ${(this._panelMode === 'burst' || this._panelMode === 'related') ? html`
+              <label class="randomize-checkbox" title="Randomize playback order">
+                <input 
+                  type="checkbox" 
+                  .checked=${this._playRandomized}
+                  @change=${(e) => { this._playRandomized = e.target.checked; this.requestUpdate(); }}
+                />
+                <span>🎲 Randomize</span>
+              </label>
               <button 
                 class="panel-action-button" 
                 @click=${this._playPanelItems} 
@@ -7614,6 +8463,57 @@ export class MediaCard extends LitElement {
   }
 
   /**
+   * V5.6: Calculate optimal number of thumbnails to display
+   * Target 5-7 rows, adjust based on typical aspect ratio to avoid overlap
+   */
+  _calculateOptimalThumbnailCount(items) {
+    // Target rows (will flex between 5-7 based on content)
+    const targetMinRows = 5;
+    const targetMaxRows = 7;
+    const columns = 2;
+    
+    // Estimate aspect ratios from a sample of items
+    // Use width/height from metadata if available
+    const sampleSize = Math.min(20, items.length);
+    const aspectRatios = [];
+    
+    for (let i = 0; i < sampleSize; i++) {
+      const item = items[i];
+      const width = item.width || item.image_width;
+      const height = item.height || item.image_height;
+      
+      if (width && height) {
+        aspectRatios.push(width / height);
+      }
+    }
+    
+    // Calculate median aspect ratio (more robust than average)
+    let medianAspect = 4/3; // Default fallback
+    if (aspectRatios.length > 0) {
+      aspectRatios.sort((a, b) => a - b);
+      const mid = Math.floor(aspectRatios.length / 2);
+      medianAspect = aspectRatios.length % 2 === 0
+        ? (aspectRatios[mid - 1] + aspectRatios[mid]) / 2
+        : aspectRatios[mid];
+    }
+    
+    // Determine row count based on median aspect ratio
+    // Portrait photos (< 1.0): Use more rows (7) since they're taller
+    // Square photos (~1.0): Use middle rows (6)
+    // Landscape photos (> 1.33): Use fewer rows (5) since they're wider
+    let targetRows;
+    if (medianAspect < 0.9) {
+      targetRows = targetMaxRows; // Portrait-heavy: 7 rows
+    } else if (medianAspect < 1.1) {
+      targetRows = 6; // Square-ish: 6 rows
+    } else {
+      targetRows = targetMinRows; // Landscape: 5 rows
+    }
+    
+    return targetRows * columns;
+  }
+
+  /**
    * Render horizontal thumbnail strip with time badges
    */
   _renderThumbnailStrip() {
@@ -7628,8 +8528,9 @@ export class MediaCard extends LitElement {
       `;
     }
 
-    // Hardcode to 5 rows (10 thumbnails) for now - dynamic calculation not working
-    const maxDisplay = 10; // 5 rows × 2 columns
+    // V5.6: Calculate optimal thumbnail size to fit 5-7 rows without overlap
+    // Based on available height and median aspect ratio of content
+    const maxDisplay = this._calculateOptimalThumbnailCount(allItems);
     
     // Initialize unified page start index
     if (this._panelPageStartIndex === undefined || this._panelPageStartIndex === null) {
@@ -7658,7 +8559,15 @@ export class MediaCard extends LitElement {
 
     // Calculate if we have previous/next pages (for all panel modes)
     const hasPreviousPage = displayStartIndex > 0;
-    const hasNextPage = (displayStartIndex + maxDisplay) < allItems.length;
+    const hasNextPage = (displayStartIndex + displayItems.length) < allItems.length;
+    
+    // V5.6: Calculate thumbnail height to fit rows in available space
+    // Assumes panel height ~70% of viewport, header ~80px, padding/gap ~150px total
+    const viewportHeight = window.innerHeight;
+    const availableHeight = (viewportHeight * 0.7) - 230; // Conservative estimate
+    const rows = maxDisplay / 2; // 2 columns
+    const gapSpace = (rows - 1) * 16; // 16px gap between rows
+    const thumbnailHeight = Math.max(100, Math.min(200, (availableHeight - gapSpace) / rows));
 
     // Resolve all thumbnail URLs upfront (async but doesn't block render)
     displayItems.forEach(async (item) => {
@@ -7685,7 +8594,7 @@ export class MediaCard extends LitElement {
     });
 
     return html`
-      <div class="thumbnail-strip">
+      <div class="thumbnail-strip" style="--thumbnail-height: ${thumbnailHeight}px">
         ${hasPreviousPage ? html`
           <button class="page-nav-button prev-page" @click=${() => this._pageQueueThumbnails('prev')}>
             <ha-icon icon="mdi:chevron-up"></ha-icon>
@@ -7699,7 +8608,20 @@ export class MediaCard extends LitElement {
             ? actualIndex === this.navigationIndex 
             : actualIndex === this._panelQueueIndex;
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
-          const isFavorited = item.is_favorited || this._burstFavoritedFiles.includes(itemUri);
+          // Check multiple sources for favorite status (check rating too - 5 stars = favorite)
+          // Queue items store metadata inside item.metadata object
+          const isFavoriteFlag = (value) =>
+            value === true ||
+            value === 1 ||
+            value === 'true' ||
+            value === '1';
+          const isFavorited = isFavoriteFlag(item.is_favorited) ||
+                              item.rating === 5 ||
+                              isFavoriteFlag(item.metadata?.is_favorited) ||
+                              item.metadata?.rating === 5 ||
+                              this._burstFavoritedFiles.includes(itemUri) ||
+                              (this.currentMedia?.media_content_id === itemUri &&
+                                isFavoriteFlag(this.currentMedia?.metadata?.is_favorited));
           
           // Format badge based on mode
           let badge = '';
@@ -7749,6 +8671,7 @@ export class MediaCard extends LitElement {
                     @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
                     @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
                   ></video>
+                  <div class="video-icon-overlay">🎞️</div>
                 ` : html`
                   <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
                 `

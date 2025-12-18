@@ -918,6 +918,158 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _displayEntitiesEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        position: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesCycleIntervalChanged(ev) {
+    const value = parseInt(ev.target.value, 10);
+    if (isNaN(value) || value < 1 || value > 60) return;
+    
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        cycle_interval: value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesTransitionDurationChanged(ev) {
+    const value = parseInt(ev.target.value, 10);
+    if (isNaN(value) || value < 0 || value > 2000) return;
+    
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        transition_duration: value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _displayEntitiesRecentChangeWindowChanged(ev) {
+    const value = parseInt(ev.target.value, 10);
+    if (isNaN(value) || value < 0 || value > 300) return;
+    
+    this._config = {
+      ...this._config,
+      display_entities: {
+        ...this._config.display_entities,
+        recent_change_window: value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockEnabledChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        enabled: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockPositionChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        position: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockShowTimeChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        show_time: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockFormatChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        format: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockShowDateChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        show_date: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockDateFormatChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        date_format: ev.target.value
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _clockShowBackgroundChanged(ev) {
+    this._config = {
+      ...this._config,
+      clock: {
+        ...this._config.clock,
+        show_background: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _overlayOpacityChanged(ev) {
+    const value = parseFloat(ev.target.value);
+    if (!isNaN(value)) {
+      this._config = {
+        ...this._config,
+        overlay_opacity: value
+      };
+      this._fireConfigChanged();
+    }
+  }
+
   _metadataShowFolderChanged(ev) {
     this._config = {
       ...this._config,
@@ -3328,6 +3480,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
 
           <div class="config-row">
+            <label>Overlay Opacity</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                .value=${this._config.overlay_opacity ?? ''}
+                @input=${this._overlayOpacityChanged}
+                placeholder="0.25"
+              />
+              <div class="help-text">Background opacity for ALL overlays (metadata, clock, display entities). Range: 0 (transparent) to 1 (opaque). Default: 0.25</div>
+            </div>
+          </div>
+
+          <div class="config-row">
             <label>Overlay Scale</label>
             <div>
               <input
@@ -3344,6 +3512,176 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
         
+        <!-- Display Entities Section -->
+        <div class="section">
+          <div class="section-title">📊 Display Entities</div>
+          
+          <div class="config-row">
+            <label>Enable Display Entities</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.display_entities?.enabled === true}
+                @change=${this._displayEntitiesEnabledChanged}
+              />
+              <div class="help-text">Show Home Assistant entity states with fade transitions</div>
+            </div>
+          </div>
+          
+          ${this._config.display_entities?.enabled ? html`
+            <div class="config-row">
+              <label>Cycle Interval (seconds)</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  step="1"
+                  .value=${this._config.display_entities?.cycle_interval || 10}
+                  @input=${this._displayEntitiesCycleIntervalChanged}
+                  style="width: 80px;"
+                />
+                <div class="help-text">Time to display each entity before cycling to next (default: 10)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Transition Duration (ms)</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  max="2000"
+                  step="100"
+                  .value=${this._config.display_entities?.transition_duration || 500}
+                  @input=${this._displayEntitiesTransitionDurationChanged}
+                  style="width: 80px;"
+                />
+                <div class="help-text">Fade animation speed (0 = instant, default: 500)</div>
+              </div>
+            </div>
+            
+            <div class="config-row">
+              <label>Recent Change Window (seconds)</label>
+              <div>
+                <input
+                  type="number"
+                  min="0"
+                  max="300"
+                  step="30"
+                  .value=${this._config.display_entities?.recent_change_window || 60}
+                  @input=${this._displayEntitiesRecentChangeWindowChanged}
+                  style="width: 80px;"
+                />
+                <div class="help-text">Prioritize recently changed entities (0 = disabled, default: 60)</div>
+              </div>
+            </div>
+            
+            <div style="grid-column: 1 / -1; padding: 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--primary-color); margin-top: 8px;">
+              <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
+              <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
+              <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
+                <li>Close this editor</li>
+                <li>Click the ⋮ menu on this card → "Edit in YAML"</li>
+                <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
+              </ol>
+              <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
+                <div style="color: var(--secondary-text-color);">display_entities:</div>
+                <div style="color: var(--secondary-text-color); padding-left: 20px;">enabled: true</div>
+                <div style="color: var(--secondary-text-color); padding-left: 20px;">entities:</div>
+                <div style="padding-left: 40px;">- entity: sensor.temperature</div>
+                <div style="padding-left: 40px; padding-left: 60px;">label: "Temp:"</div>
+                <div style="padding-left: 40px;">- entity: binary_sensor.motion</div>
+                <div style="padding-left: 40px; padding-left: 60px;">icon: mdi:motion-sensor</div>
+              </div>
+              <div style="margin-top: 8px;">
+                <a href="https://github.com/markaggar/ha-media-card#display-entities" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        
+        <!-- Clock/Date Section -->
+        <div class="section">
+          <div class="section-title">🕐 Clock/Date</div>
+          
+          <div class="config-row">
+            <label>Enable Clock/Date</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.clock?.enabled === true}
+                @change=${this._clockEnabledChanged}
+              />
+              <div class="help-text">Show clock and/or date overlay (perfect for kiosk mode)</div>
+            </div>
+          </div>
+          
+          ${this._config.clock?.enabled ? html`
+            <div class="config-row">
+              <label>Show Time</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.clock?.show_time !== false}
+                  @change=${this._clockShowTimeChanged}
+                />
+                <div class="help-text">Display the current time</div>
+              </div>
+            </div>
+            
+            ${this._config.clock?.show_time !== false ? html`
+              <div class="config-row">
+                <label>Time Format</label>
+                <div>
+                  <select @change=${this._clockFormatChanged} .value=${this._config.clock?.format || '12h'}>
+                    <option value="12h">12-hour (3:45 PM)</option>
+                    <option value="24h">24-hour (15:45)</option>
+                  </select>
+                  <div class="help-text">Clock time format</div>
+                </div>
+              </div>
+            ` : ''}
+            
+            <div class="config-row">
+              <label>Show Date</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.clock?.show_date !== false}
+                  @change=${this._clockShowDateChanged}
+                />
+                <div class="help-text">Display the current date</div>
+              </div>
+            </div>
+            
+            ${this._config.clock?.show_date !== false ? html`
+              <div class="config-row">
+                <label>Date Format</label>
+                <div>
+                  <select @change=${this._clockDateFormatChanged} .value=${this._config.clock?.date_format || 'long'}>
+                    <option value="long">Long (December 16, 2025)</option>
+                    <option value="short">Short (12/16/2025)</option>
+                  </select>
+                  <div class="help-text">Date display format</div>
+                </div>
+              </div>
+            ` : ''}
+            
+            <div class="config-row">
+              <label>Show Background</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.clock?.show_background !== false}
+                  @change=${this._clockShowBackgroundChanged}
+                />
+                <div class="help-text">Display subtle background behind clock/date (when unchecked, text will have shadow for readability)</div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        
         <!-- Overlay Positioning (consolidated section) -->
         <div class="section">
           <div class="section-title">📍 Overlay Positioning</div>
@@ -3356,10 +3694,46 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="bottom-right">Bottom Right</option>
                 <option value="top-left">Top Left</option>
                 <option value="top-right">Top Right</option>
+                <option value="center-top">Center Top</option>
+                <option value="center-bottom">Center Bottom</option>
               </select>
               <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
             </div>
           </div>
+          
+          ${this._config.display_entities?.enabled ? html`
+            <div class="config-row">
+              <label>Display Entities Position</label>
+              <div>
+                <select @change=${this._displayEntitiesPositionChanged} .value=${this._config.display_entities?.position || 'top-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="center-top">Center Top</option>
+                  <option value="center-bottom">Center Bottom</option>
+                </select>
+                <div class="help-text">Where to display entity states overlay</div>
+              </div>
+            </div>
+          ` : ''}
+          
+          ${this._config.clock?.enabled ? html`
+            <div class="config-row">
+              <label>Clock Position</label>
+              <div>
+                <select @change=${this._clockPositionChanged} .value=${this._config.clock?.position || 'bottom-left'}>
+                  <option value="top-left">Top Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="center-top">Center Top</option>
+                  <option value="center-bottom">Center Bottom</option>
+                </select>
+                <div class="help-text">Where to display clock/date overlay</div>
+              </div>
+            </div>
+          ` : ''}
           
           <div class="config-row">
             <label>Action Buttons Position</label>
@@ -3369,8 +3743,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="top-left" .selected=${this._config.action_buttons?.position === 'top-left'}>Top Left</option>
                 <option value="bottom-right" .selected=${this._config.action_buttons?.position === 'bottom-right'}>Bottom Right</option>
                 <option value="bottom-left" .selected=${this._config.action_buttons?.position === 'bottom-left'}>Bottom Left</option>
+                <option value="center-top" .selected=${this._config.action_buttons?.position === 'center-top'}>Center Top</option>
+                <option value="center-bottom" .selected=${this._config.action_buttons?.position === 'center-bottom'}>Center Bottom</option>
               </select>
-              <div class="help-text">Corner position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
+              <div class="help-text">Position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
             </div>
           </div>
           
@@ -3382,8 +3758,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="bottom-left">Bottom Left</option>
                 <option value="top-right">Top Right</option>
                 <option value="top-left">Top Left</option>
+                <option value="center-top">Center Top</option>
+                <option value="center-bottom">Center Bottom</option>
               </select>
-              <div class="help-text">Corner position for "X of Y" counter (only shown in folder mode)</div>
+              <div class="help-text">Position for "X of Y" counter (only shown in folder mode)</div>
             </div>
           </div>
         </div>
