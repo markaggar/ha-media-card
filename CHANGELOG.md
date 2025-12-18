@@ -1,5 +1,114 @@
 ## v5.6.0 (In Development)
+### Fixed
+- **Metadata Display Bug**
+  - Fixed metadata overlay not displaying even when data available (filename, location, dates)
+  - Root cause: `item.metadata` could be `undefined` instead of `null`
+  - Setting `_pendingMetadata = undefined` passed null check but rendered empty
+  - Solution: Added `|| null` fallback when setting `_pendingMetadata` to normalize undefined values
+  - Metadata now displays reliably for all available fields
+
+- **Video Loop Behavior**
+  - Videos now loop continuously until auto-advance timer fires
+  - `_onVideoEnded` exits early when `video_loop` enabled (doesn't trigger advance)
+  - Timer keeps running during looped video (not stopped)
+  - Auto-advance can interrupt loop at configured interval
+  - Consistent with expected behavior: loop video, advance when timer expires
+
+- **Display Entities Condition Initialization**
+  - Fixed display entities showing all entities initially, ignoring conditions for first few seconds
+  - Root cause: `_getFilteredEntities()` assumed `true` for uncached conditions during initialization
+  - All entities showed immediately, then filtered correctly after async condition evaluation
+  - Solution: Changed to exclude entities with unevaluated conditions (`return false` instead of `return true`)
+  - Added else case to hide display when no entities pass conditions
+  - Display entities now respect conditions from card initialization
+
 ### Added
+- **Display Entities Configuration Controls**
+  - Added GUI controls for display entities timing configuration (Phase 1 implementation)
+  - Three new sliders in card editor when display entities enabled:
+    - **Cycle Interval**: 1-60 seconds (default: 10) - time between entity rotations
+    - **Transition Duration**: 0-2000ms (default: 500) - fade animation speed
+    - **Recent Change Window**: 0-300 seconds (default: 60) - prioritize recently changed entities
+  - Enhanced YAML configuration guidance with:
+    - Step-by-step instructions to open YAML editor
+    - Example configuration snippet with proper indentation
+    - Direct link to full documentation
+    - Visual callout box with warning icon for better visibility
+    - Callout now spans full width (both columns) for better visibility
+  - Entity list still configured in YAML (conditions, icons, styling require YAML flexibility)
+
+- **Config UI Reorganization**
+  - Split config sections for better organization:
+    - New **📊 Display Entities** section with all display entities settings
+    - New **🕐 Clock/Date** section with all clock/date settings
+    - **📍 Overlay Positioning** section now contains only position dropdowns
+  - Conditional positioning: Display entities and clock position dropdowns only show when respective features are enabled
+  - Cleaner UI with logical grouping of related settings
+
+- **Code Quality Improvements**
+  - Fixed crossfade layer swap race condition with exact normalized URL matching
+  - Moved friendly states mapping to static class constant (performance optimization)
+  - Added 500ms debouncing for display entities condition evaluation (reduces excessive work)
+  - Improved favorite detection logic to handle all truthy value types (string "true", number 1, boolean true)
+
+- **UI/UX Refinements**
+  - Standardized all bottom overlay positions to 12px from edge for visual consistency
+  - Position indicator dots visible with higher z-index (z-index: 5)
+  - Navigation zones reduced to 60x120px (from 80x200px) to avoid interfering with action buttons
+  - Video icon with white background badge for clear distinction
+  - Favorite badge with higher z-index and box shadow for visibility
+- **Clock/Date Overlay**
+  - Real-time clock and date display as overlay on media
+  - Independent toggles for time and date (can show date-only, time-only, or both)
+  - Time formats: 12-hour (3:45 PM) or 24-hour (15:45)
+  - Date formats: Long (December 16, 2025) or Short (12/16/2025)
+  - Optional background with glassmorphism styling
+  - Configurable position (all 6 positions: corners + center-top/center-bottom)
+  - Updates every second with proper lifecycle management
+  - Example config:
+    ```yaml
+    clock:
+      enabled: true
+      position: center-bottom
+      show_time: true
+      show_date: true
+      format: 12h
+      date_format: long
+      show_background: false  # Optional: transparent with text shadow
+    ```
+
+- **Center Positioning for All Overlays**
+  - Added `center-top` and `center-bottom` positions to all overlays
+  - Available for: metadata, action buttons, position indicator, display entities, clock
+  - Center positioning uses `transform: translateX(-50%)` for perfect centering
+  - Position indicator dots moved to 4px from bottom when in center-bottom position
+
+- **Global Overlay Opacity Control**
+  - Single `overlay_opacity` setting controls ALL overlay backgrounds (default: 0.25)
+  - Range: 0 (transparent) to 1 (opaque), adjustable in 0.05 increments
+  - Applies to: metadata, clock, display entities, position indicator
+  - When opacity ≤ 0.05, backdrop-filter disabled for true transparency
+  - Allows opacity as low as 1% (0.01) for minimal visual interference
+  - UI control in "Metadata" section of visual editor
+
+- **Friendly State Names for Display Entities**
+  - All Home Assistant binary sensor device classes now show user-friendly states
+  - Examples: "Detected/Clear" instead of "on/off" for motion sensors
+  - "Locked/Unlocked" for locks, "Open/Closed" for doors/windows
+  - "Charging/Not Charging" for battery sensors, "Wet/Dry" for moisture
+  - Complete mapping for all 26 standard device classes
+  - Numeric values automatically rounded to 1 decimal place
+  - Falls back to raw state if device class not recognized
+
+- **Panel Thumbnail Improvements**
+  - Adaptive thumbnail sizing based on content aspect ratio
+  - Portrait photos (< 0.9 ratio): 7 rows, Square photos (~1.0): 6 rows, Landscape photos (> 1.33): 5 rows
+  - Dynamic height calculation to fit available vertical space without overlap
+  - Video thumbnails now show 🎞️ film strip icon overlay in bottom-right corner
+  - Favorite badges (♥) displayed on favorited items in all panel modes
+  - Thumbnails properly constrained to grid width (no horizontal overflow)
+  - Improved pagination - next/previous buttons work correctly on last page
+
 - **Photo Transitions (Kiosk Enhancement)**
   - Configurable crossfade transitions between images (0-1000ms duration)
   - Visual editor with slider control (default: 300ms)
@@ -9,7 +118,70 @@
   - Load-triggered swap ensures both images ready before crossfade begins
   - No black flashes or gaps during transitions
 
-## v5.5.0 (In Development)
+- **Display Entities Overlay**
+  - Display entity states as overlay on media with automatic rotation
+  - Configurable position (top-left, top-right, bottom-left, bottom-right)
+  - Cycle through multiple entities with configurable interval (default: 10s)
+  - Smooth fade transitions between entities with configurable duration
+  - Optional labels for each entity
+  - **Icon support** with optional icon and icon_color per entity
+  - Glassmorphism styling with backdrop blur
+  - **Jinja2 template conditions** to show/hide entities dynamically
+  - **Dual template styling support** - JavaScript OR Jinja2 for dynamic styling
+  - Recent changes tracking - prioritize entities that changed recently
+  - Example config with **JavaScript templates** (synchronous):
+    ```yaml
+    display_entities:
+      enabled: true
+      position: top-right
+      cycle_interval: 5
+      entities:
+        - entity: sensor.temperature
+          label: "Temp:"
+          condition: "{{ states('sensor.temperature') | float > 70 }}"
+          styles:
+            color: |
+              [[[ 
+                return stateNum > 80 ? 'red' : 
+                       stateNum > 70 ? 'orange' : 'lightblue';
+              ]]]
+            fontWeight: |
+              [[[
+                return stateNum > 75 ? 'bold' : 'normal';
+              ]]]
+    ```
+  - Example config with **Jinja2 templates** and **icons**:
+    ```yaml
+    display_entities:
+      enabled: true
+      position: bottom-left
+      entities:
+        - entity: binary_sensor.motion_kitchen
+          icon: mdi:motion-sensor
+          icon_color: red
+          label: "Kitchen"
+          condition: "{{ is_state('binary_sensor.motion_kitchen', 'on') }}"
+          styles:
+            color: "{% if is_state('binary_sensor.motion_kitchen', 'on') %}red{% else %}lightblue{% endif %}"
+            fontSize: "{{ '24px' if is_state('binary_sensor.motion_kitchen', 'on') else '16px' }}"
+        - entity: sensor.temperature
+          icon: mdi:thermometer
+          styles:
+            iconColor: "{{ 'red' if states('sensor.temperature') | float > 80 else 'orange' }}"
+            color: "{{ 'red' if states('sensor.temperature') | float > 80 else 'orange' if states('sensor.temperature') | float > 70 else 'lightblue' }}"
+            fontWeight: "{{ 'bold' if states('sensor.temperature') | float > 75 else 'normal' }}"
+    ```
+  - **JavaScript template context** (synchronous evaluation):
+    - `entity` - Full entity state object
+    - `state` - String state value (e.g., "on"/"off")
+    - `stateNum` - Parsed numeric value
+  - **Jinja2 templates** (async with caching):
+    - Use Home Assistant's full Jinja2 environment
+    - Access to `states()`, `is_state()`, `state_attr()`, etc.
+    - Results cached for performance
+    - Re-evaluated when entity states change
+
+## v5.5.0
 ### Fixed
 - **Panel Opening Position with Fixed Card Height**
   - Panel now opens on right side (not bottom) when using fixed card height in default scaling mode
