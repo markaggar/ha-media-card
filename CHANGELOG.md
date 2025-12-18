@@ -45,6 +45,12 @@
   - Conditional positioning: Display entities and clock position dropdowns only show when respective features are enabled
   - Cleaner UI with logical grouping of related settings
 
+- **Code Quality Improvements**
+  - Fixed crossfade layer swap race condition with exact normalized URL matching
+  - Moved friendly states mapping to static class constant (performance optimization)
+  - Added 500ms debouncing for display entities condition evaluation (reduces excessive work)
+  - Improved favorite detection logic to handle all truthy value types (string "true", number 1, boolean true)
+
 - **UI/UX Refinements**
   - Standardized all bottom overlay positions to 12px from edge for visual consistency
   - Position indicator dots visible with higher z-index (z-index: 5)
