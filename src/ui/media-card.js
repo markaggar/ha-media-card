@@ -1407,11 +1407,8 @@ export class MediaCard extends LitElement {
         this._navigatingAway = false;
       }, 0);
 
-      // Reset timer if buttons are explicitly showing (restart 3s countdown)
-      if (this._showButtonsExplicitly) {
-        // Restart 3s timer after navigation when buttons are showing
-        this._startActionButtonsHideTimer();
-      }
+      // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
+      // Timer only restarts on manual button clicks
 
       // Refresh metadata from media_index in background after navigation
       // Ensures overlay reflects latest EXIF/location/favorite flags
@@ -1484,11 +1481,8 @@ export class MediaCard extends LitElement {
       this._navigatingAway = false;
     }, 0);
 
-    // Reset timer if buttons are explicitly showing (restart 3s countdown)
-    if (this._showButtonsExplicitly) {
-      // Restart 3s timer after navigation when buttons are showing
-      this._startActionButtonsHideTimer();
-    }
+    // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
+    // Timer only restarts on manual button clicks
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -5991,9 +5985,12 @@ export class MediaCard extends LitElement {
     // Calculate smart timeout (scales with button count for touchscreen)
     const timeout = this._calculateActionButtonTimeout();
     
+    console.log(`[ActionButtons] Starting hide timer: ${timeout}ms (${this._countVisibleActionButtons()} buttons)`);
+    
     // Start fresh timer with calculated timeout
     this._hideButtonsTimer = setTimeout(() => {
       // Timer expired - hide explicit buttons
+      console.log('[ActionButtons] Timer expired - hiding buttons');
       this._showButtonsExplicitly = false;
       this._hideButtonsTimer = null;
       this.requestUpdate();
