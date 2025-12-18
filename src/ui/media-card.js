@@ -857,7 +857,13 @@ export class MediaCard extends LitElement {
     
     // V5.6: Subscribe to display entities when hass is available
     if (hass && this.config?.display_entities?.enabled) {
-      this._initDisplayEntities();
+      if (!this._displayEntitiesInitialized) {
+        this._displayEntitiesInitialized = true;
+        this._initDisplayEntities();
+      } else {
+        // Just update entity states, don't re-initialize
+        this._updateDisplayEntityStates();
+      }
     }
     
     // V5.4: Monitor media_index entity state for auto-recovery after HA restart
@@ -2695,7 +2701,7 @@ export class MediaCard extends LitElement {
 
   // V4: Video event handlers
   _onVideoLoadStart() {
-    this._log('Media loaded successfully:', this.mediaUrl);
+    this._log('Video load initiated:', this.mediaUrl);
     // Reset video wait timer for new video
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
@@ -3956,56 +3962,6 @@ export class MediaCard extends LitElement {
     const entityIds = entities.map(e => typeof e === 'string' ? e : e.entity).filter(Boolean);
     if (entityIds.length === 0) return;
     
-    // Only initialize once - don't restart timer on every hass update
-    if (this._entityCycleTimer) {
-      // Already initialized, just update state tracking and re-evaluate conditions
-      let stateChanged = false;
-      entityIds.forEach(entityId => {
-        const state = this.hass.states[entityId];
-        if (state) {
-          const oldState = this._entityStates.get(entityId);
-          if (oldState && oldState.state !== state.state) {
-            // State changed - track it
-            this._recentlyChangedEntities.add(entityId);
-            const recentWindow = (this.config.display_entities.recent_change_window || 60) * 1000;
-            setTimeout(() => {
-              this._recentlyChangedEntities.delete(entityId);
-            }, recentWindow);
-            stateChanged = true;
-          }
-          this._entityStates.set(entityId, state);
-        }
-      });
-      
-      // Re-evaluate conditions when state changes (with debouncing)
-      if (stateChanged) {
-        // Debounce condition evaluation to avoid excessive work on rapid hass updates
-        const now = Date.now();
-        const minInterval = 500; // 500ms debounce
-        const lastEval = this._lastConditionEvalTs || 0;
-        const elapsed = now - lastEval;
-
-        const runEvaluation = () => {
-          this._lastConditionEvalTs = Date.now();
-          this._pendingConditionEval = null;
-          this._evaluateAllConditions();
-          // Note: JS templates re-evaluate on every render (synchronous)
-          // Only trigger Jinja2 re-evaluation for changed entities
-          this.requestUpdate();
-        };
-
-        if (!lastEval || elapsed >= minInterval) {
-          // Enough time has passed – run immediately
-          runEvaluation();
-        } else if (!this._pendingConditionEval) {
-          // Schedule a trailing evaluation if one is not already pending
-          const delay = minInterval - elapsed;
-          this._pendingConditionEval = setTimeout(runEvaluation, delay);
-        }
-      }
-      return;
-    }
-    
     this._log('📊 Initializing display entities:', entityIds.length, 'entities');
     
     // Initialize state tracking
@@ -4036,6 +3992,54 @@ export class MediaCard extends LitElement {
         this.requestUpdate();
       }
     });
+  }
+
+  // Update entity states on hass changes (called after initial setup)
+  _updateDisplayEntityStates() {
+    if (!this.hass || !this.config?.display_entities?.enabled) return;
+    
+    const entities = this.config.display_entities.entities || [];
+    const entityIds = entities.map(e => typeof e === 'string' ? e : e.entity).filter(Boolean);
+    
+    let stateChanged = false;
+    entityIds.forEach(entityId => {
+      const state = this.hass.states[entityId];
+      if (state) {
+        const oldState = this._entityStates.get(entityId);
+        if (oldState && oldState.state !== state.state) {
+          // State changed - track it
+          this._recentlyChangedEntities.add(entityId);
+          const recentWindow = (this.config.display_entities.recent_change_window || 60) * 1000;
+          setTimeout(() => {
+            this._recentlyChangedEntities.delete(entityId);
+          }, recentWindow);
+          stateChanged = true;
+        }
+        this._entityStates.set(entityId, state);
+      }
+    });
+    
+    // Re-evaluate conditions when state changes (with debouncing)
+    if (stateChanged) {
+      const now = Date.now();
+      const minInterval = 500; // 500ms debounce
+      const lastEval = this._lastConditionEvalTs || 0;
+      const elapsed = now - lastEval;
+
+      const runEvaluation = () => {
+        this._lastConditionEvalTs = Date.now();
+        this._pendingConditionEval = null;
+        this._evaluateAllConditions();
+        this.requestUpdate();
+      };
+
+      if (!lastEval || elapsed >= minInterval) {
+        runEvaluation();
+      } else if (!this._pendingConditionEval) {
+        const delay = minInterval - elapsed;
+        this._pendingConditionEval = setTimeout(runEvaluation, delay);
+      }
+    }
   }
 
   
@@ -4277,13 +4281,17 @@ export class MediaCard extends LitElement {
     
     // Filter entities based on cached condition results
     return entities
-      .map(e => typeof e === 'string' ? e : e.entity)
-      .filter(entityId => {
+      .map((e, index) => ({ entityId: typeof e === 'string' ? e : e.entity, index }))
+      .filter(({ entityId, index }) => {
         if (!entityId) return false;
-        // If condition not yet evaluated, exclude it (don't show until evaluated)
-        if (!this._entityConditionCache.has(entityId)) return false;
-        return this._entityConditionCache.get(entityId);
-      });
+        // If entity has no condition, show it. If it has a condition but not yet evaluated, exclude it.
+        const entityConfig = entities[index];
+        const hasCondition = entityConfig && typeof entityConfig === 'object' && entityConfig.condition;
+        if (hasCondition && !this._entityConditionCache.has(entityId)) return false;
+        // If no condition, default to true (show it)
+        return hasCondition ? this._entityConditionCache.get(entityId) : true;
+      })
+      .map(({ entityId }) => entityId);
   }
   
   _cleanupDisplayEntities() {
@@ -4297,6 +4305,12 @@ export class MediaCard extends LitElement {
       this._entityFadeTimeout = null;
     }
     
+    // Cancel pending debounced evaluations
+    if (this._pendingConditionEval) {
+      clearTimeout(this._pendingConditionEval);
+      this._pendingConditionEval = null;
+    }
+    
     this._entityConditionCache.clear();
     this._entityStyleCache.clear();
     this._evaluatingConditions = false;
@@ -4304,6 +4318,7 @@ export class MediaCard extends LitElement {
     this._entityStates.clear();
     this._recentlyChangedEntities.clear();
     this._displayEntitiesVisible = false;
+    this._displayEntitiesInitialized = false;
   }
 
   // V5.6: Clock Timer Management
