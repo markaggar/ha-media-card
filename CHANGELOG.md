@@ -1,4 +1,15 @@
-## v5.6.0 (In Development)
+## v5.6.1 - 2025-12-17
+
+### Fixed
+- **Crossfade Regression in Default Mode**: Fixed images not displaying in default scaling mode without explicit card_height or max_height
+  - Root cause: Crossfade layers positioned absolutely needed container with explicit dimensions
+  - Solution: Override absolute positioning in default mode using CSS Grid with `grid-area: 1 / 1` to stack layers
+  - Layers now use `position: static` in default mode and participate in document flow
+  - Container sizes naturally to fit image dimensions while respecting max-height constraints
+  - Crossfade transitions work correctly with proper centering in all configurations
+
+## v5.6.0 - 2025-12-16
+
 ### Fixed
 - **Metadata Display Bug**
   - Fixed metadata overlay not displaying even when data available (filename, location, dates)
