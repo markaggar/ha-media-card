@@ -298,9 +298,6 @@ export class MediaProvider {
           }
           
           const result = new Date(year, month, day, hour, minute, second);
-          if (debugMode && !config?.custom_datetime_format?.filename_pattern) {
-            console.log(`🕒 [DateTime] Extracted from filename "${filename}":`, result);
-          }
           return result;
         } catch (e) {
           // Invalid date, continue to next pattern
@@ -308,9 +305,6 @@ export class MediaProvider {
       }
     }
     
-    if (debugMode) {
-      console.warn(`⚠️ [DateTime] No date pattern matched in filename: "${filename}"`);
-    }
     return null;
   }
   

@@ -337,9 +337,6 @@ class MediaProvider {
           }
           
           const result = new Date(year, month, day, hour, minute, second);
-          if (debugMode && !config?.custom_datetime_format?.filename_pattern) {
-            console.log(`🕒 [DateTime] Extracted from filename "${filename}":`, result);
-          }
           return result;
         } catch (e) {
           // Invalid date, continue to next pattern
@@ -347,9 +344,6 @@ class MediaProvider {
       }
     }
     
-    if (debugMode) {
-      console.warn(`⚠️ [DateTime] No date pattern matched in filename: "${filename}"`);
-    }
     return null;
   }
   
@@ -3316,8 +3310,6 @@ class SequentialMediaIndexProvider extends MediaProvider {
   }
 
   async getNext() {
-    this._log(`getNext() called - queue.length: ${this.queue.length}, hasMore: ${this.hasMore}, reachedEnd: ${this.reachedEnd}`);
-    
     // Refill queue if running low (and more items available)
     if (this.queue.length < 10 && this.hasMore && !this.reachedEnd) {
       this._log('Queue low, refilling...');
@@ -4753,24 +4745,16 @@ class MediaCard extends LitElement {
 
   // V5.3: Smart pre-load - only for small collections that fit in window
   async _smartPreloadNavigationQueue() {
-    this._log('🔍 _smartPreloadNavigationQueue CALLED');
-    
     // Check if this is a small collection that we should pre-load
     // Need to access the actual provider (might be wrapped by FolderProvider)
     let actualProvider = this.provider;
     
-    this._log('_smartPreloadNavigationQueue - checking provider type:', actualProvider.constructor.name);
-    this._log('actualProvider properties:', Object.keys(actualProvider));
-    
     // Unwrap FolderProvider to get actual provider
     if (actualProvider.sequentialProvider) {
-      this._log('Found sequentialProvider');
       actualProvider = actualProvider.sequentialProvider;
     } else if (actualProvider.mediaIndexProvider) {
-      this._log('Found mediaIndexProvider');
       actualProvider = actualProvider.mediaIndexProvider;
     } else if (actualProvider.subfolderQueue) {
-      this._log('Found subfolderQueue');
       // File system scanning via SubfolderQueue
       const queue = actualProvider.subfolderQueue;
       const queueSize = queue.queue?.length || 0;
@@ -4779,7 +4763,6 @@ class MediaCard extends LitElement {
       // Check mode - pre-loading only makes sense for sequential mode
       // Random mode manages its own queue dynamically with refills
       const mode = this.config.folder?.mode || 'random';
-      this._log(`Checking SubfolderQueue: mode=${mode}, queue=${queueSize}, isScanning=${queue.isScanning}, discoveryInProgress=${queue.discoveryInProgress}, isScanComplete=${isScanComplete}`);
       
       // Pre-load ONLY for sequential mode if scan is complete and collection is small
       if (mode === 'sequential' && isScanComplete && queueSize > 0 && queueSize <= this.maxNavQueueSize) {
@@ -4833,12 +4816,6 @@ class MediaCard extends LitElement {
         
         this._log(`✅ Pre-loaded ${this.navigationQueue.length} items from SubfolderQueue`);
         this.isNavigationQueuePreloaded = true;
-      } else {
-        if (mode === 'random') {
-          this._log(`Skipping pre-load: Random mode uses dynamic queue refills from ${queue.discoveredFolders?.length || 0} folders`);
-        } else {
-          this._log(`Skipping pre-load: mode=${mode}, isScanComplete=${isScanComplete}, queueSize=${queueSize}, maxNavQueueSize=${this.maxNavQueueSize}`);
-        }
       }
       
       return; // Exit early, SubfolderQueue handled
@@ -4852,26 +4829,22 @@ class MediaCard extends LitElement {
       // SequentialMediaIndexProvider: Use hasMore flag
       isSmallCollection = actualProvider.hasMore === false;
       estimatedSize = actualProvider.queue?.length || 0;
-      this._log(`Checking sequential provider: hasMore=${actualProvider.hasMore}, queue=${estimatedSize}`);
     } else if (actualProvider.queue) {
       // MediaIndexProvider (random mode): Small if initial query returned less than requested
       estimatedSize = actualProvider.queue.length;
       const requestedSize = actualProvider.queueSize || 100;
       isSmallCollection = estimatedSize < requestedSize;
-      this._log(`Checking random provider: queue=${estimatedSize}, requested=${requestedSize}, isSmall=${isSmallCollection}`);
     }
     
     if (!isSmallCollection) {
-      this._log(`Large collection detected, skipping pre-load (estimated: ${estimatedSize})`);
       return;
     }
     
     if (estimatedSize > this.maxNavQueueSize) {
-      this._log(`Collection too large (${estimatedSize} items), skipping pre-load`);
       return;
     }
     
-    this._log(`Small collection detected (${estimatedSize} items), pre-loading all items...`);
+    this._log(`Pre-loading ${estimatedSize} items...`);
     
     // Different pre-load strategy based on provider type
     if (actualProvider.hasMore !== undefined) {
@@ -4882,7 +4855,6 @@ class MediaCard extends LitElement {
       while (loadedCount < this.maxNavQueueSize) {
         const item = await this.provider.getNext();
         if (!item) {
-          this._log(`Pre-load complete: loaded ${loadedCount} items (provider exhausted)`);
           break;
         }
         this.navigationQueue.push(item);
@@ -4892,7 +4864,6 @@ class MediaCard extends LitElement {
       actualProvider.disableAutoLoop = false;
     } else if (actualProvider.queue) {
       // MediaIndexProvider (random): Manually transform queue items (can't disable auto-refill)
-      this._log('Random provider: manually transforming queue items...');
       
       for (const rawItem of actualProvider.queue) {
         // Transform using same logic as getNext() (but don't shift from queue)
@@ -4924,11 +4895,9 @@ class MediaCard extends LitElement {
         
         if (this.navigationQueue.length >= this.maxNavQueueSize) break;
       }
-      
-      this._log(`Transformed ${this.navigationQueue.length} items from provider queue`);
     }
     
-    this._log(`✅ Pre-loaded ${this.navigationQueue.length} items into navigation queue`);
+    this._log(`✅ Pre-loaded ${this.navigationQueue.length} items`);
     this.isNavigationQueuePreloaded = true; // Mark as pre-loaded
   }
 
@@ -5086,7 +5055,9 @@ class MediaCard extends LitElement {
         return;
       }
       
-      this._log('Displaying navigation queue item:', item.title, 'at index', this.navigationIndex);
+      // Extract filename from path for logging
+      const filename = item.metadata?.filename || item.media_content_id?.split('/').pop() || 'unknown';
+      this._log('Displaying navigation queue item:', filename, 'at index', this.navigationIndex);
       
       // Add to history for tracking (providers use this for exclusion)
       // Check by media_content_id to avoid duplicate object references
@@ -5231,13 +5202,10 @@ class MediaCard extends LitElement {
   _handleAutoAdvanceModeOnNavigate() {
     const mode = this.config.auto_advance_mode || 'reset';
     
-    this._log(`🎮 auto_advance_mode: "${mode}" - handling manual navigation`);
-    
     switch (mode) {
       case 'pause':
         // Pause auto-refresh by clearing the interval
         if (this._refreshInterval) {
-          this._log('🔄 Pausing auto-refresh due to manual navigation (clearing interval', this._refreshInterval, ')');
           clearInterval(this._refreshInterval);
           this._refreshInterval = null;
           // Mark that we paused due to navigation (for potential resume)
@@ -5252,12 +5220,9 @@ class MediaCard extends LitElement {
         
       case 'reset':
         // Reset the auto-refresh timer
-        const oldInterval = this._refreshInterval;
-        this._log(`🔄 Resetting auto-refresh timer due to manual navigation (clearing interval ${oldInterval}, will create new one)`);
         this._lastRefreshTime = Date.now();
         // Restart the timer (this will clear old interval and create new one)
         this._setupAutoRefresh();
-        this._log(`✅ Auto-refresh timer reset complete - old interval: ${oldInterval}, new interval: ${this._refreshInterval}`);
         break;
     }
   }
@@ -5476,7 +5441,6 @@ class MediaCard extends LitElement {
   _setupAutoRefresh() {
     // Clear any existing interval/timeout FIRST to prevent multiple timers
     if (this._refreshInterval) {
-      this._log('🔄 Clearing existing auto-refresh interval:', this._refreshInterval);
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
       this._timerStoppedForVideo = false; // Reset flag when manually stopping timer
@@ -5530,10 +5494,7 @@ class MediaCard extends LitElement {
       // Check if resuming from pause with remaining time
       const remainingMs = this._pausedRemainingMs || intervalMs;
       if (this._pausedRemainingMs) {
-        this._log(`🔄 Resuming ${modeLabel} with ${Math.round(remainingMs / 1000)}s remaining (was ${refreshSeconds}s total)`);
         this._pausedRemainingMs = null; // Clear saved time
-      } else {
-        this._log(`🔄 Setting up ${modeLabel} every ${refreshSeconds} seconds (${intervalMs}ms interval)`);
       }
       
       // Track when timer started for pause calculation
@@ -5588,7 +5549,6 @@ class MediaCard extends LitElement {
           if (await this._shouldWaitForVideoCompletion() && !this.config.video_loop) {
             // Stop the timer to prevent unnecessary database queries while video plays
             if (!this._timerStoppedForVideo) {
-              this._log('🔄 Stopping auto-timer while waiting for video to complete');
               clearInterval(this._refreshInterval);
               this._refreshInterval = null;
               this._timerStoppedForVideo = true;
@@ -5598,7 +5558,6 @@ class MediaCard extends LitElement {
           
           if (isRefreshMode) {
             // Reload current media (for single_media or folder with auto_refresh only)
-            this._log('🔄 Auto-refresh timer triggered - reloading current media');
             if (this.currentMedia) {
               await this._resolveMediaUrl();
               this.requestUpdate();
@@ -5607,15 +5566,11 @@ class MediaCard extends LitElement {
             }
           } else {
             // Advance to next media (folder mode with auto_advance)
-            this._log('🔄 Auto-advance timer triggered - loading next media');
             this._loadNext();
           }
         } else {
-          // Only log ONCE when paused, not every timer tick
-          if (!this._pauseLogShown) {
-            this._log(`🔄 ${modeLabel} paused - timer will continue firing but no action taken`);
-            this._pauseLogShown = true;
-          }
+          // Silently skip when paused
+          this._pauseLogShown = true;
         }
       };
       
@@ -5632,79 +5587,56 @@ class MediaCard extends LitElement {
       } else {
         // Normal startup - use setInterval from the beginning
         this._refreshInterval = setInterval(timerCallback, intervalMs);
-        this._log('✅ Auto-refresh interval started with ID:', this._refreshInterval);
       }
-    } else {
-      this._log('🔄 Auto-advance disabled or not configured:', {
-        refreshSeconds,
-        hasHass: !!this.hass
-      });
     }
   }
 
   // Check for new files in folder mode and refresh queue if needed
   // Returns true if queue was refreshed, false otherwise
   async _checkForNewFiles() {
-    this._log('🔄 _checkForNewFiles() START');
-    
     // Only for sequential mode providers
     const isSeq = this._isSequentialMode();
-    this._log('🔄 Is sequential mode?', isSeq);
     if (!isSeq) {
-      this._log('🔄 Not sequential mode - skipping');
+      return false;
+    }
+    
+    // Skip rescan on first timer tick (card just loaded)
+    if (!this._firstScanComplete) {
+      this._firstScanComplete = true;
       return false;
     }
     
     // Respect navigation grace period (avoid interrupting active navigation)
     const timeSinceLastNav = Date.now() - (this._lastNavigationTime || 0);
-    this._log('🔄 Time since last navigation:', timeSinceLastNav, 'ms');
     if (timeSinceLastNav < 5000) {
-      this._log('🔄 Skipping new file check - within navigation grace period');
       return false;
     }
     
     // Check if we're at position 1 (index 0) before rescan
     const wasAtPositionOne = this.navigationIndex === 0;
-    this._log('🔄 Currently at position 1 (index 0)?', wasAtPositionOne);
     
     if (!wasAtPositionOne) {
-      this._log('🔄 Not at position 1 - skipping rescan (manual navigation in progress)');
       return false;
     }
     
     try {
       // Trigger full rescan to detect new files
-      this._log('🔄 Triggering full folder rescan...');
       if (!this.provider || typeof this.provider.rescanForNewFiles !== 'function') {
-        this._log('🔄 Provider does not support rescanForNewFiles');
         return false;
       }
       
       const scanResult = await this.provider.rescanForNewFiles();
-      this._log('🔄 Rescan result:', scanResult);
-      this._log('🔄 Current time:', new Date().toLocaleTimeString());
-      
-      // If this is the first scan (previousFirstItem is null), don't trigger refresh
-      // This prevents unnecessary reload on the first timer fire after initial load
-      if (scanResult.previousFirstItem === null) {
-        this._log('✅ First scan complete - establishing baseline, no refresh needed');
-        return false;
-      }
       
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
-        this._log(`🆕 Queue changed - new first item detected! Refreshing display...`);
-        this._log(`🆕 Previous first item: ${scanResult.previousFirstItem?.title || scanResult.previousFirstItem || 'none'}`);
-        this._log(`🆕 New first item: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
+        this._log(`🆕 New files detected - refreshing display`);
         await this._refreshQueue();
         return true; // Queue was refreshed
       } else {
-        this._log('✅ Rescan complete - no change in first item, display stays the same');
-        this._log(`✅ Current first item still: ${scanResult.newFirstItem?.title || scanResult.newFirstItem || 'none'}`);
         return false;
       }
     } catch (error) {
-      this._log('⚠️ Error checking for new files:', error);
+      console.error('Error checking for new files:', error);
     }
     
     return false; // Queue was not refreshed
@@ -5961,7 +5893,6 @@ class MediaCard extends LitElement {
     
     // CRITICAL: Never add timestamp to signed URLs (breaks signature validation)
     if (url.includes('authSig=')) {
-      this._log('Skipping cache-busting timestamp - URL has authSig');
       return url;
     }
     
@@ -6027,16 +5958,25 @@ class MediaCard extends LitElement {
         this.requestUpdate();
       } else {
         // Crossfade: set new image on hidden layer, then swap after it loads
-        if (this._frontLayerActive) {
-          this._backLayerUrl = url;
-        } else {
+        // Special case: If both layers are empty (first load or after video), show immediately without crossfade
+        if (!this._frontLayerUrl && !this._backLayerUrl) {
           this._frontLayerUrl = url;
+          this._frontLayerActive = true;
+          this._pendingLayerSwap = false;
+          this.requestUpdate();
+        } else {
+          // Normal crossfade: load on hidden layer then swap
+          if (this._frontLayerActive) {
+            this._backLayerUrl = url;
+          } else {
+            this._frontLayerUrl = url;
+          }
+          
+          // Set flag to trigger swap when the new image loads
+          this._pendingLayerSwap = true;
+          this._transitionDuration = duration;
+          this.requestUpdate();
         }
-        
-        // Set flag to trigger swap when the new image loads
-        this._pendingLayerSwap = true;
-        this._transitionDuration = duration;
-        this.requestUpdate();
       }
     } else {
       // For videos, just clear the image layers immediately
@@ -6061,12 +6001,8 @@ class MediaCard extends LitElement {
       return;
     }
     
-    this._log('_resolveMediaUrl called with mediaId:', mediaId);
-    this._log('currentMedia object:', this.currentMedia);
-    
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
-      this._log('Using direct HTTP URL');
       this._setMediaUrl(mediaId);
       this.requestUpdate();
       return;
@@ -6075,21 +6011,15 @@ class MediaCard extends LitElement {
     // If media-source:// format, resolve through HA API
     if (mediaId.startsWith('media-source://')) {
       try {
-        this._log('Resolving media-source:// URL via HA API');
-        
         // V5: Copy V4's approach - just pass through to HA without modification
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
           media_content_id: mediaId,
           expires: (60 * 60 * 3) // 3 hours
         });
-        this._log('HA resolved to:', resolved.url);
         
         // Add timestamp for auto-refresh (camera snapshots, etc.)
         const finalUrl = this._addCacheBustingTimestamp(resolved.url);
-        if (finalUrl !== resolved.url) {
-          this._log('Added cache-busting timestamp for auto-refresh:', finalUrl);
-        }
         
         this._setMediaUrl(finalUrl);
         this.requestUpdate();
@@ -6480,7 +6410,7 @@ class MediaCard extends LitElement {
 
   // V4: Video event handlers
   _onVideoLoadStart() {
-    this._log('Video started loading:', this.mediaUrl);
+    this._log('Media loaded successfully:', this.mediaUrl);
     // Reset video wait timer for new video
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
@@ -6488,11 +6418,10 @@ class MediaCard extends LitElement {
   }
 
   _onVideoCanPlay() {
-    this._log('Video can start playing:', this.mediaUrl);
+    // Video ready to play
   }
 
   _onVideoPlay() {
-    this._log('Video started playing:', this.mediaUrl);
     // Reset video wait timer when video starts playing
     this._videoWaitStartTime = null;
     
@@ -6575,11 +6504,8 @@ class MediaCard extends LitElement {
     const videoMaxDuration = this.config.video_max_duration || 0;
     const autoAdvanceSeconds = this.config.auto_advance_seconds || 0;
 
-    this._log('🎬 Video completion check - videoMaxDuration:', videoMaxDuration, 'autoAdvanceSeconds:', autoAdvanceSeconds);
-
     // If video_max_duration is 0, wait indefinitely for video completion
     if (videoMaxDuration === 0) {
-      this._log('🎬 Video playing - waiting for completion (no time limit set)');
       return true;
     }
 
@@ -6587,7 +6513,6 @@ class MediaCard extends LitElement {
     const now = Date.now();
     if (!this._videoWaitStartTime) {
       this._videoWaitStartTime = now;
-      this._log('🎬 Starting video wait timer at:', new Date(now).toLocaleTimeString());
     }
 
     const waitTimeMs = now - this._videoWaitStartTime;
@@ -6688,7 +6613,6 @@ class MediaCard extends LitElement {
         video.muted = false;
         video.muted = true;
       }, 50);
-      this._log('Video muted state applied:', video.muted);
     }
   }
 
@@ -6763,10 +6687,9 @@ class MediaCard extends LitElement {
   }
 
   _onMediaLoaded(e) {
-    // V4: Only log once when media initially loads
-    if (!this._mediaLoadedLogged) {
+    // Log media loaded for images (videos log in _onVideoLoadStart)
+    if (!this._isVideoFile(this.mediaUrl)) {
       this._log('Media loaded successfully:', this.mediaUrl);
-      this._mediaLoadedLogged = true;
     }
     
     // V5: Clear error state and retry attempts on successful load
@@ -6778,15 +6701,25 @@ class MediaCard extends LitElement {
     // V5.6: Handle crossfade layer swap when new image loads
     if (this._pendingLayerSwap) {
       const loadedUrl = e?.target?.src;
-      const newLayerUrl = this._frontLayerActive ? this._backLayerUrl : this._frontLayerUrl;
+      const expectedUrl = this.mediaUrl; // Use mediaUrl which has the resolved URL
       
-      // Only swap if the loaded image is the new layer (exact normalized URL match)
-      if (loadedUrl && newLayerUrl) {
-        const normalizedLoaded = loadedUrl.split('?')[0];
-        const normalizedNewLayer = newLayerUrl.split('?')[0];
-
+      // Check if the loaded URL matches the expected URL (compare mediaUrl which is the resolved URL)
+      if (loadedUrl && expectedUrl) {
+        // Extract pathname from loaded URL if it's a full URL (e.g., http://10.0.0.62:8123/media/...)
+        let normalizedLoaded = loadedUrl;
+        try {
+          const url = new URL(loadedUrl);
+          normalizedLoaded = url.pathname + url.search; // Get /media/... path with query params
+        } catch (e) {
+          // If not a valid URL, use as-is (already a path)
+        }
+        
+        // Both URLs should now be paths - strip query params for comparison
+        normalizedLoaded = normalizedLoaded.split('?')[0];
+        const normalizedExpected = expectedUrl.split('?')[0];
+        
         // Require exact normalized URL match to avoid race conditions
-        if (normalizedLoaded === normalizedNewLayer) {
+        if (normalizedLoaded === normalizedExpected) {
           this._pendingLayerSwap = false;
           
           // Swap layers to trigger crossfade
@@ -7878,6 +7811,12 @@ class MediaCard extends LitElement {
           (message) => {
             clearTimeout(timeout);
             if (unsubscribe) unsubscribe();
+            
+            // Don't process if card was disconnected
+            if (!this.isConnected) {
+              resolve(false);
+              return;
+            }
             
             // Extract the actual result from the message object
             const result = message?.result !== undefined ? message.result : message;
