@@ -56,8 +56,6 @@ export class SequentialMediaIndexProvider extends MediaProvider {
   }
 
   async getNext() {
-    this._log(`getNext() called - queue.length: ${this.queue.length}, hasMore: ${this.hasMore}, reachedEnd: ${this.reachedEnd}`);
-    
     // Refill queue if running low (and more items available)
     if (this.queue.length < 10 && this.hasMore && !this.reachedEnd) {
       this._log('Queue low, refilling...');
