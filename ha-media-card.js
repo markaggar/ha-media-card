@@ -3735,6 +3735,36 @@ class MediaCard extends LitElement {
   static CARD_HEIGHT_MAX = 5000;
   static CARD_HEIGHT_STEP = 50;
   
+  // Friendly state names for HA binary sensor device classes (v5.6)
+  static FRIENDLY_STATES = {
+    'battery': { 'on': 'Low', 'off': 'Normal' },
+    'battery_charging': { 'on': 'Charging', 'off': 'Not Charging' },
+    'cold': { 'on': 'Cold', 'off': 'Normal' },
+    'connectivity': { 'on': 'Connected', 'off': 'Disconnected' },
+    'door': { 'on': 'Open', 'off': 'Closed' },
+    'garage_door': { 'on': 'Open', 'off': 'Closed' },
+    'gas': { 'on': 'Detected', 'off': 'Clear' },
+    'heat': { 'on': 'Hot', 'off': 'Normal' },
+    'light': { 'on': 'Detected', 'off': 'Clear' },
+    'lock': { 'locked': 'Locked', 'unlocked': 'Unlocked' },
+    'moisture': { 'on': 'Wet', 'off': 'Dry' },
+    'motion': { 'on': 'Detected', 'off': 'Clear' },
+    'occupancy': { 'on': 'Detected', 'off': 'Clear' },
+    'opening': { 'on': 'Open', 'off': 'Closed' },
+    'plug': { 'on': 'Plugged In', 'off': 'Unplugged' },
+    'power': { 'on': 'On', 'off': 'Off' },
+    'presence': { 'on': 'Home', 'off': 'Away' },
+    'problem': { 'on': 'Problem', 'off': 'OK' },
+    'running': { 'on': 'Running', 'off': 'Not Running' },
+    'safety': { 'on': 'Unsafe', 'off': 'Safe' },
+    'smoke': { 'on': 'Detected', 'off': 'Clear' },
+    'sound': { 'on': 'Detected', 'off': 'Clear' },
+    'tamper': { 'on': 'Tampered', 'off': 'OK' },
+    'update': { 'on': 'Available', 'off': 'Up-to-date' },
+    'vibration': { 'on': 'Detected', 'off': 'Clear' },
+    'window': { 'on': 'Open', 'off': 'Closed' }
+  };
+  
   static properties = {
     hass: { attribute: false },
     config: { attribute: false },
@@ -6750,24 +6780,30 @@ class MediaCard extends LitElement {
       const loadedUrl = e?.target?.src;
       const newLayerUrl = this._frontLayerActive ? this._backLayerUrl : this._frontLayerUrl;
       
-      // Only swap if the loaded image is the new layer (not the old one)
-      if (loadedUrl && newLayerUrl && loadedUrl.includes(newLayerUrl.split('?')[0])) {
-        this._pendingLayerSwap = false;
-        
-        // Swap layers to trigger crossfade
-        this._frontLayerActive = !this._frontLayerActive;
-        this.requestUpdate();
-        
-        // Clear old layer after transition
-        const duration = this._transitionDuration || 300;
-        setTimeout(() => {
-          if (this._frontLayerActive) {
-            this._backLayerUrl = '';
-          } else {
-            this._frontLayerUrl = '';
-          }
+      // Only swap if the loaded image is the new layer (exact normalized URL match)
+      if (loadedUrl && newLayerUrl) {
+        const normalizedLoaded = loadedUrl.split('?')[0];
+        const normalizedNewLayer = newLayerUrl.split('?')[0];
+
+        // Require exact normalized URL match to avoid race conditions
+        if (normalizedLoaded === normalizedNewLayer) {
+          this._pendingLayerSwap = false;
+          
+          // Swap layers to trigger crossfade
+          this._frontLayerActive = !this._frontLayerActive;
           this.requestUpdate();
-        }, duration + 100);
+          
+          // Clear old layer after transition
+          const duration = this._transitionDuration || 300;
+          setTimeout(() => {
+            if (this._frontLayerActive) {
+              this._backLayerUrl = '';
+            } else {
+              this._frontLayerUrl = '';
+            }
+            this.requestUpdate();
+          }, duration + 100);
+        }
       }
     }
     
@@ -7051,39 +7087,8 @@ class MediaCard extends LitElement {
     
     // Use device_class friendly names if available (all HA binary sensor device classes)
     const deviceClass = state.attributes?.device_class;
-    if (deviceClass) {
-      const friendlyStates = {
-        'battery': { 'on': 'Low', 'off': 'Normal' },
-        'battery_charging': { 'on': 'Charging', 'off': 'Not Charging' },
-        'cold': { 'on': 'Cold', 'off': 'Normal' },
-        'connectivity': { 'on': 'Connected', 'off': 'Disconnected' },
-        'door': { 'on': 'Open', 'off': 'Closed' },
-        'garage_door': { 'on': 'Open', 'off': 'Closed' },
-        'gas': { 'on': 'Detected', 'off': 'Clear' },
-        'heat': { 'on': 'Hot', 'off': 'Normal' },
-        'light': { 'on': 'Detected', 'off': 'Clear' },
-        'lock': { 'locked': 'Locked', 'unlocked': 'Unlocked' },
-        'moisture': { 'on': 'Wet', 'off': 'Dry' },
-        'motion': { 'on': 'Detected', 'off': 'Clear' },
-        'occupancy': { 'on': 'Detected', 'off': 'Clear' },
-        'opening': { 'on': 'Open', 'off': 'Closed' },
-        'plug': { 'on': 'Plugged In', 'off': 'Unplugged' },
-        'power': { 'on': 'On', 'off': 'Off' },
-        'presence': { 'on': 'Home', 'off': 'Away' },
-        'problem': { 'on': 'Problem', 'off': 'OK' },
-        'running': { 'on': 'Running', 'off': 'Not Running' },
-        'safety': { 'on': 'Unsafe', 'off': 'Safe' },
-        'smoke': { 'on': 'Detected', 'off': 'Clear' },
-        'sound': { 'on': 'Detected', 'off': 'Clear' },
-        'tamper': { 'on': 'Tampered', 'off': 'OK' },
-        'update': { 'on': 'Available', 'off': 'Up-to-date' },
-        'vibration': { 'on': 'Detected', 'off': 'Clear' },
-        'window': { 'on': 'Open', 'off': 'Closed' }
-      };
-      
-      if (friendlyStates[deviceClass]?.[stateText]) {
-        stateText = friendlyStates[deviceClass][stateText];
-      }
+    if (deviceClass && MediaCard.FRIENDLY_STATES[deviceClass]?.[stateText]) {
+      stateText = MediaCard.FRIENDLY_STATES[deviceClass][stateText];
     }
     
     // Round numeric values to 1 decimal place
@@ -7754,12 +7759,31 @@ class MediaCard extends LitElement {
         }
       });
       
-      // Re-evaluate conditions when state changes
+      // Re-evaluate conditions when state changes (with debouncing)
       if (stateChanged) {
-        this._evaluateAllConditions();
-        // Note: JS templates re-evaluate on every render (synchronous)
-        // Only trigger Jinja2 re-evaluation for changed entities
-        this.requestUpdate();
+        // Debounce condition evaluation to avoid excessive work on rapid hass updates
+        const now = Date.now();
+        const minInterval = 500; // 500ms debounce
+        const lastEval = this._lastConditionEvalTs || 0;
+        const elapsed = now - lastEval;
+
+        const runEvaluation = () => {
+          this._lastConditionEvalTs = Date.now();
+          this._pendingConditionEval = null;
+          this._evaluateAllConditions();
+          // Note: JS templates re-evaluate on every render (synchronous)
+          // Only trigger Jinja2 re-evaluation for changed entities
+          this.requestUpdate();
+        };
+
+        if (!lastEval || elapsed >= minInterval) {
+          // Enough time has passed – run immediately
+          runEvaluation();
+        } else if (!this._pendingConditionEval) {
+          // Schedule a trailing evaluation if one is not already pending
+          const delay = minInterval - elapsed;
+          this._pendingConditionEval = setTimeout(runEvaluation, delay);
+        }
       }
       return;
     }
@@ -12347,14 +12371,18 @@ class MediaCard extends LitElement {
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
           // Check multiple sources for favorite status (check rating too - 5 stars = favorite)
           // Queue items store metadata inside item.metadata object
-          const isFavorited = item.is_favorited === true || 
-                              item.is_favorited === 1 ||
+          const isFavoriteFlag = (value) =>
+            value === true ||
+            value === 1 ||
+            value === 'true' ||
+            value === '1';
+          const isFavorited = isFavoriteFlag(item.is_favorited) ||
                               item.rating === 5 ||
-                              item.metadata?.is_favorited === true ||
-                              item.metadata?.is_favorited === 1 ||
+                              isFavoriteFlag(item.metadata?.is_favorited) ||
                               item.metadata?.rating === 5 ||
                               this._burstFavoritedFiles.includes(itemUri) ||
-                              (this.currentMedia?.media_content_id === itemUri && this.currentMedia?.metadata?.is_favorited);
+                              (this.currentMedia?.media_content_id === itemUri &&
+                                isFavoriteFlag(this.currentMedia?.metadata?.is_favorited));
           
           // Format badge based on mode
           let badge = '';
