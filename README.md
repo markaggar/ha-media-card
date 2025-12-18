@@ -19,8 +19,19 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🎥 **Video Controls**: Autoplay, loop, mute and limit video length
 - 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
+- **🎞️ Photo Transitions**: Configurable crossfade transitions between images (0-1000ms) for smooth slideshow experience
 - **📱 Kiosk Mode**: Automatically activate/deactivate kiosk mode (full screen) (perfect for wall-mounted tablets)
 - 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media cards)
+### **Overlay System**
+- 🕐 **Clock/Date Overlay**: Real-time clock and date display with configurable formats (12h/24h, long/short date)
+- 📊 **Display Entities**: Show Home Assistant entity states as overlay with automatic rotation and fade transitions
+  - Support for icons, labels, and custom styling per entity
+  - **Jinja2 & JavaScript template conditions** for dynamic visibility
+  - **Dual template styling** (Jinja2 or JavaScript) for colors, fonts, sizes
+  - Friendly state names for binary sensors (e.g., "Detected/Clear" for motion instead of "on/off")
+  - Recent changes tracking to prioritize entities that changed recently
+- 🎨 **Global Opacity Control**: Single setting controls all overlay backgrounds (0-100%)
+- 📍 **Flexible Positioning**: 6 positions for all overlays (corners + center-top/center-bottom)
 ### **Metadata Visibility & Management with Media Index**
 - ❤️ **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
 - ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
@@ -36,6 +47,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 📅 **Same Date**: View other media items from the same date as the current photo
 - 📆 **Through the Years**: See photos from today's date across all years in your library (with adjustable ±N day window)
 - 💾 **Burst Metadata Persistence**: Save favorite selections from burst reviews to file metadata for future reference
+- 🎞️ **Enhanced Thumbnails**: Adaptive sizing based on aspect ratio, video film strip icons, favorite badges, optimized pagination
 ### **Advanced Capabilities**
 - 🖱️ **Point-and-click file and folder selection** with real image thumbnails. No more typing paths!
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
