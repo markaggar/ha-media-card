@@ -5985,12 +5985,9 @@ export class MediaCard extends LitElement {
     // Calculate smart timeout (scales with button count for touchscreen)
     const timeout = this._calculateActionButtonTimeout();
     
-    console.log(`[ActionButtons] Starting hide timer: ${timeout}ms (${this._countVisibleActionButtons()} buttons)`);
-    
     // Start fresh timer with calculated timeout
     this._hideButtonsTimer = setTimeout(() => {
       // Timer expired - hide explicit buttons
-      console.log('[ActionButtons] Timer expired - hiding buttons');
       this._showButtonsExplicitly = false;
       this._hideButtonsTimer = null;
       this.requestUpdate();
