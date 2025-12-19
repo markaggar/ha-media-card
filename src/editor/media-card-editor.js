@@ -3581,8 +3581,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
               <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
               <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
-                <li>Close this editor</li>
-                <li>Click the ⋮ menu on this card → "Edit in YAML"</li>
+                <li>Click "Show code editor" (bottom-left of the Media Card configuration)</li>
                 <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
               </ol>
               <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
@@ -3595,7 +3594,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div style="padding-left: 40px; padding-left: 60px;">icon: mdi:motion-sensor</div>
               </div>
               <div style="margin-top: 8px;">
-                <a href="https://github.com/markaggar/ha-media-card#display-entities" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
+                <a href="https://github.com/markaggar/ha-media-card/blob/master/docs/guides/display-entities.md" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
               </div>
             </div>
           ` : ''}

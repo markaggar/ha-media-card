@@ -14,12 +14,6 @@ Display content from folders dynamically with multiple viewing strategies:
 - Control sample size with `random_count` parameter
 - Explore large collections without repetition
 
-**Latest Mode** 
-- Always show the most recent file from a folder
-- Ideal for security cameras, dashcam feeds, and live monitoring
-- Automatically detects timestamps in filenames
-- Updates when new content arrives
-
 **Sequential Mode**
 - Display files in order from newest to oldest
 - Great for reviewing security footage or camera rolls chronologically
@@ -32,6 +26,34 @@ Display specific images or videos with auto-refresh capabilities:
 - Live status displays (weather radar, traffic cams)
 - Featured content that changes programmatically
 
+## Overlay System
+
+The card features a flexible overlay system with multiple information layers:
+
+### Clock/Date Overlay
+
+**Real-Time Display**
+- Live updating clock with 12h/24h format
+- Current date with long or short format
+- Configurable positioning (6 locations)
+- Optional semi-transparent background
+- Perfect for kiosk displays and digital picture frames
+
+**Format Options**
+- **Time**: 12-hour (2:30 PM) or 24-hour (14:30)
+- **Date Long**: "Monday, January 1, 2025"
+- **Date Short**: "Jan 1, 2025"
+- Automatically updates every second
+
+### Global Overlay Opacity
+
+**Unified Background Control**
+- Single setting controls all overlay backgrounds
+- Range: 0.0 (fully transparent) to 1.0 (fully opaque)
+- Default: 0.25 (25% opacity for subtle visibility)
+- Affects: metadata, clock, display entities, position indicators
+- Maintains readability while showing media content
+
 ## Rich Metadata Display
 
 Show contextual information about your media:
@@ -41,6 +63,8 @@ Show contextual information about your media:
 - **Filename**: Display clean, readable filenames
 - **Date Taken**: Show photo capture date (when available)
 - **Position**: Display current file number (e.g., "3 of 15")
+- **Location**: GPS-based location (city, state, country). Country is not shown if it matches the Home Assistant instance's country.
+- **Favorite / Rating**: Whether the media is favorited and its rating
 
 **Positioning Control**
 - Place metadata in any corner (top-left, top-right, bottom-left, bottom-right)
@@ -64,10 +88,43 @@ Multiple ways to browse through your media collection:
 - Avoids conflicts with video controls and other UI elements
 - Visual indicators on hover show available actions
 
-**Intelligent Button Placement**
-- Pause/Resume button in top-right corner
-- Navigation zones aligned to middle of screen
-- Center area reserved for tap actions and video controls
+### Action Buttons
+
+**Comprehensive Control Panel**
+
+Overlay buttons provide quick access to card features:
+
+**Standard Buttons** (always available)
+- **Pause/Resume**: Stop/start auto-advance slideshow
+- **Refresh**: Manually reload current media
+- **Fullscreen**: Enter browser fullscreen mode
+- **Debug**: Toggle debug mode at runtime
+
+**Media Index Buttons** (requires Media Index integration)
+- **Favorite**: Toggle favorite status with heart icon
+- **Edit**: Mark photo for editing (moves to _Edit folder)
+- **Delete**: Mark for deletion (moves to _Junk folder)
+- **Info**: Show full metadata panel with EXIF details
+- **Burst Review**: View rapid-fire photos from same moment
+- **Same Date**: See photos from the same date
+- **Through Years**: View photos from this date across all years
+
+**Navigation Buttons**
+- **Queue Preview**: Show upcoming/previous items with thumbnails
+
+**Button Configuration**
+- Position: top-left, top-right, bottom-left, bottom-right
+- Enable/disable individual buttons
+- Smart touchscreen timeout (3-15s based on button count)
+- Mouse hover shows immediately, no timeout
+- All buttons restart timeout on interaction
+
+**Smart Touchscreen Timeout**
+- Base timeout: 3 seconds for ≤3 buttons
+- Scales automatically: +1s per additional button
+- Maximum: 15 seconds for 12+ buttons
+- Examples: 5 buttons→5s, 8→8s, 10→10s
+- Provides adequate time without accidental dismissal
 
 ### Keyboard Navigation
 
@@ -83,11 +140,67 @@ Multiple ways to browse through your media collection:
 - Click card first to enable keyboard control
 - Works across all folder modes
 
+### Queue Preview
+
+**Visual Navigation Timeline**
+
+Interactive panel showing your slideshow queue:
+
+**Features**
+- Thumbnail previews of upcoming items
+- See previous items in history
+- Click any thumbnail to jump directly to it
+- Current item highlighted
+- Smooth scrolling and navigation
+- Works with all provider types (folder, media_index)
+
+**Automatic Opening**
+- `auto_open_queue_preview`: Opens automatically on card load
+- Useful for reviewing queue before slideshow starts
+- Great for small collections where you want to see all items
+
+**Thumbnail Display**
+- Adaptive sizing based on image aspect ratio
+- Video items show film strip icon overlay
+- Favorite items show heart badge
+- Optimized pagination for large queues
+
+**Use Cases**
+- Review slideshow content before presenting
+- Quick navigation to specific photos
+- Verify queue composition in random mode
+- Navigate through small curated collections
+
 ### Visual Feedback
 
 - **Navigation Indicators**: Overlay hints showing available navigation
 - **File Position**: Current item number in collection
 - **Loading States**: Visual feedback during transitions
+
+## Visual Transitions
+
+### Crossfade Effects
+
+Smooth transitions between images for professional slideshow presentations:
+
+**Automatic Crossfade**
+- Built-in crossfade effect for image-to-image transitions
+- Dual-layer rendering system for seamless blending
+- Images load on hidden layer before fading in
+- No flickering or jarring transitions
+- Works with all aspect modes and scaling options
+
+**Performance Optimized**
+- Only applies to images (videos display immediately)
+- Hardware-accelerated CSS transitions
+- Minimal resource overhead
+- Respects browser performance capabilities
+
+**Use Cases**
+- Professional photo slideshows for events
+- Digital picture frames with elegant transitions
+- Kiosk displays in lobbies or waiting rooms
+- Family photo displays on wall-mounted tablets
 
 ## Smart Slideshow System
 
@@ -113,8 +226,11 @@ Intelligent auto-advance with context awareness:
 
 ### Video-Aware Advancement
 
-- Automatically advances when videos finish playing
-- Respects manual pause—won't advance if user paused playback
+- Automatically advances when videos finish playing (not cut short by auto-advance timer)
+- Hard time limit can be defined to automaticall end long-playing videos
+- Respects manual pause — won't advance if user paused playback
+- If user interacts with video, it will continue playing until the end (unless manually skipped)
+- If video loop and auto-advance is configured, video will loop until auto-advance interval
 - Works with slideshow timer for seamless transitions
 - Configurable per video (autoplay, loop, muted options)
 
@@ -237,6 +353,14 @@ Professional fullscreen display with exit controls:
 ## Interactive Actions
 
 Make your media cards respond to user interaction:
+
+**Image Zoom**
+- Click anywhere on an image to zoom in 2x at that point
+- Click again to reset zoom
+- Configurable zoom level (1.5x to 5x)
+- Tap action: `zoom` enables this feature
+- Perfect for examining photo details
+- Works with all aspect modes
 
 **Action Types**
 - **Tap Action**: Single tap behavior
