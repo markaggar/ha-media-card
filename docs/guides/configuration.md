@@ -135,6 +135,8 @@ folder:
   recursive: true
   scan_depth: 3  # Optional: limit depth (null = unlimited)
   estimated_total_photos: 200000
+  priority_new_files: true  # Prioritize recently modified files
+  new_files_threshold_seconds: 3600  # Files modified within 1 hour (default: 3600)
   priority_folders:
     - pattern: "/DCIM/"
       weight: 3.0
@@ -147,6 +149,8 @@ folder:
 | `folder.mode` | string | random | random or sequential |
 | `folder.recursive` | boolean | `false` | Enable recursive subfolder scanning |
 | `folder.scan_depth` | number | `null` | Maximum depth (null = unlimited) |
+| `folder.priority_new_files` | boolean | `false` | Prioritize recently modified files in random selection |
+| `folder.new_files_threshold_seconds` | number | `3600` | Time window in seconds for "new" file prioritization (default: 1 hour) |
 | `folder.priority_folders` | array | `[]` | Folders to prioritize with weight multipliers |
 
 ### Why `estimated_total_photos` is Critical
@@ -154,6 +158,45 @@ folder:
 **Without estimate**: Early folders get over-represented because total count grows during discovery.
 
 **With estimate**: Probability calculations stay consistent, ensuring true statistical fairness across all folders.
+
+## Overlay System
+
+### Global Overlay Opacity
+
+Control background opacity for all overlays with a single setting:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `overlay_opacity` | number | `0.25` | Background opacity for all overlays (0.0-1.0, where 0=transparent, 1=opaque) |
+
+Affects: metadata, clock, display entities, position indicator overlays
+
+### Clock/Date Overlay
+
+Real-time clock and date display:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `clock.enabled` | boolean | `false` | Enable clock/date overlay |
+| `clock.position` | string | `bottom-left` | Position: `top-left`, `top-right`, `bottom-left`, `bottom-right`, `center-top`, `center-bottom` |
+| `clock.show_time` | boolean | `true` | Display current time |
+| `clock.show_date` | boolean | `true` | Display current date |
+| `clock.format` | string | `12h` | Time format: `12h` or `24h` |
+| `clock.date_format` | string | `long` | Date format: `long` (e.g., "Monday, January 1, 2025") or `short` (e.g., "Jan 1, 2025") |
+| `clock.show_background` | boolean | `true` | Show semi-transparent background (uses `overlay_opacity`) |
+
+**Example Configuration:**
+```yaml
+overlay_opacity: 0.3
+clock:
+  enabled: true
+  position: top-right
+  show_time: true
+  show_date: true
+  format: 24h
+  date_format: short
+  show_background: true
+```
 
 ## Metadata Display
 
@@ -165,6 +208,65 @@ folder:
 | `show_filename` | boolean | `false` | Show clean filename |
 | `show_date` | boolean | `false` | Show extracted date |
 | `show_file_position` | boolean | `false` | Show position (e.g., "3 of 15") |
+
+## Action Buttons
+
+Overlay buttons for quick access to card features:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `action_buttons.position` | string | `top-right` | Button position: `top-left`, `top-right`, `bottom-left`, `bottom-right` |
+| `action_buttons.enable_pause` | boolean | `true` | Show pause/resume button |
+| `action_buttons.enable_fullscreen` | boolean | `false` | Show fullscreen button |
+| `show_refresh_button` | boolean | `false` | Show manual refresh button |
+| `debug_button` | boolean | `false` | Show debug mode toggle button |
+
+### Media Index Action Buttons
+
+Require Media Index integration:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `action_buttons.enable_favorite` | boolean | `true` | Show favorite toggle button |
+| `action_buttons.enable_edit` | boolean | `true` | Show edit button (moves to _Edit folder) |
+| `action_buttons.enable_delete` | boolean | `true` | Show delete button (moves to _Junk folder) |
+| `action_buttons.enable_info` | boolean | `true` | Show metadata info panel button |
+| `action_buttons.enable_burst_review` | boolean | `false` | Show burst review button (rapid-fire photos) |
+| `action_buttons.enable_related_photos` | boolean | `false` | Show same date button |
+| `action_buttons.enable_on_this_day` | boolean | `false` | Show through years button (this date across years) |
+
+### Queue Preview Button
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `action_buttons.enable_queue_preview` | boolean | `false` | Show queue preview button |
+| `action_buttons.auto_open_queue_preview` | boolean | `false` | Automatically open queue on card load |
+
+### Smart Touchscreen Timeout
+
+Action buttons automatically adjust visibility timeout based on number of visible buttons:
+- **Base**: 3 seconds for ≤3 buttons
+- **Scaling**: +1 second per additional button
+- **Maximum**: 15 seconds for 12+ buttons
+- **Mouse**: Hover shows/hides immediately (no timeout)
+
+### Example Configuration
+
+```yaml
+action_buttons:
+  position: top-right
+  enable_pause: true
+  enable_fullscreen: true
+  enable_favorite: true
+  enable_delete: true
+  enable_edit: true
+  enable_info: true
+  enable_burst_review: true
+  enable_related_photos: true
+  enable_on_this_day: true
+  enable_queue_preview: true
+  auto_open_queue_preview: false
+```
 
 ## Navigation Controls
 
@@ -245,7 +347,9 @@ double_tap_action:
 - `navigate`: Go to dashboard
 - `perform-action`: Call Home Assistant service
 - `toggle`: Toggle entity state
+- `toggle-kiosk`: Toggle kiosk mode on/off
 - `url`: Open URL
+- `zoom`: Click to zoom image 2x at click point, click again to reset
 
 ### Confirmation Dialogs
 

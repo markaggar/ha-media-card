@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.1
+ * Media Card v5.6.2
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -3912,6 +3912,8 @@ class MediaCard extends LitElement {
     // Auto-hide action buttons for touch screens
     this._showButtonsExplicitly = false; // true = show via touch tap (independent of hover)
     this._hideButtonsTimer = null;
+    this._actionButtonsBaseTimeout = 3000;  // 3s minimum for touchscreen
+    this._actionButtonsMaxTimeout = 15000;  // 15s maximum for touchscreen
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -5120,11 +5122,8 @@ class MediaCard extends LitElement {
         this._navigatingAway = false;
       }, 0);
 
-      // Reset timer if buttons are explicitly showing (restart 3s countdown)
-      if (this._showButtonsExplicitly) {
-        // Restart 3s timer after navigation when buttons are showing
-        this._startActionButtonsHideTimer();
-      }
+      // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
+      // Timer only restarts on manual button clicks
 
       // Refresh metadata from media_index in background after navigation
       // Ensures overlay reflects latest EXIF/location/favorite flags
@@ -5197,11 +5196,8 @@ class MediaCard extends LitElement {
       this._navigatingAway = false;
     }, 0);
 
-    // Reset timer if buttons are explicitly showing (restart 3s countdown)
-    if (this._showButtonsExplicitly) {
-      // Restart 3s timer after navigation when buttons are showing
-      this._startActionButtonsHideTimer();
-    }
+    // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
+    // Timer only restarts on manual button clicks
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -8062,6 +8058,11 @@ class MediaCard extends LitElement {
   async _handleFavoriteClick(e) {
     e.stopPropagation();
     
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     // CRITICAL: Capture current state NOW before async operations
@@ -8159,6 +8160,12 @@ class MediaCard extends LitElement {
   // V4: Handle pause button click
   _handlePauseClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     this._setPauseState(!this._isPaused);
     
     // Stop timer when pausing, restart when resuming
@@ -8174,6 +8181,11 @@ class MediaCard extends LitElement {
   // Handle debug button click - toggle debug mode dynamically
   _handleDebugButtonClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
     
     // Toggle debug mode
     this._debugMode = !this._debugMode;
@@ -8200,6 +8212,12 @@ class MediaCard extends LitElement {
   // Handle refresh button click - reload current media
   async _handleRefreshClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     this._log('🔄 Refresh button clicked');
     
     // Check if in folder mode - if so, trigger full queue refresh
@@ -8258,6 +8276,11 @@ class MediaCard extends LitElement {
   async _handleInfoClick(e) {
     e.stopPropagation();
     
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     // Toggle state
     this._showInfoOverlay = !this._showInfoOverlay;
     
@@ -8314,6 +8337,11 @@ class MediaCard extends LitElement {
   
   // V5.6: Queue Preview button handler
   async _handleQueueClick() {
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     if (this._panelMode === 'queue') {
       // Exit queue preview mode
       await this._exitPanelMode();
@@ -8330,6 +8358,11 @@ class MediaCard extends LitElement {
   // V5.5: Burst button handler - toggle burst review mode
   async _handleBurstClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
     
     if (this._panelOpen && this._panelMode === 'burst') {
       // Exit panel mode (will call _exitPanelMode)
@@ -8349,6 +8382,11 @@ class MediaCard extends LitElement {
   async _handleRelatedClick(e) {
     e.stopPropagation();
     
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     if (this._panelOpen && this._panelMode === 'related') {
       // Exit related photos mode
       this._exitRelatedMode();
@@ -8364,6 +8402,11 @@ class MediaCard extends LitElement {
 
   async _handleOnThisDayClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
     
     if (this._panelOpen && this._panelMode === 'on_this_day') {
       // Exit on this day mode
@@ -8425,6 +8468,11 @@ class MediaCard extends LitElement {
   
   async _handleDeleteClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
     
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
@@ -8639,6 +8687,11 @@ class MediaCard extends LitElement {
   async _handleEditClick(e) {
     e.stopPropagation();
     
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     // V4 PATTERN: Capture path at button click time to prevent wrong file being marked
@@ -8654,6 +8707,11 @@ class MediaCard extends LitElement {
   
   _handleFullscreenButtonClick(e) {
     e.stopPropagation();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
     
     // Detect if current media is video
     const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
@@ -9595,21 +9653,60 @@ class MediaCard extends LitElement {
     this.requestUpdate();
   }
   
+  _countVisibleActionButtons() {
+    // Count visible action buttons to calculate smart timeout
+    const config = this.config.action_buttons || {};
+    const showMediaIndexButtons = MediaProvider.isMediaIndexActive(this.config) && this._currentMediaPath;
+    
+    let count = 0;
+    if (config.enable_pause !== false) count++;
+    if (showMediaIndexButtons && config.enable_favorite !== false) count++;
+    if (showMediaIndexButtons && config.enable_delete !== false) count++;
+    if (showMediaIndexButtons && config.enable_edit !== false) count++;
+    if (showMediaIndexButtons && config.enable_info !== false) count++;
+    if (config.enable_fullscreen === true) count++;
+    if (this.config.show_refresh_button === true) count++;
+    if (showMediaIndexButtons && config.enable_burst_review === true) count++;
+    if (showMediaIndexButtons && config.enable_related_photos === true) count++;
+    if (showMediaIndexButtons && config.enable_on_this_day === true) count++;
+    if (config.enable_queue_preview === true && this.navigationQueue && this.navigationQueue.length >= 1) count++;
+    if (this.config.debug_button === true) count++;
+    
+    return count;
+  }
+  
+  _calculateActionButtonTimeout() {
+    // Calculate smart timeout based on visible button count
+    // Formula: 3s base + 1s per button over 3 buttons
+    // Examples: 3 buttons → 3s, 5 buttons → 5s, 8 buttons → 8s, 15+ buttons → 15s (capped)
+    const buttonCount = this._countVisibleActionButtons();
+    
+    const timeout = Math.min(
+      this._actionButtonsBaseTimeout + (Math.max(0, buttonCount - 3) * 1000),
+      this._actionButtonsMaxTimeout
+    );
+    
+    return timeout;
+  }
+  
   _startActionButtonsHideTimer() {
-    // Start/restart 3s hide timer
+    // Start/restart hide timer with smart timeout based on button count
     
     // Clear existing timer
     if (this._hideButtonsTimer) {
       clearTimeout(this._hideButtonsTimer);
     }
     
-    // Start fresh 3s timer
+    // Calculate smart timeout (scales with button count for touchscreen)
+    const timeout = this._calculateActionButtonTimeout();
+    
+    // Start fresh timer with calculated timeout
     this._hideButtonsTimer = setTimeout(() => {
       // Timer expired - hide explicit buttons
       this._showButtonsExplicitly = false;
       this._hideButtonsTimer = null;
       this.requestUpdate();
-    }, 3000);
+    }, timeout);
   }
   
   _handleDoubleTap(e) {
@@ -16013,8 +16110,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
               <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
               <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
-                <li>Close this editor</li>
-                <li>Click the ⋮ menu on this card → "Edit in YAML"</li>
+                <li>Click "Show code editor" (bottom-left of the Media Card configuration)</li>
                 <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
               </ol>
               <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
@@ -16027,7 +16123,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div style="padding-left: 40px; padding-left: 60px;">icon: mdi:motion-sensor</div>
               </div>
               <div style="margin-top: 8px;">
-                <a href="https://github.com/markaggar/ha-media-card#display-entities" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
+                <a href="https://github.com/markaggar/ha-media-card/blob/master/docs/guides/display-entities.md" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">📖 View Full Documentation & Examples →</a>
               </div>
             </div>
           ` : ''}
@@ -16478,7 +16574,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.1 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.2 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
