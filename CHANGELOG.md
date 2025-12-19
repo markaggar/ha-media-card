@@ -1,3 +1,22 @@
+## v5.6.2 - 2025-12-18
+
+### Fixed
+- **Action Button Timeout Not Expiring**: Fixed buttons never disappearing after tapping center to show them
+  - Root cause: Slideshow auto-advance was restarting timer in `_loadNext()`/`_loadPrevious()` methods
+  - Timer would restart on every slideshow advance before expiring, creating infinite loop
+  - Solution: Removed timer restart from automatic navigation methods
+  - Timer now expires naturally during slideshow auto-advance
+  - Timer only restarts on manual user actions (navigation zones, action buttons)
+  - Added debug logging to track timer lifecycle
+
+### Added
+- **Smart Touchscreen Timeout for Action Buttons**: Dynamic timeout scales with number of visible buttons
+  - Base timeout: 3 seconds for ≤3 buttons
+  - Scaling formula: 3s + 1s per additional button (max 15s)
+  - Examples: 3 buttons→3s, 5→5s, 8→8s, 10→10s, 15+→15s
+  - Touchscreen-only feature, mouse hover behavior unchanged
+  - Provides adequate time to select buttons without accidental dismissal
+
 ## v5.6.1 - 2025-12-17
 
 ### Fixed
