@@ -6818,8 +6818,8 @@ export class MediaCard extends LitElement {
       width: 100%;
       height: 100%;
       pointer-events: none;
-      /* V5.6: Increase z-index to show over images */
-      z-index: 10;
+      /* V5.7: Lower z-index to not interfere with card editor */
+      z-index: 3;
     }
 
     .nav-zone {
