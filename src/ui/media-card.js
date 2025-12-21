@@ -785,7 +785,9 @@ export class MediaCard extends LitElement {
         ...config.clock
       },
       // V5.6: Global overlay opacity control
-      overlay_opacity: config.overlay_opacity ?? 0.25
+      overlay_opacity: config.overlay_opacity ?? 0.25,
+      // V5.7: Card background blending - default true for seamless look
+      blend_with_background: config.blend_with_background !== false
     };
     
     // V4: Set debug mode from config
@@ -825,6 +827,13 @@ export class MediaCard extends LitElement {
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
+    
+    // V5.7: Set blend with background attribute for CSS targeting
+    if (this.config.blend_with_background !== false) {
+      this.setAttribute('data-blend-with-background', 'true');
+    } else {
+      this.removeAttribute('data-blend-with-background');
+    }
     
     // V5: Set position indicator position attribute for CSS targeting
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
@@ -6458,12 +6467,29 @@ export class MediaCard extends LitElement {
       /* Smart-scale mode max-height - leaves ~20vh buffer for metadata visibility */
       --smart-scale-max-height: 80vh;
     }
+    
+    /* V5.7: Ensure ha-card properly clips content to rounded corners */
+    ha-card {
+      overflow: hidden;
+    }
+    
     .card {
       position: relative;
       overflow: hidden;
       background: var(--card-background-color);
       border-radius: var(--ha-card-border-radius);
     }
+    
+    /* When NOT blending, use proper card background */
+    :host(:not([data-blend-with-background])) .card {
+      background: var(--card-background-color);
+    }
+    
+    /* When blending (default), use transparent/primary background */
+    :host([data-blend-with-background]) .card {
+      background: transparent;
+    }
+    
     .media-container {
       position: relative;
       width: 100%;
@@ -6474,6 +6500,14 @@ export class MediaCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
+      /* V5.7: Inherit border radius to respect parent card's rounded corners */
+      border-radius: var(--ha-card-border-radius);
+      overflow: hidden;
+    }
+    
+    /* When NOT blending, media-container should also use card background */
+    :host(:not([data-blend-with-background])) .media-container {
+      background: var(--card-background-color);
     }
     
     /* V5.6: Crossfade layers - both images stacked on top of each other */
@@ -6797,9 +6831,9 @@ export class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 60%;
+      height: 50%;
       min-height: 120px;
-      max-height: 600px;
+      max-height: 400px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -6809,9 +6843,9 @@ export class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 60%;
+      height: 50%;
       min-height: 120px;
-      max-height: 600px;
+      max-height: 400px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -6883,6 +6917,11 @@ export class MediaCard extends LitElement {
     .media-container:not(.transparent-overlays) .metadata-overlay {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .metadata-overlay {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
 
     /* Metadata positioning */
@@ -7322,6 +7361,11 @@ export class MediaCard extends LitElement {
     .media-container:not(.transparent-overlays) .position-indicator {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .position-indicator {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
     
     /* Position indicator corner positioning - bottom-right is default */

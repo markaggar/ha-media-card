@@ -841,6 +841,11 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
     this._fireConfigChanged();
   }
+  
+  _blendWithBackgroundChanged(ev) {
+    this._config = { ...this._config, blend_with_background: ev.target.checked };
+    this._fireConfigChanged();
+  }
 
   _autoplayChanged(ev) {
     this._config = { ...this._config, video_autoplay: ev.target.checked };
@@ -3258,6 +3263,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 placeholder="No zoom"
               />
               <div class="help-text">Images load pre-zoomed at this level (1-5x, click image to reset)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Blend Card with Background</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.blend_with_background !== false}
+                @change=${this._blendWithBackgroundChanged}
+              />
+              <div class="help-text">Blend card seamlessly with dashboard background (uncheck for card-style appearance)</div>
             </div>
           </div>
           

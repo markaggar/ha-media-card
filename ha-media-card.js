@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.2
+ * Media Card v5.6.3
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -4500,7 +4500,9 @@ class MediaCard extends LitElement {
         ...config.clock
       },
       // V5.6: Global overlay opacity control
-      overlay_opacity: config.overlay_opacity ?? 0.25
+      overlay_opacity: config.overlay_opacity ?? 0.25,
+      // V5.7: Card background blending - default true for seamless look
+      blend_with_background: config.blend_with_background !== false
     };
     
     // V4: Set debug mode from config
@@ -4540,6 +4542,13 @@ class MediaCard extends LitElement {
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
+    
+    // V5.7: Set blend with background attribute for CSS targeting
+    if (this.config.blend_with_background !== false) {
+      this.setAttribute('data-blend-with-background', 'true');
+    } else {
+      this.removeAttribute('data-blend-with-background');
+    }
     
     // V5: Set position indicator position attribute for CSS targeting
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
@@ -10173,12 +10182,29 @@ class MediaCard extends LitElement {
       /* Smart-scale mode max-height - leaves ~20vh buffer for metadata visibility */
       --smart-scale-max-height: 80vh;
     }
+    
+    /* V5.7: Ensure ha-card properly clips content to rounded corners */
+    ha-card {
+      overflow: hidden;
+    }
+    
     .card {
       position: relative;
       overflow: hidden;
       background: var(--card-background-color);
       border-radius: var(--ha-card-border-radius);
     }
+    
+    /* When NOT blending, use proper card background */
+    :host(:not([data-blend-with-background])) .card {
+      background: var(--card-background-color);
+    }
+    
+    /* When blending (default), use transparent/primary background */
+    :host([data-blend-with-background]) .card {
+      background: transparent;
+    }
+    
     .media-container {
       position: relative;
       width: 100%;
@@ -10189,6 +10215,14 @@ class MediaCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
+      /* V5.7: Inherit border radius to respect parent card's rounded corners */
+      border-radius: var(--ha-card-border-radius);
+      overflow: hidden;
+    }
+    
+    /* When NOT blending, media-container should also use card background */
+    :host(:not([data-blend-with-background])) .media-container {
+      background: var(--card-background-color);
     }
     
     /* V5.6: Crossfade layers - both images stacked on top of each other */
@@ -10512,9 +10546,9 @@ class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 60%;
+      height: 50%;
       min-height: 120px;
-      max-height: 600px;
+      max-height: 400px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -10524,9 +10558,9 @@ class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 60%;
+      height: 50%;
       min-height: 120px;
-      max-height: 600px;
+      max-height: 400px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -10598,6 +10632,11 @@ class MediaCard extends LitElement {
     .media-container:not(.transparent-overlays) .metadata-overlay {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .metadata-overlay {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
 
     /* Metadata positioning */
@@ -11037,6 +11076,11 @@ class MediaCard extends LitElement {
     .media-container:not(.transparent-overlays) .position-indicator {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .position-indicator {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
     
     /* Position indicator corner positioning - bottom-right is default */
@@ -13368,6 +13412,11 @@ class MediaCardEditor extends LitElement {
 
   _refreshButtonChanged(ev) {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
+    this._fireConfigChanged();
+  }
+  
+  _blendWithBackgroundChanged(ev) {
+    this._config = { ...this._config, blend_with_background: ev.target.checked };
     this._fireConfigChanged();
   }
 
@@ -15791,6 +15840,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
+            <label>Blend Card with Background</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.blend_with_background !== false}
+                @change=${this._blendWithBackgroundChanged}
+              />
+              <div class="help-text">Blend card seamlessly with dashboard background (uncheck for card-style appearance)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Refresh Button</label>
             <div>
               <input
@@ -16574,7 +16635,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.2 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.3 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

@@ -1,3 +1,19 @@
+## v5.6.3 - 2025-12-20
+
+### Added
+- **Blend with Background Toggle**: New `blend_with_background` config option (default: true)
+  - When enabled (default): Card blends seamlessly with dashboard background (transparent)
+  - When disabled: Card uses standard HA card background with proper rounded corners
+  - Metadata and position indicators automatically adapt to match card background color
+  - Available in visual editor under "Image Options" section
+
+### Fixed
+- **Navigation Button Height**: Reduced height from 60% to 50% (max 600px to 400px)
+  - Prevents interference with video control seek bar when panels are active
+- **Rounded Corners**: Fixed missing rounded corners at top and bottom
+  - Added `overflow: hidden` to `<ha-card>` element to properly clip content
+  - Media container now inherits border-radius for consistent appearance
+
 ## v5.6.2 - 2025-12-18
 
 ### Fixed
