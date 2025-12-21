@@ -10183,26 +10183,33 @@ class MediaCard extends LitElement {
       --smart-scale-max-height: 80vh;
     }
     
-    /* V5.7: Ensure ha-card properly clips content to rounded corners */
-    ha-card {
+    /* V5.7: Ensure ha-card properly clips content to rounded corners when NOT blending */
+    :host(:not([data-blend-with-background])) ha-card {
       overflow: hidden;
+    }
+    
+    /* V5.7: When blending, remove borders for seamless integration */
+    :host([data-blend-with-background]) ha-card {
+      border: none;
+      box-shadow: none;
     }
     
     .card {
       position: relative;
       overflow: hidden;
       background: var(--card-background-color);
+    }
+    
+    /* When NOT blending, use proper card background and rounded corners */
+    :host(:not([data-blend-with-background])) .card {
+      background: var(--card-background-color);
       border-radius: var(--ha-card-border-radius);
     }
     
-    /* When NOT blending, use proper card background */
-    :host(:not([data-blend-with-background])) .card {
-      background: var(--card-background-color);
-    }
-    
-    /* When blending (default), use transparent/primary background */
+    /* When blending (default), use transparent/primary background with square corners */
     :host([data-blend-with-background]) .card {
       background: transparent;
+      border-radius: 0;
     }
     
     .media-container {
@@ -10215,14 +10222,13 @@ class MediaCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      /* V5.7: Inherit border radius to respect parent card's rounded corners */
-      border-radius: var(--ha-card-border-radius);
       overflow: hidden;
     }
     
-    /* When NOT blending, media-container should also use card background */
+    /* When NOT blending, inherit border radius and use card background */
     :host(:not([data-blend-with-background])) .media-container {
       background: var(--card-background-color);
+      border-radius: var(--ha-card-border-radius);
     }
     
     /* V5.6: Crossfade layers - both images stacked on top of each other */
@@ -11437,6 +11443,17 @@ class MediaCard extends LitElement {
       font-weight: 500;
       color: var(--primary-text-color);
       border-bottom: 1px solid var(--divider-color);
+    }
+    
+    /* V5.7: When blending, title uses dashboard background */
+    :host([data-blend-with-background]) .title {
+      background: var(--primary-background-color);
+      border-bottom: none;
+    }
+    
+    /* V5.7: When NOT blending, title uses card background */
+    :host(:not([data-blend-with-background])) .title {
+      background: var(--card-background-color);
     }
     
     /* Confirmation dialog styles */
