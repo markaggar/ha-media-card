@@ -10704,6 +10704,11 @@ class MediaCard extends LitElement {
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
     
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .display-entities {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
+    }
+    
     .display-entities ha-icon {
       flex-shrink: 0;
       --mdc-icon-size: 1em;
@@ -10763,6 +10768,11 @@ class MediaCard extends LitElement {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .clock-overlay {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
     
     .clock-overlay.no-background {
