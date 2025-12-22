@@ -1497,8 +1497,9 @@ export class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
-    // V5: Setup auto-advance after successfully loading media  
-    this._setupAutoRefresh();
+    // V5.6.4: Auto-refresh timer starts in _onMediaLoaded/_onVideoCanPlay
+    // This prevents timer expiring before media has loaded (especially on slow connections)
+    // Timer will be set up when image loads or video is ready to play
 
     // V5.6: Clear navigation flag after render cycle completes
     setTimeout(() => {
@@ -2738,6 +2739,10 @@ export class MediaCard extends LitElement {
       this._log('✅ Applied pending navigation index on video canplay');
       this.requestUpdate();
     }
+    
+    // V5.6.4: Start auto-advance timer now that video is ready to play
+    // Prevents timer expiring before video has loaded (especially for large files)
+    this._setupAutoRefresh();
   }
 
   _onVideoPlay() {
@@ -3068,6 +3073,10 @@ export class MediaCard extends LitElement {
         this._zoomToPoint(img, 50, 50, level);
       }
     }
+    
+    // V5.6.4: Start auto-advance timer now that media is loaded and visible
+    // Prevents timer expiring before image has rendered (especially on slow connections)
+    this._setupAutoRefresh();
     
     // V5: Apply pending metadata AND navigation index now that image has loaded
     // This synchronizes metadata/counter/position indicator updates with the new image appearing

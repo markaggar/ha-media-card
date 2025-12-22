@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Works alongside existing vignette effect for additional image framing  
 
 ### Fixed
+- **Auto-Advance Timer**: Fixed timer starting before media loads
+  - Timer now starts only when image has loaded or video is ready to play
+  - Prevents timer expiring and advancing before media has rendered
+  - Most noticeable with slow connections or large files
+  - Timer starts in `_onMediaLoaded()` for images and `_onVideoCanPlay()` for videos
+
 - **Navigation Button Height**: Reduced height from 60% to 50% (max 600px to 400px)
   - Prevents interference with video control seek bar when panels are active
 - **Rounded Corners**: Fixed missing rounded corners at top and bottom
