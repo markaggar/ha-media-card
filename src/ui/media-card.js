@@ -1237,11 +1237,11 @@ export class MediaCard extends LitElement {
 
     try {
       // V5.3: Navigation Queue Architecture
-      // Always increment (starts at -1, first increment → 0)
-      this.navigationIndex++;
+      // Store pending index (will be applied when media loads to sync with metadata)
+      const nextIndex = this.navigationIndex + 1;
       
       // Need to load more items?
-      if (this.navigationIndex >= this.navigationQueue.length) {
+      if (nextIndex >= this.navigationQueue.length) {
         // V5.3: If this was a pre-loaded small collection, don't load more - just wrap
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
@@ -1254,7 +1254,7 @@ export class MediaCard extends LitElement {
             return;
           }
           
-          this.navigationIndex = 0;
+          this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
           let item = await this.provider.getNext();
@@ -1295,7 +1295,7 @@ export class MediaCard extends LitElement {
                 return;
               }
               
-              this.navigationIndex = 0;
+              this._pendingNavigationIndex = 0;
               return;
             }
             
@@ -1317,7 +1317,7 @@ export class MediaCard extends LitElement {
                 return;
               }
               
-              this.navigationIndex = 0;
+              this._pendingNavigationIndex = 0;
               return;
             }
             
@@ -1356,21 +1356,24 @@ export class MediaCard extends LitElement {
               return;
             }
             
-            this.navigationIndex = 0;
+            this._pendingNavigationIndex = 0;
           }
         }
       }
       
       // Get item at current navigation index
-      const item = this.navigationQueue[this.navigationIndex];
+      const item = this.navigationQueue[nextIndex];
       if (!item) {
-        this._log('ERROR: No item at navigationIndex', this.navigationIndex);
+        this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
       }
       
       // Extract filename from path for logging
       const filename = item.metadata?.filename || item.media_content_id?.split('/').pop() || 'unknown';
-      this._log('Displaying navigation queue item:', filename, 'at index', this.navigationIndex);
+      this._log('Displaying navigation queue item:', filename, 'at index', nextIndex);
+      
+      // Store pending index (will apply when media loads)
+      this._pendingNavigationIndex = nextIndex;
       
       // Add to history for tracking (providers use this for exclusion)
       // Check by media_content_id to avoid duplicate object references
@@ -1404,10 +1407,8 @@ export class MediaCard extends LitElement {
       
       // Display the item
       this.currentMedia = item;
-      this._currentMediaPath = item.media_content_id;
-      this._currentMetadata = item.metadata || null;
       
-      // V5: Store metadata in pending state until image loads
+      // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
       this._pendingMediaPath = item.media_content_id;
       this._pendingMetadata = item.metadata || null;
       
@@ -1483,8 +1484,10 @@ export class MediaCard extends LitElement {
     
     // Display the item
     this.currentMedia = item;
-    this._currentMediaPath = item.media_content_id;
-    this._currentMetadata = item.metadata || null;
+    
+    // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
+    this._pendingMediaPath = item.media_content_id;
+    this._pendingMetadata = item.metadata || null;
     
     // V5: Clear cached full metadata when media changes
     this._fullMetadata = null;
@@ -1591,8 +1594,10 @@ export class MediaCard extends LitElement {
       media_content_type: item.filename?.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
       metadata: metadata
     };
-    this._currentMediaPath = mediaUri;
-    this._currentMetadata = metadata;
+    
+    // V5.7: Store in pending state - will apply when image/video loads
+    this._pendingMediaPath = mediaUri;
+    this._pendingMetadata = metadata;
     
     // Update deprecated state for compatibility
     if (this._panelMode === 'burst') {
@@ -1623,9 +1628,6 @@ export class MediaCard extends LitElement {
 
     console.log(`🎯 Jumping to queue position ${queueIndex + 1}/${this.navigationQueue.length}`);
 
-    // Update navigation index
-    this.navigationIndex = queueIndex;
-    
     // Clear manual page flag - user is now navigating to items, allow auto-adjustment
     this._manualPageChange = false;
     this._manualPageRenderCount = 0;
@@ -1633,8 +1635,11 @@ export class MediaCard extends LitElement {
     // Load the item from the queue
     const item = this.navigationQueue[queueIndex];
     this.currentMedia = item;
-    this._currentMediaPath = item.media_content_id;
-    this._currentMetadata = item.metadata || null;
+    
+    // V5.7: Store in pending state - will apply when image/video loads  
+    this._pendingNavigationIndex = queueIndex;
+    this._pendingMediaPath = item.media_content_id;
+    this._pendingMetadata = item.metadata || null;
 
     // Clear cached metadata
     this._fullMetadata = null;
@@ -2725,7 +2730,13 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoCanPlay() {
-    // Video ready to play
+    // V5.7: Apply pending navigation index when video is ready (sync with metadata)
+    if (this._pendingNavigationIndex !== null) {
+      this.navigationIndex = this._pendingNavigationIndex;
+      this._pendingNavigationIndex = null;
+      this._log('✅ Applied pending navigation index on video canplay');
+      this.requestUpdate();
+    }
   }
 
   _onVideoPlay() {
@@ -3057,8 +3068,8 @@ export class MediaCard extends LitElement {
       }
     }
     
-    // V5: Apply pending metadata now that image has loaded
-    // This synchronizes metadata/counter updates with the new image appearing
+    // V5: Apply pending metadata AND navigation index now that image has loaded
+    // This synchronizes metadata/counter/position indicator updates with the new image appearing
     if (this._pendingMetadata !== null) {
       this._currentMetadata = this._pendingMetadata;
       this._pendingMetadata = null;
@@ -3067,6 +3078,11 @@ export class MediaCard extends LitElement {
     if (this._pendingMediaPath !== null) {
       this._currentMediaPath = this._pendingMediaPath;
       this._pendingMediaPath = null;
+    }
+    if (this._pendingNavigationIndex !== null) {
+      this.navigationIndex = this._pendingNavigationIndex;
+      this._pendingNavigationIndex = null;
+      this._log('✅ Applied pending navigation index on image load');
     }
     
     // Trigger re-render to show updated metadata/counters
@@ -5552,13 +5568,15 @@ export class MediaCard extends LitElement {
       this._panelOpen = true;
       
       // Initialize paging for queue preview
-      this._panelPageStartIndex = this.navigationIndex;
+      // V5.7: Use pending index if available (syncs with deferred navigation updates)
+      const currentIndex = this._pendingNavigationIndex ?? this.navigationIndex;
+      this._panelPageStartIndex = currentIndex;
       
       // Load current item to show in panel
-      const currentItem = this.navigationQueue[this.navigationIndex];
+      const currentItem = this.navigationQueue[currentIndex];
       if (currentItem) {
         // Current item is already loaded, just open panel
-        console.warn(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${this.navigationIndex + 1}`);
+        console.warn(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${currentIndex + 1}`);
       }
       
     } catch (error) {
