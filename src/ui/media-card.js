@@ -698,13 +698,11 @@ export class MediaCard extends LitElement {
         'See https://github.com/markaggar/ha-media-card#configuration for examples.'
       );
       
-      // Force migration by creating mutable copy (HA passes frozen config object)
+      // Force migration by temporarily removing media_source_type
       this._log('⚠️ Forcing V4→V5 migration due to hybrid config');
       const originalMediaSourceType = config.media_source_type;
-      // Create mutable copy without media_source_type to trigger migration
-      const mutableConfig = { ...config };
-      delete mutableConfig.media_source_type;
-      config = this._migrateV4ConfigToV5a(mutableConfig);
+      delete config.media_source_type;
+      config = this._migrateV4ConfigToV5a(config);
       // If they had explicitly set media_source_type, trust it over migration
       if (originalMediaSourceType && originalMediaSourceType !== config.media_source_type) {
         this._log('⚠️ Overriding migrated media_source_type with user value:', originalMediaSourceType);
