@@ -1,6 +1,33 @@
-## v5.6.4 - 2025-12-21
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## v5.6.3 - 2025-12-21
+
+### Added
+- **Blend with Background Toggle**: New `blend_with_background` config option (default: true)
+  - When enabled (default): Card blends seamlessly with dashboard background (transparent)
+  - When disabled: Card uses standard HA card background with proper rounded corners
+  - Metadata and position indicators automatically adapt to match card background color
+  - Available in visual editor under "Image Options" section
+
+- **Edge Fade Strength (Beta)**: Rectangular fade effect from all four edges
+  - Single 0-100 number control for fade strength (replaces binary enable/disable)
+  - CSS mask implementation with intersecting linear gradients
+  - Available in visual editor under "Image Options" section
+  - Marked as beta: May show faint horizontal/vertical intersection lines on some images
+  - Works alongside existing vignette effect for additional image framing  
 
 ### Fixed
+- **Navigation Button Height**: Reduced height from 60% to 50% (max 600px to 400px)
+  - Prevents interference with video control seek bar when panels are active
+- **Rounded Corners**: Fixed missing rounded corners at top and bottom
+  - Added `overflow: hidden` to `<ha-card>` element to properly clip content
+  - Media container now inherits border-radius for consistent appearance
+
 - **Metadata/Position Indicator Synchronization**: Fixed overlays updating before media loads
   - Root cause: Navigation methods were setting state immediately while media was still loading
   - Created visible desync where metadata and position indicator changed before image appeared
@@ -12,35 +39,27 @@
   - Fixed all navigation paths: `_loadNext()`, `_loadPrevious()`, `_loadPanelItem()`, `_jumpToQueuePosition()`
   - Metadata, position indicator, and media display now update perfectly synchronized
 
+- **Panel Navigation Issues**:
+  - Fixed Through the Years panel Next/Previous buttons not working (added `on_this_day` and `history` to allowed panel modes)
+  - Fixed queue panel wrapping: Previous at start wraps to end, Next at end wraps to beginning
+  - Fixed panel buttons showing when queue has ≤10 items and fits on one page
+  - Fixed wrapping logic jumping to position 1 instead of last page
+
+- **Clock Overlay Enhancement**: Made clock/date clickable to open Through the Years panel
+  - Hover effect with slight scale and brightness increase
+  - Only clickable when media_index active and Through the Years enabled
+  - Tooltip shows "Through the Years" when clickable
+
+- **Queue Preview Auto-Open**: Fixed not opening on card load in random mode
+  - Changed requirement from `length > 1` to `length > 0` items
+  - Now opens immediately with initial item, showing current position
+  - Previous button appears as queue grows, allowing navigation back to earlier items
+
 - **Queue Preview Auto-Open Not Populating**: Fixed panel opening empty when auto-open enabled
   - Root cause: Panel initialization reading `navigationIndex` before pending state applied
   - Auto-open happens in `firstUpdated()` lifecycle, before first media load completes
   - Solution: `_enterQueuePreviewMode()` now checks `_pendingNavigationIndex` first, falls back to `navigationIndex`
   - Panel now correctly initializes with current position and displays thumbnails immediately
-
-### Added
-- **Edge Fade Strength (Beta)**: Rectangular fade effect from all four edges
-  - Single 0-100 number control for fade strength (replaces binary enable/disable)
-  - CSS mask implementation with intersecting linear gradients
-  - Available in visual editor under "Image Options" section
-  - Marked as beta: May show faint horizontal/vertical intersection lines on some images
-  - Works alongside existing vignette effect for additional image framing
-
-## v5.6.3 - 2025-12-20
-
-### Added
-- **Blend with Background Toggle**: New `blend_with_background` config option (default: true)
-  - When enabled (default): Card blends seamlessly with dashboard background (transparent)
-  - When disabled: Card uses standard HA card background with proper rounded corners
-  - Metadata and position indicators automatically adapt to match card background color
-  - Available in visual editor under "Image Options" section
-
-### Fixed
-- **Navigation Button Height**: Reduced height from 60% to 50% (max 600px to 400px)
-  - Prevents interference with video control seek bar when panels are active
-- **Rounded Corners**: Fixed missing rounded corners at top and bottom
-  - Added `overflow: hidden` to `<ha-card>` element to properly clip content
-  - Media container now inherits border-radius for consistent appearance
 
 ## v5.6.2 - 2025-12-18
 

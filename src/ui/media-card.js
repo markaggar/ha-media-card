@@ -1028,15 +1028,15 @@ export class MediaCard extends LitElement {
         // Now that panel renders inside card, no need to prevent opening in editor mode
         if (this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
-          // Wait for navigation queue to be populated before opening preview
-          // Use requestAnimationFrame to ensure DOM is ready and queue is populated
+          // Open queue preview immediately if queue has any items
+          // Use requestAnimationFrame to ensure DOM is ready
           requestAnimationFrame(() => {
-            if (this.navigationQueue && this.navigationQueue.length > 1) {
+            if (this.navigationQueue && this.navigationQueue.length > 0) {
               this._enterQueuePreviewMode();
             } else {
               // Queue not ready yet, wait a bit longer
               setTimeout(() => {
-                if (this.navigationQueue && this.navigationQueue.length > 1) {
+                if (this.navigationQueue && this.navigationQueue.length > 0) {
                   this._enterQueuePreviewMode();
                 }
               }, 500);
@@ -1486,6 +1486,7 @@ export class MediaCard extends LitElement {
     this.currentMedia = item;
     
     // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
+    this._pendingNavigationIndex = this.navigationIndex;
     this._pendingMediaPath = item.media_content_id;
     this._pendingMetadata = item.metadata || null;
     
@@ -3427,9 +3428,15 @@ export class MediaCard extends LitElement {
     }
 
     const backgroundClass = config.show_background === false ? 'no-background' : '';
+    const showMediaIndexButtons = MediaProvider.isMediaIndexActive(this.config);
+    const enableOnThisDay = this.config.action_buttons?.enable_on_this_day !== false;
+    const clockClickable = showMediaIndexButtons && enableOnThisDay;
     
     return html`
-      <div class="clock-overlay ${positionClass} ${backgroundClass}">
+      <div 
+        class="clock-overlay ${positionClass} ${backgroundClass} ${clockClickable ? 'clickable' : ''}"
+        @click=${clockClickable ? this._handleOnThisDayClick : null}
+        title="${clockClickable ? 'Through the Years' : ''}">
         ${timeDisplay ? html`<div class="clock-time">${timeDisplay}</div>` : ''}
         ${dateDisplay ? html`<div class="clock-date">${dateDisplay}</div>` : ''}
       </div>
@@ -5551,8 +5558,8 @@ export class MediaCard extends LitElement {
   }
 
   async _enterQueuePreviewMode() {
-    if (!this.navigationQueue || this.navigationQueue.length <= 1) {
-      console.warn('Cannot enter queue preview: insufficient items in queue');
+    if (!this.navigationQueue || this.navigationQueue.length === 0) {
+      console.warn('Cannot enter queue preview: no items in queue');
       return;
     }
 
@@ -5837,8 +5844,8 @@ export class MediaCard extends LitElement {
    * @param {string} direction - 'prev' or 'next'
    */
   _pageQueueThumbnails(direction) {
-    // Works for queue, burst, and related modes
-    if (!['queue', 'burst', 'related'].includes(this._panelMode)) return;
+    // Works for queue, burst, related, on_this_day, and history modes
+    if (!['queue', 'burst', 'related', 'on_this_day', 'history'].includes(this._panelMode)) return;
 
     const oldIndex = this._panelPageStartIndex || 0;
     const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
@@ -5848,11 +5855,22 @@ export class MediaCard extends LitElement {
     const maxDisplay = this._calculateOptimalThumbnailCount(items);
 
     if (direction === 'prev') {
-      this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
+      if (this._panelMode === 'queue' && this._panelPageStartIndex === 0) {
+        // Queue mode: wrap to last page
+        const maxStartIndex = Math.max(0, totalLength - maxDisplay);
+        this._panelPageStartIndex = maxStartIndex;
+      } else {
+        this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
+      }
     } else if (direction === 'next') {
       const maxStartIndex = Math.max(0, totalLength - maxDisplay);
       const newIndex = this._panelPageStartIndex + maxDisplay;
-      this._panelPageStartIndex = Math.min(maxStartIndex, newIndex);
+      if (this._panelMode === 'queue' && this._panelPageStartIndex >= maxStartIndex && maxStartIndex > 0) {
+        // Queue mode: we're on the last page, wrap to beginning
+        this._panelPageStartIndex = 0;
+      } else {
+        this._panelPageStartIndex = Math.min(maxStartIndex, newIndex);
+      }
     }
 
     // Mark that user manually paged - don't auto-adjust until they navigate
@@ -7095,6 +7113,21 @@ export class MediaCard extends LitElement {
       pointer-events: none;
       z-index: 2;
       text-align: center;
+    }
+    
+    .clock-overlay.clickable {
+      pointer-events: auto;
+      cursor: pointer;
+      transition: background-color 0.2s ease, transform 0.1s ease;
+    }
+    
+    .clock-overlay.clickable:hover {
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), calc(var(--ha-overlay-opacity, 0.25) + 0.15));
+      transform: scale(1.05);
+    }
+    
+    .clock-overlay.clickable:active {
+      transform: scale(0.98);
     }
     
     /* Only apply backdrop-filter if opacity > 0.05 to allow true transparency */
@@ -8790,9 +8823,12 @@ export class MediaCard extends LitElement {
     const displayStartIndex = this._panelPageStartIndex;
     const displayItems = allItems.slice(displayStartIndex, displayStartIndex + maxDisplay);
 
-    // Calculate if we have previous/next pages (for all panel modes)
-    const hasPreviousPage = displayStartIndex > 0;
-    const hasNextPage = (displayStartIndex + displayItems.length) < allItems.length;
+    // Calculate if we have previous/next pages
+    // For queue mode: show buttons only when multiple pages exist (allows wrapping/cycling)
+    // For other modes: only show when there are more pages
+    const hasMultiplePages = allItems.length > maxDisplay;
+    const hasPreviousPage = this._panelMode === 'queue' ? hasMultiplePages : displayStartIndex > 0;
+    const hasNextPage = this._panelMode === 'queue' ? hasMultiplePages : (displayStartIndex + displayItems.length) < allItems.length;
     
     // V5.6: Calculate thumbnail height to fit rows in available space
     // Assumes panel height ~70% of viewport, header ~80px, padding/gap ~150px total
