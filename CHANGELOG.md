@@ -1,3 +1,31 @@
+## v5.6.4 - 2025-12-21
+
+### Fixed
+- **Metadata/Position Indicator Synchronization**: Fixed overlays updating before media loads
+  - Root cause: Navigation methods were setting state immediately while media was still loading
+  - Created visible desync where metadata and position indicator changed before image appeared
+  - Most noticeable with manual navigation (buttons, thumbnails) or on slower connections
+  - Solution: Implemented comprehensive pending state pattern across all navigation methods
+  - All state updates (`_currentMetadata`, `_currentMediaPath`, `navigationIndex`) now deferred until image/video load events
+  - Added `_pendingNavigationIndex` property alongside existing pending metadata
+  - Modified `_onMediaLoaded()` and `_onVideoCanPlay()` to apply all pending state simultaneously
+  - Fixed all navigation paths: `_loadNext()`, `_loadPrevious()`, `_loadPanelItem()`, `_jumpToQueuePosition()`
+  - Metadata, position indicator, and media display now update perfectly synchronized
+
+- **Queue Preview Auto-Open Not Populating**: Fixed panel opening empty when auto-open enabled
+  - Root cause: Panel initialization reading `navigationIndex` before pending state applied
+  - Auto-open happens in `firstUpdated()` lifecycle, before first media load completes
+  - Solution: `_enterQueuePreviewMode()` now checks `_pendingNavigationIndex` first, falls back to `navigationIndex`
+  - Panel now correctly initializes with current position and displays thumbnails immediately
+
+### Added
+- **Edge Fade Strength (Beta)**: Rectangular fade effect from all four edges
+  - Single 0-100 number control for fade strength (replaces binary enable/disable)
+  - CSS mask implementation with intersecting linear gradients
+  - Available in visual editor under "Image Options" section
+  - Marked as beta: May show faint horizontal/vertical intersection lines on some images
+  - Works alongside existing vignette effect for additional image framing
+
 ## v5.6.3 - 2025-12-20
 
 ### Added

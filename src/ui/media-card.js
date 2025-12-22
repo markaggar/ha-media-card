@@ -6572,13 +6572,18 @@ export class MediaCard extends LitElement {
     :host([data-edge-fade]) video,
     :host([data-edge-fade]) .image-layer {
       --edge-px: calc(var(--edge-fade-strength, 0) * 1px);
+      /* Single combined mask using comma-separated list (implicit intersection) */
       mask-image: 
         linear-gradient(90deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%),
         linear-gradient(180deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%);
+      mask-size: 100% 100%;
+      mask-repeat: no-repeat;
       mask-composite: intersect;
       -webkit-mask-image: 
         linear-gradient(90deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%),
         linear-gradient(180deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%);
+      -webkit-mask-size: 100% 100%;
+      -webkit-mask-repeat: no-repeat;
       -webkit-mask-composite: source-in;
     }
     
