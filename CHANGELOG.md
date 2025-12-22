@@ -23,10 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Hybrid Config Detection**: Enhanced validation for mixed V4/V5 configurations
-  - Detects when users have both V4 fields (media_path, is_folder, etc.) and V5 fields (media_source_type, folder, etc.)
+  - Detects when users have both V4-exclusive fields (media_path, is_folder, folder_mode) and V5 fields (media_source_type, folder, single_media)
+  - **Fixed false positives**: Correctly allows `auto_refresh_seconds` and `subfolder_queue` in V5 configs (these are still valid in V5)
   - Shows clear console error explaining the problem with specific field names found
-  - Automatically forces migration to pure V5 format when hybrid detected
-  - Warns about stray V4 fields in otherwise-valid V5 configs
+  - Automatically forces migration to pure V5 format when true hybrid detected
+  - Warns about stray V4-exclusive fields in otherwise-valid V5 configs
   - Provides documentation link for correct configuration format
   - Prevents silent failures on Android WebView (stricter than desktop browsers)
   - Example error: "HYBRID CONFIG DETECTED! V4 fields: media_path, folder_mode. V5 fields: media_source_type, folder"

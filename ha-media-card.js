@@ -4387,9 +4387,9 @@ class MediaCard extends LitElement {
     }
     this._log('📝 setConfig called with:', config);
     
-    // V5.6.4: Enhanced hybrid config detection with clear error messages
-    const hasV4Fields = !!(config.media_path || config.is_folder || config.folder_mode || 
-                           config.auto_refresh_seconds !== undefined || config.subfolder_queue);
+    // V5.6.4: Fixed hybrid config detection - only check truly V4-exclusive fields
+    // Note: auto_refresh_seconds and subfolder_queue are still valid in V5, so don't flag them
+    const hasV4Fields = !!(config.media_path || config.is_folder || config.folder_mode);
     const hasV5Fields = !!(config.media_source_type || config.folder || config.single_media);
     
     if (hasV4Fields && hasV5Fields) {
@@ -4398,8 +4398,6 @@ class MediaCard extends LitElement {
       if (config.media_path) v4Fields.push('media_path');
       if (config.is_folder !== undefined) v4Fields.push('is_folder');
       if (config.folder_mode) v4Fields.push('folder_mode');
-      if (config.auto_refresh_seconds !== undefined) v4Fields.push('auto_refresh_seconds');
-      if (config.subfolder_queue) v4Fields.push('subfolder_queue');
       
       const v5Fields = [];
       if (config.media_source_type) v5Fields.push('media_source_type');
@@ -4431,13 +4429,12 @@ class MediaCard extends LitElement {
       config = this._migrateV4ConfigToV5a(config);
       this._log('✅ V4 config migrated:', config);
     } else if (hasV5Fields) {
-      // Pure V5 config - but check for stray V4 fields and warn
+      // Pure V5 config - but check for stray V4-exclusive fields and warn
+      // Note: auto_refresh_seconds is still valid in V5 (used for single_media mode)
       const strayV4Fields = [];
       if (config.media_path) strayV4Fields.push('media_path');
       if (config.is_folder !== undefined) strayV4Fields.push('is_folder');
       if (config.folder_mode) strayV4Fields.push('folder_mode');
-      if (config.auto_refresh_seconds !== undefined) strayV4Fields.push('auto_refresh_seconds (use auto_advance_seconds)');
-      if (config.subfolder_queue) strayV4Fields.push('subfolder_queue');
       
       if (strayV4Fields.length > 0) {
         console.warn(
