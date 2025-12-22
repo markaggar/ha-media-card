@@ -4387,11 +4387,65 @@ class MediaCard extends LitElement {
     }
     this._log('📝 setConfig called with:', config);
     
-    // MIGRATION: Detect V4 config and convert to V5a format
-    if (!config.media_source_type && config.media_path) {
+    // V5.6.4: Enhanced hybrid config detection with clear error messages
+    const hasV4Fields = !!(config.media_path || config.is_folder || config.folder_mode || 
+                           config.auto_refresh_seconds !== undefined || config.subfolder_queue);
+    const hasV5Fields = !!(config.media_source_type || config.folder || config.single_media);
+    
+    if (hasV4Fields && hasV5Fields) {
+      // HYBRID CONFIG DETECTED - This causes issues especially on Android
+      const v4Fields = [];
+      if (config.media_path) v4Fields.push('media_path');
+      if (config.is_folder !== undefined) v4Fields.push('is_folder');
+      if (config.folder_mode) v4Fields.push('folder_mode');
+      if (config.auto_refresh_seconds !== undefined) v4Fields.push('auto_refresh_seconds');
+      if (config.subfolder_queue) v4Fields.push('subfolder_queue');
+      
+      const v5Fields = [];
+      if (config.media_source_type) v5Fields.push('media_source_type');
+      if (config.folder) v5Fields.push('folder');
+      if (config.single_media) v5Fields.push('single_media');
+      
+      console.error(
+        '❌ [Media Card] HYBRID CONFIG DETECTED!\n' +
+        'Your configuration mixes V4 and V5 fields, which can cause errors.\n' +
+        'V4 fields found: ' + v4Fields.join(', ') + '\n' +
+        'V5 fields found: ' + v5Fields.join(', ') + '\n\n' +
+        'SOLUTION: Remove all V4 fields and use only V5 format.\n' +
+        'See https://github.com/markaggar/ha-media-card#configuration for examples.'
+      );
+      
+      // Force migration by temporarily removing media_source_type
+      this._log('⚠️ Forcing V4→V5 migration due to hybrid config');
+      const originalMediaSourceType = config.media_source_type;
+      delete config.media_source_type;
+      config = this._migrateV4ConfigToV5a(config);
+      // If they had explicitly set media_source_type, trust it over migration
+      if (originalMediaSourceType && originalMediaSourceType !== config.media_source_type) {
+        this._log('⚠️ Overriding migrated media_source_type with user value:', originalMediaSourceType);
+        config.media_source_type = originalMediaSourceType;
+      }
+    } else if (hasV4Fields && !hasV5Fields) {
+      // Pure V4 config - normal migration
       this._log('🔄 Detected V4 config - migrating to V5a format');
       config = this._migrateV4ConfigToV5a(config);
       this._log('✅ V4 config migrated:', config);
+    } else if (hasV5Fields) {
+      // Pure V5 config - but check for stray V4 fields and warn
+      const strayV4Fields = [];
+      if (config.media_path) strayV4Fields.push('media_path');
+      if (config.is_folder !== undefined) strayV4Fields.push('is_folder');
+      if (config.folder_mode) strayV4Fields.push('folder_mode');
+      if (config.auto_refresh_seconds !== undefined) strayV4Fields.push('auto_refresh_seconds (use auto_advance_seconds)');
+      if (config.subfolder_queue) strayV4Fields.push('subfolder_queue');
+      
+      if (strayV4Fields.length > 0) {
+        console.warn(
+          '⚠️ [Media Card] V5 config contains deprecated V4 fields: ' + strayV4Fields.join(', ') + '\n' +
+          'These fields are ignored and should be removed to avoid confusion.\n' +
+          'See https://github.com/markaggar/ha-media-card#configuration'
+        );
+      }
     }
     
     // V5: Clear auto-advance timer when reconfiguring (prevents duplicate timers)
