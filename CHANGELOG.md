@@ -22,15 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Works alongside existing vignette effect for additional image framing  
 
 ### Fixed
-- **Hybrid Config Detection**: Enhanced validation for mixed V4/V5 configurations
-  - Detects when users have both V4 fields (media_path, is_folder, etc.) and V5 fields (media_source_type, folder, etc.)
-  - Shows clear console error explaining the problem with specific field names found
-  - Automatically forces migration to pure V5 format when hybrid detected
-  - Warns about stray V4 fields in otherwise-valid V5 configs
-  - Provides documentation link for correct configuration format
-  - Prevents silent failures on Android WebView (stricter than desktop browsers)
-  - Example error: "HYBRID CONFIG DETECTED! V4 fields: media_path, folder_mode. V5 fields: media_source_type, folder"
-
 - **Navigation Button Height**: Reduced height from 60% to 50% (max 600px to 400px)
   - Prevents interference with video control seek bar when panels are active
 - **Rounded Corners**: Fixed missing rounded corners at top and bottom
