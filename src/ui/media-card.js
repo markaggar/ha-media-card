@@ -787,7 +787,9 @@ export class MediaCard extends LitElement {
       // V5.6: Global overlay opacity control
       overlay_opacity: config.overlay_opacity ?? 0.25,
       // V5.7: Card background blending - default true for seamless look
-      blend_with_background: config.blend_with_background !== false
+      blend_with_background: config.blend_with_background !== false,
+      // V5.7: Edge fade strength (0 = disabled, 1-100 = enabled with fade intensity)
+      edge_fade_strength: config.edge_fade_strength ?? 0
     };
     
     // V4: Set debug mode from config
@@ -833,6 +835,15 @@ export class MediaCard extends LitElement {
       this.setAttribute('data-blend-with-background', 'true');
     } else {
       this.removeAttribute('data-blend-with-background');
+    }
+    
+    // V5.7: Set edge fade attribute and strength for CSS targeting
+    if (this.config.edge_fade_strength > 0) {
+      this.setAttribute('data-edge-fade', 'true');
+      this.style.setProperty('--edge-fade-strength', this.config.edge_fade_strength);
+    } else {
+      this.removeAttribute('data-edge-fade');
+      this.style.removeProperty('--edge-fade-strength');
     }
     
     // V5: Set position indicator position attribute for CSS targeting
@@ -6536,6 +6547,21 @@ export class MediaCard extends LitElement {
     .media-container .image-layer.inactive {
       opacity: 0;
       z-index: 1;
+    }
+    
+    /* V5.7: Edge fade effect - smooth rectangular fade using intersecting gradients */
+    :host([data-edge-fade]) img,
+    :host([data-edge-fade]) video,
+    :host([data-edge-fade]) .image-layer {
+      --edge-px: calc(var(--edge-fade-strength, 0) * 1px);
+      mask-image: 
+        linear-gradient(90deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%),
+        linear-gradient(180deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%);
+      mask-composite: intersect;
+      -webkit-mask-image: 
+        linear-gradient(90deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%),
+        linear-gradient(180deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%);
+      -webkit-mask-composite: source-in;
     }
     
     /* V4 Smart aspect ratio handling - base rules for default mode only */

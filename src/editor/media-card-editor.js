@@ -847,6 +847,11 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _edgeFadeStrengthChanged(ev) {
+    this._config = { ...this._config, edge_fade_strength: parseInt(ev.target.value) || 0 };
+    this._fireConfigChanged();
+  }
+
   _autoplayChanged(ev) {
     this._config = { ...this._config, video_autoplay: ev.target.checked };
     this._fireConfigChanged();
@@ -3275,6 +3280,22 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._blendWithBackgroundChanged}
               />
               <div class="help-text">Blend card seamlessly with dashboard background (uncheck for card-style appearance)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Edge Fade Strength (Beta)</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="5"
+                .value=${this._config.edge_fade_strength ?? 0}
+                @input=${this._edgeFadeStrengthChanged}
+                placeholder="0"
+              />
+              <div class="help-text">Fade image edges into background (0 = off, 1-100 = fade strength). Beta: May show faint lines on some images.</div>
             </div>
           </div>
           
