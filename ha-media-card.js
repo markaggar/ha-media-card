@@ -5220,9 +5220,7 @@ class MediaCard extends LitElement {
     // Videos: Start timer immediately (will be ignored if max_video_duration=0 and video still playing)
     const isVideo = this._isVideoFile(item.media_content_id);
     if (isVideo) {
-      // Reset video completion tracking when loading new video
-      this._videoHasEnded = false;
-      this._lastVideoTime = undefined;
+      // Video tracking flags already reset in _setMediaUrl() - no need to duplicate here
       // Always start timer for videos - timer callback will check if it should be ignored
       this._setupAutoRefresh();
     }
