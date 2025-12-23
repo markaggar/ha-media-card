@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.2
+ * Media Card v5.6.3
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -4500,7 +4500,11 @@ class MediaCard extends LitElement {
         ...config.clock
       },
       // V5.6: Global overlay opacity control
-      overlay_opacity: config.overlay_opacity ?? 0.25
+      overlay_opacity: config.overlay_opacity ?? 0.25,
+      // V5.7: Card background blending - default true for seamless look
+      blend_with_background: config.blend_with_background !== false,
+      // V5.7: Edge fade strength (0 = disabled, 1-100 = enabled with fade intensity)
+      edge_fade_strength: config.edge_fade_strength ?? 0
     };
     
     // V4: Set debug mode from config
@@ -4540,6 +4544,22 @@ class MediaCard extends LitElement {
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
+    
+    // V5.7: Set blend with background attribute for CSS targeting
+    if (this.config.blend_with_background !== false) {
+      this.setAttribute('data-blend-with-background', 'true');
+    } else {
+      this.removeAttribute('data-blend-with-background');
+    }
+    
+    // V5.7: Set edge fade attribute and strength for CSS targeting
+    if (this.config.edge_fade_strength > 0) {
+      this.setAttribute('data-edge-fade', 'true');
+      this.style.setProperty('--edge-fade-strength', this.config.edge_fade_strength);
+    } else {
+      this.removeAttribute('data-edge-fade');
+      this.style.removeProperty('--edge-fade-strength');
+    }
     
     // V5: Set position indicator position attribute for CSS targeting
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
@@ -4723,15 +4743,15 @@ class MediaCard extends LitElement {
         // Now that panel renders inside card, no need to prevent opening in editor mode
         if (this.config.action_buttons?.auto_open_queue_preview === true && 
             this.config.action_buttons?.enable_queue_preview === true) {
-          // Wait for navigation queue to be populated before opening preview
-          // Use requestAnimationFrame to ensure DOM is ready and queue is populated
+          // Open queue preview immediately if queue has any items
+          // Use requestAnimationFrame to ensure DOM is ready
           requestAnimationFrame(() => {
-            if (this.navigationQueue && this.navigationQueue.length > 1) {
+            if (this.navigationQueue && this.navigationQueue.length > 0) {
               this._enterQueuePreviewMode();
             } else {
               // Queue not ready yet, wait a bit longer
               setTimeout(() => {
-                if (this.navigationQueue && this.navigationQueue.length > 1) {
+                if (this.navigationQueue && this.navigationQueue.length > 0) {
                   this._enterQueuePreviewMode();
                 }
               }, 500);
@@ -4932,11 +4952,11 @@ class MediaCard extends LitElement {
 
     try {
       // V5.3: Navigation Queue Architecture
-      // Always increment (starts at -1, first increment → 0)
-      this.navigationIndex++;
+      // Store pending index (will be applied when media loads to sync with metadata)
+      const nextIndex = this.navigationIndex + 1;
       
       // Need to load more items?
-      if (this.navigationIndex >= this.navigationQueue.length) {
+      if (nextIndex >= this.navigationQueue.length) {
         // V5.3: If this was a pre-loaded small collection, don't load more - just wrap
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
@@ -4949,7 +4969,7 @@ class MediaCard extends LitElement {
             return;
           }
           
-          this.navigationIndex = 0;
+          this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
           let item = await this.provider.getNext();
@@ -4990,7 +5010,7 @@ class MediaCard extends LitElement {
                 return;
               }
               
-              this.navigationIndex = 0;
+              this._pendingNavigationIndex = 0;
               return;
             }
             
@@ -5012,7 +5032,7 @@ class MediaCard extends LitElement {
                 return;
               }
               
-              this.navigationIndex = 0;
+              this._pendingNavigationIndex = 0;
               return;
             }
             
@@ -5051,21 +5071,24 @@ class MediaCard extends LitElement {
               return;
             }
             
-            this.navigationIndex = 0;
+            this._pendingNavigationIndex = 0;
           }
         }
       }
       
       // Get item at current navigation index
-      const item = this.navigationQueue[this.navigationIndex];
+      const item = this.navigationQueue[nextIndex];
       if (!item) {
-        this._log('ERROR: No item at navigationIndex', this.navigationIndex);
+        this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
       }
       
       // Extract filename from path for logging
       const filename = item.metadata?.filename || item.media_content_id?.split('/').pop() || 'unknown';
-      this._log('Displaying navigation queue item:', filename, 'at index', this.navigationIndex);
+      this._log('Displaying navigation queue item:', filename, 'at index', nextIndex);
+      
+      // Store pending index (will apply when media loads)
+      this._pendingNavigationIndex = nextIndex;
       
       // Add to history for tracking (providers use this for exclusion)
       // Check by media_content_id to avoid duplicate object references
@@ -5099,10 +5122,8 @@ class MediaCard extends LitElement {
       
       // Display the item
       this.currentMedia = item;
-      this._currentMediaPath = item.media_content_id;
-      this._currentMetadata = item.metadata || null;
       
-      // V5: Store metadata in pending state until image loads
+      // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
       this._pendingMediaPath = item.media_content_id;
       this._pendingMetadata = item.metadata || null;
       
@@ -5178,8 +5199,11 @@ class MediaCard extends LitElement {
     
     // Display the item
     this.currentMedia = item;
-    this._currentMediaPath = item.media_content_id;
-    this._currentMetadata = item.metadata || null;
+    
+    // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
+    this._pendingNavigationIndex = this.navigationIndex;
+    this._pendingMediaPath = item.media_content_id;
+    this._pendingMetadata = item.metadata || null;
     
     // V5: Clear cached full metadata when media changes
     this._fullMetadata = null;
@@ -5188,8 +5212,9 @@ class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
-    // V5: Setup auto-advance after successfully loading media  
-    this._setupAutoRefresh();
+    // V5.6.4: Auto-refresh timer starts in _onMediaLoaded/_onVideoCanPlay
+    // This prevents timer expiring before media has loaded (especially on slow connections)
+    // Timer will be set up when image loads or video is ready to play
 
     // V5.6: Clear navigation flag after render cycle completes
     setTimeout(() => {
@@ -5286,8 +5311,10 @@ class MediaCard extends LitElement {
       media_content_type: item.filename?.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
       metadata: metadata
     };
-    this._currentMediaPath = mediaUri;
-    this._currentMetadata = metadata;
+    
+    // V5.7: Store in pending state - will apply when image/video loads
+    this._pendingMediaPath = mediaUri;
+    this._pendingMetadata = metadata;
     
     // Update deprecated state for compatibility
     if (this._panelMode === 'burst') {
@@ -5318,9 +5345,6 @@ class MediaCard extends LitElement {
 
     console.log(`🎯 Jumping to queue position ${queueIndex + 1}/${this.navigationQueue.length}`);
 
-    // Update navigation index
-    this.navigationIndex = queueIndex;
-    
     // Clear manual page flag - user is now navigating to items, allow auto-adjustment
     this._manualPageChange = false;
     this._manualPageRenderCount = 0;
@@ -5328,8 +5352,11 @@ class MediaCard extends LitElement {
     // Load the item from the queue
     const item = this.navigationQueue[queueIndex];
     this.currentMedia = item;
-    this._currentMediaPath = item.media_content_id;
-    this._currentMetadata = item.metadata || null;
+    
+    // V5.7: Store in pending state - will apply when image/video loads  
+    this._pendingNavigationIndex = queueIndex;
+    this._pendingMediaPath = item.media_content_id;
+    this._pendingMetadata = item.metadata || null;
 
     // Clear cached metadata
     this._fullMetadata = null;
@@ -6420,7 +6447,17 @@ class MediaCard extends LitElement {
   }
 
   _onVideoCanPlay() {
-    // Video ready to play
+    // V5.7: Apply pending navigation index when video is ready (sync with metadata)
+    if (this._pendingNavigationIndex !== null) {
+      this.navigationIndex = this._pendingNavigationIndex;
+      this._pendingNavigationIndex = null;
+      this._log('✅ Applied pending navigation index on video canplay');
+      this.requestUpdate();
+    }
+    
+    // V5.6.4: Start auto-advance timer now that video is ready to play
+    // Prevents timer expiring before video has loaded (especially for large files)
+    this._setupAutoRefresh();
   }
 
   _onVideoPlay() {
@@ -6752,8 +6789,12 @@ class MediaCard extends LitElement {
       }
     }
     
-    // V5: Apply pending metadata now that image has loaded
-    // This synchronizes metadata/counter updates with the new image appearing
+    // V5.6.4: Start auto-advance timer now that media is loaded and visible
+    // Prevents timer expiring before image has rendered (especially on slow connections)
+    this._setupAutoRefresh();
+    
+    // V5: Apply pending metadata AND navigation index now that image has loaded
+    // This synchronizes metadata/counter/position indicator updates with the new image appearing
     if (this._pendingMetadata !== null) {
       this._currentMetadata = this._pendingMetadata;
       this._pendingMetadata = null;
@@ -6762,6 +6803,11 @@ class MediaCard extends LitElement {
     if (this._pendingMediaPath !== null) {
       this._currentMediaPath = this._pendingMediaPath;
       this._pendingMediaPath = null;
+    }
+    if (this._pendingNavigationIndex !== null) {
+      this.navigationIndex = this._pendingNavigationIndex;
+      this._pendingNavigationIndex = null;
+      this._log('✅ Applied pending navigation index on image load');
     }
     
     // Trigger re-render to show updated metadata/counters
@@ -7106,9 +7152,15 @@ class MediaCard extends LitElement {
     }
 
     const backgroundClass = config.show_background === false ? 'no-background' : '';
+    const showMediaIndexButtons = MediaProvider.isMediaIndexActive(this.config);
+    const enableOnThisDay = this.config.action_buttons?.enable_on_this_day !== false;
+    const clockClickable = showMediaIndexButtons && enableOnThisDay;
     
     return html`
-      <div class="clock-overlay ${positionClass} ${backgroundClass}">
+      <div 
+        class="clock-overlay ${positionClass} ${backgroundClass} ${clockClickable ? 'clickable' : ''}"
+        @click=${clockClickable ? this._handleOnThisDayClick : null}
+        title="${clockClickable ? 'Through the Years' : ''}">
         ${timeDisplay ? html`<div class="clock-time">${timeDisplay}</div>` : ''}
         ${dateDisplay ? html`<div class="clock-date">${dateDisplay}</div>` : ''}
       </div>
@@ -9230,8 +9282,8 @@ class MediaCard extends LitElement {
   }
 
   async _enterQueuePreviewMode() {
-    if (!this.navigationQueue || this.navigationQueue.length <= 1) {
-      console.warn('Cannot enter queue preview: insufficient items in queue');
+    if (!this.navigationQueue || this.navigationQueue.length === 0) {
+      console.warn('Cannot enter queue preview: no items in queue');
       return;
     }
 
@@ -9247,13 +9299,15 @@ class MediaCard extends LitElement {
       this._panelOpen = true;
       
       // Initialize paging for queue preview
-      this._panelPageStartIndex = this.navigationIndex;
+      // V5.7: Use pending index if available (syncs with deferred navigation updates)
+      const currentIndex = this._pendingNavigationIndex ?? this.navigationIndex;
+      this._panelPageStartIndex = currentIndex;
       
       // Load current item to show in panel
-      const currentItem = this.navigationQueue[this.navigationIndex];
+      const currentItem = this.navigationQueue[currentIndex];
       if (currentItem) {
         // Current item is already loaded, just open panel
-        console.warn(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${this.navigationIndex + 1}`);
+        console.warn(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${currentIndex + 1}`);
       }
       
     } catch (error) {
@@ -9514,8 +9568,8 @@ class MediaCard extends LitElement {
    * @param {string} direction - 'prev' or 'next'
    */
   _pageQueueThumbnails(direction) {
-    // Works for queue, burst, and related modes
-    if (!['queue', 'burst', 'related'].includes(this._panelMode)) return;
+    // Works for queue, burst, related, on_this_day, and history modes
+    if (!['queue', 'burst', 'related', 'on_this_day', 'history'].includes(this._panelMode)) return;
 
     const oldIndex = this._panelPageStartIndex || 0;
     const items = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
@@ -9525,11 +9579,22 @@ class MediaCard extends LitElement {
     const maxDisplay = this._calculateOptimalThumbnailCount(items);
 
     if (direction === 'prev') {
-      this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
+      if (this._panelMode === 'queue' && this._panelPageStartIndex === 0) {
+        // Queue mode: wrap to last page
+        const maxStartIndex = Math.max(0, totalLength - maxDisplay);
+        this._panelPageStartIndex = maxStartIndex;
+      } else {
+        this._panelPageStartIndex = Math.max(0, this._panelPageStartIndex - maxDisplay);
+      }
     } else if (direction === 'next') {
       const maxStartIndex = Math.max(0, totalLength - maxDisplay);
       const newIndex = this._panelPageStartIndex + maxDisplay;
-      this._panelPageStartIndex = Math.min(maxStartIndex, newIndex);
+      if (this._panelMode === 'queue' && this._panelPageStartIndex >= maxStartIndex && maxStartIndex > 0) {
+        // Queue mode: we're on the last page, wrap to beginning
+        this._panelPageStartIndex = 0;
+      } else {
+        this._panelPageStartIndex = Math.min(maxStartIndex, newIndex);
+      }
     }
 
     // Mark that user manually paged - don't auto-adjust until they navigate
@@ -10173,12 +10238,36 @@ class MediaCard extends LitElement {
       /* Smart-scale mode max-height - leaves ~20vh buffer for metadata visibility */
       --smart-scale-max-height: 80vh;
     }
+    
+    /* V5.7: Ensure ha-card properly clips content to rounded corners when NOT blending */
+    :host(:not([data-blend-with-background])) ha-card {
+      overflow: hidden;
+    }
+    
+    /* V5.7: When blending, remove borders for seamless integration */
+    :host([data-blend-with-background]) ha-card {
+      border: none;
+      box-shadow: none;
+    }
+    
     .card {
       position: relative;
       overflow: hidden;
       background: var(--card-background-color);
+    }
+    
+    /* When NOT blending, use proper card background and rounded corners */
+    :host(:not([data-blend-with-background])) .card {
+      background: var(--card-background-color);
       border-radius: var(--ha-card-border-radius);
     }
+    
+    /* When blending (default), use transparent/primary background with square corners */
+    :host([data-blend-with-background]) .card {
+      background: transparent;
+      border-radius: 0;
+    }
+    
     .media-container {
       position: relative;
       width: 100%;
@@ -10189,6 +10278,13 @@ class MediaCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
+      overflow: hidden;
+    }
+    
+    /* When NOT blending, inherit border radius and use card background */
+    :host(:not([data-blend-with-background])) .media-container {
+      background: var(--card-background-color);
+      border-radius: var(--ha-card-border-radius);
     }
     
     /* V5.6: Crossfade layers - both images stacked on top of each other */
@@ -10211,6 +10307,26 @@ class MediaCard extends LitElement {
     .media-container .image-layer.inactive {
       opacity: 0;
       z-index: 1;
+    }
+    
+    /* V5.7: Edge fade effect - smooth rectangular fade using intersecting gradients */
+    :host([data-edge-fade]) img,
+    :host([data-edge-fade]) video,
+    :host([data-edge-fade]) .image-layer {
+      --edge-px: calc(var(--edge-fade-strength, 0) * 1px);
+      /* Single combined mask using comma-separated list (implicit intersection) */
+      mask-image: 
+        linear-gradient(90deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%),
+        linear-gradient(180deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%);
+      mask-size: 100% 100%;
+      mask-repeat: no-repeat;
+      mask-composite: intersect;
+      -webkit-mask-image: 
+        linear-gradient(90deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%),
+        linear-gradient(180deg, transparent 0, white var(--edge-px), white calc(100% - var(--edge-px)), transparent 100%);
+      -webkit-mask-size: 100% 100%;
+      -webkit-mask-repeat: no-repeat;
+      -webkit-mask-composite: source-in;
     }
     
     /* V4 Smart aspect ratio handling - base rules for default mode only */
@@ -10493,8 +10609,8 @@ class MediaCard extends LitElement {
       width: 100%;
       height: 100%;
       pointer-events: none;
-      /* V5.6: Increase z-index to show over images */
-      z-index: 10;
+      /* V5.7: Lower z-index to not interfere with card editor */
+      z-index: 3;
     }
 
     .nav-zone {
@@ -10512,9 +10628,9 @@ class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 60%;
+      height: 50%;
       min-height: 120px;
-      max-height: 600px;
+      max-height: 400px;
       cursor: w-resize;
       border-radius: 8px;
     }
@@ -10524,9 +10640,9 @@ class MediaCard extends LitElement {
       top: 50%;
       transform: translateY(-50%);
       width: 80px;
-      height: 60%;
+      height: 50%;
       min-height: 120px;
-      max-height: 600px;
+      max-height: 400px;
       cursor: e-resize;
       border-radius: 8px;
     }
@@ -10599,6 +10715,11 @@ class MediaCard extends LitElement {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
     }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .metadata-overlay {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
+    }
 
     /* Metadata positioning */
     .metadata-overlay.metadata-bottom-left {
@@ -10659,6 +10780,11 @@ class MediaCard extends LitElement {
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
     
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .display-entities {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
+    }
+    
     .display-entities ha-icon {
       flex-shrink: 0;
       --mdc-icon-size: 1em;
@@ -10713,11 +10839,31 @@ class MediaCard extends LitElement {
       text-align: center;
     }
     
+    .clock-overlay.clickable {
+      pointer-events: auto;
+      cursor: pointer;
+      transition: background-color 0.2s ease, transform 0.1s ease;
+    }
+    
+    .clock-overlay.clickable:hover {
+      background: rgba(var(--rgb-primary-background-color, 255, 255, 255), calc(var(--ha-overlay-opacity, 0.25) + 0.15));
+      transform: scale(1.05);
+    }
+    
+    .clock-overlay.clickable:active {
+      transform: scale(0.98);
+    }
+    
     /* Only apply backdrop-filter if opacity > 0.05 to allow true transparency */
     .media-container:not(.transparent-overlays) .clock-overlay {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .clock-overlay {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
     
     .clock-overlay.no-background {
@@ -11037,6 +11183,11 @@ class MediaCard extends LitElement {
     .media-container:not(.transparent-overlays) .position-indicator {
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
+    }
+    
+    /* V5.7: When NOT blending with background, use card background color (same opacity) */
+    :host(:not([data-blend-with-background])) .position-indicator {
+      background: rgba(var(--rgb-card-background-color, 0, 0, 0), var(--ha-overlay-opacity, 0.25));
     }
     
     /* Position indicator corner positioning - bottom-right is default */
@@ -11393,6 +11544,17 @@ class MediaCard extends LitElement {
       font-weight: 500;
       color: var(--primary-text-color);
       border-bottom: 1px solid var(--divider-color);
+    }
+    
+    /* V5.7: When blending, title uses dashboard background */
+    :host([data-blend-with-background]) .title {
+      background: var(--primary-background-color);
+      border-bottom: none;
+    }
+    
+    /* V5.7: When NOT blending, title uses card background */
+    :host(:not([data-blend-with-background])) .title {
+      background: var(--card-background-color);
     }
     
     /* Confirmation dialog styles */
@@ -12385,9 +12547,12 @@ class MediaCard extends LitElement {
     const displayStartIndex = this._panelPageStartIndex;
     const displayItems = allItems.slice(displayStartIndex, displayStartIndex + maxDisplay);
 
-    // Calculate if we have previous/next pages (for all panel modes)
-    const hasPreviousPage = displayStartIndex > 0;
-    const hasNextPage = (displayStartIndex + displayItems.length) < allItems.length;
+    // Calculate if we have previous/next pages
+    // For queue mode: show buttons only when multiple pages exist (allows wrapping/cycling)
+    // For other modes: only show when there are more pages
+    const hasMultiplePages = allItems.length > maxDisplay;
+    const hasPreviousPage = this._panelMode === 'queue' ? hasMultiplePages : displayStartIndex > 0;
+    const hasNextPage = this._panelMode === 'queue' ? hasMultiplePages : (displayStartIndex + displayItems.length) < allItems.length;
     
     // V5.6: Calculate thumbnail height to fit rows in available space
     // Assumes panel height ~70% of viewport, header ~80px, padding/gap ~150px total
@@ -13368,6 +13533,16 @@ class MediaCardEditor extends LitElement {
 
   _refreshButtonChanged(ev) {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
+    this._fireConfigChanged();
+  }
+  
+  _blendWithBackgroundChanged(ev) {
+    this._config = { ...this._config, blend_with_background: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _edgeFadeStrengthChanged(ev) {
+    this._config = { ...this._config, edge_fade_strength: parseInt(ev.target.value) || 0 };
     this._fireConfigChanged();
   }
 
@@ -15791,6 +15966,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
+            <label>Blend Card with Background</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.blend_with_background !== false}
+                @change=${this._blendWithBackgroundChanged}
+              />
+              <div class="help-text">Blend card seamlessly with dashboard background (uncheck for card-style appearance)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Edge Fade Strength (Beta)</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="5"
+                .value=${this._config.edge_fade_strength ?? 0}
+                @input=${this._edgeFadeStrengthChanged}
+                placeholder="0"
+              />
+              <div class="help-text">Fade image edges into background (0 = off, 1-100 = fade strength). Beta: May show faint lines on some images.</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
             <label>Refresh Button</label>
             <div>
               <input
@@ -16574,7 +16777,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.2 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.3 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
