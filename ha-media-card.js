@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.3
+ * Media Card v5.6.4
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -4961,13 +4961,9 @@ class MediaCard extends LitElement {
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
           
-          // V5.4: Check for new files before wrapping back to position 1
-          // This ensures files that arrived mid-carousel are shown immediately
-          const queueRefreshed = await this._checkForNewFiles();
-          if (queueRefreshed) {
-            // Queue was refreshed and reset to position 1 with new files
-            return;
-          }
+          // V5.6.5: Don't check for new files when wrapping in preloaded collection
+          // The queue is already fully loaded, no need to rescan database on every loop
+          // Only check for new files when explicitly requested (e.g., user action)
           
           // V5.6.4: Update nextIndex to 0 after wrapping
           nextIndex = 0;
@@ -5707,7 +5703,7 @@ class MediaCard extends LitElement {
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
         this._log(`🆕 New files detected - refreshing display`);
-        await this._refreshQueue();
+        await this._refreshQueue(true); // skipReset=true, provider already rescanned
         return true; // Queue was refreshed
       } else {
         return false;
@@ -5756,7 +5752,8 @@ class MediaCard extends LitElement {
   }
   
   // Full queue refresh - clear navigation state and reinitialize provider
-  async _refreshQueue() {
+  // skipReset: true when called from rescanForNewFiles (provider already rescanned)
+  async _refreshQueue(skipReset = false) {
     this._log('🔄 Starting full queue refresh...');
     
     try {
@@ -5775,23 +5772,28 @@ class MediaCard extends LitElement {
       this.navigationHistory = [];
       this.navigationIndex = 0; // Will be at first position after loading
       
-      // Reset provider cursor to beginning (critical for sequential mode)
-      // Check if provider has reset() method (SequentialMediaIndexProvider)
-      let providerToReset = this.provider;
-      
-      // Unwrap FolderProvider to get actual provider
-      if (this.provider?.sequentialProvider) {
-        providerToReset = this.provider.sequentialProvider;
-      } else if (this.provider?.mediaIndexProvider) {
-        providerToReset = this.provider.mediaIndexProvider;
-      }
-      
-      if (providerToReset && typeof providerToReset.reset === 'function') {
-        this._log('🔄 Calling provider.reset() to clear cursor');
-        await providerToReset.reset();
-      } else if (this.provider && typeof this.provider.initialize === 'function') {
-        this._log('🔄 Provider has no reset(), calling initialize()');
-        await this.provider.initialize();
+      // V5.6.5: Skip reset if provider was already rescanned (avoids duplicate query)
+      if (!skipReset) {
+        // Reset provider cursor to beginning (critical for sequential mode)
+        // Check if provider has reset() method (SequentialMediaIndexProvider)
+        let providerToReset = this.provider;
+        
+        // Unwrap FolderProvider to get actual provider
+        if (this.provider?.sequentialProvider) {
+          providerToReset = this.provider.sequentialProvider;
+        } else if (this.provider?.mediaIndexProvider) {
+          providerToReset = this.provider.mediaIndexProvider;
+        }
+        
+        if (providerToReset && typeof providerToReset.reset === 'function') {
+          this._log('🔄 Calling provider.reset() to clear cursor');
+          await providerToReset.reset();
+        } else if (this.provider && typeof this.provider.initialize === 'function') {
+          this._log('🔄 Provider has no reset(), calling initialize()');
+          await this.provider.initialize();
+        }
+      } else {
+        this._log('🔄 Skipping provider reset (already rescanned)');
       }
       
       // Get access to the underlying provider's queue
@@ -16896,7 +16898,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.3 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.4 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
