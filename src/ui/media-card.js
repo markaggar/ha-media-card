@@ -2272,7 +2272,10 @@ export class MediaCard extends LitElement {
   
   // V5: Refresh metadata from media_index (for action button updates)
   async _refreshMetadata() {
-    if (!MediaProvider.isMediaIndexActive(this.config) || !this._currentMediaPath || !this.hass) {
+    // V5.6.5: Use pending path if available (during navigation), otherwise use current path
+    const targetPath = this._pendingMediaPath || this._currentMediaPath;
+    
+    if (!MediaProvider.isMediaIndexActive(this.config) || !targetPath || !this.hass) {
       return;
     }
     
@@ -2281,23 +2284,35 @@ export class MediaCard extends LitElement {
       const freshMetadata = await MediaIndexHelper.fetchFileMetadata(
         this.hass,
         this.config,
-        this._currentMediaPath
+        targetPath
       );
       
       if (freshMetadata) {
-        // Merge updated metadata with existing path-based metadata
-        this._currentMetadata = {
-          ...this._currentMetadata,
-          ...freshMetadata
-        };
-        
-        // Update currentMedia.metadata as well
-        if (this.currentMedia) {
-          this.currentMedia.metadata = this._currentMetadata;
+        // V5.6.5: If we have pending metadata, update that instead of current
+        // This prevents refreshed metadata from being applied before media loads
+        if (this._pendingMetadata !== null) {
+          // Merge with pending metadata (which contains path-based metadata)
+          this._pendingMetadata = {
+            ...this._pendingMetadata,
+            ...freshMetadata
+          };
+          this._log('📊 Refreshed metadata from media_index (applied to pending)');
+        } else {
+          // No pending state - apply directly to current
+          this._currentMetadata = {
+            ...this._currentMetadata,
+            ...freshMetadata
+          };
+          
+          // Update currentMedia.metadata as well
+          if (this.currentMedia) {
+            this.currentMedia.metadata = this._currentMetadata;
+          }
+          
+          this._log('📊 Refreshed metadata from media_index');
         }
         
         this.requestUpdate();
-        this._log('📊 Refreshed metadata from media_index');
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
@@ -2791,13 +2806,23 @@ export class MediaCard extends LitElement {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
     
-    // V5.7: Apply pending navigation index when video is ready (sync with metadata)
+    // V5.6.5: Apply pending metadata AND navigation index when video is ready
+    // This ensures video gets its own metadata, not inherited from previous image
+    if (this._pendingMetadata !== null) {
+      this._currentMetadata = this._pendingMetadata;
+      this._pendingMetadata = null;
+      this._log('✅ Applied pending metadata on video canplay');
+    }
     if (this._pendingNavigationIndex !== null) {
       this.navigationIndex = this._pendingNavigationIndex;
       this._pendingNavigationIndex = null;
       this._log('✅ Applied pending navigation index on video canplay');
-      this.requestUpdate();
     }
+    if (this._pendingMediaPath !== null) {
+      this._currentMediaPath = this._pendingMediaPath;
+      this._pendingMediaPath = null;
+    }
+    this.requestUpdate();
   }
 
   _onVideoPlay() {
@@ -8552,7 +8577,6 @@ export class MediaCard extends LitElement {
             ?autoplay=${this.config.video_autoplay !== false}
             ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
-            @loadeddata=${this._onMediaLoaded}
             @error=${this._onMediaError}
             @canplay=${this._onVideoCanPlay}
             @loadedmetadata=${this._onVideoLoadedMetadata}
