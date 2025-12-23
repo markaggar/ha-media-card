@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.6.4 - 2025-12-22
 
 ### Fixed
-- **Video Timer and Loop Behavior**: Complete overhaul of video timing system (v5.6.4)
+- **Video Timer and Loop Behavior**: Complete overhaul of video timing system
   - Changed from timestamp-based approach to simple counter-based system
   - Timer always fires at `auto_advance_seconds` interval (e.g., 5s), never changes dynamically
   - Short videos that loop: advance on first timer fire after loop detection
@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixes videos taking twice as long as expected (10s instead of 5s)
   - Preserves user control when manually interacting with video controls
 
-- **Metadata Inheritance and Synchronization**: Fixed metadata from previous image being copied to videos (v5.6.5)
+- **Metadata Inheritance and Synchronization**: Fixed metadata from previous image being copied to videos
   - Root cause: Video elements had `@loadeddata` handler calling `_onMediaLoaded` (image handler)
   - Removed `@loadeddata` from video elements - videos now only use `@canplay` event
   - Updated `_onVideoCanPlay` to apply pending metadata like `_onMediaLoaded` does for images
@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Ensures metadata is synchronized with displayed media across all transitions
   - Favorite hearts and other metadata no longer incorrectly inherited between different media items
 
-- **Duplicate Queue Refresh on Wrap-Around**: Fixed unnecessary queue refresh when looping from last to first item (v5.6.5)
+- **Duplicate Queue Refresh on Wrap-Around**: Fixed unnecessary queue refresh when looping from last to first item
   - Root cause: `_refreshQueue` called `provider.reset()` which triggered duplicate database query
   - `reset()` internally calls `initialize()` causing redundant rescan after `rescanForNewFiles()`
   - Solution: Added `skipReset` parameter to `_refreshQueue` to avoid duplicate when provider already rescanned
