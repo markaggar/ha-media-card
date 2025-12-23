@@ -1358,6 +1358,8 @@ export class MediaCard extends LitElement {
               return;
             }
             
+            // V5.6.4: Update nextIndex to 0 after wrapping (matches pattern at line 1258)
+            nextIndex = 0;
             this._pendingNavigationIndex = 0;
           }
         }
