@@ -1123,17 +1123,17 @@ class FolderProvider extends MediaProvider {
     return [];
   }
 
-  async rescanForNewFiles() {
+  async rescanForNewFiles(currentMediaId = null) {
     // Delegate to SequentialMediaIndexProvider for database-backed sources
     if (this.sequentialProvider && typeof this.sequentialProvider.rescanForNewFiles === 'function') {
       this.cardAdapter._log('🔍 Triggering SequentialMediaIndexProvider rescan');
-      return await this.sequentialProvider.rescanForNewFiles();
+      return await this.sequentialProvider.rescanForNewFiles(currentMediaId);
     }
     
     // Delegate to SubfolderQueue for filesystem-based sources
     if (this.subfolderQueue && typeof this.subfolderQueue.rescanForNewFiles === 'function') {
       this.cardAdapter._log('🔍 Triggering SubfolderQueue rescan');
-      return await this.subfolderQueue.rescanForNewFiles();
+      return await this.subfolderQueue.rescanForNewFiles(currentMediaId);
     }
     
     this.cardAdapter._log('⚠️ No rescan method available for this provider');
@@ -3672,11 +3672,12 @@ class SequentialMediaIndexProvider extends MediaProvider {
   }
 
   // Rescan by resetting cursor and checking if first item changed
-  async rescanForNewFiles() {
+  async rescanForNewFiles(currentMediaId = null) {
     this._log('🔄 Rescanning database for new files...');
     
-    // Save current first item in queue
-    const previousFirstItem = this.queue.length > 0 ? this.queue[0].media_content_id : null;
+    // V5.6.5: Use provided currentMediaId for comparison (prevents false positives on wrap)
+    // Fall back to queue[0] if not provided
+    const previousFirstItem = currentMediaId || (this.queue.length > 0 ? this.queue[0].media_content_id : null);
     
     // Reset cursor to beginning
     this.lastSeenValue = null;
@@ -4961,9 +4962,13 @@ class MediaCard extends LitElement {
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
           
-          // V5.6.5: Don't check for new files when wrapping in preloaded collection
-          // The queue is already fully loaded, no need to rescan database on every loop
-          // Only check for new files when explicitly requested (e.g., user action)
+          // V5.6.5: Check for new files before wrapping, but pass current media for comparison
+          // This prevents false positives while still detecting actual new files
+          const queueRefreshed = await this._checkForNewFiles();
+          if (queueRefreshed) {
+            // Queue was refreshed and reset to position 1 with new files
+            return;
+          }
           
           // V5.6.4: Update nextIndex to 0 after wrapping
           nextIndex = 0;
@@ -5698,7 +5703,9 @@ class MediaCard extends LitElement {
         return false;
       }
       
-      const scanResult = await this.provider.rescanForNewFiles();
+      // V5.6.5: Pass current media ID to prevent false positives on wrap
+      const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+      const scanResult = await this.provider.rescanForNewFiles(currentMediaId);
       
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {

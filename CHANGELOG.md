@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.4 - 2025-12-22
+
+### Fixed
+- **Video Timer and Loop Behavior**: Complete overhaul of video timing system (v5.6.4)
+  - Changed from timestamp-based approach to simple counter-based system
+  - Timer always fires at `auto_advance_seconds` interval (e.g., 5s), never changes dynamically
+  - Short videos that loop: advance on first timer fire after loop detection
+  - Long videos with `max_video_duration`: counter × interval ≥ max enforces duration cap
+  - User interaction (pause/seek/click) allows video to play to completion regardless of max_duration
+  - Removed problematic logic that changed timer interval to max_duration (caused 2× timing)
+  - Counter reset in `_setMediaUrl` for each new video
+  - Fixes videos taking twice as long as expected (10s instead of 5s)
+  - Preserves user control when manually interacting with video controls
+
+- **Metadata Inheritance and Synchronization**: Fixed metadata from previous image being copied to videos (v5.6.5)
+  - Root cause: Video elements had `@loadeddata` handler calling `_onMediaLoaded` (image handler)
+  - Removed `@loadeddata` from video elements - videos now only use `@canplay` event
+  - Updated `_onVideoCanPlay` to apply pending metadata like `_onMediaLoaded` does for images
+  - Fixed `_refreshMetadata` bypassing pending state pattern by writing directly to `_currentMetadata`
+  - `_refreshMetadata` now updates `_pendingMetadata` instead when pending state exists
+  - Fixed `_refreshMetadata` using wrong path (was using `_currentMediaPath` instead of `_pendingMediaPath`)
+  - Now uses pending path during navigation to fetch correct metadata for new item
+  - Ensures metadata is synchronized with displayed media across all transitions
+  - Favorite hearts and other metadata no longer incorrectly inherited between different media items
+
+- **Duplicate Queue Refresh on Wrap-Around**: Fixed unnecessary queue refresh when looping from last to first item (v5.6.5)
+  - Root cause: `_refreshQueue` called `provider.reset()` which triggered duplicate database query
+  - `reset()` internally calls `initialize()` causing redundant rescan after `rescanForNewFiles()`
+  - Solution: Added `skipReset` parameter to `_refreshQueue` to avoid duplicate when provider already rescanned
+  - When called from `_checkForNewFiles`, passes `skipReset=true` to skip redundant reset
+  - Fixed false positive new file detection on wrap by passing current media ID for comparison
+  - `rescanForNewFiles` now accepts `currentMediaId` parameter for accurate comparison
+  - Compares currently displayed file against database query results to detect actual new files
+  - Eliminates unnecessary database queries while still detecting new files when they arrive
+  - Reduces log spam and improves performance on collections that loop continuously
+
+### Technical Details
+- Video timer uses simple counter approach: `_videoTimerCount` increments each fire
+- Elapsed time calculated as: `counter × auto_advance_seconds`
+- Duration enforcement: `if (elapsedSeconds >= maxDuration) { advance }`
+- User interaction flag `_videoUserInteracted` bypasses all timer/duration logic
+- Metadata now properly isolated per media type with pending state pattern
+- Queue refresh logic optimized to avoid redundant provider initialization
+
 ## v5.6.3 - 2025-12-21
 
 ### Added

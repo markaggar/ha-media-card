@@ -1246,9 +1246,13 @@ export class MediaCard extends LitElement {
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
           
-          // V5.6.5: Don't check for new files when wrapping in preloaded collection
-          // The queue is already fully loaded, no need to rescan database on every loop
-          // Only check for new files when explicitly requested (e.g., user action)
+          // V5.6.5: Check for new files before wrapping, but pass current media for comparison
+          // This prevents false positives while still detecting actual new files
+          const queueRefreshed = await this._checkForNewFiles();
+          if (queueRefreshed) {
+            // Queue was refreshed and reset to position 1 with new files
+            return;
+          }
           
           // V5.6.4: Update nextIndex to 0 after wrapping
           nextIndex = 0;
@@ -1983,7 +1987,9 @@ export class MediaCard extends LitElement {
         return false;
       }
       
-      const scanResult = await this.provider.rescanForNewFiles();
+      // V5.6.5: Pass current media ID to prevent false positives on wrap
+      const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+      const scanResult = await this.provider.rescanForNewFiles(currentMediaId);
       
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
