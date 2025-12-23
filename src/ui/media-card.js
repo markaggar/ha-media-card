@@ -1238,7 +1238,7 @@ export class MediaCard extends LitElement {
     try {
       // V5.3: Navigation Queue Architecture
       // Store pending index (will be applied when media loads to sync with metadata)
-      const nextIndex = this.navigationIndex + 1;
+      let nextIndex = this.navigationIndex + 1;
       
       // Need to load more items?
       if (nextIndex >= this.navigationQueue.length) {
@@ -1246,14 +1246,16 @@ export class MediaCard extends LitElement {
         if (this.isNavigationQueuePreloaded) {
           this._log('Pre-loaded collection exhausted, wrapping to beginning');
           
-          // V5.4: Check for new files before wrapping back to position 1
-          // This ensures files that arrived mid-carousel are shown immediately
+          // V5.6.5: Check for new files before wrapping, but pass current media for comparison
+          // This prevents false positives while still detecting actual new files
           const queueRefreshed = await this._checkForNewFiles();
           if (queueRefreshed) {
             // Queue was refreshed and reset to position 1 with new files
             return;
           }
           
+          // V5.6.4: Update nextIndex to 0 after wrapping
+          nextIndex = 0;
           this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
@@ -1356,6 +1358,8 @@ export class MediaCard extends LitElement {
               return;
             }
             
+            // V5.6.4: Update nextIndex to 0 after wrapping (matches pattern at line 1258)
+            nextIndex = 0;
             this._pendingNavigationIndex = 0;
           }
         }
@@ -1497,9 +1501,16 @@ export class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
-    // V5.6.4: Auto-refresh timer starts in _onMediaLoaded/_onVideoCanPlay
-    // This prevents timer expiring before media has loaded (especially on slow connections)
-    // Timer will be set up when image loads or video is ready to play
+    // V5.6.4: Timer behavior
+    // Images: Defer timer until loaded (prevents timer expiring before slow image loads)
+    // Videos: Start timer immediately (will be ignored if max_video_duration=0 and video still playing)
+    const isVideo = this._isVideoFile(item.media_content_id);
+    if (isVideo) {
+      // Video tracking flags already reset in _setMediaUrl() - no need to duplicate here
+      // Always start timer for videos - timer callback will check if it should be ignored
+      this._setupAutoRefresh();
+    }
+    // Images: Timer deferred to _onMediaLoaded() to prevent premature expiration
 
     // V5.6: Clear navigation flag after render cycle completes
     setTimeout(() => {
@@ -1792,6 +1803,8 @@ export class MediaCard extends LitElement {
                          this.config?.auto_advance_duration || 0;
       const autoRefresh = this.config?.auto_refresh_seconds || 0;
       
+      // V5.6.4: Timer always uses auto_advance interval (not max_video_duration)
+      // Timer callback enforces max_duration cap using counter math
       if (autoAdvance > 0) {
         refreshSeconds = autoAdvance;
         isRefreshMode = false; // Advance to next
@@ -1857,17 +1870,52 @@ export class MediaCard extends LitElement {
             return;
           }
           
-          // V4 CODE REUSE: Check if we should wait for video to complete
-          // Based on V4 lines 3259-3302
-          // V5.6: Don't stop timer if video_loop is enabled - let timer interrupt the loop
-          if (await this._shouldWaitForVideoCompletion() && !this.config.video_loop) {
-            // Stop the timer to prevent unnecessary database queries while video plays
-            if (!this._timerStoppedForVideo) {
-              clearInterval(this._refreshInterval);
-              this._refreshInterval = null;
-              this._timerStoppedForVideo = true;
+          // V5.6.4: Timer behavior for videos (counter-based, no timestamps):
+          // - Short videos that loop: advance on FIRST timer fire after loop detected
+          // - Long videos with max_duration: advance when timer count * interval >= max_duration
+          // - Long videos without max_duration: never advance on timer (play to completion)
+          const videoElement = this.shadowRoot?.querySelector('video');
+          const maxDuration = this.config.video_max_duration;
+          
+          // Check if video is currently playing
+          if (videoElement && !videoElement.paused && !videoElement.ended) {
+            // Increment timer counter for this video
+            this._videoTimerCount = (this._videoTimerCount || 0) + 1;
+            
+            const currentTime = Math.round(videoElement.currentTime * 10) / 10;
+            const duration = Math.round(videoElement.duration * 10) / 10;
+            const elapsedSeconds = this._videoTimerCount * refreshSeconds;
+            this._log(`🎬 Timer fired #${this._videoTimerCount}: video at ${currentTime}s/${duration}s, hasEnded=${this._videoHasEnded}, elapsed≈${elapsedSeconds}s, maxDuration=${maxDuration}, userInteracted=${this._videoUserInteracted}`);
+            
+            // V5.6.4: If user interacted (pause, seek, click), let video play to completion
+            if (this._videoUserInteracted && !this._videoHasEnded) {
+              this._log('🎬 User interacted with video - playing to completion (ignoring timer/max_duration)');
+              return;
             }
-            return;
+            
+            // V5.6.4: Short videos that looped - advance on FIRST timer fire
+            if (this._videoHasEnded && this._videoTimerCount >= 1) {
+              this._log('🎬 Video looped (short video) - ADVANCING');
+              // Fall through to advance
+            } else if (maxDuration === null || maxDuration === undefined || maxDuration === 0) {
+              // Long video, no duration cap - let it play to completion (ignore timer during first playthrough)
+              if (!this._videoHasEnded) {
+                this._log('🎬 Video on first playthrough (max_video_duration=0/null) - IGNORING TIMER');
+                return;
+              } else {
+                // Video looped, advance
+                this._log('🎬 Video looped - ADVANCING');
+              }
+            } else {
+              // Long video with max_video_duration cap - check if we've reached the limit
+              if (elapsedSeconds < maxDuration) {
+                this._log(`🎬 Timer count ${this._videoTimerCount}: elapsed≈${elapsedSeconds}s < max ${maxDuration}s - CONTINUING`);
+                return; // Keep playing
+              } else {
+                this._log(`🎬 Timer count ${this._videoTimerCount}: elapsed≈${elapsedSeconds}s ≥ max ${maxDuration}s - INTERRUPTING`);
+                // Fall through to advance
+              }
+            }
           }
           
           if (isRefreshMode) {
@@ -1939,12 +1987,14 @@ export class MediaCard extends LitElement {
         return false;
       }
       
-      const scanResult = await this.provider.rescanForNewFiles();
+      // V5.6.5: Pass current media ID to prevent false positives on wrap
+      const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+      const scanResult = await this.provider.rescanForNewFiles(currentMediaId);
       
       // If the first item in queue changed, refresh display
       if (scanResult.queueChanged) {
         this._log(`🆕 New files detected - refreshing display`);
-        await this._refreshQueue();
+        await this._refreshQueue(true); // skipReset=true, provider already rescanned
         return true; // Queue was refreshed
       } else {
         return false;
@@ -1993,7 +2043,8 @@ export class MediaCard extends LitElement {
   }
   
   // Full queue refresh - clear navigation state and reinitialize provider
-  async _refreshQueue() {
+  // skipReset: true when called from rescanForNewFiles (provider already rescanned)
+  async _refreshQueue(skipReset = false) {
     this._log('🔄 Starting full queue refresh...');
     
     try {
@@ -2012,23 +2063,28 @@ export class MediaCard extends LitElement {
       this.navigationHistory = [];
       this.navigationIndex = 0; // Will be at first position after loading
       
-      // Reset provider cursor to beginning (critical for sequential mode)
-      // Check if provider has reset() method (SequentialMediaIndexProvider)
-      let providerToReset = this.provider;
-      
-      // Unwrap FolderProvider to get actual provider
-      if (this.provider?.sequentialProvider) {
-        providerToReset = this.provider.sequentialProvider;
-      } else if (this.provider?.mediaIndexProvider) {
-        providerToReset = this.provider.mediaIndexProvider;
-      }
-      
-      if (providerToReset && typeof providerToReset.reset === 'function') {
-        this._log('🔄 Calling provider.reset() to clear cursor');
-        await providerToReset.reset();
-      } else if (this.provider && typeof this.provider.initialize === 'function') {
-        this._log('🔄 Provider has no reset(), calling initialize()');
-        await this.provider.initialize();
+      // V5.6.5: Skip reset if provider was already rescanned (avoids duplicate query)
+      if (!skipReset) {
+        // Reset provider cursor to beginning (critical for sequential mode)
+        // Check if provider has reset() method (SequentialMediaIndexProvider)
+        let providerToReset = this.provider;
+        
+        // Unwrap FolderProvider to get actual provider
+        if (this.provider?.sequentialProvider) {
+          providerToReset = this.provider.sequentialProvider;
+        } else if (this.provider?.mediaIndexProvider) {
+          providerToReset = this.provider.mediaIndexProvider;
+        }
+        
+        if (providerToReset && typeof providerToReset.reset === 'function') {
+          this._log('🔄 Calling provider.reset() to clear cursor');
+          await providerToReset.reset();
+        } else if (this.provider && typeof this.provider.initialize === 'function') {
+          this._log('🔄 Provider has no reset(), calling initialize()');
+          await this.provider.initialize();
+        }
+      } else {
+        this._log('🔄 Skipping provider reset (already rescanned)');
       }
       
       // Get access to the underlying provider's queue
@@ -2224,7 +2280,10 @@ export class MediaCard extends LitElement {
   
   // V5: Refresh metadata from media_index (for action button updates)
   async _refreshMetadata() {
-    if (!MediaProvider.isMediaIndexActive(this.config) || !this._currentMediaPath || !this.hass) {
+    // V5.6.5: Use pending path if available (during navigation), otherwise use current path
+    const targetPath = this._pendingMediaPath || this._currentMediaPath;
+    
+    if (!MediaProvider.isMediaIndexActive(this.config) || !targetPath || !this.hass) {
       return;
     }
     
@@ -2233,23 +2292,35 @@ export class MediaCard extends LitElement {
       const freshMetadata = await MediaIndexHelper.fetchFileMetadata(
         this.hass,
         this.config,
-        this._currentMediaPath
+        targetPath
       );
       
       if (freshMetadata) {
-        // Merge updated metadata with existing path-based metadata
-        this._currentMetadata = {
-          ...this._currentMetadata,
-          ...freshMetadata
-        };
-        
-        // Update currentMedia.metadata as well
-        if (this.currentMedia) {
-          this.currentMedia.metadata = this._currentMetadata;
+        // V5.6.5: If we have pending metadata, update that instead of current
+        // This prevents refreshed metadata from being applied before media loads
+        if (this._pendingMetadata !== null) {
+          // Merge with pending metadata (which contains path-based metadata)
+          this._pendingMetadata = {
+            ...this._pendingMetadata,
+            ...freshMetadata
+          };
+          this._log('📊 Refreshed metadata from media_index (applied to pending)');
+        } else {
+          // No pending state - apply directly to current
+          this._currentMetadata = {
+            ...this._currentMetadata,
+            ...freshMetadata
+          };
+          
+          // Update currentMedia.metadata as well
+          if (this.currentMedia) {
+            this.currentMedia.metadata = this._currentMetadata;
+          }
+          
+          this._log('📊 Refreshed metadata from media_index');
         }
         
         this.requestUpdate();
-        this._log('📊 Refreshed metadata from media_index');
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
@@ -2296,6 +2367,14 @@ export class MediaCard extends LitElement {
       // For videos, just clear the image layers immediately
       this._frontLayerUrl = '';
       this._backLayerUrl = '';
+      
+      // V5.6.4: Reset video tracking flags when loading new video
+      // This prevents stale flags from previous video affecting new video
+      this._videoHasEnded = false;
+      this._lastVideoTime = undefined;
+      this._videoTimerCount = 0; // Reset timer counter for new video
+      this._log('🎬 Loading new video - reset tracking flags');
+      
       this.requestUpdate();
     }
   }
@@ -2732,17 +2811,26 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoCanPlay() {
-    // V5.7: Apply pending navigation index when video is ready (sync with metadata)
+    // V5.6.4: Timer uses simple counter, no timestamp needed
+    this._log('🎬 Video ready - can play');
+    
+    // V5.6.5: Apply pending metadata AND navigation index when video is ready
+    // This ensures video gets its own metadata, not inherited from previous image
+    if (this._pendingMetadata !== null) {
+      this._currentMetadata = this._pendingMetadata;
+      this._pendingMetadata = null;
+      this._log('✅ Applied pending metadata on video canplay');
+    }
     if (this._pendingNavigationIndex !== null) {
       this.navigationIndex = this._pendingNavigationIndex;
       this._pendingNavigationIndex = null;
       this._log('✅ Applied pending navigation index on video canplay');
-      this.requestUpdate();
     }
-    
-    // V5.6.4: Start auto-advance timer now that video is ready to play
-    // Prevents timer expiring before video has loaded (especially for large files)
-    this._setupAutoRefresh();
+    if (this._pendingMediaPath !== null) {
+      this._currentMediaPath = this._pendingMediaPath;
+      this._pendingMediaPath = null;
+    }
+    this.requestUpdate();
   }
 
   _onVideoPlay() {
@@ -2758,8 +2846,6 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoPause() {
-    this._log('Video paused by user');
-    
     // CRITICAL: Ignore pause events when card is disconnected
     // Browser fires pause AFTER disconnectedCallback when navigating away
     if (!this.isConnected) {
@@ -2774,15 +2860,24 @@ export class MediaCard extends LitElement {
       return;
     }
     
+    // V5.6.4: Verify video element still exists in DOM before processing pause
+    // Pause events can fire after navigation completes and video is removed
+    const videoElement = this.renderRoot?.querySelector('video');
+    const isCurrentlyVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    
+    if (!videoElement || !isCurrentlyVideo) {
+      this._log('⏸️ Ignoring video pause - no video in DOM (navigated to image)');
+      return;
+    }
+    
+    this._log('Video paused by user');
+    
     // Mark that user has interacted with the video
     this._videoUserInteracted = true;
     this._log('🎬 User interacted with video (pause) - will play to completion');
     
     // Only pause slideshow if video was manually paused (not ended)
-    // Also verify we're actually showing a video (not navigated to image)
-    const videoElement = this.renderRoot?.querySelector('video');
-    const isCurrentlyVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
-    if (videoElement && !videoElement.ended && !this._isPaused && isCurrentlyVideo) {
+    if (videoElement && !videoElement.ended && !this._isPaused) {
       this._log('🎬 Video manually paused - pausing slideshow');
       this._pausedByVideo = true;
       this._setPauseState(true);
@@ -2790,9 +2885,14 @@ export class MediaCard extends LitElement {
   }
 
   // V5: Track video seeking (user interaction)
-  _onVideoSeeking() {
-    this._videoUserInteracted = true;
-    this._log('🎬 User interacted with video (seek) - will play to completion');
+  _onVideoSeeking(e) {
+    // V5.6.4: Only mark as user interaction if video has started playing
+    // Browser fires seeking events during initial load - ignore those
+    const video = e.target;
+    if (video && video.currentTime > 0.5) {
+      this._videoUserInteracted = true;
+      this._log('🎬 User interacted with video (seek) - will play to completion');
+    }
   }
   
   // V5: Track video click (user interaction)
@@ -2862,6 +2962,9 @@ export class MediaCard extends LitElement {
     const endTime = new Date();
     this._log(`🎬 Video ended at ${endTime.toLocaleTimeString()}:`, this.mediaUrl);
     
+    // V5.6.4: Mark that video has completed first playthrough
+    this._videoHasEnded = true;
+    
     // V5.6: If video_loop is enabled, don't advance - video will loop until auto-refresh timer
     if (this.config.video_loop) {
       this._log('🔁 Video loop enabled - video will restart automatically, waiting for auto-refresh timer');
@@ -2871,37 +2974,37 @@ export class MediaCard extends LitElement {
     // Reset video wait timer when video ends
     this._videoWaitStartTime = null;
     
-    // Restart timer if it was stopped for video playback, then trigger immediate action
-    if (this._timerStoppedForVideo) {
-      this._log('🎬 Restarting auto-timer after video completion');
-      this._timerStoppedForVideo = false;
-      this._setupAutoRefresh();
-      
-      // Trigger immediate action instead of waiting for next timer interval
-      const hasAutoRefresh = (this.config?.auto_refresh_seconds || 0) > 0;
-      const hasAutoAdvance = (this.config?.auto_advance_seconds || 
-                             this.config?.auto_advance_interval || 
-                             this.config?.auto_advance_duration || 0) > 0;
-      
-      if (hasAutoRefresh || hasAutoAdvance) {
-        this._log('🎬 Triggering immediate action after video completion');
-        setTimeout(async () => {
-          // Check for new files first (at position 1 in sequential mode)
-          const queueRefreshed = await this._checkForNewFiles();
-          
-          // If queue wasn't refreshed and we have auto_advance, advance to next
-          if (!queueRefreshed && hasAutoAdvance) {
-            this._loadNext().catch(err => {
-              console.error('Error advancing after video:', err);
-            });
-          } else if (!queueRefreshed && hasAutoRefresh) {
-            // Reload current media
-            await this._resolveMediaUrl();
-            this.requestUpdate();
-          }
-        }, 100);
-        return; // Skip manual mode logic below
-      }
+    // V5.6.4: Check if auto-advance is configured
+    const hasAutoRefresh = (this.config?.auto_refresh_seconds || 0) > 0;
+    const hasAutoAdvance = (this.config?.auto_advance_seconds || 
+                           this.config?.auto_advance_interval || 
+                           this.config?.auto_advance_duration || 0) > 0;
+    
+    // If we have auto-advance configured, advance to next media after video completes
+    if (hasAutoAdvance) {
+      this._log('🎬 Video completed naturally - advancing to next media');
+      setTimeout(async () => {
+        // Check for new files first (at position 1 in sequential mode)
+        const queueRefreshed = await this._checkForNewFiles();
+        
+        // If queue wasn't refreshed, advance to next
+        if (!queueRefreshed) {
+          this._loadNext().catch(err => {
+            console.error('Error advancing after video:', err);
+          });
+        }
+      }, 100);
+      return;
+    }
+    
+    // If we have auto-refresh configured, reload current media
+    if (hasAutoRefresh) {
+      this._log('🎬 Video completed - reloading current media');
+      setTimeout(async () => {
+        await this._resolveMediaUrl();
+        this.requestUpdate();
+      }, 100);
+      return;
     }
     
     // V4: For slideshow mode without auto-advance/refresh, trigger immediate navigation
@@ -2925,6 +3028,28 @@ export class MediaCard extends LitElement {
         }, 100);
       }
     }
+  }
+
+  _onVideoTimeUpdate(e) {
+    // V5.6.4: Detect when looping video wraps back to beginning
+    // The 'ended' event doesn't fire for videos with loop attribute
+    const video = e.target;
+    if (!video || !this.config.video_loop) return;
+    
+    const currentTime = video.currentTime;
+    
+    // Simple, robust loop detection: currentTime went backwards
+    // This happens when video loops from end to start
+    // Add small tolerance (0.5s) to avoid false positives from minor seeking
+    if (this._lastVideoTime !== undefined && currentTime < (this._lastVideoTime - 0.5)) {
+      // Video looped! Mark that it has completed first playthrough
+      if (!this._videoHasEnded) {
+        this._videoHasEnded = true;
+        this._log(`🔁 Video looped (time jumped from ${Math.round(this._lastVideoTime * 10) / 10}s to ${Math.round(currentTime * 10) / 10}s) - first playthrough complete, timer can now advance`);
+      }
+    }
+    
+    this._lastVideoTime = currentTime;
   }
 
   _onVideoLoadedMetadata() {
@@ -3074,9 +3199,11 @@ export class MediaCard extends LitElement {
       }
     }
     
-    // V5.6.4: Start auto-advance timer now that media is loaded and visible
-    // Prevents timer expiring before image has rendered (especially on slow connections)
-    this._setupAutoRefresh();
+    // V5.6.4: Start auto-advance timer for images now that they're loaded
+    // For videos, timer starts immediately in navigation method (not deferred)
+    if (!this._isVideoFile(this.mediaUrl)) {
+      this._setupAutoRefresh();
+    }
     
     // V5: Apply pending metadata AND navigation index now that image has loaded
     // This synchronizes metadata/counter/position indicator updates with the new image appearing
@@ -8458,13 +8585,13 @@ export class MediaCard extends LitElement {
             ?autoplay=${this.config.video_autoplay !== false}
             ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
-            @loadeddata=${this._onMediaLoaded}
             @error=${this._onMediaError}
             @canplay=${this._onVideoCanPlay}
             @loadedmetadata=${this._onVideoLoadedMetadata}
             @play=${this._onVideoPlay}
             @pause=${this._onVideoPause}
             @ended=${this._onVideoEnded}
+            @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
