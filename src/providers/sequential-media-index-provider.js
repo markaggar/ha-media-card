@@ -418,11 +418,12 @@ export class SequentialMediaIndexProvider extends MediaProvider {
   }
 
   // Rescan by resetting cursor and checking if first item changed
-  async rescanForNewFiles() {
+  async rescanForNewFiles(currentMediaId = null) {
     this._log('🔄 Rescanning database for new files...');
     
-    // Save current first item in queue
-    const previousFirstItem = this.queue.length > 0 ? this.queue[0].media_content_id : null;
+    // V5.6.5: Use provided currentMediaId for comparison (prevents false positives on wrap)
+    // Fall back to queue[0] if not provided
+    const previousFirstItem = currentMediaId || (this.queue.length > 0 ? this.queue[0].media_content_id : null);
     
     // Reset cursor to beginning
     this.lastSeenValue = null;

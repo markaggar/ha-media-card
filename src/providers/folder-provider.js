@@ -426,17 +426,17 @@ export class FolderProvider extends MediaProvider {
     return [];
   }
 
-  async rescanForNewFiles() {
+  async rescanForNewFiles(currentMediaId = null) {
     // Delegate to SequentialMediaIndexProvider for database-backed sources
     if (this.sequentialProvider && typeof this.sequentialProvider.rescanForNewFiles === 'function') {
       this.cardAdapter._log('🔍 Triggering SequentialMediaIndexProvider rescan');
-      return await this.sequentialProvider.rescanForNewFiles();
+      return await this.sequentialProvider.rescanForNewFiles(currentMediaId);
     }
     
     // Delegate to SubfolderQueue for filesystem-based sources
     if (this.subfolderQueue && typeof this.subfolderQueue.rescanForNewFiles === 'function') {
       this.cardAdapter._log('🔍 Triggering SubfolderQueue rescan');
-      return await this.subfolderQueue.rescanForNewFiles();
+      return await this.subfolderQueue.rescanForNewFiles(currentMediaId);
     }
     
     this.cardAdapter._log('⚠️ No rescan method available for this provider');
