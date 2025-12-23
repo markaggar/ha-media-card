@@ -1497,9 +1497,15 @@ export class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
-    // V5.6.4: Auto-refresh timer starts in _onMediaLoaded/_onVideoCanPlay
-    // This prevents timer expiring before media has loaded (especially on slow connections)
-    // Timer will be set up when image loads or video is ready to play
+    // V5.6.4: Timer behavior differs for images vs videos
+    // Images: Defer timer until loaded (prevents timer expiring before slow image loads)
+    // Videos: Start timer immediately (timer should run while video plays/loops)
+    const isVideo = this._isVideoFile(item.media_content_id);
+    if (isVideo) {
+      // Videos: Timer starts immediately - will interrupt long videos or loop until expiry
+      this._setupAutoRefresh();
+    }
+    // Images: Timer deferred to _onMediaLoaded() to prevent premature expiration
 
     // V5.6: Clear navigation flag after render cycle completes
     setTimeout(() => {
@@ -2740,9 +2746,8 @@ export class MediaCard extends LitElement {
       this.requestUpdate();
     }
     
-    // V5.6.4: Start auto-advance timer now that video is ready to play
-    // Prevents timer expiring before video has loaded (especially for large files)
-    this._setupAutoRefresh();
+    // V5.6.4: Do NOT start timer here - timer starts immediately for videos (not deferred)
+    // This allows timer to run while video plays/loops and interrupt when timer expires
   }
 
   _onVideoPlay() {
@@ -3074,9 +3079,11 @@ export class MediaCard extends LitElement {
       }
     }
     
-    // V5.6.4: Start auto-advance timer now that media is loaded and visible
-    // Prevents timer expiring before image has rendered (especially on slow connections)
-    this._setupAutoRefresh();
+    // V5.6.4: Start auto-advance timer for images now that they're loaded
+    // For videos, timer starts immediately in navigation method (not deferred)
+    if (!this._isVideoFile(this.mediaUrl)) {
+      this._setupAutoRefresh();
+    }
     
     // V5: Apply pending metadata AND navigation index now that image has loaded
     // This synchronizes metadata/counter/position indicator updates with the new image appearing

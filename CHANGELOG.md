@@ -22,11 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Works alongside existing vignette effect for additional image framing  
 
 ### Fixed
-- **Auto-Advance Timer**: Fixed timer starting before media loads
-  - Timer now starts only when image has loaded or video is ready to play
-  - Prevents timer expiring and advancing before media has rendered
+- **Auto-Advance Timer**: Fixed timer starting before media loads (images only)
+  - **Images**: Timer now starts only when image has loaded (prevents timer expiring during slow image load)
+  - **Videos**: Timer starts immediately and runs while video plays/loops (allows timer to interrupt long videos)
   - Most noticeable with slow connections or large files
-  - Timer starts in `_onMediaLoaded()` for images and `_onVideoCanPlay()` for videos
+  - Fixes issue where slideshow would skip images before they rendered
+  - Preserves correct video behavior: timer interrupts playback when it expires (for max duration and loop mode)
 
 - **Navigation Button Height**: Reduced height from 60% to 50% (max 600px to 400px)
   - Prevents interference with video control seek bar when panels are active
