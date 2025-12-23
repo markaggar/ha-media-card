@@ -841,6 +841,16 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
     this._fireConfigChanged();
   }
+  
+  _blendWithBackgroundChanged(ev) {
+    this._config = { ...this._config, blend_with_background: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _edgeFadeStrengthChanged(ev) {
+    this._config = { ...this._config, edge_fade_strength: parseInt(ev.target.value) || 0 };
+    this._fireConfigChanged();
+  }
 
   _autoplayChanged(ev) {
     this._config = { ...this._config, video_autoplay: ev.target.checked };
@@ -3258,6 +3268,34 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 placeholder="No zoom"
               />
               <div class="help-text">Images load pre-zoomed at this level (1-5x, click image to reset)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Blend Card with Background</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.blend_with_background !== false}
+                @change=${this._blendWithBackgroundChanged}
+              />
+              <div class="help-text">Blend card seamlessly with dashboard background (uncheck for card-style appearance)</div>
+            </div>
+          </div>
+          
+          <div class="config-row">
+            <label>Edge Fade Strength (Beta)</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="5"
+                .value=${this._config.edge_fade_strength ?? 0}
+                @input=${this._edgeFadeStrengthChanged}
+                placeholder="0"
+              />
+              <div class="help-text">Fade image edges into background (0 = off, 1-100 = fade strength). Beta: May show faint lines on some images.</div>
             </div>
           </div>
           
