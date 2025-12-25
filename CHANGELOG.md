@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Matches pattern already correctly implemented for preloaded collections
   - Identified by GitHub Copilot code review
 
+- **Missing Media File Handling (404 Errors)**: Slideshow no longer gets stuck on deleted files
+  - 404 errors now automatically skip to next image in folder/queue modes
+  - After one retry attempt, missing files are silently skipped with debug log
+  - Slideshow continues seamlessly without user intervention
+  - Single media mode still shows error message (as expected for static display)
+  - Queue thumbnails: Broken thumbnails styled with reduced opacity and grayscale
+  - Prevents broken image icons and empty slideshow states
+
+- **Debug Logging**: Console messages now properly respect debug_mode setting
+  - Queue navigation messages now use `_log()` instead of `console.log()`
+  - Favorite debugging messages now use `_log()` instead of `console.warn()`
+  - Messages only appear when `debug_mode: true` is enabled
+  - Reduces console noise in production use
+
+- **Confirmation Dialog Paths**: Delete/edit dialogs show correct destination folder
+  - Root cause: Always preferred `media_path` even when in folder mode
+  - Now checks `media_source_type` to determine correct path source
+  - Folder mode (`media_source_type: folder`) uses `folder.path`
+  - Single media mode (`media_source_type: single_media`) uses `media_path`
+  - Prevents showing incorrect `_Junk`/`_Edit` destination paths
+
 ### Improved
 - **Code Quality**: Removed redundant video tracking flag resets
   - Centralized all resets in `_setMediaUrl()` as single source of truth
