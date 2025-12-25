@@ -6330,13 +6330,26 @@ class MediaCard extends LitElement {
             this._showMediaError(errorMessage, isSynologyUrl);
           });
       } else {
-        // For folder/queue modes, will implement later
-        this._showMediaError(errorMessage, isSynologyUrl);
+        // For folder/queue modes, if it's a 404, skip to next automatically
+        if (is404) {
+          this._log('⏭️ Skipping 404 file, advancing to next media');
+          // Skip to next without showing error
+          setTimeout(() => this._loadNext(), 100);
+        } else {
+          this._showMediaError(errorMessage, isSynologyUrl);
+        }
       }
     } else {
-      // Already tried to retry this URL, show error immediately
-      this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
-      this._showMediaError(errorMessage, isSynologyUrl);
+      // Already tried to retry this URL
+      if (is404 && this.config.media_source_type !== 'single_media') {
+        // For 404s in folder/queue mode, skip to next instead of showing error
+        this._log('⏭️ Skipping 404 file after retry, advancing to next media');
+        setTimeout(() => this._loadNext(), 100);
+      } else {
+        // Show error for non-404 errors or single media mode
+        this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
+        this._showMediaError(errorMessage, isSynologyUrl);
+      }
     }
   }
   
@@ -9696,6 +9709,22 @@ class MediaCard extends LitElement {
     videoElement.dataset.loaded = 'true';
   }
   
+  _handleThumbnailError(e, item) {
+    // Handle 404s for queue thumbnails - hide the thumbnail element
+    this._log('📭 Thumbnail failed to load (404):', item.filename || item.path);
+    
+    // Hide the broken thumbnail by replacing with a placeholder
+    const target = e.target;
+    if (target) {
+      target.style.opacity = '0.3';
+      target.style.filter = 'grayscale(100%)';
+      // Optionally set a broken image icon
+      if (target.tagName === 'IMG') {
+        target.alt = '❌ File not found';
+      }
+    }
+  }
+  
   /**
    * Page through queue preview thumbnails
    * @param {string} direction - 'prev' or 'next'
@@ -12809,11 +12838,15 @@ class MediaCard extends LitElement {
                     @play=${(e) => e.target.pause()}
                     src="${item._resolvedUrl}#t=${videoThumbnailTime}"
                     @loadeddata=${(e) => this._handleVideoThumbnailLoaded(e, item)}
-                    @error=${() => console.warn('Video thumbnail failed to load:', item.filename)}
+                    @error=${(e) => this._handleThumbnailError(e, item)}
                   ></video>
                   <div class="video-icon-overlay">🎞️</div>
                 ` : html`
-                  <img src="${item._resolvedUrl}" alt="${item.filename || 'Thumbnail'}" />
+                  <img 
+                    src="${item._resolvedUrl}" 
+                    alt="${item.filename || 'Thumbnail'}"
+                    @error=${(e) => this._handleThumbnailError(e, item)}
+                  />
                 `
               ) : html`
                 <div class="thumbnail-loading">⏳</div>
