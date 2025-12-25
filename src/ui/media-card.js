@@ -5883,8 +5883,10 @@ export class MediaCard extends LitElement {
         }
       }
       
-      // Restore main queue state
-      if (this._mainQueue && this._mainQueue.length > 0) {
+      // Restore main queue state (but NOT for queue preview - it doesn't replace the queue)
+      const isQueuePreview = this._panelMode === 'queue';
+      
+      if (!isQueuePreview && this._mainQueue && this._mainQueue.length > 0) {
         this.navigationQueue = [...this._mainQueue];
         this.navigationIndex = this._mainQueueIndex;
         
@@ -5994,19 +5996,26 @@ export class MediaCard extends LitElement {
   }
   
   _handleThumbnailError(e, item) {
-    // Handle 404s for queue thumbnails - hide the thumbnail element
+    // Handle 404s for queue thumbnails - mark item as invalid and hide it
     this._log('📭 Thumbnail failed to load (404):', item.filename || item.path);
     
-    // Hide the broken thumbnail by replacing with a placeholder
+    // Mark the item as invalid so it won't be displayed
+    if (item) {
+      item._invalid = true;
+    }
+    
+    // Hide the entire thumbnail container
     const target = e.target;
     if (target) {
-      target.style.opacity = '0.3';
-      target.style.filter = 'grayscale(100%)';
-      // Optionally set a broken image icon
-      if (target.tagName === 'IMG') {
-        target.alt = '❌ File not found';
+      // Find the parent thumbnail container and hide it
+      const thumbnailContainer = target.closest('.thumbnail-item');
+      if (thumbnailContainer) {
+        thumbnailContainer.style.display = 'none';
       }
     }
+    
+    // Trigger a re-render to update the display without the broken item
+    this.requestUpdate();
   }
   
   /**
@@ -9005,12 +9014,14 @@ export class MediaCard extends LitElement {
     }
     
     const displayStartIndex = this._panelPageStartIndex;
-    const displayItems = allItems.slice(displayStartIndex, displayStartIndex + maxDisplay);
+    // Filter out invalid items (404s) before displaying
+    const validItems = allItems.filter(item => !item._invalid);
+    const displayItems = validItems.slice(displayStartIndex, displayStartIndex + maxDisplay);
 
     // Calculate if we have previous/next pages
     // For queue mode: show buttons only when multiple pages exist (allows wrapping/cycling)
     // For other modes: only show when there are more pages
-    const hasMultiplePages = allItems.length > maxDisplay;
+    const hasMultiplePages = validItems.length > maxDisplay;
     const hasPreviousPage = this._panelMode === 'queue' ? hasMultiplePages : displayStartIndex > 0;
     const hasNextPage = this._panelMode === 'queue' ? hasMultiplePages : (displayStartIndex + displayItems.length) < allItems.length;
     
