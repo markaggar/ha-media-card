@@ -32,8 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - After one retry attempt, missing files are silently skipped with debug log
   - Slideshow continues seamlessly without user intervention
   - Single media mode still shows error message (as expected for static display)
-  - Queue thumbnails: Broken thumbnails styled with reduced opacity and grayscale
-  - Prevents broken image icons and empty slideshow states
+  - Queue thumbnails: Broken thumbnails completely removed from display
+  - Items marked with `_invalid` flag and filtered from queue rendering
+  - Prevents broken image icons, empty slideshow states, and stuck video playback
 
 - **Debug Logging**: Console messages now properly respect debug_mode setting
   - Queue navigation messages now use `_log()` instead of `console.log()`
@@ -47,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Folder mode (`media_source_type: folder`) uses `folder.path`
   - Single media mode (`media_source_type: single_media`) uses `media_path`
   - Prevents showing incorrect `_Junk`/`_Edit` destination paths
+
+- **Queue Preview Panel Interaction**: Closing Queue Preview no longer skips injected items
+  - Root cause: Queue restoration logic treated Queue Preview like other panel modes
+  - Queue Preview is read-only overlay, never saves/restores navigationQueue
+  - Through the Years, Burst, and Related modes inject items into navigationQueue
+  - Closing Queue Preview now skips restoration, preserving injected items
+  - Fixes bug where viewing queue during Through the Years playback would skip remaining items
 
 ### Improved
 - **Code Quality**: Removed redundant video tracking flag resets
