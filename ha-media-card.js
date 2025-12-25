@@ -5300,7 +5300,7 @@ class MediaCard extends LitElement {
       return;
     }
     
-    console.log(`📱 Loading panel item ${index + 1}/${this._panelQueue.length}:`, item.filename || item.path);
+    this._log(`📱 Loading panel item ${index + 1}/${this._panelQueue.length}:`, item.filename || item.path);
     
     // Update panel index
     this._panelQueueIndex = index;
@@ -5355,7 +5355,7 @@ class MediaCard extends LitElement {
       return;
     }
 
-    console.log(`🎯 Jumping to queue position ${queueIndex + 1}/${this.navigationQueue.length}`);
+    this._log(`🎯 Jumping to queue position ${queueIndex + 1}/${this.navigationQueue.length}`);
 
     // Clear manual page flag - user is now navigating to items, allow auto-adjustment
     this._manualPageChange = false;
@@ -8253,8 +8253,8 @@ class MediaCard extends LitElement {
                        false;
     const newState = !isFavorite;
     
-    console.warn(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
-    console.warn(`💗 CURRENT METADATA:`, this._currentMetadata);
+    this._log(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
+    this._log(`💗 CURRENT METADATA:`, this._currentMetadata);
     
     try {
       // V5.2: Call media_index service with media_source_uri (no path conversion needed)
@@ -8276,7 +8276,7 @@ class MediaCard extends LitElement {
       
       const response = await this.hass.callWS(wsCall);
       
-      console.warn(`✅ Favorite toggled for ${targetUri}: ${newState}`, response);
+      this._log(`✅ Favorite toggled for ${targetUri}: ${newState}`, response);
       
       // Update current metadata
       if (this._currentMetadata) {
@@ -8713,8 +8713,10 @@ class MediaCard extends LitElement {
     const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(filename);
     
     // Construct the destination path for display
-    // Extract the root path from the media_path config
-    const rootPath = this.config?.media_path || this.config?.folder?.path || '';
+    // Use folder.path in folder mode, media_path in single_media mode
+    const rootPath = this.config?.media_source_type === 'folder' 
+      ? (this.config?.folder?.path || '')
+      : (this.config?.media_path || '');
     // Strip media-source:// prefix if present
     const cleanRootPath = rootPath.replace('media-source://media_source', '');
     const destinationPath = `${cleanRootPath}/_Junk/${filename}`;
@@ -9056,8 +9058,10 @@ class MediaCard extends LitElement {
     const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(filename);
     
     // Construct the destination path for display
-    // Extract the root path from the media_path config
-    const rootPath = this.config?.media_path || this.config?.folder?.path || '';
+    // Use folder.path in folder mode, media_path in single_media mode
+    const rootPath = this.config?.media_source_type === 'folder' 
+      ? (this.config?.folder?.path || '')
+      : (this.config?.media_path || '');
     // Strip media-source:// prefix if present
     const cleanRootPath = rootPath.replace('media-source://media_source', '');
     const destinationPath = `${cleanRootPath}/_Edit/${filename}`;
