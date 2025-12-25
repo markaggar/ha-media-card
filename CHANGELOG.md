@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.5 - 2025-12-24
+
+### Added
+- **Through the Years Button Hide Option**: New `hide_on_this_day_button` config option
+  - Hides the action button while keeping clock/date activation functional
+  - Useful for cleaner UI when clock overlay provides sufficient access
+  - Appears as indented sub-option in editor when Through the Years is enabled
+  - Config: `action_buttons.hide_on_this_day_button: true`
+
+### Fixed
+- **Through the Years Panel Layout**: Fixed button overflow on narrow screens
+  - Stacked layout: dropdown on top, checkbox and button on bottom row
+  - Prevents "Play These" button from spilling off page
+  - Improved responsive design for mobile/tablet views
+
+- **Navigation Wrap-Around Bug**: Fixed undefined queue access when wrapping from end to start
+  - Root cause: Local `nextIndex` variable wasn't synchronized with `_pendingNavigationIndex` when wrapping
+  - Could cause errors when provider exhausted and collection wrapped to start
+  - Added `nextIndex = 0` before `_pendingNavigationIndex = 0` at wrap point
+  - Matches pattern already correctly implemented for preloaded collections
+  - Identified by GitHub Copilot code review
+
+### Improved
+- **Code Quality**: Removed redundant video tracking flag resets
+  - Centralized all resets in `_setMediaUrl()` as single source of truth
+  - Removed duplicate resets from `_displayItem()` for cleaner code
+  - Flags: `_videoHasEnded`, `_lastVideoTime`, `_videoTimerCount`
+
 ## v5.6.4 - 2025-12-22
 
 ### Fixed
