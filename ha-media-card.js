@@ -7399,6 +7399,7 @@ class MediaCard extends LitElement {
     
     // V5.5: On This Day feature (anniversary mode - same date across years)
     const enableOnThisDay = this.config.action_buttons?.enable_on_this_day === true;
+    const hideOnThisDayButton = this.config.action_buttons?.hide_on_this_day_button === true;
     
     // V5.6: Queue Preview mode (Show Queue) - works without media_index
     const enableQueuePreview = this.config.action_buttons?.enable_queue_preview === true;
@@ -7484,7 +7485,7 @@ class MediaCard extends LitElement {
             <ha-icon icon="mdi:calendar-outline"></ha-icon>
           </button>
         ` : ''}
-        ${showMediaIndexButtons && enableOnThisDay ? html`
+        ${showMediaIndexButtons && enableOnThisDay && !hideOnThisDayButton ? html`
           <button
             class="action-btn on-this-day-btn ${isOnThisDayActive ? 'active' : ''} ${this._onThisDayLoading ? 'loading' : ''}"
             @click=${this._handleOnThisDayClick}
@@ -11892,6 +11893,18 @@ class MediaCard extends LitElement {
       justify-content: center;
     }
 
+    .panel-header-actions.stacked {
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .panel-header-actions.stacked .bottom-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: center;
+    }
+
     .panel-action-button {
       background: var(--primary-color, #03a9f4);
       color: white;
@@ -12517,7 +12530,7 @@ class MediaCard extends LitElement {
           <div class="panel-title">
             <div class="title-text">${title}</div>
           </div>
-          <div class="panel-header-actions">
+          <div class="panel-header-actions stacked">
             <select 
               class="window-selector" 
               .value=${String(this._onThisDayWindowDays)}
@@ -12529,20 +12542,22 @@ class MediaCard extends LitElement {
               <option value="7">±1 week</option>
               <option value="14">±2 weeks</option>
             </select>
-            <label class="randomize-checkbox" title="Randomize playback order">
-              <input 
-                type="checkbox" 
-                .checked=${this._playRandomized}
-                @change=${(e) => { this._playRandomized = e.target.checked; this.requestUpdate(); }}
-              />
-              <span>🎲 Randomize</span>
-            </label>
-            <button 
-              class="panel-action-button" 
-              @click=${this._playPanelItems} 
-              title="Insert into queue and play">
-              ▶️ Play These
-            </button>
+            <div class="bottom-row">
+              <label class="randomize-checkbox" title="Randomize playback order">
+                <input 
+                  type="checkbox" 
+                  .checked=${this._playRandomized}
+                  @change=${(e) => { this._playRandomized = e.target.checked; this.requestUpdate(); }}
+                />
+                <span>🎲 Randomize</span>
+              </label>
+              <button 
+                class="panel-action-button" 
+                @click=${this._playPanelItems} 
+                title="Insert into queue and play">
+                ▶️ Play These
+              </button>
+            </div>
           </div>
           <button class="panel-close-button" @click=${this._exitPanelMode} title="Close panel">
             ✕
@@ -14101,6 +14116,17 @@ class MediaCardEditor extends LitElement {
       action_buttons: {
         ...this._config.action_buttons,
         enable_on_this_day: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _actionButtonsHideOnThisDayButtonChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        hide_on_this_day_button: ev.target.checked
       }
     };
     this._fireConfigChanged();
@@ -16729,6 +16755,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableOnThisDayChanged}
                 />
                 <div class="help-text">View media items from today's date across all years in your library (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row" style="display: ${this._config.action_buttons?.enable_on_this_day === true ? 'flex' : 'none'}">
+              <label style="padding-left: 20px;">Hide Button (Clock Only)</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.hide_on_this_day_button === true}
+                  @change=${this._actionButtonsHideOnThisDayButtonChanged}
+                />
+                <div class="help-text">Hide the action button; activate Through the Years by clicking the clock/date overlay only</div>
               </div>
             </div>
           </div>

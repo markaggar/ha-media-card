@@ -1284,6 +1284,17 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _actionButtonsHideOnThisDayButtonChanged(ev) {
+    this._config = {
+      ...this._config,
+      action_buttons: {
+        ...this._config.action_buttons,
+        hide_on_this_day_button: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -3907,6 +3918,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableOnThisDayChanged}
                 />
                 <div class="help-text">View media items from today's date across all years in your library (requires media_index)</div>
+              </div>
+            </div>
+            
+            <div class="config-row" style="display: ${this._config.action_buttons?.enable_on_this_day === true ? 'flex' : 'none'}">
+              <label style="padding-left: 20px;">Hide Button (Clock Only)</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.action_buttons?.hide_on_this_day_button === true}
+                  @change=${this._actionButtonsHideOnThisDayButtonChanged}
+                />
+                <div class="help-text">Hide the action button; activate Through the Years by clicking the clock/date overlay only</div>
               </div>
             </div>
           </div>
