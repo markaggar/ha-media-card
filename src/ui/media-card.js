@@ -6002,6 +6002,23 @@ export class MediaCard extends LitElement {
     // Mark the item as invalid so it won't be displayed
     if (item) {
       item._invalid = true;
+      
+      // Remove the invalid item from navigationQueue to prevent position mismatches
+      if (this.navigationQueue && this.navigationQueue.length > 0) {
+        const initialLength = this.navigationQueue.length;
+        this.navigationQueue = this.navigationQueue.filter(q => q !== item);
+        
+        if (this.navigationQueue.length < initialLength) {
+          this._log(`🗑️ Removed invalid item from navigationQueue (${initialLength} → ${this.navigationQueue.length})`);
+          
+          // Adjust navigationIndex if needed (if current position was after the removed item)
+          const removedIndex = initialLength - this.navigationQueue.length - 1;
+          if (this.navigationIndex > removedIndex) {
+            this.navigationIndex--;
+            this._log(`📍 Adjusted navigationIndex: ${this.navigationIndex + 1} → ${this.navigationIndex}`);
+          }
+        }
+      }
     }
     
     // Hide the entire thumbnail container
