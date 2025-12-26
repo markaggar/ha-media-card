@@ -32,9 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - After one retry attempt, missing files are silently skipped with debug log
   - Slideshow continues seamlessly without user intervention
   - Single media mode still shows error message (as expected for static display)
-  - Queue thumbnails: Broken thumbnails completely removed from display
-  - Items marked with `_invalid` flag and filtered from queue rendering
-  - Prevents broken image icons, empty slideshow states, and stuck video playback
+  - Queue thumbnails: Broken thumbnails completely removed from display and navigationQueue
+  - Items marked with `_invalid` flag and removed from underlying queue
+  - Prevents broken image icons, empty slideshow states, stuck video playback, and position mismatches
+  - NavigationIndex automatically adjusted when invalid items removed
 
 - **Debug Logging**: Console messages now properly respect debug_mode setting
   - Queue navigation messages now use `_log()` instead of `console.log()`
