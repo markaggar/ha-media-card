@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v5.6.6 - 2025-12-27
+## v5.6.5 - 2025-12-27
 
 ### Added
 - **Lightweight File Existence Check**: New filesystem validation for MediaIndexProvider only
@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - WebSocket service call pattern: `hass.callWS()` with `return_response: true`
 - Response parsing: `response?.response?.exists` (nested under response key)
 
-## v5.6.5 - 2025-12-24
+## v5.6.4 - 2025-12-24
 
 ### Added
 - **Through the Years Button Hide Option**: New `hide_on_this_day_button` config option
