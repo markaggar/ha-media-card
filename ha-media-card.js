@@ -9365,7 +9365,7 @@ class MediaCard extends LitElement {
         dateStr = String(currentDate).split('T')[0];
       }
       
-      console.warn(`📅 Using date: ${dateStr} from metadata (original: ${currentDate})`);
+      this._log(`📅 Using date: ${dateStr} from metadata (original: ${currentDate})`);
       
       // Call media_index.get_random_items with date filtering
       const wsCall = {
@@ -9387,8 +9387,8 @@ class MediaCard extends LitElement {
       
       const response = await this.hass.callWS(wsCall);
       
-      console.warn('📅 Related photos response:', response);
-      console.warn('📅 First item:', response.response?.items?.[0]);
+      this._log('📅 Related photos response:', response);
+      this._log('📅 First item:', response.response?.items?.[0]);
       
       // Store panel queue and sort by time
       const rawItems = response.response?.items || [];
