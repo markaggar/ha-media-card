@@ -1100,6 +1100,21 @@ class FolderProvider extends MediaProvider {
     return null;
   }
 
+  // V5.6.6: Delegate file existence check to wrapped provider (MediaIndexProvider only)
+  async checkFileExists(mediaItem) {
+    // Only MediaIndexProvider implements this - delegate if available
+    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.checkFileExists === 'function') {
+      return await this.mediaIndexProvider.checkFileExists(mediaItem);
+    }
+    
+    if (this.sequentialProvider && typeof this.sequentialProvider.checkFileExists === 'function') {
+      return await this.sequentialProvider.checkFileExists(mediaItem);
+    }
+    
+    // SubfolderQueue discovers files from disk, no validation needed
+    return null;
+  }
+
   // Query for files newer than the given date (for queue refresh feature)
   async getFilesNewerThan(dateThreshold) {
     // Delegate to the underlying provider
@@ -2548,6 +2563,57 @@ class MediaIndexProvider extends MediaProvider {
     this._entitySubscriptions = []; // Track subscribed entity IDs
     this._entityUnsubscribe = null; // Unsubscribe function
     this._lastFilterValues = {}; // Track last known filter values for change detection
+  }
+  
+  /**
+   * V5.6.6: Check if file exists using media_index service (lightweight filesystem check)
+   * @param {Object} mediaItem - Media item with path or URI
+   * @returns {Promise<boolean|null>} true if exists, false if not, null if unavailable
+   */
+  async checkFileExists(mediaItem) {
+    try {
+      const entityId = this.config?.media_index?.entity_id;
+      if (!entityId) {
+        // No media_index entity configured
+        return null;
+      }
+
+      const uri = mediaItem?.media_source_uri || mediaItem?.media_content_id;
+      const path = mediaItem?.path;
+
+      if (!uri && !path) {
+        this._log('⚠️ No URI or path for file existence check');
+        return null;
+      }
+
+    // Call media_index.check_file_exists service using WebSocket (same pattern as get_random_items)
+    const wsCall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service: 'check_file_exists',
+      service_data: {
+        media_source_uri: uri,
+        file_path: path
+      },
+      return_response: true
+    };
+    
+    // Target specific media_index entity if configured
+    if (entityId) {
+      wsCall.target = {
+        entity_id: entityId
+      };
+    }
+    
+    const response = await this.hass.callWS(wsCall);
+
+    this._log('📁 File existence check result:', response);
+    return response?.response?.exists === true;
+    } catch (error) {
+      // Service doesn't exist (old media_index version) or other error
+      this._log('⚠️ File existence check failed (service unavailable):', error.message);
+      return null; // Fallback to preload
+    }
   }
   
   /**
@@ -6041,12 +6107,41 @@ class MediaCard extends LitElement {
     }
   }
 
-  // V5.6: Helper to set mediaUrl with crossfade transition
-  _setMediaUrl(url) {
-    this.mediaUrl = url;
-    
+  // V5.6.6: Check if file exists via provider (delegates to media_index service if available)
+  async _checkFileExistsViaProvider(mediaItem) {
+    // Ask provider to check - MediaIndexProvider has service, others return null
+    if (typeof this.provider?.checkFileExists === 'function') {
+      return await this.provider.checkFileExists(mediaItem);
+    }
+    return null; // Provider doesn't support file existence checks
+  }
+
+  // V5.6: Helper to set mediaUrl with crossfade transition (validates first for images)
+  async _setMediaUrl(url) {
     // Only use crossfade for images, not videos
     const isVideo = this._isVideoFile(url);
+    
+    // For images, validate they exist before displaying (MediaIndexProvider only)
+    if (!isVideo) {
+      // V5.6.6: Try lightweight filesystem check first (provider delegates to media_index if available)
+      const providerCheckResult = await this._checkFileExistsViaProvider(this.currentMedia);
+      
+      if (providerCheckResult === false) {
+        // Service confirmed file doesn't exist - skip immediately
+        this._log('❌ File does not exist (filesystem check):', url);
+        this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
+        this._remove404FromQueues(this.currentMedia);
+        setTimeout(() => this._loadNext(), 100);
+        return; // Don't set mediaUrl, abort display
+      } else if (providerCheckResult === true) {
+        // File exists, confirmed by filesystem check
+        this._log('✅ File exists (filesystem check):', url);
+      }
+      // If providerCheckResult is null, provider doesn't support checks (FolderProvider, SingleMediaProvider)
+      // These providers discover files from disk, so 404s are unlikely - proceed without validation
+    }
+    
+    this.mediaUrl = url;
     
     if (!isVideo) {
       const duration = this.config?.transition?.duration ?? 300;
@@ -6110,7 +6205,7 @@ class MediaCard extends LitElement {
     
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
-      this._setMediaUrl(mediaId);
+      await this._setMediaUrl(mediaId);
       this.requestUpdate();
       return;
     }
@@ -6128,11 +6223,11 @@ class MediaCard extends LitElement {
         // Add timestamp for auto-refresh (camera snapshots, etc.)
         const finalUrl = this._addCacheBustingTimestamp(resolved.url);
         
-        this._setMediaUrl(finalUrl);
+        await this._setMediaUrl(finalUrl);
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCard] Failed to resolve media URL:', error);
-        this._setMediaUrl('');
+        await this._setMediaUrl('');
         this._nextMediaUrl = '';
         this.requestUpdate();
       }
@@ -6157,7 +6252,7 @@ class MediaCard extends LitElement {
         });
         this._log('✅ File exists and resolved to:', resolved.url);
         this._validationDepth = 0; // Reset on success
-        this._setMediaUrl(resolved.url);
+        await this._setMediaUrl(resolved.url);
         this.requestUpdate();
         return; // Success - don't fall through to fallback
       } catch (error) {
@@ -6184,7 +6279,7 @@ class MediaCard extends LitElement {
         }
         
         // Clear the current media to avoid showing broken state
-        this._setMediaUrl('');
+        await this._setMediaUrl('');
         
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
@@ -6203,7 +6298,7 @@ class MediaCard extends LitElement {
 
     // Fallback: use as-is
     this._log('Using media ID as-is (fallback)');
-    this._setMediaUrl(mediaId);
+    await this._setMediaUrl(mediaId);
     this.requestUpdate();
   }
 
@@ -6328,9 +6423,11 @@ class MediaCard extends LitElement {
             this._showMediaError(errorMessage, isSynologyUrl);
           });
       } else {
-        // For folder/queue modes, if it's a 404, skip to next automatically
+        // For folder/queue modes, if it's a 404, remove from queue and skip to next automatically
         if (is404) {
-          this._log('⏭️ Skipping 404 file, advancing to next media');
+          this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
+          // Remove from navigation queue and panel queue to prevent showing again
+          this._remove404FromQueues(this.currentMedia);
           // Skip to next without showing error
           setTimeout(() => this._loadNext(), 100);
         } else {
@@ -6340,8 +6437,9 @@ class MediaCard extends LitElement {
     } else {
       // Already tried to retry this URL
       if (is404 && this.config.media_source_type !== 'single_media') {
-        // For 404s in folder/queue mode, skip to next instead of showing error
-        this._log('⏭️ Skipping 404 file after retry, advancing to next media');
+        // For 404s in folder/queue mode, remove from queue and skip to next instead of showing error
+        this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
+        this._remove404FromQueues(this.currentMedia);
         setTimeout(() => this._loadNext(), 100);
       } else {
         // Show error for non-404 errors or single media mode
@@ -6464,19 +6562,10 @@ class MediaCard extends LitElement {
     if (is404 && this.config.media_source_type === 'folder') {
       this._log('🔇 Skipping 404 error UI - will auto-advance silently');
       
-      // V4: Remove from queue if provider supports it
-      if (currentPath && this.provider && this.queue) {
+      // V5: Remove from queues to prevent showing again
+      if (this.currentMedia) {
         this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
-        
-        // Find and remove from queue
-        const queueIndex = this.queue.findIndex(item => item.media_content_id === currentPath);
-        if (queueIndex !== -1) {
-          this.queue.splice(queueIndex, 1);
-          this._log(`🗑️ Removed from queue at index ${queueIndex} (${this.queue.length} remaining)`);
-        }
-        
-        // Also mark in shownItems to avoid showing again
-        this.shownItems.add(currentPath);
+        this._remove404FromQueues(this.currentMedia);
       }
       
       // V4: In folder mode with auto-refresh enabled, automatically advance to next image immediately
@@ -9724,6 +9813,15 @@ class MediaCard extends LitElement {
     if (item) {
       item._invalid = true;
       
+      // Get identifier to match (prefer media_source_uri, fallback to media_content_id or path)
+      const itemIdentifier = item.media_source_uri || item.media_content_id || item.path;
+      
+      // Helper to match items by identifier
+      const matchesItem = (q) => {
+        const qIdentifier = q.media_source_uri || q.media_content_id || q.path;
+        return qIdentifier === itemIdentifier || q === item; // Also check reference for thumbnails
+      };
+      
       // Remove the invalid item from navigationQueue to prevent position mismatches
       if (this.navigationQueue && this.navigationQueue.length > 0) {
         const originalQueue = this.navigationQueue;
@@ -9731,7 +9829,7 @@ class MediaCard extends LitElement {
         let removedBeforeCurrent = 0;
         
         this.navigationQueue = originalQueue.filter((q, index) => {
-          const isRemoved = q === item;
+          const isRemoved = matchesItem(q);
           if (isRemoved && index < this.navigationIndex) {
             removedBeforeCurrent++;
           }
@@ -9758,7 +9856,7 @@ class MediaCard extends LitElement {
         let removedBeforeCurrent = 0;
         
         this._panelQueue = originalPanelQueue.filter((q, index) => {
-          const isRemoved = q === item;
+          const isRemoved = matchesItem(q);
           if (isRemoved && index < this._panelQueueIndex) {
             removedBeforeCurrent++;
           }
@@ -9790,6 +9888,122 @@ class MediaCard extends LitElement {
     
     // Trigger a re-render to update the display without the broken item
     this.requestUpdate();
+  }
+
+  _remove404FromQueues(item) {
+    // Remove 404 item from both navigation and panel queues
+    // This is called from main media error handler to prevent showing the same 404 again
+    if (!item) return;
+
+    this._log('🗑️ Removing 404 item from all queues:', item.filename || item.path);
+    this._log('🔍 Item identifiers:', {
+      media_source_uri: item.media_source_uri,
+      media_content_id: item.media_content_id,
+      path: item.path
+    });
+
+    // Get identifier to match (prefer media_source_uri, fallback to media_content_id or path)
+    const itemIdentifier = item.media_source_uri || item.media_content_id || item.path;
+    if (!itemIdentifier) {
+      this._log('⚠️ Cannot remove 404 item - no identifier found');
+      return;
+    }
+
+    // Helper to match items by identifier - handle both URI and path formats
+    let debugMatchCount = 0;
+    const matchesItem = (q, index) => {
+      const qUri = q.media_source_uri || q.media_content_id;
+      const qPath = q.path;
+      
+      // Debug first 3 queue items to see their identifiers
+      if (debugMatchCount < 3) {
+        this._log(`🔍 Queue item ${index}:`, {
+          filename: q.filename,
+          qUri: qUri,
+          qPath: qPath
+        });
+        debugMatchCount++;
+      }
+      
+      // Try exact match first
+      if (qUri === itemIdentifier || qPath === itemIdentifier) {
+        this._log(`✅ Exact match found at index ${index}`);
+        return true;
+      }
+      
+      // If item has URI and queue has path, extract path from URI for comparison
+      if (item.media_source_uri && qPath) {
+        // Extract path from media-source URI: media-source://media_source/path -> /path
+        const uriPath = item.media_source_uri.replace(/^media-source:\/\/media_source/, '');
+        if (uriPath === qPath) {
+          this._log(`✅ URI-path match found at index ${index}: "${uriPath}" === "${qPath}"`);
+          return true;
+        } else if (debugMatchCount <= 3) {
+          this._log(`❌ No match: URI "${uriPath}" !== path "${qPath}"`);
+        }
+      }
+      
+      // If queue has URI and item has path, extract path from queue URI
+      if (qUri && item.path) {
+        const qUriPath = qUri.replace(/^media-source:\/\/media_source/, '');
+        if (qUriPath === item.path) {
+          this._log(`✅ Path-URI match found at index ${index}`);
+          return true;
+        }
+      }
+      
+      return false;
+    };
+
+    // Remove from navigation queue
+    if (this.navigationQueue && this.navigationQueue.length > 0) {
+      const originalQueue = this.navigationQueue;
+      const initialLength = originalQueue.length;
+      let removedBeforeCurrent = 0;
+
+      this.navigationQueue = originalQueue.filter((q, index) => {
+        const isRemoved = matchesItem(q);
+        if (isRemoved && index < this.navigationIndex) {
+          removedBeforeCurrent++;
+        }
+        return !isRemoved;
+      });
+
+      if (this.navigationQueue.length < initialLength) {
+        this._log(`🗑️ Removed from navigationQueue (${initialLength} → ${this.navigationQueue.length})`);
+        if (removedBeforeCurrent > 0) {
+          const previousIndex = this.navigationIndex;
+          this.navigationIndex = Math.max(0, this.navigationIndex - removedBeforeCurrent);
+          this._log(`📍 Adjusted navigationIndex: ${previousIndex} → ${this.navigationIndex}`);
+        }
+      } else {
+        this._log(`⚠️ Item not found in navigationQueue: ${itemIdentifier}`);
+      }
+    }
+
+    // Remove from panel queue
+    if (this._panelQueue && this._panelQueue.length > 0 && this._panelMode) {
+      const originalPanelQueue = this._panelQueue;
+      const initialLength = originalPanelQueue.length;
+      let removedBeforeCurrent = 0;
+
+      this._panelQueue = originalPanelQueue.filter((q, index) => {
+        const isRemoved = matchesItem(q);
+        if (isRemoved && index < this._panelQueueIndex) {
+          removedBeforeCurrent++;
+        }
+        return !isRemoved;
+      });
+
+      if (this._panelQueue.length < initialLength) {
+        this._log(`🗑️ Removed from _panelQueue (${initialLength} → ${this._panelQueue.length})`);
+        if (removedBeforeCurrent > 0) {
+          const previousIndex = this._panelQueueIndex;
+          this._panelQueueIndex = Math.max(0, this._panelQueueIndex - removedBeforeCurrent);
+          this._log(`📍 Adjusted _panelQueueIndex: ${previousIndex} → ${this._panelQueueIndex}`);
+        }
+      }
+    }
   }
   
   /**
@@ -12962,7 +13176,17 @@ class MediaCardEditor extends LitElement {
   setConfig(config) {
     // Migrate v4 config to v5 if needed
     const migratedConfig = this._migrateV4toV5(config);
-    this._config = { ...migratedConfig };
+    
+    // Sanitize numeric config values (convert "auto" or other strings to valid numbers/undefined)
+    const sanitizedConfig = { ...migratedConfig };
+    if (sanitizedConfig.auto_advance_seconds !== undefined && typeof sanitizedConfig.auto_advance_seconds !== 'number') {
+      sanitizedConfig.auto_advance_seconds = undefined;
+    }
+    if (sanitizedConfig.auto_refresh_seconds !== undefined && typeof sanitizedConfig.auto_refresh_seconds !== 'number') {
+      sanitizedConfig.auto_refresh_seconds = undefined;
+    }
+    
+    this._config = sanitizedConfig;
   }
 
   // V4 to V5 Migration
@@ -16078,7 +16302,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <input
                 type="number"
-                .value=${this._config.auto_advance_seconds || ''}
+                .value=${typeof this._config.auto_advance_seconds === 'number' ? this._config.auto_advance_seconds : ''}
                 @input=${this._autoAdvanceChanged}
                 placeholder="0"
                 min="0"
@@ -16270,7 +16494,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <input
                 type="number"
-                .value=${this._config.auto_refresh_seconds || ''}
+                .value=${typeof this._config.auto_refresh_seconds === 'number' ? this._config.auto_refresh_seconds : ''}
                 @input=${this._autoRefreshChanged}
                 placeholder="0"
                 min="0"
@@ -16495,7 +16719,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 min="0.3"
                 max="4"
                 step="0.1"
-                .value=${this._config.metadata?.scale ?? ''}
+                .value=${typeof this._config.metadata?.scale === 'number' ? this._config.metadata.scale : ''}
                 @input=${this._metadataScaleChanged}
                 placeholder="1.0"
               />

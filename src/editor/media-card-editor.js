@@ -19,7 +19,17 @@ export class MediaCardEditor extends LitElement {
   setConfig(config) {
     // Migrate v4 config to v5 if needed
     const migratedConfig = this._migrateV4toV5(config);
-    this._config = { ...migratedConfig };
+    
+    // Sanitize numeric config values (convert "auto" or other strings to valid numbers/undefined)
+    const sanitizedConfig = { ...migratedConfig };
+    if (sanitizedConfig.auto_advance_seconds !== undefined && typeof sanitizedConfig.auto_advance_seconds !== 'number') {
+      sanitizedConfig.auto_advance_seconds = undefined;
+    }
+    if (sanitizedConfig.auto_refresh_seconds !== undefined && typeof sanitizedConfig.auto_refresh_seconds !== 'number') {
+      sanitizedConfig.auto_refresh_seconds = undefined;
+    }
+    
+    this._config = sanitizedConfig;
   }
 
   // V4 to V5 Migration
@@ -3135,7 +3145,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <input
                 type="number"
-                .value=${this._config.auto_advance_seconds || ''}
+                .value=${typeof this._config.auto_advance_seconds === 'number' ? this._config.auto_advance_seconds : ''}
                 @input=${this._autoAdvanceChanged}
                 placeholder="0"
                 min="0"
@@ -3327,7 +3337,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <div>
               <input
                 type="number"
-                .value=${this._config.auto_refresh_seconds || ''}
+                .value=${typeof this._config.auto_refresh_seconds === 'number' ? this._config.auto_refresh_seconds : ''}
                 @input=${this._autoRefreshChanged}
                 placeholder="0"
                 min="0"
@@ -3552,7 +3562,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 min="0.3"
                 max="4"
                 step="0.1"
-                .value=${this._config.metadata?.scale ?? ''}
+                .value=${typeof this._config.metadata?.scale === 'number' ? this._config.metadata.scale : ''}
                 @input=${this._metadataScaleChanged}
                 placeholder="1.0"
               />
