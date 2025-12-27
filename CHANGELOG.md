@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.6.5 - 2025-12-27
 
 ### Added
-- **Lightweight File Existence Check**: New filesystem validation for MediaIndexProvider only
+
+- - **Lightweight File Existence Check**: New filesystem validation for MediaIndexProvider only
   - Calls `media_index.check_file_exists` service for instant validation (~1ms)
   - No network request, no image decode - just `os.path.exists()` check
   - Eliminates 404 broken image icons by detecting missing files before rendering
@@ -19,22 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Graceful fallback: If service unavailable (old media_index v<1.5.6), proceeds without validation
   - Backward compatible with all media_index versions
 
-### Changed
-- **404 Validation Strategy**: Lightweight filesystem check for MediaIndexProvider only
-  - MediaIndexProvider: Uses service check (instant, ~1ms filesystem check)
-  - Other providers: No validation overhead (files discovered from disk)
-  - Removed Image() preload validation (was causing double network/decode overhead for all providers)
-  - Provider polymorphism: Card calls `provider.checkFileExists()`, only MediaIndexProvider implements
-
-### Technical
-- Requires `ha-media-index` v1.5.6+ for optimal performance (filesystem check)
-- Works with older media_index versions (proceeds without validation)
-- WebSocket service call pattern: `hass.callWS()` with `return_response: true`
-- Response parsing: `response?.response?.exists` (nested under response key)
-
-## v5.6.4 - 2025-12-24
-
-### Added
 - **Through the Years Button Hide Option**: New `hide_on_this_day_button` config option
   - Hides the action button while keeping clock/date activation functional
   - Useful for cleaner UI when clock overlay provides sufficient access
@@ -91,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Panel mode thumbnails: Same fix applied to burst, related photos, "On This Day", and history panels
   - Invalid items removed from `_panelQueue` with `_panelQueueIndex` adjustment
   - Fixes thumbnail/media mismatch when 404s occur in panel modes
+  
+- **404 Validation Strategy**: Lightweight filesystem check for MediaIndexProvider only
+  - MediaIndexProvider: Uses service check (instant, ~1ms filesystem check)
+  - Other providers: No validation overhead (files discovered from disk)
+  - Removed Image() preload validation (was causing double network/decode overhead for all providers)
+  - Provider polymorphism: Card calls `provider.checkFileExists()`, only MediaIndexProvider implements
 
 - **Debug Logging**: Console messages now properly respect debug_mode setting
   - Queue navigation messages now use `_log()` instead of `console.log()`
@@ -117,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Centralized all resets in `_setMediaUrl()` as single source of truth
   - Removed duplicate resets from `_displayItem()` for cleaner code
   - Flags: `_videoHasEnded`, `_lastVideoTime`, `_videoTimerCount`
+
+### Technical
+- Requires `ha-media-index` v1.5.6+ for optimal performance (filesystem check)
+- Works with older media_index versions (proceeds without validation)
+- WebSocket service call pattern: `hass.callWS()` with `return_response: true`
+- Response parsing: `response?.response?.exists` (nested under response key)
 
 ## v5.6.4 - 2025-12-22
 
