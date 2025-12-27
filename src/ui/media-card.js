@@ -5856,12 +5856,12 @@ export class MediaCard extends LitElement {
    * Exit panel mode - restore main queue and handle burst metadata updates
    */
   async _exitPanelMode() {
-    console.warn(`🚪 Exiting panel mode: ${this._panelMode}, burstAllFiles: ${this._burstAllFiles?.length || 0}`);
+    this._log(`🚪 Exiting panel mode: ${this._panelMode}, burstAllFiles: ${this._burstAllFiles?.length || 0}`);
     
     try {
       // Handle burst-specific exit actions - always save metadata to record burst_count
       if (this._panelMode === 'burst' && this._burstAllFiles && this._burstAllFiles.length > 0) {
-        console.warn(`💾 Writing burst metadata to ${this._burstAllFiles.length} files (${this._burstFavoritedFiles?.length || 0} favorited)`);
+        this._log(`💾 Writing burst metadata to ${this._burstAllFiles.length} files (${this._burstFavoritedFiles?.length || 0} favorited)`);
         
         // Call update_burst_metadata service
         try {
@@ -5881,7 +5881,7 @@ export class MediaCard extends LitElement {
           }
           
           const response = await this.hass.callWS(wsCall);
-          console.warn('✅ Burst metadata saved:', `${response.response.files_updated} files, ${response.response.favorites_count} favorited`);
+          this._log('✅ Burst metadata saved:', `${response.response.files_updated} files, ${response.response.favorites_count} favorited`);
         } catch (metadataError) {
           console.error('Failed to update burst metadata:', metadataError);
           // Don't block exit on metadata failure
@@ -5910,7 +5910,7 @@ export class MediaCard extends LitElement {
           // Resolve media URL to update display
           await this._resolveMediaUrl();
           
-          console.warn(`↩️ Restored main queue position ${this.navigationIndex + 1}/${this.navigationQueue.length}`);
+          this._log(`↩️ Restored main queue position ${this.navigationIndex + 1}/${this.navigationQueue.length}`);
         }
       }
       
