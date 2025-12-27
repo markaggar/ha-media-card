@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Items marked with `_invalid` flag and removed from underlying queue
   - Prevents broken image icons, empty slideshow states, stuck video playback, and position mismatches
   - NavigationIndex automatically adjusted when invalid items removed
+  - Panel mode thumbnails: Same fix applied to burst, related photos, "On This Day", and history panels
+  - Invalid items removed from `_panelQueue` with `_panelQueueIndex` adjustment
+  - Fixes thumbnail/media mismatch when 404s occur in panel modes
 
 - **Debug Logging**: Console messages now properly respect debug_mode setting
   - Queue navigation messages now use `_log()` instead of `console.log()`

@@ -6033,6 +6033,33 @@ export class MediaCard extends LitElement {
           }
         }
       }
+      
+      // V5.6.5: Also remove from panel queue if we're in panel mode
+      // This fixes the same index mismatch issue for burst, related, on_this_day, and history panels
+      if (this._panelQueue && this._panelQueue.length > 0 && this._panelMode) {
+        const originalPanelQueue = this._panelQueue;
+        const initialLength = originalPanelQueue.length;
+        let removedBeforeCurrent = 0;
+        
+        this._panelQueue = originalPanelQueue.filter((q, index) => {
+          const isRemoved = q === item;
+          if (isRemoved && index < this._panelQueueIndex) {
+            removedBeforeCurrent++;
+          }
+          return !isRemoved;
+        });
+        
+        if (this._panelQueue.length < initialLength) {
+          this._log(`🗑️ Removed invalid item from _panelQueue (${initialLength} → ${this._panelQueue.length})`);
+          
+          // Adjust _panelQueueIndex if needed (if current position was after any removed items)
+          if (removedBeforeCurrent > 0) {
+            const previousIndex = this._panelQueueIndex;
+            this._panelQueueIndex = Math.max(0, this._panelQueueIndex - removedBeforeCurrent);
+            this._log(`📍 Adjusted _panelQueueIndex: ${previousIndex} → ${this._panelQueueIndex}`);
+          }
+        }
+      }
     }
     
     // Hide the entire thumbnail container
