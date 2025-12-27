@@ -27,6 +27,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Matches pattern already correctly implemented for preloaded collections
   - Identified by GitHub Copilot code review
 
+- **Video Loop Detection for Short Videos**: Fixed endless looping on very short videos (e.g., 1-second videos)
+  - Loop detection tolerance now duration-aware: uses 10% of video duration (clamped 0.05s-0.5s)
+  - Previous fixed 0.5s tolerance was too large for short videos
+  - Example: 1-second video now uses 0.1s tolerance instead of 0.5s
+  - Backwards compatible: defaults to 0.5s for unknown/long durations
+  - Identified by GitHub Copilot code review
+
+- **Navigation Queue Index Adjustment**: Fixed incorrect position tracking when removing invalid items
+  - Previous logic didn't correctly identify where removed items were relative to current position
+  - Now tracks how many items were removed before current `navigationIndex`
+  - Prevents position mismatches when clicking thumbnails after 404 items are filtered out
+  - Handles multiple removed items correctly
+  - Identified by GitHub Copilot code review
+
+- **Video Seeking Threshold**: Changed threshold from `> 0.5` to `>= 0.5` for consistency
+  - User seeks at exactly 0.5 seconds are now correctly detected as user interaction
+  - Minor consistency improvement in threshold checks
+  - Identified by GitHub Copilot code review
+
+- **Panel Mode Debug Logging**: Fixed debug logs showing regardless of debug_mode setting
+  - Burst mode, related photos, queue preview, and "On This Day" logs now properly gated
+  - Changed all panel mode `console.warn()` calls to use `this._log()` method
+  - Logs only appear when `debug_mode: true` in config or when using debug button
+  - Reduces console noise for normal users
+
 - **Missing Media File Handling (404 Errors)**: Slideshow no longer gets stuck on deleted files
   - 404 errors now automatically skip to next image in folder/queue modes
   - After one retry attempt, missing files are silently skipped with debug log

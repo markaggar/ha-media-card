@@ -5401,7 +5401,7 @@ class MediaCard extends LitElement {
     
     // V5.6.0: Randomize if checkbox is enabled
     if (this._playRandomized) {
-      console.warn('🎲 Randomizing panel items for playback');
+      this._log('🎲 Randomizing panel items for playback');
       // Fisher-Yates shuffle
       for (let i = panelItems.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -5447,16 +5447,14 @@ class MediaCard extends LitElement {
       }
     }
 
-    console.warn(`🗑️ Removed ${removedCount} duplicate items from queue`);
-
-    // Update navigation index after removals
+    this._log(`🗑️ Removed ${removedCount} duplicate items from queue`);
     this.navigationIndex = adjustedIndex;
 
     // Insert items into navigation queue after current position
     const insertPosition = this.navigationIndex + 1;
     this.navigationQueue.splice(insertPosition, 0, ...queueItems);
 
-    console.warn(`✅ Inserted ${queueItems.length} items at position ${insertPosition}, queue now has ${this.navigationQueue.length} items`);
+    this._log(`✅ Inserted ${queueItems.length} items at position ${insertPosition}, queue now has ${this.navigationQueue.length} items`);
 
     // Close panel WITHOUT restoring queue (we want to keep our insertions)
     this._panelOpen = false;
@@ -5468,7 +5466,7 @@ class MediaCard extends LitElement {
     
     // V5.6.0: Resume playback if paused
     if (this._isPaused) {
-      console.warn('▶️ Resuming playback to play panel items');
+      this._log('▶️ Resuming playback to play panel items');
       this._isPaused = false;
     }
     
@@ -6618,7 +6616,7 @@ class MediaCard extends LitElement {
     // V5.6.4: Only mark as user interaction if video has started playing
     // Browser fires seeking events during initial load - ignore those
     const video = e.target;
-    if (video && video.currentTime > 0.5) {
+    if (video && video.currentTime >= 0.5) {
       this._videoUserInteracted = true;
       this._log('🎬 User interacted with video (seek) - will play to completion');
     }
@@ -6769,12 +6767,19 @@ class MediaCard extends LitElement {
     
     // Simple, robust loop detection: currentTime went backwards
     // This happens when video loops from end to start
-    // Add small tolerance (0.5s) to avoid false positives from minor seeking
-    if (this._lastVideoTime !== undefined && currentTime < (this._lastVideoTime - 0.5)) {
+    // Use duration-aware tolerance to handle very short videos (e.g., 1-second videos)
+    let tolerance = 0.5; // default for longer videos / unknown duration (backwards compatible)
+    const duration = video.duration;
+    if (Number.isFinite(duration) && duration > 0) {
+      // Use ~10% of duration, clamped between 0.05s and 0.5s
+      tolerance = Math.min(Math.max(duration * 0.1, 0.05), 0.5);
+    }
+    
+    if (this._lastVideoTime !== undefined && currentTime < (this._lastVideoTime - tolerance)) {
       // Video looped! Mark that it has completed first playthrough
       if (!this._videoHasEnded) {
         this._videoHasEnded = true;
-        this._log(`🔁 Video looped (time jumped from ${Math.round(this._lastVideoTime * 10) / 10}s to ${Math.round(currentTime * 10) / 10}s) - first playthrough complete, timer can now advance`);
+        this._log(`🔁 Video looped (time jumped from ${Math.round(this._lastVideoTime * 10) / 10}s to ${Math.round(currentTime * 10) / 10}s, tolerance=${Math.round(tolerance * 100) / 100}s) - first playthrough complete, timer can now advance`);
       }
     }
     
@@ -8305,14 +8310,14 @@ class MediaCard extends LitElement {
       if (this._panelOpen && this._panelMode === 'burst' && newState === true) {
         if (!this._burstFavoritedFiles.includes(targetUri)) {
           this._burstFavoritedFiles.push(targetUri);
-          console.warn(`🎯 Added to burst favorites: ${targetUri} (${this._burstFavoritedFiles.length} total)`);
+          this._log(`🎯 Added to burst favorites: ${targetUri} (${this._burstFavoritedFiles.length} total)`);
         }
       } else if (this._panelOpen && this._panelMode === 'burst' && newState === false) {
         // Remove from favorites tracking if unfavorited
         const index = this._burstFavoritedFiles.indexOf(targetUri);
         if (index !== -1) {
           this._burstFavoritedFiles.splice(index, 1);
-          console.warn(`🎯 Removed from burst favorites: ${targetUri} (${this._burstFavoritedFiles.length} remaining)`);
+          this._log(`🎯 Removed from burst favorites: ${targetUri} (${this._burstFavoritedFiles.length} remaining)`);
         }
       }
       
@@ -9267,8 +9272,8 @@ class MediaCard extends LitElement {
       
       const response = await this.hass.callWS(wsCall);
       
-      console.warn('🎥 Burst photos response:', response);
-      console.warn('🎥 First item:', response.response?.items?.[0]);
+      this._log('🎥 Burst photos response:', response);
+      this._log('🎥 First item:', response.response?.items?.[0]);
       
       // Store panel queue - items already have media_source_uri from backend
       const rawItems = response.response?.items || [];
@@ -9289,7 +9294,7 @@ class MediaCard extends LitElement {
         .filter(item => item.is_favorited || item.rating >= 4)
         .map(item => item.media_source_uri || item.path);
       
-      console.warn(`📸 Burst panel loaded: ${this._panelQueue.length} files, ${this._burstFavoritedFiles.length} pre-favorited`);
+      this._log(`📸 Burst panel loaded: ${this._panelQueue.length} files, ${this._burstFavoritedFiles.length} pre-favorited`);
       
       // Deprecated state (for compatibility)
       this._burstPhotos = this._panelQueue;
@@ -9309,7 +9314,7 @@ class MediaCard extends LitElement {
         this._setPauseState(true);
       }
       
-      console.warn(`✅ Entered burst mode with ${this._panelQueue.length} photos`);
+      this._log(`✅ Entered burst mode with ${this._panelQueue.length} photos`);
       
     } catch (error) {
       console.error('Failed to enter burst mode:', error);
@@ -9400,7 +9405,7 @@ class MediaCard extends LitElement {
       this._panelMode = 'related';
       this._panelOpen = true;
       
-      console.warn(`📸 Related photos panel loaded: ${this._panelQueue.length} files`);
+      this._log(`📸 Related photos panel loaded: ${this._panelQueue.length} files`);
       
       // Initialize paging for related panel
       this._panelPageStartIndex = 0;
@@ -9415,7 +9420,7 @@ class MediaCard extends LitElement {
         this._setPauseState(true);
       }
       
-      console.warn(`✅ Entered related photos mode with ${this._panelQueue.length} photos`);
+      this._log(`✅ Entered related photos mode with ${this._panelQueue.length} photos`);
       
     } catch (error) {
       console.error('Failed to enter related photos mode:', error);
@@ -9453,7 +9458,7 @@ class MediaCard extends LitElement {
       const currentItem = this.navigationQueue[currentIndex];
       if (currentItem) {
         // Current item is already loaded, just open panel
-        console.warn(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${currentIndex + 1}`);
+        this._log(`📋 Queue preview opened: ${this.navigationQueue.length} items, current position ${currentIndex + 1}`);
       }
       
     } catch (error) {
@@ -9466,7 +9471,7 @@ class MediaCard extends LitElement {
   }
   
   _exitRelatedMode() {
-    console.warn('🚪 Exiting related photos mode');
+    this._log('🚪 Exiting related photos mode');
     this._exitPanelMode();
   }
 
@@ -9500,7 +9505,7 @@ class MediaCard extends LitElement {
       // Use current window setting (default 0 = exact match)
       const windowDays = this._onThisDayWindowDays || 0;
       
-      console.warn(`📅 Querying On This Day: month=${month}, day=${day}, window=±${windowDays} days`);
+      this._log(`📅 Querying On This Day: month=${month}, day=${day}, window=±${windowDays} days`);
       
       // Call media_index.get_random_items with anniversary parameters
       const wsCall = {
@@ -9559,7 +9564,7 @@ class MediaCard extends LitElement {
    * Exit On This Day mode
    */
   _exitOnThisDayMode() {
-    console.warn('🚪 Exiting On This Day mode');
+    this._log('🚪 Exiting On This Day mode');
     this._exitPanelMode();
   }
 
@@ -9661,7 +9666,7 @@ class MediaCard extends LitElement {
       }
       
       this.requestUpdate();
-      console.warn('✅ Panel mode exited, main queue restored');
+      this._log('✅ Panel mode exited, main queue restored');
       
     } catch (error) {
       console.error('Error exiting panel mode:', error);
@@ -9721,17 +9726,26 @@ class MediaCard extends LitElement {
       
       // Remove the invalid item from navigationQueue to prevent position mismatches
       if (this.navigationQueue && this.navigationQueue.length > 0) {
-        const initialLength = this.navigationQueue.length;
-        this.navigationQueue = this.navigationQueue.filter(q => q !== item);
+        const originalQueue = this.navigationQueue;
+        const initialLength = originalQueue.length;
+        let removedBeforeCurrent = 0;
+        
+        this.navigationQueue = originalQueue.filter((q, index) => {
+          const isRemoved = q === item;
+          if (isRemoved && index < this.navigationIndex) {
+            removedBeforeCurrent++;
+          }
+          return !isRemoved;
+        });
         
         if (this.navigationQueue.length < initialLength) {
           this._log(`🗑️ Removed invalid item from navigationQueue (${initialLength} → ${this.navigationQueue.length})`);
           
-          // Adjust navigationIndex if needed (if current position was after the removed item)
-          const removedIndex = initialLength - this.navigationQueue.length - 1;
-          if (this.navigationIndex > removedIndex) {
-            this.navigationIndex--;
-            this._log(`📍 Adjusted navigationIndex: ${this.navigationIndex + 1} → ${this.navigationIndex}`);
+          // Adjust navigationIndex if needed (if current position was after any removed items)
+          if (removedBeforeCurrent > 0) {
+            const previousIndex = this.navigationIndex;
+            this.navigationIndex = Math.max(0, this.navigationIndex - removedBeforeCurrent);
+            this._log(`📍 Adjusted navigationIndex: ${previousIndex} → ${this.navigationIndex}`);
           }
         }
       }
@@ -9810,7 +9824,7 @@ class MediaCard extends LitElement {
     }
     
     const selectedPhoto = this._burstPhotos[index];
-    console.warn(`📸 Selected burst photo ${index + 1}/${this._burstPhotos.length}: ${selectedPhoto.path}`);
+    this._log(`📸 Selected burst photo ${index + 1}/${this._burstPhotos.length}: ${selectedPhoto.path}`);
     
     // Update current media to selected photo
     this._currentMediaPath = selectedPhoto.path;
