@@ -3976,6 +3976,12 @@ class MediaCard extends LitElement {
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
     
+    // V5.7: Track which navigation index each crossfade layer belongs to
+    this._frontLayerNavigationIndex = null;  // Navigation index for front layer image
+    this._backLayerNavigationIndex = null;   // Navigation index for back layer image
+    this._frontLayerGeneration = 0;   // Increment when front layer URL changes (prevents stale setTimeout clearing new URLs)
+    this._backLayerGeneration = 0;    // Increment when back layer URL changes (prevents stale setTimeout clearing new URLs)
+    
     // Auto-hide action buttons for touch screens
     this._showButtonsExplicitly = false; // true = show via touch tap (independent of hover)
     this._hideButtonsTimer = null;
@@ -5692,28 +5698,26 @@ class MediaCard extends LitElement {
               return;
             }
             
-            // V5.6.4: Short videos that looped - advance on FIRST timer fire
-            if (this._videoHasEnded && this._videoTimerCount >= 1) {
-              this._log('🎬 Video looped (short video) - ADVANCING');
+            // V5.6.5: Video advancement logic
+            // Priority 1: Video ended naturally (no loop attribute when auto-advance active)
+            if (this._videoHasEnded || (videoElement.ended && !videoElement.loop)) {
+              this._log('🎬 Video ended - ADVANCING');
               // Fall through to advance
-            } else if (maxDuration === null || maxDuration === undefined || maxDuration === 0) {
-              // Long video, no duration cap - let it play to completion (ignore timer during first playthrough)
-              if (!this._videoHasEnded) {
-                this._log('🎬 Video on first playthrough (max_video_duration=0/null) - IGNORING TIMER');
-                return;
-              } else {
-                // Video looped, advance
-                this._log('🎬 Video looped - ADVANCING');
-              }
-            } else {
-              // Long video with max_video_duration cap - check if we've reached the limit
+            }
+            // Priority 2: max_video_duration > 0 - enforce interruption limit
+            else if (maxDuration && maxDuration > 0) {
               if (elapsedSeconds < maxDuration) {
-                this._log(`🎬 Timer count ${this._videoTimerCount}: elapsed≈${elapsedSeconds}s < max ${maxDuration}s - CONTINUING`);
+                this._log(`🎬 Timer #${this._videoTimerCount}: elapsed≈${elapsedSeconds}s < max ${maxDuration}s - CONTINUING`);
                 return; // Keep playing
               } else {
-                this._log(`🎬 Timer count ${this._videoTimerCount}: elapsed≈${elapsedSeconds}s ≥ max ${maxDuration}s - INTERRUPTING`);
+                this._log(`🎬 Timer #${this._videoTimerCount}: elapsed≈${elapsedSeconds}s ≥ max ${maxDuration}s - INTERRUPTING`);
                 // Fall through to advance
               }
+            }
+            // Priority 3: No max_video_duration and not ended - let video play
+            else {
+              this._log('🎬 Video playing to completion - IGNORING TIMER');
+              return; // Let it play to completion
             }
           }
           
@@ -6141,7 +6145,14 @@ class MediaCard extends LitElement {
   }
 
   // V5.6: Helper to set mediaUrl with crossfade transition (validates first for images)
-  async _setMediaUrl(url) {
+  async _setMediaUrl(url, expectedNavigationIndex) {
+    // V5.7: Guard against stale async resolutions during rapid navigation
+    // If expectedNavigationIndex is provided and doesn't match current pending index, abort
+    if (expectedNavigationIndex !== undefined && this._pendingNavigationIndex !== expectedNavigationIndex) {
+      this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
+      return;
+    }
+    
     // Only use crossfade for images, not videos
     const isVideo = this._isVideoFile(url);
     
@@ -6175,19 +6186,46 @@ class MediaCard extends LitElement {
         // Just update - render will show single image directly
         this.requestUpdate();
       } else {
+        // V5.7: Check again before setting layer URLs - navigation may have moved on during file check
+        // Use navigationIndex (not _pendingNavigationIndex) since pending gets cleared when image loads
+        const currentNavIndex = this._pendingNavigationIndex ?? this.navigationIndex;
+        if (expectedNavigationIndex !== undefined && currentNavIndex !== expectedNavigationIndex) {
+          this._log(`⏭️ Skipping stale layer update (expected: ${expectedNavigationIndex}, current: ${currentNavIndex})`);
+          return;
+        }
+        
         // Crossfade: set new image on hidden layer, then swap after it loads
-        // Special case: If both layers are empty (first load or after video), show immediately without crossfade
+        // V5.7: If there's already a pending swap, clear both layers and start fresh
+        // This handles rapid navigation where the previous image hasn't loaded yet
         if (!this._frontLayerUrl && !this._backLayerUrl) {
+          // Special case: Both layers empty (first load or after video), show immediately without crossfade
           this._frontLayerUrl = url;
           this._frontLayerActive = true;
           this._pendingLayerSwap = false;
+          this._frontLayerNavigationIndex = expectedNavigationIndex;
+          this.requestUpdate();
+        } else if (this._pendingLayerSwap) {
+          // Rapid navigation: Previous image hasn't loaded yet. Clear both and start fresh.
+          this._log(`⏩ Rapid navigation detected - clearing both layers`);
+          this._frontLayerUrl = url;
+          this._frontLayerGeneration++; // Invalidate any pending setTimeout for front layer
+          this._backLayerUrl = '';
+          this._backLayerGeneration++; // Invalidate any pending setTimeout for back layer
+          this._frontLayerActive = true;
+          this._pendingLayerSwap = false; // Show immediately without waiting for load
+          this._frontLayerNavigationIndex = expectedNavigationIndex;
+          this._backLayerNavigationIndex = null;
           this.requestUpdate();
         } else {
           // Normal crossfade: load on hidden layer then swap
           if (this._frontLayerActive) {
             this._backLayerUrl = url;
+            this._backLayerGeneration++; // Increment to invalidate any pending setTimeout for this layer
+            this._backLayerNavigationIndex = expectedNavigationIndex;
           } else {
             this._frontLayerUrl = url;
+            this._frontLayerGeneration++; // Increment to invalidate any pending setTimeout for this layer
+            this._frontLayerNavigationIndex = expectedNavigationIndex;
           }
           
           // Set flag to trigger swap when the new image loads
@@ -6200,6 +6238,8 @@ class MediaCard extends LitElement {
       // For videos, just clear the image layers immediately
       this._frontLayerUrl = '';
       this._backLayerUrl = '';
+      this._frontLayerNavigationIndex = null; // Clear layer navigation indices
+      this._backLayerNavigationIndex = null;
       
       // V5.6.4: Reset video tracking flags when loading new video
       // This prevents stale flags from previous video affecting new video
@@ -6220,6 +6260,9 @@ class MediaCard extends LitElement {
 
     const mediaId = this.currentMedia.media_content_id;
     
+    // V5.7: Capture pending index for async resolution guard
+    const expectedIndex = this._pendingNavigationIndex;
+    
     // Validate mediaId exists
     if (!mediaId) {
       this._log('ERROR: currentMedia has no media_content_id:', this.currentMedia);
@@ -6229,7 +6272,7 @@ class MediaCard extends LitElement {
     
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
-      await this._setMediaUrl(mediaId);
+      await this._setMediaUrl(mediaId, expectedIndex);
       this.requestUpdate();
       return;
     }
@@ -6247,11 +6290,11 @@ class MediaCard extends LitElement {
         // Add timestamp for auto-refresh (camera snapshots, etc.)
         const finalUrl = this._addCacheBustingTimestamp(resolved.url);
         
-        await this._setMediaUrl(finalUrl);
+        await this._setMediaUrl(finalUrl, expectedIndex);
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCard] Failed to resolve media URL:', error);
-        await this._setMediaUrl('');
+        await this._setMediaUrl('', expectedIndex);
         this._nextMediaUrl = '';
         this.requestUpdate();
       }
@@ -6276,7 +6319,7 @@ class MediaCard extends LitElement {
         });
         this._log('✅ File exists and resolved to:', resolved.url);
         this._validationDepth = 0; // Reset on success
-        await this._setMediaUrl(resolved.url);
+        await this._setMediaUrl(resolved.url, expectedIndex);
         this.requestUpdate();
         return; // Success - don't fall through to fallback
       } catch (error) {
@@ -6303,7 +6346,7 @@ class MediaCard extends LitElement {
         }
         
         // Clear the current media to avoid showing broken state
-        await this._setMediaUrl('');
+        await this._setMediaUrl('', expectedIndex);
         
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
@@ -6322,7 +6365,7 @@ class MediaCard extends LitElement {
 
     // Fallback: use as-is
     this._log('Using media ID as-is (fallback)');
-    await this._setMediaUrl(mediaId);
+    await this._setMediaUrl(mediaId, expectedIndex);
     this.requestUpdate();
   }
 
@@ -7004,41 +7047,78 @@ class MediaCard extends LitElement {
       const loadedUrl = e?.target?.src;
       const expectedUrl = this.mediaUrl; // Use mediaUrl which has the resolved URL
       
-      // Check if the loaded URL matches the expected URL (compare mediaUrl which is the resolved URL)
-      if (loadedUrl && expectedUrl) {
-        // Extract pathname from loaded URL if it's a full URL (e.g., http://10.0.0.62:8123/media/...)
+      // V5.7: Determine which layer just loaded by comparing URLs
+      let loadedLayerIndex = null;
+      
+      if (loadedUrl) {
+        // Normalize loaded URL for comparison
         let normalizedLoaded = loadedUrl;
         try {
           const url = new URL(loadedUrl);
-          normalizedLoaded = url.pathname + url.search; // Get /media/... path with query params
+          normalizedLoaded = url.pathname + url.search;
         } catch (e) {
-          // If not a valid URL, use as-is (already a path)
+          // Already a path
         }
-        
-        // Both URLs should now be paths - strip query params for comparison
         normalizedLoaded = normalizedLoaded.split('?')[0];
-        const normalizedExpected = expectedUrl.split('?')[0];
         
-        // Require exact normalized URL match to avoid race conditions
-        if (normalizedLoaded === normalizedExpected) {
-          this._pendingLayerSwap = false;
-          
-          // Swap layers to trigger crossfade
-          this._frontLayerActive = !this._frontLayerActive;
-          this.requestUpdate();
-          
-          // Clear old layer after transition
-          const duration = this._transitionDuration || 300;
-          setTimeout(() => {
-            if (this._frontLayerActive) {
-              this._backLayerUrl = '';
-            } else {
-              this._frontLayerUrl = '';
-            }
-            this.requestUpdate();
-          }, duration + 100);
+        // Check which layer this URL belongs to
+        const normalizedFront = this._frontLayerUrl ? this._frontLayerUrl.split('?')[0] : '';
+        const normalizedBack = this._backLayerUrl ? this._backLayerUrl.split('?')[0] : '';
+        
+        if (normalizedLoaded === normalizedFront) {
+          loadedLayerIndex = this._frontLayerNavigationIndex;
+        } else if (normalizedLoaded === normalizedBack) {
+          loadedLayerIndex = this._backLayerNavigationIndex;
         }
       }
+      
+      // Check if the loaded layer's navigation index matches current position
+      // This prevents swapping to an old image if navigation moved on during load
+      const currentNavigationIndex = this._pendingNavigationIndex ?? this.navigationIndex;
+      
+      if (loadedLayerIndex !== null && loadedLayerIndex !== currentNavigationIndex) {
+        this._log(`⏭️ Skipping layer swap - loaded image is for navigation index ${loadedLayerIndex}, current is ${currentNavigationIndex}`);
+        
+        // Clear the stale layer URL but DON'T clear _pendingLayerSwap
+        // We're still waiting for the correct image to load and swap in
+        if (normalizedLoaded === this._frontLayerUrl?.split('?')[0]) {
+          this._frontLayerUrl = '';
+          this._frontLayerNavigationIndex = null;
+        } else if (normalizedLoaded === this._backLayerUrl?.split('?')[0]) {
+          this._backLayerUrl = '';
+          this._backLayerNavigationIndex = null;
+        }
+        
+        this.requestUpdate();
+        return; // Don't swap layers, but keep _pendingLayerSwap = true
+      }
+      
+      // V5.7: If we got here, the loaded image is for the current navigation position
+      // Just swap immediately - no need to compare URLs since we already validated the navigation index
+      this._pendingLayerSwap = false;
+      
+      // Swap layers to trigger crossfade
+      this._frontLayerActive = !this._frontLayerActive;
+      this._log(`🔄 Layer swap triggered - now showing layer: ${this._frontLayerActive ? 'front' : 'back'}`);
+      this.requestUpdate();
+      
+      // Clear old layer after transition
+      const duration = this._transitionDuration || 300;
+      // Capture current generation to prevent clearing if layer gets reused during setTimeout delay
+      const expectedFrontGen = this._frontLayerGeneration;
+      const expectedBackGen = this._backLayerGeneration;
+      setTimeout(() => {
+        if (this._frontLayerActive && this._backLayerGeneration === expectedBackGen) {
+          // Only clear if back layer hasn't been reused (generation unchanged)
+          this._backLayerUrl = '';
+          this._backLayerNavigationIndex = null;
+        } else if (!this._frontLayerActive && this._frontLayerGeneration === expectedFrontGen) {
+          // Only clear if front layer hasn't been reused (generation unchanged)
+          this._frontLayerUrl = '';
+          this._frontLayerNavigationIndex = null;
+        }
+        this.requestUpdate();
+      }, duration + 100);
     }
     
     // V5.3: Apply default zoom AFTER image loads (PR #37 by BasicCPPDev)
@@ -12656,7 +12736,7 @@ class MediaCard extends LitElement {
             preload="auto"
             playsinline
             crossorigin="anonymous"
-            ?loop=${this.config.video_loop || false}
+            ?loop=${(this.config.video_loop || false) && !this._autoRefreshTimer}
             ?autoplay=${this.config.video_autoplay !== false}
             ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
@@ -13084,6 +13164,10 @@ class MediaCard extends LitElement {
         } catch (error) {
           console.error('Failed to resolve thumbnail:', error);
           pendingResolutions--;
+          if (pendingResolutions === 0 && !hasRequestedUpdate) {
+            hasRequestedUpdate = true;
+            this.requestUpdate();
+          }
         } finally {
           item._resolving = false;
         }
@@ -17141,7 +17225,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   .checked=${this._config.action_buttons?.hide_on_this_day_button === true}
                   @change=${this._actionButtonsHideOnThisDayButtonChanged}
                 />
-                <div class="help-text">Hide the action button; activate Through the Years by clicking the clock/date overlay only</div>
+                <div class="help-text">Hide the Through the Years action button; the feature remains accessible via the clock/date overlay</div>
               </div>
             </div>
           </div>

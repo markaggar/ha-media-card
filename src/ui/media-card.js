@@ -1916,28 +1916,26 @@ export class MediaCard extends LitElement {
               return;
             }
             
-            // V5.6.4: Short videos that looped - advance on FIRST timer fire
-            if (this._videoHasEnded && this._videoTimerCount >= 1) {
-              this._log('🎬 Video looped (short video) - ADVANCING');
+            // V5.6.5: Video advancement logic
+            // Priority 1: Video ended naturally (no loop attribute when auto-advance active)
+            if (this._videoHasEnded || (videoElement.ended && !videoElement.loop)) {
+              this._log('🎬 Video ended - ADVANCING');
               // Fall through to advance
-            } else if (maxDuration === null || maxDuration === undefined || maxDuration === 0) {
-              // Long video, no duration cap - let it play to completion (ignore timer during first playthrough)
-              if (!this._videoHasEnded) {
-                this._log('🎬 Video on first playthrough (max_video_duration=0/null) - IGNORING TIMER');
-                return;
-              } else {
-                // Video looped, advance
-                this._log('🎬 Video looped - ADVANCING');
-              }
-            } else {
-              // Long video with max_video_duration cap - check if we've reached the limit
+            }
+            // Priority 2: max_video_duration > 0 - enforce interruption limit
+            else if (maxDuration && maxDuration > 0) {
               if (elapsedSeconds < maxDuration) {
-                this._log(`🎬 Timer count ${this._videoTimerCount}: elapsed≈${elapsedSeconds}s < max ${maxDuration}s - CONTINUING`);
+                this._log(`🎬 Timer #${this._videoTimerCount}: elapsed≈${elapsedSeconds}s < max ${maxDuration}s - CONTINUING`);
                 return; // Keep playing
               } else {
-                this._log(`🎬 Timer count ${this._videoTimerCount}: elapsed≈${elapsedSeconds}s ≥ max ${maxDuration}s - INTERRUPTING`);
+                this._log(`🎬 Timer #${this._videoTimerCount}: elapsed≈${elapsedSeconds}s ≥ max ${maxDuration}s - INTERRUPTING`);
                 // Fall through to advance
               }
+            }
+            // Priority 3: No max_video_duration and not ended - let video play
+            else {
+              this._log('🎬 Video playing to completion - IGNORING TIMER');
+              return; // Let it play to completion
             }
           }
           
@@ -8956,7 +8954,7 @@ export class MediaCard extends LitElement {
             preload="auto"
             playsinline
             crossorigin="anonymous"
-            ?loop=${this.config.video_loop || false}
+            ?loop=${(this.config.video_loop || false) && !this._autoRefreshTimer}
             ?autoplay=${this.config.video_autoplay !== false}
             ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
