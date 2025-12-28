@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Video Auto-Advance Behavior**: Fixed videos respecting auto-advance timer properly
+  - Videos now play to completion by default when auto-advance is enabled
+  - `video_loop` attribute disabled when auto-advance timer is active (prevents looping)
+  - Videos advance immediately when they end naturally
+  - `video_max_duration` still respected if set - interrupts video at specified limit
+  - Fixes issue where long videos would loop indefinitely despite auto-advance timer
+  - Behavior: video plays → ends → advances immediately (no loop when timer active)
+
 - **Crossfade Black Screen During Navigation**: Fixed race condition causing images to disappear (fade to black) during navigation
   - Root cause: setTimeout callback clearing layer URLs after transition could fire after new image was already set to that layer
   - Added layer generation counters (`_frontLayerGeneration`, `_backLayerGeneration`) that increment when layer URLs change
