@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Crossfade Black Screen During Navigation**: Fixed race condition causing images to disappear (fade to black) during navigation
+  - Root cause: setTimeout callback clearing layer URLs after transition could fire after new image was already set to that layer
+  - Added layer generation counters (`_frontLayerGeneration`, `_backLayerGeneration`) that increment when layer URLs change
+  - setTimeout callbacks now capture generation at scheduling time and only clear if generation unchanged
+  - Prevents stale setTimeout from wiping out newly-set layer URLs during rapid or overlapping navigation
+  - Most commonly occurred when navigating forward/back repeatedly with brief pauses between clicks
+  - Images now render consistently without black screens, crossfade transitions work reliably
+
 - **Code Quality Issues** (GitHub Copilot review feedback):
   - Fixed matchesItem function parameter inconsistency - now properly receives index parameter in all filter calls
   - Fixed debugMatchCount variable continuing across multiple filter operations - now resets before _panelQueue filter
