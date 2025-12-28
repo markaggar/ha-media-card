@@ -6109,6 +6109,11 @@ class MediaCard extends LitElement {
 
   // V5.6.6: Check if file exists via provider (delegates to media_index service if available)
   async _checkFileExistsViaProvider(mediaItem) {
+    // Validate mediaItem exists before proceeding
+    if (!mediaItem) {
+      return null;
+    }
+    
     // Ask provider to check - MediaIndexProvider has service, others return null
     if (typeof this.provider?.checkFileExists === 'function') {
       return await this.provider.checkFileExists(mediaItem);
@@ -6862,6 +6867,11 @@ class MediaCard extends LitElement {
     if (Number.isFinite(duration) && duration > 0) {
       // Use ~10% of duration, clamped between 0.05s and 0.5s
       tolerance = Math.min(Math.max(duration * 0.1, 0.05), 0.5);
+    }
+    
+    // Defensive check: ensure tolerance is valid before comparison
+    if (!Number.isFinite(tolerance) || tolerance <= 0) {
+      tolerance = 0.5; // Fallback to safe default
     }
     
     if (this._lastVideoTime !== undefined && currentTime < (this._lastVideoTime - tolerance)) {
@@ -9962,7 +9972,7 @@ class MediaCard extends LitElement {
       let removedBeforeCurrent = 0;
 
       this.navigationQueue = originalQueue.filter((q, index) => {
-        const isRemoved = matchesItem(q);
+        const isRemoved = matchesItem(q, index);
         if (isRemoved && index < this.navigationIndex) {
           removedBeforeCurrent++;
         }
@@ -9986,9 +9996,12 @@ class MediaCard extends LitElement {
       const originalPanelQueue = this._panelQueue;
       const initialLength = originalPanelQueue.length;
       let removedBeforeCurrent = 0;
+      
+      // Reset debug counter for panel queue filtering
+      debugMatchCount = 0;
 
       this._panelQueue = originalPanelQueue.filter((q, index) => {
-        const isRemoved = matchesItem(q);
+        const isRemoved = matchesItem(q, index);
         if (isRemoved && index < this._panelQueueIndex) {
           removedBeforeCurrent++;
         }
@@ -13011,7 +13024,7 @@ class MediaCard extends LitElement {
     // For other modes: only show when there are more pages
     const hasMultiplePages = validItems.length > maxDisplay;
     const hasPreviousPage = this._panelMode === 'queue' ? hasMultiplePages : displayStartIndex > 0;
-    const hasNextPage = this._panelMode === 'queue' ? hasMultiplePages : (displayStartIndex + displayItems.length) < allItems.length;
+    const hasNextPage = this._panelMode === 'queue' ? hasMultiplePages : (displayStartIndex + displayItems.length) < validItems.length;
     
     // V5.6: Calculate thumbnail height to fit rows in available space
     // Assumes panel height ~70% of viewport, header ~80px, padding/gap ~150px total
