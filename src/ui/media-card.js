@@ -1220,10 +1220,18 @@ export class MediaCard extends LitElement {
     // The browser auto-pauses videos when they're removed from DOM
     this._navigatingAway = true;
 
-    // V5.5: Panel Navigation Override
-    if (this._panelOpen && this._panelQueue.length > 0) {
+    // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
+    // Queue preview mode uses navigationQueue directly, so skip panel navigation
+    if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
       this._navigatingAway = false;
       return await this._loadNextPanel();
+    }
+    
+    // V5.7: Reset manual page flag when navigating with arrow keys/buttons
+    // This allows auto-adjustment to scroll panel to show newly navigated item
+    // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
+    if (this._panelOpen && this._panelMode === 'queue') {
+      this._manualPageChange = false;
     }
     
     if (!this.provider) {
@@ -1447,10 +1455,17 @@ export class MediaCard extends LitElement {
     // V5.6: Set flag FIRST to ignore video pause events during navigation
     this._navigatingAway = true;
 
-    // V5.5: Panel Navigation Override
-    if (this._panelOpen && this._panelQueue.length > 0) {
+    // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
+    // Queue preview mode uses navigationQueue directly, so skip panel navigation
+    if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
       this._navigatingAway = false;
       return await this._loadPreviousPanel();
+    }
+    
+    // V5.7: Reset manual page flag when navigating with arrow keys/buttons
+    // This allows auto-adjustment to scroll panel to show newly navigated item
+    if (this._panelOpen && this._panelMode === 'queue') {
+      this._manualPageChange = false;
     }
     
     if (!this.provider) {
@@ -1641,9 +1656,13 @@ export class MediaCard extends LitElement {
 
     this._log(`🎯 Jumping to queue position ${queueIndex + 1}/${this.navigationQueue.length}`);
 
-    // Clear manual page flag - user is now navigating to items, allow auto-adjustment
-    this._manualPageChange = false;
-    this._manualPageRenderCount = 0;
+    // CRITICAL: Keep _manualPageChange true when in queue preview mode
+    // User clicked a thumbnail on the current page - don't auto-adjust page position!
+    // Only reset to false when NOT in panel mode (normal navigation with arrow keys)
+    if (!this._panelOpen || this._panelMode !== 'queue') {
+      this._manualPageChange = false;
+      this._manualPageRenderCount = 0;
+    }
 
     // Load the item from the queue
     const item = this.navigationQueue[queueIndex];
@@ -2853,8 +2872,7 @@ export class MediaCard extends LitElement {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
     
-    // V5.6.5: Apply pending metadata AND navigation index when video is ready
-    // This ensures video gets its own metadata, not inherited from previous image
+    // V5: Apply pending metadata AND navigation index when video is ready
     if (this._pendingMetadata !== null) {
       this._currentMetadata = this._pendingMetadata;
       this._pendingMetadata = null;
@@ -2869,6 +2887,7 @@ export class MediaCard extends LitElement {
       this._currentMediaPath = this._pendingMediaPath;
       this._pendingMediaPath = null;
     }
+    
     this.requestUpdate();
   }
 
@@ -9253,9 +9272,15 @@ export class MediaCard extends LitElement {
     const thumbnailHeight = Math.max(100, Math.min(200, (availableHeight - gapSpace) / rows));
 
     // Resolve all thumbnail URLs upfront (async but doesn't block render)
+    // Batch updates: only request re-render once after all pending resolutions complete
+    let pendingResolutions = 0;
+    let hasRequestedUpdate = false;
+    
     displayItems.forEach(async (item) => {
       if (!item._resolvedUrl && !item._resolving) {
         item._resolving = true;
+        pendingResolutions++;
+        
         try {
           // For queue mode, use media_content_id directly; for burst mode, construct from path
           const mediaUri = item.media_source_uri 
@@ -9267,9 +9292,16 @@ export class MediaCard extends LitElement {
             expires: 3600
           });
           item._resolvedUrl = resolved.url;
-          this.requestUpdate();
+          
+          // Only request update once after all thumbnails resolve
+          pendingResolutions--;
+          if (pendingResolutions === 0 && !hasRequestedUpdate) {
+            hasRequestedUpdate = true;
+            this.requestUpdate();
+          }
         } catch (error) {
           console.error('Failed to resolve thumbnail:', error);
+          pendingResolutions--;
         } finally {
           item._resolving = false;
         }
