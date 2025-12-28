@@ -3268,7 +3268,6 @@ export class MediaCard extends LitElement {
       const expectedUrl = this.mediaUrl; // Use mediaUrl which has the resolved URL
       
       // V5.7: Determine which layer just loaded by comparing URLs
-      let loadedLayerUrl = null;
       let loadedLayerIndex = null;
       
       if (loadedUrl) {
@@ -9385,6 +9384,10 @@ export class MediaCard extends LitElement {
         } catch (error) {
           console.error('Failed to resolve thumbnail:', error);
           pendingResolutions--;
+          if (pendingResolutions === 0 && !hasRequestedUpdate) {
+            hasRequestedUpdate = true;
+            this.requestUpdate();
+          }
         } finally {
           item._resolving = false;
         }
