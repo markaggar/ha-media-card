@@ -3939,7 +3939,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   .checked=${this._config.action_buttons?.hide_on_this_day_button === true}
                   @change=${this._actionButtonsHideOnThisDayButtonChanged}
                 />
-                <div class="help-text">Hide the action button; activate Through the Years by clicking the clock/date overlay only</div>
+                <div class="help-text">Hide the Through the Years action button; the feature remains accessible via the clock/date overlay</div>
               </div>
             </div>
           </div>
