@@ -403,6 +403,21 @@ export class FolderProvider extends MediaProvider {
     return null;
   }
 
+  // V5.6.6: Delegate file existence check to wrapped provider (MediaIndexProvider only)
+  async checkFileExists(mediaItem) {
+    // Only MediaIndexProvider implements this - delegate if available
+    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.checkFileExists === 'function') {
+      return await this.mediaIndexProvider.checkFileExists(mediaItem);
+    }
+    
+    if (this.sequentialProvider && typeof this.sequentialProvider.checkFileExists === 'function') {
+      return await this.sequentialProvider.checkFileExists(mediaItem);
+    }
+    
+    // SubfolderQueue discovers files from disk, no validation needed
+    return null;
+  }
+
   // Query for files newer than the given date (for queue refresh feature)
   async getFilesNewerThan(dateThreshold) {
     // Delegate to the underlying provider
