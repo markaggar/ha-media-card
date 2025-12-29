@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.5
+ * Media Card v5.6.6
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -5387,7 +5387,7 @@ class MediaCard extends LitElement {
       return;
     }
     
-    this._log(`📱 Loading panel item ${index + 1}/${this._panelQueue.length}:`, item.filename || item.path);
+    console.log('[MediaCard] 📱 Loading panel item', index + 1, '/', this._panelQueue.length, ':', item.filename || item.path, 'Panel mode:', this._panelMode);
     
     // Update panel index
     this._panelQueueIndex = index;
@@ -5414,6 +5414,10 @@ class MediaCard extends LitElement {
     // V5.7: Store in pending state - will apply when image/video loads
     this._pendingMediaPath = mediaUri;
     this._pendingMetadata = metadata;
+    
+    // V5.7: Panel navigation doesn't use queue navigation indices - set to special marker
+    // This tells _resolveMediaUrl to skip stale navigation checks (only relevant for queue nav)
+    this._pendingNavigationIndex = -1; // -1 = panel navigation, not queue navigation
     
     // Update deprecated state for compatibility
     if (this._panelMode === 'burst') {
@@ -17416,7 +17420,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.5 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.6 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
