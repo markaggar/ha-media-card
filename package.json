@@ -1,6 +1,6 @@
 {
   "name": "ha-media-card",
-  "version": "5.6.5",
+  "version": "5.6.6",
   "description": "Home Assistant Lovelace card for displaying media with slideshow, favorites, and metadata",
   "type": "module",
   "scripts": {
