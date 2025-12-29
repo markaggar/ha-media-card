@@ -2464,6 +2464,7 @@ export class MediaCard extends LitElement {
       this._videoHasEnded = false;
       this._lastVideoTime = undefined;
       this._videoTimerCount = 0; // Reset timer counter for new video
+      this._videoPlayStartTime = null; // Track when video playback starts
       this._log('🎬 Loading new video - reset tracking flags');
       
       this.requestUpdate();
@@ -2935,6 +2936,11 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoPlay() {
+    // V5.6.5: Track when video playback starts for elapsed time calculation
+    if (!this._videoPlayStartTime) {
+      this._videoPlayStartTime = Date.now();
+    }
+    
     // Reset video wait timer when video starts playing
     this._videoWaitStartTime = null;
     
@@ -3027,7 +3033,6 @@ export class MediaCard extends LitElement {
 
     // Get configuration values
     const videoMaxDuration = this.config.video_max_duration || 0;
-    const autoAdvanceSeconds = this.config.auto_advance_seconds || 0;
 
     // If video_max_duration is 0, wait indefinitely for video completion
     if (videoMaxDuration === 0) {
@@ -3044,18 +3049,13 @@ export class MediaCard extends LitElement {
     const waitTimeSeconds = Math.floor(waitTimeMs / 1000);
     const maxWaitMs = videoMaxDuration * 1000;
 
-    // Use the larger of video_max_duration and auto_advance_seconds as the actual limit
-    // This prevents auto_advance_seconds from cutting off long videos
-    const effectiveMaxWaitMs = Math.max(maxWaitMs, autoAdvanceSeconds * 1000);
-    const effectiveMaxWaitSeconds = Math.floor(effectiveMaxWaitMs / 1000);
-
-    if (waitTimeMs >= effectiveMaxWaitMs) {
-      this._log(`🎬 Video max duration reached (${waitTimeSeconds}s/${effectiveMaxWaitSeconds}s), proceeding with refresh`);
+    if (waitTimeMs >= maxWaitMs) {
+      this._log(`🎬 Video max duration reached (${waitTimeSeconds}s/${videoMaxDuration}s), proceeding with refresh`);
       this._videoWaitStartTime = null; // Reset for next video
       return false;
     }
 
-    this._log(`🎬 Video playing - waiting for completion (${waitTimeSeconds}s/${effectiveMaxWaitSeconds}s)`);
+    this._log(`🎬 Video playing - waiting for completion (${waitTimeSeconds}s/${videoMaxDuration}s)`);
     return true;
   }
 
@@ -3066,10 +3066,24 @@ export class MediaCard extends LitElement {
     // V5.6.4: Mark that video has completed first playthrough
     this._videoHasEnded = true;
     
-    // V5.6: If video_loop is enabled, don't advance - video will loop until auto-refresh timer
-    if (this.config.video_loop) {
-      this._log('🔁 Video loop enabled - video will restart automatically, waiting for auto-refresh timer');
-      return;
+    // V5.6.5: Check if we should restart video (short video with loop enabled)
+    const autoAdvanceSeconds = this.config?.auto_advance_seconds || 
+                               this.config?.auto_advance_interval || 
+                               this.config?.auto_advance_duration || 0;
+    
+    if (this.config.video_loop && autoAdvanceSeconds > 0 && this._videoPlayStartTime) {
+      const elapsedMs = Date.now() - this._videoPlayStartTime;
+      const elapsedSeconds = Math.floor(elapsedMs / 1000);
+      
+      if (elapsedSeconds < autoAdvanceSeconds) {
+        this._log(`🔁 Short video with loop enabled (${elapsedSeconds}s < ${autoAdvanceSeconds}s auto-advance) - restarting video`);
+        const videoElement = this.shadowRoot?.querySelector('video');
+        if (videoElement) {
+          videoElement.currentTime = 0;
+          videoElement.play().catch(err => this._log('Error restarting video:', err));
+        }
+        return;
+      }
     }
     
     // Reset video wait timer when video ends
@@ -8954,7 +8968,7 @@ export class MediaCard extends LitElement {
             preload="auto"
             playsinline
             crossorigin="anonymous"
-            ?loop=${(this.config.video_loop || false) && !this._autoRefreshTimer}
+            ?loop=${(this.config.video_loop || false) && !(this.config.auto_advance_seconds > 0)}
             ?autoplay=${this.config.video_autoplay !== false}
             ?muted=${this.config.video_muted !== false}
             @loadstart=${this._onVideoLoadStart}
