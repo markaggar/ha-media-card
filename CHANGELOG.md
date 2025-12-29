@@ -5,6 +5,143 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.5 - 2025-12-27
+
+### Added
+
+- - **Lightweight File Existence Check**: New filesystem validation for MediaIndexProvider only
+  - Calls `media_index.check_file_exists` service for instant validation (~1ms)
+  - No network request, no image decode - just `os.path.exists()` check
+  - Eliminates 404 broken image icons by detecting missing files before rendering
+  - Files skip instantly when 404 detected, no broken image placeholder shown
+  - Provider-based architecture: MediaIndexProvider implements check, others skip validation
+  - FolderProvider delegates to wrapped MediaIndexProvider when using `use_media_index_for_discovery: true`
+  - Other providers (FolderProvider/SubfolderQueue, SingleMediaProvider) scan filesystem directly, so 404s unlikely
+  - Graceful fallback: If service unavailable (old media_index v<1.5.6), proceeds without validation
+  - Backward compatible with all media_index versions
+
+- **Through the Years Button Hide Option**: New `hide_on_this_day_button` config option
+  - Hides the action button while keeping clock/date activation functional
+  - Useful for cleaner UI when clock overlay provides sufficient access
+  - Appears as indented sub-option in editor when Through the Years is enabled
+  - Config: `action_buttons.hide_on_this_day_button: true`
+
+### Fixed
+
+- **Video Auto-Advance Behavior**: Fixed videos respecting auto-advance timer properly
+  - Videos now play to completion when auto-advance is enabled (no HTML loop attribute when timer active)
+  - Short videos with `video_loop: true` restart manually based on elapsed playback time
+  - When elapsed time < auto-advance interval: Video restarts and continues looping
+  - When elapsed time >= auto-advance interval: Advances immediately to next media
+  - `video_max_duration` still respected if set - interrupts video at specified limit
+  - Long videos advance immediately when they end (no delay waiting for timer)
+  - Fixed incorrect `maxDuration` calculation that showed wrong value in logs
+  - Behavior: Short videos loop until timer expires, long videos advance on completion
+
+- **Crossfade Black Screen During Navigation**: Fixed race condition causing images to disappear (fade to black) during navigation
+  - Root cause: setTimeout callback clearing layer URLs after transition could fire after new image was already set to that layer
+  - Added layer generation counters (`_frontLayerGeneration`, `_backLayerGeneration`) that increment when layer URLs change
+  - setTimeout callbacks now capture generation at scheduling time and only clear if generation unchanged
+  - Prevents stale setTimeout from wiping out newly-set layer URLs during rapid or overlapping navigation
+  - Most commonly occurred when navigating forward/back repeatedly with brief pauses between clicks
+  - Images now render consistently without black screens, crossfade transitions work reliably
+
+- **Code Quality Issues** (GitHub Copilot review feedback):
+  - Fixed matchesItem function parameter inconsistency - now properly receives index parameter in all filter calls
+  - Fixed debugMatchCount variable continuing across multiple filter operations - now resets before _panelQueue filter
+  - **Pagination Bug**: Fixed hasNextPage calculation using allItems.length instead of validItems.length (incorrect page count when items filtered)
+  - Added null check in _checkFileExistsViaProvider before passing currentMedia to provider (prevents crashes)
+  - Added defensive Number.isFinite check for video tolerance calculation (prevents NaN comparisons)
+  - All issues addressed from automated code review to improve robustness and prevent edge case failures
+
+- **Through the Years Panel Layout**: Fixed button overflow on narrow screens
+  - Stacked layout: dropdown on top, checkbox and button on bottom row
+  - Prevents "Play These" button from spilling off page
+  - Improved responsive design for mobile/tablet views
+
+- **Navigation Wrap-Around Bug**: Fixed undefined queue access when wrapping from end to start
+  - Root cause: Local `nextIndex` variable wasn't synchronized with `_pendingNavigationIndex` when wrapping
+  - Could cause errors when provider exhausted and collection wrapped to start
+  - Added `nextIndex = 0` before `_pendingNavigationIndex = 0` at wrap point
+  - Matches pattern already correctly implemented for preloaded collections
+  - Identified by GitHub Copilot code review
+
+- **Video Loop Detection for Short Videos**: Fixed endless looping on very short videos (e.g., 1-second videos)
+  - Loop detection tolerance now duration-aware: uses 10% of video duration (clamped 0.05s-0.5s)
+  - Previous fixed 0.5s tolerance was too large for short videos
+  - Example: 1-second video now uses 0.1s tolerance instead of 0.5s
+  - Backwards compatible: defaults to 0.5s for unknown/long durations
+  - Identified by GitHub Copilot code review
+
+- **Navigation Queue Index Adjustment**: Fixed incorrect position tracking when removing invalid items
+  - Previous logic didn't correctly identify where removed items were relative to current position
+  - Now tracks how many items were removed before current `navigationIndex`
+  - Prevents position mismatches when clicking thumbnails after 404 items are filtered out
+  - Handles multiple removed items correctly
+  - Identified by GitHub Copilot code review
+
+- **Video Seeking Threshold**: Changed threshold from `> 0.5` to `>= 0.5` for consistency
+  - User seeks at exactly 0.5 seconds are now correctly detected as user interaction
+  - Minor consistency improvement in threshold checks
+  - Identified by GitHub Copilot code review
+
+- **Panel Mode Debug Logging**: Fixed debug logs showing regardless of debug_mode setting
+  - Burst mode, related photos, queue preview, and "On This Day" logs now properly gated
+  - Changed all panel mode `console.warn()` calls to use `this._log()` method
+  - Logs only appear when `debug_mode: true` in config or when using debug button
+  - Reduces console noise for normal users
+
+- **Missing Media File Handling (404 Errors)**: Slideshow no longer gets stuck on deleted files
+  - 404 errors now automatically skip to next image in folder/queue modes
+  - After one retry attempt, missing files are silently skipped with debug log
+  - Slideshow continues seamlessly without user intervention
+  - Single media mode still shows error message (as expected for static display)
+  - Queue thumbnails: Broken thumbnails completely removed from display and navigationQueue
+  - Items marked with `_invalid` flag and removed from underlying queue
+  - Prevents broken image icons, empty slideshow states, stuck video playback, and position mismatches
+  - NavigationIndex automatically adjusted when invalid items removed
+  - Panel mode thumbnails: Same fix applied to burst, related photos, "On This Day", and history panels
+  - Invalid items removed from `_panelQueue` with `_panelQueueIndex` adjustment
+  - Fixes thumbnail/media mismatch when 404s occur in panel modes
+  
+- **404 Validation Strategy**: Lightweight filesystem check for MediaIndexProvider only
+  - MediaIndexProvider: Uses service check (instant, ~1ms filesystem check)
+  - Other providers: No validation overhead (files discovered from disk)
+  - Removed Image() preload validation (was causing double network/decode overhead for all providers)
+  - Provider polymorphism: Card calls `provider.checkFileExists()`, only MediaIndexProvider implements
+
+- **Debug Logging**: Console messages now properly respect debug_mode setting
+  - Queue navigation messages now use `_log()` instead of `console.log()`
+  - Favorite debugging messages now use `_log()` instead of `console.warn()`
+  - Messages only appear when `debug_mode: true` is enabled
+  - Reduces console noise in production use
+
+- **Confirmation Dialog Paths**: Delete/edit dialogs show correct destination folder
+  - Root cause: Always preferred `media_path` even when in folder mode
+  - Now checks `media_source_type` to determine correct path source
+  - Folder mode (`media_source_type: folder`) uses `folder.path`
+  - Single media mode (`media_source_type: single_media`) uses `media_path`
+  - Prevents showing incorrect `_Junk`/`_Edit` destination paths
+
+- **Queue Preview Panel Interaction**: Closing Queue Preview no longer skips injected items
+  - Root cause: Queue restoration logic treated Queue Preview like other panel modes
+  - Queue Preview is read-only overlay, never saves/restores navigationQueue
+  - Through the Years, Burst, and Related modes inject items into navigationQueue
+  - Closing Queue Preview now skips restoration, preserving injected items
+  - Fixes bug where viewing queue during Through the Years playback would skip remaining items
+
+### Improved
+- **Code Quality**: Removed redundant video tracking flag resets
+  - Centralized all resets in `_setMediaUrl()` as single source of truth
+  - Removed duplicate resets from `_displayItem()` for cleaner code
+  - Flags: `_videoHasEnded`, `_lastVideoTime`, `_videoTimerCount`
+
+### Technical
+- Requires `ha-media-index` v1.5.6+ for optimal performance (filesystem check)
+- Works with older media_index versions (proceeds without validation)
+- WebSocket service call pattern: `hass.callWS()` with `return_response: true`
+- Response parsing: `response?.response?.exists` (nested under response key)
+
 ## v5.6.4 - 2025-12-22
 
 ### Fixed
