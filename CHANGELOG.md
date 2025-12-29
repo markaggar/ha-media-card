@@ -29,12 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Video Auto-Advance Behavior**: Fixed videos respecting auto-advance timer properly
-  - Videos now play to completion by default when auto-advance is enabled
-  - `video_loop` attribute disabled when auto-advance timer is active (prevents looping)
-  - Videos advance immediately when they end naturally
+  - Videos now play to completion when auto-advance is enabled (no HTML loop attribute when timer active)
+  - Short videos with `video_loop: true` restart manually based on elapsed playback time
+  - When elapsed time < auto-advance interval: Video restarts and continues looping
+  - When elapsed time >= auto-advance interval: Advances immediately to next media
   - `video_max_duration` still respected if set - interrupts video at specified limit
-  - Fixes issue where long videos would loop indefinitely despite auto-advance timer
-  - Behavior: video plays → ends → advances immediately (no loop when timer active)
+  - Long videos advance immediately when they end (no delay waiting for timer)
+  - Fixed incorrect `maxDuration` calculation that showed wrong value in logs
+  - Behavior: Short videos loop until timer expires, long videos advance on completion
 
 - **Crossfade Black Screen During Navigation**: Fixed race condition causing images to disappear (fade to black) during navigation
   - Root cause: setTimeout callback clearing layer URLs after transition could fire after new image was already set to that layer
