@@ -6500,6 +6500,31 @@ class MediaCard extends LitElement {
           this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
           // Remove from navigation queue and panel queue to prevent showing again
           this._remove404FromQueues(this.currentMedia);
+          
+          // CRITICAL FIX: Force clear video element to prevent stalled state when video errors during load
+          const videoElement = this.shadowRoot?.querySelector('video');
+          if (videoElement) {
+            videoElement.pause();
+            videoElement.removeAttribute('src');
+            videoElement.load(); // Reset to empty state
+          }
+          
+          // Force apply any pending metadata immediately instead of waiting for canplay that will never fire
+          if (this._pendingMetadata !== null) {
+            this._currentMetadata = this._pendingMetadata;
+            this._pendingMetadata = null;
+          }
+          if (this._pendingMediaPath !== null) {
+            this._currentMediaPath = this._pendingMediaPath;
+            this._pendingMediaPath = null;
+          }
+          if (this._pendingNavigationIndex !== null) {
+            this.navigationIndex = this._pendingNavigationIndex;
+            this._pendingNavigationIndex = null;
+          }
+          
+          this.requestUpdate(); // Force render with new metadata
+          
           // Skip to next without showing error
           setTimeout(() => this._loadNext(), 100);
         } else {
@@ -6512,6 +6537,31 @@ class MediaCard extends LitElement {
         // For 404s in folder/queue mode, remove from queue and skip to next instead of showing error
         this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
         this._remove404FromQueues(this.currentMedia);
+        
+        // CRITICAL FIX: Force clear video element to prevent stalled state
+        const videoElement = this.shadowRoot?.querySelector('video');
+        if (videoElement) {
+          videoElement.pause();
+          videoElement.removeAttribute('src');
+          videoElement.load(); // Reset to empty state
+        }
+        
+        // Force apply any pending metadata immediately
+        if (this._pendingMetadata !== null) {
+          this._currentMetadata = this._pendingMetadata;
+          this._pendingMetadata = null;
+        }
+        if (this._pendingMediaPath !== null) {
+          this._currentMediaPath = this._pendingMediaPath;
+          this._pendingMediaPath = null;
+        }
+        if (this._pendingNavigationIndex !== null) {
+          this.navigationIndex = this._pendingNavigationIndex;
+          this._pendingNavigationIndex = null;
+        }
+        
+        this.requestUpdate(); // Force render with new metadata
+        
         setTimeout(() => this._loadNext(), 100);
       } else {
         // Show error for non-404 errors or single media mode
