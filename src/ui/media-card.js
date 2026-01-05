@@ -179,6 +179,7 @@ export class MediaCard extends LitElement {
     
     // V5.7.1: Queue panel scroll position preservation
     this._previousQueuePageIndex = null; // Saved queue scroll position before special panels
+    this._previousPauseState = null;      // Saved pause state before special panels
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -5778,7 +5779,8 @@ export class MediaCard extends LitElement {
         await this._loadPanelItem(0);
       }
       
-      // Pause auto-advance while in burst mode
+      // V5.7.1: Save pause state before pausing, then pause auto-advance while in burst mode
+      this._previousPauseState = this._isPaused;
       if (!this._isPaused) {
         this._setPauseState(true);
       }
@@ -5902,7 +5904,8 @@ export class MediaCard extends LitElement {
         await this._loadPanelItem(0);
       }
       
-      // Pause auto-advance while in related mode
+      // V5.7.1: Save pause state before pausing, then pause auto-advance while in related mode
+      this._previousPauseState = this._isPaused;
       if (!this._isPaused) {
         this._setPauseState(true);
       }
@@ -6051,6 +6054,12 @@ export class MediaCard extends LitElement {
       this._panelLoading = false;
       this._onThisDayLoading = false;
       
+      // V5.7.1: Save pause state before pausing, then pause auto-advance while in On This Day mode
+      this._previousPauseState = this._isPaused;
+      if (!this._isPaused) {
+        this._setPauseState(true);
+      }
+      
       this.requestUpdate();
       
     } catch (error) {
@@ -6169,9 +6178,16 @@ export class MediaCard extends LitElement {
         console.warn('↩️ Restored queue preview panel after burst review');
       }
       
-      // Resume auto-advance if it was paused for panel mode (but not if we restored queue panel)
-      if (this._isPaused && this._panelMode !== 'queue') {
-        this._setPauseState(false);
+      // V5.7.1: Restore previous pause state when exiting special panels (but not for queue panel)
+      if (previousPanelMode !== 'queue') {
+        // Restore the pause state from before entering the panel
+        if (this._previousPauseState !== null) {
+          if (!this._previousPauseState && this._isPaused) {
+            // Was not paused before, currently paused, so resume
+            this._setPauseState(false);
+          }
+          this._previousPauseState = null; // Clear saved state
+        }
       }
       
       this.requestUpdate();
