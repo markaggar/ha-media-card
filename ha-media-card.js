@@ -9607,31 +9607,31 @@ class MediaCard extends LitElement {
         localDate = new Date(String(currentDate));
       }
       
-      // Get start and end of the local date in UTC timestamps
+      // Get start and end of the local date as Unix timestamps
       // This ensures we match all photos from the calendar day user sees
       const localYear = localDate.getFullYear();
       const localMonth = localDate.getMonth();
       const localDay = localDate.getDate();
       
-      // Start of day in local timezone
+      // Start of day in local timezone (convert to Unix timestamp in seconds)
       const startOfDay = new Date(localYear, localMonth, localDay, 0, 0, 0);
-      const startOfDayUTC = startOfDay.toISOString().split('T')[0];
+      const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
       
-      // End of day in local timezone
+      // End of day in local timezone (convert to Unix timestamp in seconds)
       const endOfDay = new Date(localYear, localMonth, localDay, 23, 59, 59);
-      const endOfDayUTC = endOfDay.toISOString().split('T')[0];
+      const endTimestamp = Math.floor(endOfDay.getTime() / 1000);
       
-      this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → UTC range ${startOfDayUTC} to ${endOfDayUTC}`);
+      this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → timestamp range ${startTimestamp} to ${endTimestamp}`);
       
-      // Call media_index.get_random_items with date filtering
+      // Call media_index.get_random_items with timestamp filtering
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_random_items',
         service_data: {
           count: 100, // Get up to 100 photos from this day
-          date_from: startOfDayUTC,
-          date_to: endOfDayUTC
+          timestamp_from: startTimestamp,
+          timestamp_to: endTimestamp
         },
         return_response: true
       };
