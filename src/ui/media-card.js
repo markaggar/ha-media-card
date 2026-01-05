@@ -5812,29 +5812,34 @@ export class MediaCard extends LitElement {
         throw new Error('No date available for current photo');
       }
       
-      // Format as YYYY-MM-DD for service call (handle string, Date object, or Unix timestamp)
-      // CRITICAL: Extract date in USER'S LOCAL TIMEZONE, not UTC
-      // This ensures "same date" matches what the user sees displayed
-      let dateStr;
+      // Extract the LOCAL date (what user sees displayed)
+      let localDate;
       if (typeof currentDate === 'number') {
-        // Unix timestamp - convert to Date in local timezone
-        const dateObj = new Date(currentDate * 1000); // Convert seconds to milliseconds
-        const year = dateObj.getFullYear();
-        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const day = String(dateObj.getDate()).padStart(2, '0');
-        dateStr = `${year}-${month}-${day}`;
+        const dateObj = new Date(currentDate * 1000);
+        localDate = dateObj;
       } else if (typeof currentDate === 'string') {
-        dateStr = currentDate.split('T')[0]; // Get just the date part
+        localDate = new Date(currentDate);
       } else if (currentDate instanceof Date) {
-        const year = currentDate.getFullYear();
-        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-        const day = String(currentDate.getDate()).padStart(2, '0');
-        dateStr = `${year}-${month}-${day}`;
+        localDate = currentDate;
       } else {
-        dateStr = String(currentDate).split('T')[0];
+        localDate = new Date(String(currentDate));
       }
       
-      this._log(`📅 Using date: ${dateStr} from metadata (original: ${currentDate})`);
+      // Get start and end of the local date in UTC timestamps
+      // This ensures we match all photos from the calendar day user sees
+      const localYear = localDate.getFullYear();
+      const localMonth = localDate.getMonth();
+      const localDay = localDate.getDate();
+      
+      // Start of day in local timezone
+      const startOfDay = new Date(localYear, localMonth, localDay, 0, 0, 0);
+      const startOfDayUTC = startOfDay.toISOString().split('T')[0];
+      
+      // End of day in local timezone
+      const endOfDay = new Date(localYear, localMonth, localDay, 23, 59, 59);
+      const endOfDayUTC = endOfDay.toISOString().split('T')[0];
+      
+      this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → UTC range ${startOfDayUTC} to ${endOfDayUTC}`);
       
       // Call media_index.get_random_items with date filtering
       const wsCall = {
@@ -5843,8 +5848,8 @@ export class MediaCard extends LitElement {
         service: 'get_random_items',
         service_data: {
           count: 100, // Get up to 100 photos from this day
-          date_from: dateStr,
-          date_to: dateStr
+          date_from: startOfDayUTC,
+          date_to: endOfDayUTC
         },
         return_response: true
       };
