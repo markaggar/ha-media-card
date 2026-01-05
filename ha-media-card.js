@@ -3959,6 +3959,9 @@ class MediaCard extends LitElement {
     this._onThisDayLoading = false;    // Loading indicator for anniversary query
     this._onThisDayWindowDays = 0;     // Current window size (±N days)
     
+    // V5.7.1: Queue panel scroll position preservation
+    this._previousQueuePageIndex = null; // Saved queue scroll position before special panels
+    
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
     
@@ -9492,6 +9495,11 @@ class MediaCard extends LitElement {
       // Save previous panel mode to restore after burst closes
       this._previousPanelMode = this._panelMode; // Could be 'queue' or null
       
+      // V5.7.1: Save queue panel scroll position if coming from queue mode
+      if (this._panelMode === 'queue') {
+        this._previousQueuePageIndex = this._panelPageStartIndex;
+      }
+      
       // Call media_index.get_related_files service with burst mode
       const wsCall = {
         type: 'call_service',
@@ -9587,6 +9595,11 @@ class MediaCard extends LitElement {
       
       // Save previous panel mode to restore after related closes
       this._previousPanelMode = this._panelMode;
+      
+      // V5.7.1: Save queue panel scroll position if coming from queue mode
+      if (this._panelMode === 'queue') {
+        this._previousQueuePageIndex = this._panelPageStartIndex;
+      }
       
       // Extract date from SNAPSHOT metadata (not current, which may have changed)
       const currentDate = metadataSnapshot?.date_taken || metadataSnapshot?.created_time;
@@ -9752,6 +9765,11 @@ class MediaCard extends LitElement {
       
       // Save previous panel mode to restore after closing
       this._previousPanelMode = this._panelMode;
+      
+      // V5.7.1: Save queue panel scroll position if coming from queue mode
+      if (this._panelMode === 'queue') {
+        this._previousQueuePageIndex = this._panelPageStartIndex;
+      }
       
       // V5.7.1: Use current photo's date instead of today's date
       // Extract date from current photo's metadata
@@ -9923,7 +9941,13 @@ class MediaCard extends LitElement {
       if (previousPanelMode === 'queue') {
         this._panelMode = 'queue';
         this._panelOpen = true;
-        this._panelPageStartIndex = preservedPageStartIndex; // V5.7.1: Restore scroll position
+        // V5.7.1: Restore queue scroll position from saved value
+        if (this._previousQueuePageIndex !== null) {
+          this._panelPageStartIndex = this._previousQueuePageIndex;
+          this._previousQueuePageIndex = null; // Clear saved value
+        } else {
+          this._panelPageStartIndex = preservedPageStartIndex;
+        }
         console.warn('↩️ Restored queue preview panel after burst review');
       }
       
