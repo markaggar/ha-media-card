@@ -9753,10 +9753,19 @@ class MediaCard extends LitElement {
       // Save previous panel mode to restore after closing
       this._previousPanelMode = this._panelMode;
       
-      // Get today's month and day
-      const today = new Date();
-      const month = String(today.getMonth() + 1); // 1-12
-      const day = String(today.getDate()); // 1-31
+      // V5.7.1: Use current photo's date instead of today's date
+      // Extract date from current photo's metadata
+      const currentTimestamp = this._currentMetadata?.date_taken || this._currentMetadata?.created_time;
+      if (!currentTimestamp) {
+        console.warn('Cannot enter On This Day mode: no timestamp for current photo');
+        this._panelLoading = false;
+        this._onThisDayLoading = false;
+        return;
+      }
+      
+      const photoDate = new Date(currentTimestamp * 1000); // Convert Unix timestamp to Date
+      const month = String(photoDate.getMonth() + 1); // 1-12
+      const day = String(photoDate.getDate()); // 1-31
       
       // Use current window setting (default 0 = exact match)
       const windowDays = this._onThisDayWindowDays || 0;
@@ -9888,6 +9897,7 @@ class MediaCard extends LitElement {
       
       // Clear panel state (but might restore queue panel below)
       const previousPanelMode = this._previousPanelMode;
+      const preservedPageStartIndex = this._panelPageStartIndex; // V5.7.1: Preserve for queue restoration
       this._panelOpen = false;
       this._panelMode = null;
       this._panelQueue = [];
@@ -9913,6 +9923,7 @@ class MediaCard extends LitElement {
       if (previousPanelMode === 'queue') {
         this._panelMode = 'queue';
         this._panelOpen = true;
+        this._panelPageStartIndex = preservedPageStartIndex; // V5.7.1: Restore scroll position
         console.warn('↩️ Restored queue preview panel after burst review');
       }
       
@@ -13158,8 +13169,9 @@ class MediaCard extends LitElement {
       }
     }
     
-    // Auto-adjust page for queue mode only (burst/related stay on current page)
-    if (this._panelMode === 'queue' && !this._manualPageChange) {
+    // Auto-adjust page for queue mode only (burst/related/same_date/on_this_day stay on current page)
+    // V5.7.1: Also check that slideshow is paused - don't auto-adjust during active slideshow navigation
+    if (this._panelMode === 'queue' && !this._manualPageChange && this._isPaused) {
       const currentPageEnd = this._panelPageStartIndex + maxDisplay;
       
       if (this.navigationIndex < this._panelPageStartIndex) {
