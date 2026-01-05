@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.6
+ * Media Card v5.6.7
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -6500,31 +6500,6 @@ class MediaCard extends LitElement {
           this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
           // Remove from navigation queue and panel queue to prevent showing again
           this._remove404FromQueues(this.currentMedia);
-          
-          // CRITICAL FIX: Force clear video element to prevent stalled state when video errors during load
-          const videoElement = this.shadowRoot?.querySelector('video');
-          if (videoElement) {
-            videoElement.pause();
-            videoElement.removeAttribute('src');
-            videoElement.load(); // Reset to empty state
-          }
-          
-          // Force apply any pending metadata immediately instead of waiting for canplay that will never fire
-          if (this._pendingMetadata !== null) {
-            this._currentMetadata = this._pendingMetadata;
-            this._pendingMetadata = null;
-          }
-          if (this._pendingMediaPath !== null) {
-            this._currentMediaPath = this._pendingMediaPath;
-            this._pendingMediaPath = null;
-          }
-          if (this._pendingNavigationIndex !== null) {
-            this.navigationIndex = this._pendingNavigationIndex;
-            this._pendingNavigationIndex = null;
-          }
-          
-          this.requestUpdate(); // Force render with new metadata
-          
           // Skip to next without showing error
           setTimeout(() => this._loadNext(), 100);
         } else {
@@ -6537,31 +6512,6 @@ class MediaCard extends LitElement {
         // For 404s in folder/queue mode, remove from queue and skip to next instead of showing error
         this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
         this._remove404FromQueues(this.currentMedia);
-        
-        // CRITICAL FIX: Force clear video element to prevent stalled state
-        const videoElement = this.shadowRoot?.querySelector('video');
-        if (videoElement) {
-          videoElement.pause();
-          videoElement.removeAttribute('src');
-          videoElement.load(); // Reset to empty state
-        }
-        
-        // Force apply any pending metadata immediately
-        if (this._pendingMetadata !== null) {
-          this._currentMetadata = this._pendingMetadata;
-          this._pendingMetadata = null;
-        }
-        if (this._pendingMediaPath !== null) {
-          this._currentMediaPath = this._pendingMediaPath;
-          this._pendingMediaPath = null;
-        }
-        if (this._pendingNavigationIndex !== null) {
-          this.navigationIndex = this._pendingNavigationIndex;
-          this._pendingNavigationIndex = null;
-        }
-        
-        this.requestUpdate(); // Force render with new metadata
-        
         setTimeout(() => this._loadNext(), 100);
       } else {
         // Show error for non-404 errors or single media mode
@@ -7494,8 +7444,15 @@ class MediaCard extends LitElement {
       ? `${label} ${stateText}${unit}` 
       : `${stateText}${unit}`;
 
-    // Icon support
-    const icon = entityConfig?.icon;
+    // Icon support (with template evaluation)
+    let icon = entityConfig?.icon;
+    // Check if icon was evaluated from a template
+    if (icon && typeof icon === 'string' && (icon.includes('{{') || icon.includes('{%'))) {
+      const iconCacheKey = `${entityId}:icon`;
+      if (this._entityStyleCache?.has(iconCacheKey)) {
+        icon = this._entityStyleCache.get(iconCacheKey);
+      }
+    }
     const baseIconColor = entityConfig?.icon_color || 'currentColor';
 
     // Evaluate JavaScript/Jinja2 styles (returns { containerStyles, iconColor })
@@ -8206,6 +8163,7 @@ class MediaCard extends LitElement {
         this._lastConditionEvalTs = Date.now();
         this._pendingConditionEval = null;
         this._evaluateAllConditions();
+        this._evaluateAllEntityStyles(); // Re-evaluate styles and icon templates
         this.requestUpdate();
       };
 
@@ -8367,32 +8325,51 @@ class MediaCard extends LitElement {
     
     for (const entityConfig of entities) {
       const entityId = typeof entityConfig === 'string' ? entityConfig : entityConfig.entity;
-      if (!entityId || !entityConfig.styles) continue;
+      if (!entityId) continue;
       
       const state = this.hass.states[entityId];
       if (!state) continue;
       
-      // Evaluate each Jinja2 style property and cache individually
-      for (const [property, template] of Object.entries(entityConfig.styles)) {
-        if (typeof template === 'string') {
-          if (template.includes('[[[') && template.includes(']]]')) {
-            // JavaScript template - skip (evaluated synchronously on render)
-            continue;
-          } else if (template.includes('{{') || template.includes('{%')) {
-            // Jinja2 template - evaluate async and cache per property
-            try {
-              const value = await this._evaluateJinjaTemplate(template);
-              const cacheKey = `${entityId}:${property}`;
-              if (!this._entityStyleCache) {
-                this._entityStyleCache = new Map();
-              }
-              this._entityStyleCache.set(cacheKey, value);
-              this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
-            } catch (error) {
-              console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+      // Evaluate icon template if present
+      if (entityConfig.icon && typeof entityConfig.icon === 'string') {
+        if (entityConfig.icon.includes('{{') || entityConfig.icon.includes('{%')) {
+          try {
+            const iconValue = await this._evaluateJinjaTemplate(entityConfig.icon);
+            const cacheKey = `${entityId}:icon`;
+            if (!this._entityStyleCache) {
+              this._entityStyleCache = new Map();
             }
+            this._entityStyleCache.set(cacheKey, iconValue);
+            this._log('🎨 Jinja2 icon:', iconValue, 'for', entityId);
+          } catch (error) {
+            console.warn('[MediaCard] Failed to evaluate icon template:', error);
           }
-          // Static values don't need caching
+        }
+      }
+      
+      // Evaluate each Jinja2 style property and cache individually
+      if (entityConfig.styles) {
+        for (const [property, template] of Object.entries(entityConfig.styles)) {
+          if (typeof template === 'string') {
+            if (template.includes('[[[') && template.includes(']]]')) {
+              // JavaScript template - skip (evaluated synchronously on render)
+              continue;
+            } else if (template.includes('{{') || template.includes('{%')) {
+              // Jinja2 template - evaluate async and cache per property
+              try {
+                const value = await this._evaluateJinjaTemplate(template);
+                const cacheKey = `${entityId}:${property}`;
+                if (!this._entityStyleCache) {
+                  this._entityStyleCache = new Map();
+                }
+                this._entityStyleCache.set(cacheKey, value);
+                this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
+              } catch (error) {
+                console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+              }
+            }
+            // Static values don't need caching
+          }
         }
       }
     }
@@ -9618,15 +9595,23 @@ class MediaCard extends LitElement {
       }
       
       // Format as YYYY-MM-DD for service call (handle string, Date object, or Unix timestamp)
+      // CRITICAL: Extract date in USER'S LOCAL TIMEZONE, not UTC
+      // This ensures "same date" matches what the user sees displayed
       let dateStr;
       if (typeof currentDate === 'number') {
-        // Unix timestamp - convert to Date first
+        // Unix timestamp - convert to Date in local timezone
         const dateObj = new Date(currentDate * 1000); // Convert seconds to milliseconds
-        dateStr = dateObj.toISOString().split('T')[0];
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        dateStr = `${year}-${month}-${day}`;
       } else if (typeof currentDate === 'string') {
         dateStr = currentDate.split('T')[0]; // Get just the date part
       } else if (currentDate instanceof Date) {
-        dateStr = currentDate.toISOString().split('T')[0];
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(currentDate.getDate()).padStart(2, '0');
+        dateStr = `${year}-${month}-${day}`;
       } else {
         dateStr = String(currentDate).split('T')[0];
       }
@@ -17470,7 +17455,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.6 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.7 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
