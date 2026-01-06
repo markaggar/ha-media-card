@@ -3964,6 +3964,7 @@ class MediaCard extends LitElement {
     this._previousQueuePageIndex = null;   // Saved queue scroll position before special panels
     this._previousPauseState = null;       // Saved pause state before special panels
     this._previousNavigationIndex = null;  // Saved navigation index before navigation
+    this._isLoadingNext = false;  // Re-entrance guard for _loadNext()
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -5047,21 +5048,32 @@ class MediaCard extends LitElement {
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
-    // V5.6: Set flag FIRST to ignore video pause events during navigation
-    // The browser auto-pauses videos when they're removed from DOM
-    this._navigatingAway = true;
+    // V5.7.2: Re-entrance guard - prevent concurrent calls to _loadNext
+    if (this._isLoadingNext) {
+      this._log('⏭️ Skipping _loadNext - already in progress');
+      return;
+    }
+    this._isLoadingNext = true;
+
+    try {
+      // V5.6: Set flag FIRST to ignore video pause events during navigation
+      // The browser auto-pauses videos when they're removed from DOM
+      this._navigatingAway = true;
 
     // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
     // Queue preview mode uses navigationQueue directly, so skip panel navigation
     if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
       this._navigatingAway = false;
+      this._isLoadingNext = false;
       return await this._loadNextPanel();
     }
     
     // V5.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
     // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
-    if (this._panelOpen && this._panelMode === 'queue') {
+    // V5.7.2: Skip this logic for videos - videos auto-advance and shouldn't trigger panel adjustments
+    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    if (this._panelOpen && this._panelMode === 'queue' && !isCurrentVideo) {
       // V5.7.1: Save current navigationIndex BEFORE it changes so we can check if it was highlighted
       this._previousNavigationIndex = this.navigationIndex;
       
@@ -5082,16 +5094,16 @@ class MediaCard extends LitElement {
     if (!this.provider) {
       this._log('_loadNext called but no provider');
       this._navigatingAway = false;
+      this._isLoadingNext = false;
       return;
     }
 
     // V4: Handle auto_advance_mode when manually navigating
     this._handleAutoAdvanceModeOnNavigate();
 
-    try {
-      // V5.3: Navigation Queue Architecture
-      // Store pending index (will be applied when media loads to sync with metadata)
-      let nextIndex = this.navigationIndex + 1;
+    // V5.3: Navigation Queue Architecture
+    // Store pending index (will be applied when media loads to sync with metadata)
+    let nextIndex = this.navigationIndex + 1;
       
       // Need to load more items?
       if (nextIndex >= this.navigationQueue.length) {
@@ -5275,26 +5287,24 @@ class MediaCard extends LitElement {
       
       await this._resolveMediaUrl();
       this.requestUpdate();
-      
-      // V5: Setup auto-advance after successfully loading media
-      this._setupAutoRefresh();
 
-      // V5.6: Clear navigation flag after render cycle completes
-      // Use setTimeout to ensure old video element is removed from DOM first
-      setTimeout(() => {
-        this._navigatingAway = false;
-      }, 0);
+      // V5.7.2: Don't clear _navigatingAway here - let _onVideoCanPlay/_onMediaLoaded clear it
+      // when the new media actually loads. Clearing it early causes timer to fire prematurely
+      // for short videos that end before the next video reaches canplay state.
 
       // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
       // Timer only restarts on manual button clicks
 
-      // Refresh metadata from media_index in background after navigation
-      // Ensures overlay reflects latest EXIF/location/favorite flags
-      this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
-    } catch (error) {
-      console.error('[MediaCard] Error loading next media:', error);
-    }
+    // Refresh metadata from media_index in background after navigation
+    // Ensures overlay reflects latest EXIF/location/favorite flags
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+  } catch (error) {
+    console.error('[MediaCard] Error loading next media:', error);
+  } finally {
+    // V5.7.2: Always clear re-entrance guard
+    this._isLoadingNext = false;
   }
+}
 
   async _loadPrevious() {
     // V5.6: Set flag FIRST to ignore video pause events during navigation
@@ -5721,6 +5731,14 @@ class MediaCard extends LitElement {
         
         // Check pause states before advancing
         if (!this._isPaused && !this._backgroundPaused) {
+          // V5.7.2: Skip timer callback while navigating to new media
+          // This prevents the timer from calling _loadNext() while the new video is still loading
+          // (which happens when video is paused/buffering and timer fires before canplay event)
+          if (this._navigatingAway) {
+            this._log('⏱️ Timer skipped - navigation in progress');
+            return;
+          }
+          
           // Reset pause log flag (timer is active again)
           this._pauseLogShown = false;
           
@@ -6311,6 +6329,16 @@ class MediaCard extends LitElement {
       this._log('🎬 Loading new video - reset tracking flags');
       
       this.requestUpdate();
+      
+      // V5.7.2: When going video → video, Lit reuses the same <video> element
+      // and just updates <source src>. But changing source doesn't auto-reload!
+      // We must explicitly call video.load() after render to trigger reload.
+      await this.updateComplete;
+      const videoElement = this.shadowRoot?.querySelector('video');
+      if (videoElement) {
+        this._log('🎬 Explicitly reloading video element for video→video transition');
+        videoElement.load();
+      }
     }
   }
 
@@ -6759,6 +6787,10 @@ class MediaCard extends LitElement {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
     
+    // V5.7.2: Clear navigation flag now that video is actually ready to play
+    // This prevents timer from firing prematurely during video-to-video transitions
+    this._navigatingAway = false;
+    
     // V5: Apply pending metadata AND navigation index when video is ready
     if (this._pendingMetadata !== null) {
       this._currentMetadata = this._pendingMetadata;
@@ -7109,6 +7141,10 @@ class MediaCard extends LitElement {
     // Log media loaded for images (videos log in _onVideoLoadStart)
     if (!this._isVideoFile(this.mediaUrl)) {
       this._log('Media loaded successfully:', this.mediaUrl);
+      
+      // V5.7.2: Clear navigation flag now that image is loaded
+      // This prevents timer from firing prematurely during transitions
+      this._navigatingAway = false;
     }
     
     // V5: Clear error state and retry attempts on successful load
@@ -12956,7 +12992,7 @@ class MediaCard extends LitElement {
         @pointercancel=${this._handlePointerCancel}
       >
         ${isVideo ? html`
-          <video 
+          <video
             controls
             preload="auto"
             playsinline
