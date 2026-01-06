@@ -179,8 +179,9 @@ export class MediaCard extends LitElement {
     this._onThisDayUsePhotoDate = false; // V5.6.7: Use photo's date vs today's date
     
     // V5.7.1: Queue panel scroll position preservation
-    this._previousQueuePageIndex = null; // Saved queue scroll position before special panels
-    this._previousPauseState = null;      // Saved pause state before special panels
+    this._previousQueuePageIndex = null;   // Saved queue scroll position before special panels
+    this._previousPauseState = null;       // Saved pause state before special panels
+    this._previousNavigationIndex = null;  // Saved navigation index before navigation
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -4605,6 +4606,9 @@ export class MediaCard extends LitElement {
       const state = this.hass.states[entityId];
       if (!state) continue;
       
+      // Skip if entityConfig is not an object (could be a string entity ID)
+      if (typeof entityConfig !== 'object' || entityConfig === null) continue;
+      
       // Evaluate icon template if present
       if (entityConfig.icon && typeof entityConfig.icon === 'string') {
         if (entityConfig.icon.includes('{{') || entityConfig.icon.includes('{%')) {
@@ -5913,8 +5917,9 @@ export class MediaCard extends LitElement {
       const startOfDay = new Date(localYear, localMonth, localDay, 0, 0, 0);
       const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
       
-      // End of day in local timezone (convert to Unix timestamp in seconds)
-      const endOfDay = new Date(localYear, localMonth, localDay, 23, 59, 59);
+      // End of day in local timezone: start of next day minus 1 ms (23:59:59.999)
+      const startOfNextDay = new Date(localYear, localMonth, localDay + 1, 0, 0, 0);
+      const endOfDay = new Date(startOfNextDay.getTime() - 1);
       const endTimestamp = Math.floor(endOfDay.getTime() / 1000);
       
       this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → timestamp range ${startTimestamp} to ${endTimestamp}`);
@@ -6040,6 +6045,10 @@ export class MediaCard extends LitElement {
     // Show loading state
     this._panelLoading = true;
     this._onThisDayLoading = true;
+    
+    // V5.6.7: Save pause state early before operations that might fail
+    this._previousPauseState = this._isPaused;
+    
     this.requestUpdate();
     
     try {
@@ -6128,8 +6137,7 @@ export class MediaCard extends LitElement {
       this._panelLoading = false;
       this._onThisDayLoading = false;
       
-      // V5.7.1: Save pause state before pausing, then pause auto-advance while in On This Day mode
-      this._previousPauseState = this._isPaused;
+      // V5.7.1: Pause auto-advance while in On This Day mode (pause state already saved earlier)
       if (!this._isPaused) {
         this._setPauseState(true);
       }
@@ -9714,7 +9722,7 @@ export class MediaCard extends LitElement {
                 isVideo ? html`
                   <video 
                     class="thumbnail-video ${isVideoLoaded ? 'loaded' : ''}"
-                    preload="${isVideoLoaded ? 'none' : 'metadata'}"
+                    preload="metadata"
                     muted
                     playsinline
                     disablepictureinpicture
