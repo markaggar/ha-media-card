@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.7 - 2026-01-05
+
+### Fixed
+
+- **Same Date / Through the Years Timezone Issue**: Fixed critical bug where these features returned photos from wrong dates
+  - Photos taken on specific dates were returning results spanning 2-3 days due to timezone conversion errors
+  - Now uses Unix timestamp comparison for exact day matching (timezone-independent)
+  - Card sends timestamp range for the full local calendar day
+  - Backend compares timestamps directly without date string extraction
+  - Requires ha-media-index v1.5.9 or later with timestamp filtering support
+
+- **Through the Years Date Source**: Changed to use current photo's date instead of today's date
+  - Makes more sense when browsing historical photos
+  - Click "Through the Years" on August 12, 2013 photo → shows photos from August 12 across all years
+
+- **Preview Panel Navigation During Slideshow**: Fixed panel auto-refreshing during navigation
+  - Panel no longer jumps back to current image when navigating through special panels during active slideshow
+  - Auto-adjustment only occurs when slideshow is paused
+
+- **Queue Panel Scroll Position**: Fixed queue panel resetting to first image when exiting special panels
+  - Queue panel now preserves scroll position when closing burst/related/same date/on this day panels
+  - Returns to exact scroll position where you left it
+
+- **Slideshow Resume After Closing Panels**: Fixed slideshow not resuming correctly
+  - Slideshow now correctly resumes when closing special panels if it was playing before
+  - Closing queue panel now immediately resumes auto-advance (doesn't wait for manual advance)
+  - Added explicit auto-refresh restart to ensure timer is active
+
+- **Queue Panel Auto-Adjustment During Auto-Advance**: Fixed smart scrolling behavior
+  - Panel now correctly scrolls to show newly highlighted image during auto-advance
+  - Panel stays put when user manually scrolled to a different page (no disruptive jumping)
+  - Only auto-adjusts if the previous thumbnail was highlighted (visible in panel)
+
+- **ReferenceError in _onMediaLoaded**: Fixed `normalizedLoaded is not defined` error
+  - Variable scope issue was preventing slideshow from resuming after closing panels
+  - Moved declaration outside conditional block
+
+### Technical
+
+- Added `timestamp_from` and `timestamp_to` parameters to Same Date and Through the Years features
+- Improved queue panel state management with `_previousNavigationIndex` tracking
+- Enhanced pause state restoration with `_previousPauseState` and `_previousQueuePageIndex`
+
 ## v5.6.5 - 2025-12-27
 
 ### Added
