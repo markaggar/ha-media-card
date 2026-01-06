@@ -176,6 +176,7 @@ export class MediaCard extends LitElement {
     // V5.5: On This Day state (anniversary mode)
     this._onThisDayLoading = false;    // Loading indicator for anniversary query
     this._onThisDayWindowDays = 0;     // Current window size (±N days)
+    this._onThisDayUsePhotoDate = false; // V5.6.7: Use photo's date vs today's date
     
     // V5.7.1: Queue panel scroll position preservation
     this._previousQueuePageIndex = null; // Saved queue scroll position before special panels
@@ -5143,6 +5144,16 @@ export class MediaCard extends LitElement {
     // Re-query with new window size
     await this._enterOnThisDayMode();
   }
+
+  /**
+   * V5.6.7: Handle photo date toggle for On This Day mode
+   */
+  async _handleUsePhotoDateChange(e) {
+    this._onThisDayUsePhotoDate = e.target.checked;
+    
+    // Re-query with new date source
+    await this._enterOnThisDayMode();
+  }
   
   // Helper to fetch full metadata asynchronously (called from render when overlay is open)
   async _fetchFullMetadataAsync() {
@@ -6044,19 +6055,30 @@ export class MediaCard extends LitElement {
         this._previousQueuePageIndex = this._panelPageStartIndex;
       }
       
-      // V5.7.1: Use current photo's date instead of today's date
-      // Extract date from current photo's metadata
-      const currentTimestamp = this._currentMetadata?.date_taken || this._currentMetadata?.created_time;
-      if (!currentTimestamp) {
-        console.warn('Cannot enter On This Day mode: no timestamp for current photo');
-        this._panelLoading = false;
-        this._onThisDayLoading = false;
-        return;
-      }
+      // V5.6.7: Use photo's date or today's date based on toggle
+      // Default (off): Use today's date (for "it's my kid's birthday today")
+      // Checked (on): Use current photo's date (for "show me this birthday across years")
+      let month, day;
       
-      const photoDate = new Date(currentTimestamp * 1000); // Convert Unix timestamp to Date
-      const month = String(photoDate.getMonth() + 1); // 1-12
-      const day = String(photoDate.getDate()); // 1-31
+      if (this._onThisDayUsePhotoDate) {
+        // Use current photo's date
+        const currentTimestamp = this._currentMetadata?.date_taken || this._currentMetadata?.created_time;
+        if (!currentTimestamp) {
+          console.warn('Cannot enter On This Day mode: no timestamp for current photo');
+          this._panelLoading = false;
+          this._onThisDayLoading = false;
+          return;
+        }
+        
+        const photoDate = new Date(currentTimestamp * 1000); // Convert Unix timestamp to Date
+        month = String(photoDate.getMonth() + 1); // 1-12
+        day = String(photoDate.getDate()); // 1-31
+      } else {
+        // Use today's date (default)
+        const today = new Date();
+        month = String(today.getMonth() + 1); // 1-12
+        day = String(today.getDate()); // 1-31
+      }
       
       // Use current window setting (default 0 = exact match)
       const windowDays = this._onThisDayWindowDays || 0;
@@ -8712,11 +8734,36 @@ export class MediaCard extends LitElement {
       gap: 8px;
     }
 
+    .panel-header-actions.stacked .top-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: center;
+    }
+
     .panel-header-actions.stacked .bottom-row {
       display: flex;
       align-items: center;
       gap: 8px;
       justify-content: center;
+    }
+
+    .use-photo-date-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--primary-text-color);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .use-photo-date-checkbox input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--primary-color, #03a9f4);
     }
 
     .panel-action-button {
@@ -9345,17 +9392,27 @@ export class MediaCard extends LitElement {
             <div class="title-text">${title}</div>
           </div>
           <div class="panel-header-actions stacked">
-            <select 
-              class="window-selector" 
-              .value=${String(this._onThisDayWindowDays)}
-              @change=${this._handleWindowSizeChange}
-              title="Adjust date range">
-              <option value="0">Exact</option>
-              <option value="1">±1 day</option>
-              <option value="3">±3 days</option>
-              <option value="7">±1 week</option>
-              <option value="14">±2 weeks</option>
-            </select>
+            <div class="top-row">
+              <select 
+                class="window-selector" 
+                .value=${String(this._onThisDayWindowDays)}
+                @change=${this._handleWindowSizeChange}
+                title="Adjust date range">
+                <option value="0">Exact</option>
+                <option value="1">±1 day</option>
+                <option value="3">±3 days</option>
+                <option value="7">±1 week</option>
+                <option value="14">±2 weeks</option>
+              </select>
+              <label class="use-photo-date-checkbox" title="Use photo's date instead of today's date">
+                <input 
+                  type="checkbox" 
+                  .checked=${this._onThisDayUsePhotoDate}
+                  @change=${this._handleUsePhotoDateChange}
+                />
+                <span>📸 Photo Date</span>
+              </label>
+            </div>
             <div class="bottom-row">
               <label class="randomize-checkbox" title="Randomize playback order">
                 <input 
