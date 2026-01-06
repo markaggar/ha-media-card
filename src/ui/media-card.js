@@ -6174,6 +6174,8 @@ export class MediaCard extends LitElement {
         if (!this._previousPauseState && this._isPaused) {
           // Was not paused before, currently paused, so resume
           this._setPauseState(false);
+          // V5.7.1: Explicitly restart auto-refresh to ensure timer is active
+          this._setupAutoRefresh();
         }
         this._previousPauseState = null; // Clear saved state
       }
@@ -9436,8 +9438,8 @@ export class MediaCard extends LitElement {
     }
     
     // Auto-adjust page for queue mode only (burst/related/same_date/on_this_day stay on current page)
-    // V5.7.1: Also check that slideshow is paused - don't auto-adjust during active slideshow navigation
-    if (this._panelMode === 'queue' && !this._manualPageChange && this._isPaused) {
+    // V5.7.1: Auto-adjust works both when paused (manual navigation) and during slideshow (auto-advance)
+    if (this._panelMode === 'queue' && !this._manualPageChange) {
       const currentPageEnd = this._panelPageStartIndex + maxDisplay;
       
       if (this.navigationIndex < this._panelPageStartIndex) {
