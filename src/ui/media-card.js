@@ -1241,7 +1241,21 @@ export class MediaCard extends LitElement {
     // This allows auto-adjustment to scroll panel to show newly navigated item
     // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
     if (this._panelOpen && this._panelMode === 'queue') {
-      this._manualPageChange = false;
+      // V5.7.1: Save current navigationIndex BEFORE it changes so we can check if it was highlighted
+      this._previousNavigationIndex = this.navigationIndex;
+      
+      // V5.7.1: Only reset _manualPageChange if current thumbnail is highlighted
+      // If user paged away, keep _manualPageChange=true until they manually navigate back
+      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
+      const currentPageStart = this._panelPageStartIndex || 0;
+      const currentPageEnd = currentPageStart + maxDisplay;
+      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
+      
+      if (isCurrentImageHighlighted) {
+        // Current thumbnail is highlighted, allow panel to follow
+        this._manualPageChange = false;
+      }
+      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
     }
     
     if (!this.provider) {
@@ -9438,16 +9452,24 @@ export class MediaCard extends LitElement {
     }
     
     // Auto-adjust page for queue mode only (burst/related/same_date/on_this_day stay on current page)
-    // V5.7.1: Auto-adjust works both when paused (manual navigation) and during slideshow (auto-advance)
+    // V5.7.1: Only auto-adjust if the PREVIOUS image was highlighted (visible in panel)
+    // This prevents panel from jumping back when user manually scrolled away
     if (this._panelMode === 'queue' && !this._manualPageChange) {
       const currentPageEnd = this._panelPageStartIndex + maxDisplay;
       
-      if (this.navigationIndex < this._panelPageStartIndex) {
-        // Navigated backward beyond current page
-        this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
-      } else if (this.navigationIndex >= currentPageEnd) {
-        // Navigated forward beyond current page
-        this._panelPageStartIndex = this.navigationIndex;
+      // Check if previous navigationIndex was within visible range
+      const prevIndex = this._previousNavigationIndex ?? this.navigationIndex;
+      const prevWasVisible = prevIndex >= this._panelPageStartIndex && prevIndex < currentPageEnd;
+      
+      // Only auto-adjust if the previous image was visible (highlighted)
+      if (prevWasVisible) {
+        if (this.navigationIndex < this._panelPageStartIndex) {
+          // Navigated backward beyond current page
+          this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
+        } else if (this.navigationIndex >= currentPageEnd) {
+          // Navigated forward beyond current page
+          this._panelPageStartIndex = this.navigationIndex;
+        }
       }
     }
     
