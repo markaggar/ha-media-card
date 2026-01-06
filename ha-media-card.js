@@ -13138,9 +13138,24 @@ class MediaCard extends LitElement {
       title = '📅 Same Date';
       subtitle = `${this._panelQueue.length} media items from this date/time`;
     } else if (this._panelMode === 'on_this_day') {
-      const today = new Date();
-      const monthDay = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const currentYear = today.getFullYear();
+      // V5.6.7: Use either today's date or current photo's date based on toggle
+      let displayDate;
+      if (this._onThisDayUsePhotoDate) {
+        // Use current photo's date
+        const currentTimestamp = this._currentMetadata?.date_taken || this._currentMetadata?.created_time;
+        if (currentTimestamp) {
+          displayDate = new Date(currentTimestamp * 1000);
+        } else {
+          displayDate = new Date(); // Fallback to today if no photo timestamp
+        }
+      } else {
+        // Use today's date (default)
+        displayDate = new Date();
+      }
+      
+      const monthDay = displayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const currentYear = displayDate.getFullYear();
+      
       // Calculate year range from photos if available, otherwise show reasonable range
       let yearRange = '';
       if (this._panelQueue.length > 0) {
