@@ -3980,6 +3980,10 @@ class MediaCard extends LitElement {
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
     
+    // V5.6.7: Track panel content to prevent unnecessary thumbnail re-renders
+    this._lastPanelItemsHash = null;
+    this._cachedThumbnailStripTemplate = null;
+    
     // V5.7: Track which navigation index each crossfade layer belongs to
     this._frontLayerNavigationIndex = null;  // Navigation index for front layer image
     this._backLayerNavigationIndex = null;   // Navigation index for back layer image
@@ -4652,6 +4656,39 @@ class MediaCard extends LitElement {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
       this._initializeProvider();
     }
+  }
+
+  /**
+   * V5.6.7: Update thumbnail active state without full re-render
+   * Called after every render cycle by Lit
+   */
+  updated(changedProps) {
+    super.updated(changedProps);
+    
+    // Update thumbnail active state whenever render completes
+    if (this._panelOpen) {
+      this._updateThumbnailActiveState();
+    }
+  }
+
+  /**
+   * V5.6.7: Update which thumbnail has 'active' class without re-rendering videos
+   */
+  _updateThumbnailActiveState() {
+    const thumbnailStrip = this.shadowRoot?.querySelector('.thumbnail-strip');
+    if (!thumbnailStrip) return;
+    
+    const thumbnails = thumbnailStrip.querySelectorAll('.thumbnail[data-item-index]');
+    const activeIndex = this._panelMode === 'queue' ? this.navigationIndex : this._panelQueueIndex;
+    
+    thumbnails.forEach(thumb => {
+      const itemIndex = parseInt(thumb.dataset.itemIndex);
+      if (itemIndex === activeIndex) {
+        thumb.classList.add('active');
+      } else {
+        thumb.classList.remove('active');
+      }
+    });
   }
 
   set hass(hass) {
@@ -13373,18 +13410,21 @@ class MediaCard extends LitElement {
           const isVideo = this._isVideoItem(item);
           const videoThumbnailTime = this.config.video_thumbnail_time || 1;
           const isVideoLoaded = isVideo && this._isVideoThumbnailLoaded(item);
+          const cacheKey = item.media_content_id || item.path;
           
           return html`
             <div 
-              class="thumbnail ${isActive ? 'active' : ''} ${isFavorited ? 'favorited' : ''}"
+              class="thumbnail ${isFavorited ? 'favorited' : ''}"
+              data-item-index="${actualIndex}"
               @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
               title="${item.filename || item.path}"
+              data-cache-key="${cacheKey}"
             >
               ${item._resolvedUrl ? (
                 isVideo ? html`
                   <video 
                     class="thumbnail-video ${isVideoLoaded ? 'loaded' : ''}"
-                    preload="metadata"
+                    preload="${isVideoLoaded ? 'none' : 'metadata'}"
                     muted
                     playsinline
                     disablepictureinpicture
