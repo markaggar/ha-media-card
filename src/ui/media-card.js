@@ -3289,10 +3289,11 @@ export class MediaCard extends LitElement {
       
       // V5.7: Determine which layer just loaded by comparing URLs
       let loadedLayerIndex = null;
+      let normalizedLoaded = ''; // V5.7.1: Declare outside if block to avoid ReferenceError
       
       if (loadedUrl) {
         // Normalize loaded URL for comparison
-        let normalizedLoaded = loadedUrl;
+        normalizedLoaded = loadedUrl;
         try {
           const url = new URL(loadedUrl);
           normalizedLoaded = url.pathname + url.search;
