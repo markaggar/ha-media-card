@@ -9946,8 +9946,21 @@ class MediaCard extends LitElement {
       this._mainQueueIndex = 0;
       this._previousPanelMode = null;
       
+      // V5.7.1: Restore previous pause state BEFORE restoring queue panel
+      // This ensures the pause state is correct whether we restore queue or not
+      const shouldRestoreQueuePanel = (previousPanelMode === 'queue');
+      const shouldRestorePauseState = !isQueuePreview; // Don't restore when closing queue itself
+      
+      if (shouldRestorePauseState && this._previousPauseState !== null) {
+        if (!this._previousPauseState && this._isPaused) {
+          // Was not paused before, currently paused, so resume
+          this._setPauseState(false);
+        }
+        this._previousPauseState = null; // Clear saved state
+      }
+      
       // Restore previous panel mode if we were in queue preview before burst
-      if (previousPanelMode === 'queue') {
+      if (shouldRestoreQueuePanel) {
         this._panelMode = 'queue';
         this._panelOpen = true;
         // V5.7.1: Restore queue scroll position from saved value
@@ -9960,16 +9973,10 @@ class MediaCard extends LitElement {
         console.warn('↩️ Restored queue preview panel after burst review');
       }
       
-      // V5.7.1: Restore previous pause state when exiting special panels (but not for queue panel)
-      if (previousPanelMode !== 'queue') {
-        // Restore the pause state from before entering the panel
-        if (this._previousPauseState !== null) {
-          if (!this._previousPauseState && this._isPaused) {
-            // Was not paused before, currently paused, so resume
-            this._setPauseState(false);
-          }
-          this._previousPauseState = null; // Clear saved state
-        }
+      // V5.7.1: When closing queue panel, ensure auto-refresh is active if not paused
+      if (isQueuePreview && !this._isPaused) {
+        this._log('▶️ Restarting auto-advance after closing queue panel');
+        this._setupAutoRefresh();
       }
       
       this.requestUpdate();
