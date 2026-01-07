@@ -183,6 +183,7 @@ export class MediaCard extends LitElement {
     this._previousPauseState = null;       // Saved pause state before special panels
     this._previousNavigationIndex = null;  // Saved navigation index before navigation
     this._isLoadingNext = false;  // Re-entrance guard for _loadNext()
+    this._isManualNavigation = false; // V5.7.3: Track if navigation is user-initiated vs timer-driven
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -1289,9 +1290,11 @@ export class MediaCard extends LitElement {
     // V5.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
     // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
-    // V5.7.2: Skip this logic for videos - videos auto-advance and shouldn't trigger panel adjustments
+    // V5.7.3: Skip panel adjustment during auto-advance of videos (prevents flickering)
+    // but allow panel adjustment during manual navigation, even from/to videos
     const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
-    if (this._panelOpen && this._panelMode === 'queue' && !isCurrentVideo) {
+    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
+    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
       // V5.7.1: Save current navigationIndex BEFORE it changes so we can check if it was highlighted
       this._previousNavigationIndex = this.navigationIndex;
       
@@ -1521,19 +1524,30 @@ export class MediaCard extends LitElement {
   } finally {
     // V5.7.2: Always clear re-entrance guard
     this._isLoadingNext = false;
+    // V5.7.3: Always clear manual navigation flag after navigation completes
+    this._isManualNavigation = false;
   }
 }
 
   async _loadPrevious() {
-    // V5.6: Set flag FIRST to ignore video pause events during navigation
-    this._navigatingAway = true;
-
-    // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
-    // Queue preview mode uses navigationQueue directly, so skip panel navigation
-    if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
-      this._navigatingAway = false;
-      return await this._loadPreviousPanel();
+    // V5.7.3: Re-entrance guard - prevent concurrent calls to _loadPrevious
+    if (this._isLoadingNext) {
+      this._log('⏮️ Skipping _loadPrevious - already in progress');
+      return;
     }
+    this._isLoadingNext = true;
+
+    try {
+      // V5.6: Set flag FIRST to ignore video pause events during navigation
+      this._navigatingAway = true;
+
+      // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
+      // Queue preview mode uses navigationQueue directly, so skip panel navigation
+      if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
+        this._navigatingAway = false;
+        this._isLoadingNext = false;
+        return await this._loadPreviousPanel();
+      }
     
     // V5.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
@@ -1600,13 +1614,21 @@ export class MediaCard extends LitElement {
     }
     // Images: Timer deferred to _onMediaLoaded() to prevent premature expiration
 
-    // V5.6: Clear navigation flag after render cycle completes
-    setTimeout(() => {
-      this._navigatingAway = false;
-    }, 0);
+      // V5.6: Clear navigation flag after render cycle completes
+      setTimeout(() => {
+        this._navigatingAway = false;
+      }, 0);
 
-    // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
-    // Timer only restarts on manual button clicks
+      // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
+      // Timer only restarts on manual button clicks
+    } catch (error) {
+      console.error('[MediaCard] Error loading previous media:', error);
+    } finally {
+      // V5.7.3: Always clear re-entrance guard
+      this._isLoadingNext = false;
+      // V5.7.3: Always clear manual navigation flag after navigation completes
+      this._isManualNavigation = false;
+    }
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -2551,6 +2573,9 @@ export class MediaCard extends LitElement {
       // V5.7.2: When going video → video, Lit reuses the same <video> element
       // and just updates <source src>. But changing source doesn't auto-reload!
       // We must explicitly call video.load() after render to trigger reload.
+      // NOTE: Copilot suggested checking readyState first, but that's wrong -
+      // readyState > 0 means the OLD video has data, not that the NEW source is loading.
+      // We MUST call load() to force browser to load the new source.
       await this.updateComplete;
       const videoElement = this.shadowRoot?.querySelector('video');
       if (videoElement) {
@@ -3290,16 +3315,20 @@ export class MediaCard extends LitElement {
     // Handle keyboard navigation
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
+      this._isManualNavigation = true; // V5.7.3: Mark as manual navigation
       this._loadPrevious();
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
+      this._isManualNavigation = true; // V5.7.3: Mark as manual navigation
       this._loadNext();
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       // Space or Enter on navigation zones acts like a click
       if (e.target.classList.contains('nav-zone-left')) {
+        this._isManualNavigation = true; // V5.7.3: Mark as manual navigation
         this._loadPrevious();
       } else if (e.target.classList.contains('nav-zone-right')) {
+        this._isManualNavigation = true; // V5.7.3: Mark as manual navigation
         this._loadNext();
       }
     } else if (e.key === 'p' || e.key === 'P') {
@@ -3406,7 +3435,22 @@ export class MediaCard extends LitElement {
       // This prevents swapping to an old image if navigation moved on during load
       const currentNavigationIndex = this._pendingNavigationIndex ?? this.navigationIndex;
       
-      if (loadedLayerIndex !== null && loadedLayerIndex !== currentNavigationIndex) {
+      // V5.6.7: In panel mode (index -1), check URL match instead of navigation index
+      // This handles the case where the same image is already loading when panel opens
+      let normalizedExpected = expectedUrl || '';
+      try {
+        const expUrl = new URL(expectedUrl);
+        normalizedExpected = expUrl.pathname;
+      } catch (e) {
+        // Already a path
+      }
+      normalizedExpected = normalizedExpected.split('?')[0];
+      const urlMatches = normalizedLoaded && normalizedExpected && normalizedLoaded === normalizedExpected;
+      
+      // Skip layer swap if:
+      // 1. Navigation index doesn't match AND
+      // 2. We're not in panel mode OR the URL doesn't match what we want
+      if (loadedLayerIndex !== null && loadedLayerIndex !== currentNavigationIndex && !(currentNavigationIndex === -1 && urlMatches)) {
         this._log(`⏭️ Skipping layer swap - loaded image is for navigation index ${loadedLayerIndex}, current is ${currentNavigationIndex}`);
         
         // Clear the stale layer URL but DON'T clear _pendingLayerSwap
@@ -5953,10 +5997,9 @@ export class MediaCard extends LitElement {
       const startOfDay = new Date(localYear, localMonth, localDay, 0, 0, 0);
       const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
       
-      // End of day in local timezone: start of next day minus 1 ms (23:59:59.999)
-      const startOfNextDay = new Date(localYear, localMonth, localDay + 1, 0, 0, 0);
-      const endOfDay = new Date(startOfNextDay.getTime() - 1);
-      const endTimestamp = Math.floor(endOfDay.getTime() / 1000);
+      // End of day in local timezone as inclusive Unix timestamp in seconds
+      // 24 hours * 60 minutes * 60 seconds = 86400 seconds
+      const endTimestamp = startTimestamp + 86400 - 1;
       
       this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → timestamp range ${startTimestamp} to ${endTimestamp}`);
       
@@ -6294,8 +6337,9 @@ export class MediaCard extends LitElement {
           // V5.7.1: Explicitly restart auto-refresh to ensure timer is active
           this._setupAutoRefresh();
         }
-        this._previousPauseState = null; // Clear saved state
       }
+      // V5.7.3: Always clear saved pause state after use (not just in restore branch)
+      this._previousPauseState = null;
       
       // Restore previous panel mode if we were in queue preview before burst
       if (shouldRestoreQueuePanel) {
@@ -9295,6 +9339,8 @@ export class MediaCard extends LitElement {
            <div class="nav-zone nav-zone-left ${this._showButtonsExplicitly ? 'show-buttons' : ''}"
              @click=${async (e) => { 
             e.stopPropagation(); 
+            // V5.7.3: Mark as manual navigation
+            this._isManualNavigation = true;
             // Navigate first
             await this._loadPrevious(); 
             // If buttons are showing, restart the 3s timer to auto-hide
@@ -9307,6 +9353,8 @@ export class MediaCard extends LitElement {
            <div class="nav-zone nav-zone-right ${this._showButtonsExplicitly ? 'show-buttons' : ''}"  
              @click=${async (e) => { 
             e.stopPropagation(); 
+            // V5.7.3: Mark as manual navigation
+            this._isManualNavigation = true;
             // Navigate first
             await this._loadNext(); 
             // If buttons are showing, restart the 3s timer to auto-hide
@@ -9416,7 +9464,6 @@ export class MediaCard extends LitElement {
       }
       
       const monthDay = displayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const currentYear = displayDate.getFullYear();
       
       // Calculate year range from photos if available, otherwise show reasonable range
       let yearRange = '';
@@ -9624,6 +9671,8 @@ export class MediaCard extends LitElement {
           this._panelPageStartIndex = this.navigationIndex;
         }
       }
+      // V5.7.3: Clear saved previous index after adjustment logic completes
+      this._previousNavigationIndex = null;
     }
     
     const displayStartIndex = this._panelPageStartIndex;
