@@ -3978,6 +3978,9 @@ class MediaCard extends LitElement {
     this._last404Time = 0;
     this._errorAutoAdvanceTimeout = null;
     
+    // V5.6.7: Hide bottom overlays during video playback (to access video controls)
+    this._hideBottomOverlaysForVideo = false;
+    
     // V5.6: Video thumbnail cache (session-scoped)
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
@@ -6261,6 +6264,12 @@ class MediaCard extends LitElement {
       return;
     }
     
+    // V5.6.7: Reset bottom overlay hiding when loading new media
+    // This ensures overlays are visible again for new content
+    if (this._hideBottomOverlaysForVideo) {
+      this._hideBottomOverlaysForVideo = false;
+    }
+    
     // Only use crossfade for images, not videos
     const isVideo = this._isVideoFile(url);
     
@@ -7011,6 +7020,12 @@ class MediaCard extends LitElement {
     
     // V5.6.4: Mark that video has completed first playthrough
     this._videoHasEnded = true;
+    
+    // V5.6.7: Show bottom overlays when video ends (if they were hidden)
+    if (this._hideBottomOverlaysForVideo) {
+      this._hideBottomOverlaysForVideo = false;
+      this.requestUpdate();
+    }
     
     // V5.6.5: Check if we should restart video (short video with loop enabled)
     const autoAdvanceSeconds = this.config?.auto_advance_seconds || 
@@ -10596,6 +10611,14 @@ class MediaCard extends LitElement {
       this._startActionButtonsHideTimer();
     }
     
+    // V5.6.7: Toggle bottom overlay visibility during video playback
+    // This allows access to video controls (play/pause, seek bar, volume)
+    const isVideo = this._isVideoFile(this.mediaUrl);
+    if (isVideo) {
+      this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+      this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'} for video controls access`);
+    }
+    
     this.requestUpdate();
   }
   
@@ -11731,8 +11754,19 @@ class MediaCard extends LitElement {
       transform: scale(1.05);
     }
     
+    /* V5.6.7: Preserve translateX centering on hover for center-positioned clocks */
+    .clock-overlay.clock-center-top.clickable:hover,
+    .clock-overlay.clock-center-bottom.clickable:hover {
+      transform: translateX(-50%) scale(1.05);
+    }
+    
     .clock-overlay.clickable:active {
       transform: scale(0.98);
+    }
+    
+    .clock-overlay.clock-center-top.clickable:active,
+    .clock-overlay.clock-center-bottom.clickable:active {
+      transform: translateX(-50%) scale(0.98);
     }
     
     /* Only apply backdrop-filter if opacity > 0.05 to allow true transparency */
@@ -11802,6 +11836,22 @@ class MediaCard extends LitElement {
       bottom: 12px;
       left: 50%;
       transform: translateX(-50%);
+    }
+
+    /* V5.6.7: Hide bottom overlays during video playback (tap center to toggle)
+       This allows access to native video controls (play/pause, seek bar, volume) */
+    .media-container.hide-bottom-overlays .metadata-overlay.metadata-bottom-left,
+    .media-container.hide-bottom-overlays .metadata-overlay.metadata-bottom-right,
+    .media-container.hide-bottom-overlays .metadata-overlay.metadata-center-bottom,
+    .media-container.hide-bottom-overlays .display-entities.position-bottom-left,
+    .media-container.hide-bottom-overlays .display-entities.position-bottom-right,
+    .media-container.hide-bottom-overlays .display-entities.position-center-bottom,
+    .media-container.hide-bottom-overlays .clock-overlay.clock-bottom-left,
+    .media-container.hide-bottom-overlays .clock-overlay.clock-bottom-right,
+    .media-container.hide-bottom-overlays .clock-overlay.clock-center-bottom {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
     }
 
     /* V4: Action Buttons (Favorite/Delete/Edit) */
@@ -13070,10 +13120,13 @@ class MediaCard extends LitElement {
     
     // Disable backdrop-filter when opacity <= 0.05 to allow true transparency
     const transparentClass = overlayOpacity <= 0.05 ? 'transparent-overlays' : '';
+    
+    // V5.6.7: Hide bottom overlays during video playback (tap center to toggle for video control access)
+    const hideBottomOverlaysClass = this._hideBottomOverlaysForVideo ? 'hide-bottom-overlays' : '';
 
     return html`
       <div 
-        class="media-container ${transparentClass}"
+        class="media-container ${transparentClass} ${hideBottomOverlaysClass}"
         style="--ha-media-metadata-scale: ${metadataScale}; --display-entities-transition: ${displayEntitiesTransition}ms; --ha-overlay-opacity: ${overlayOpacity}"
         @click=${this._handleTap}
         @dblclick=${this._handleDoubleTap}
