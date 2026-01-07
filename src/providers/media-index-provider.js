@@ -25,56 +25,8 @@ export class MediaIndexProvider extends MediaProvider {
     this._lastFilterValues = {}; // Track last known filter values for change detection
   }
   
-  /**
-   * V5.6.6: Check if file exists using media_index service (lightweight filesystem check)
-   * @param {Object} mediaItem - Media item with path or URI
-   * @returns {Promise<boolean|null>} true if exists, false if not, null if unavailable
-   */
-  async checkFileExists(mediaItem) {
-    try {
-      const entityId = this.config?.media_index?.entity_id;
-      if (!entityId) {
-        // No media_index entity configured
-        return null;
-      }
-
-      const uri = mediaItem?.media_source_uri || mediaItem?.media_content_id;
-      const path = mediaItem?.path;
-
-      if (!uri && !path) {
-        this._log('⚠️ No URI or path for file existence check');
-        return null;
-      }
-
-    // Call media_index.check_file_exists service using WebSocket (same pattern as get_random_items)
-    const wsCall = {
-      type: 'call_service',
-      domain: 'media_index',
-      service: 'check_file_exists',
-      service_data: {
-        media_source_uri: uri,
-        file_path: path
-      },
-      return_response: true
-    };
-    
-    // Target specific media_index entity if configured
-    if (entityId) {
-      wsCall.target = {
-        entity_id: entityId
-      };
-    }
-    
-    const response = await this.hass.callWS(wsCall);
-
-    this._log('📁 File existence check result:', response);
-    return response?.response?.exists === true;
-    } catch (error) {
-      // Service doesn't exist (old media_index version) or other error
-      this._log('⚠️ File existence check failed (service unavailable):', error.message);
-      return null; // Fallback to preload
-    }
-  }
+  // V5.6.7: checkFileExists is inherited from base MediaProvider class
+  // No need to duplicate - all providers share the same media_index.check_file_exists service
   
   /**
    * Clean up subscriptions when provider is destroyed

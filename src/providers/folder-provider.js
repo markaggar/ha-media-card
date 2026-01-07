@@ -403,18 +403,19 @@ export class FolderProvider extends MediaProvider {
     return null;
   }
 
-  // V5.6.6: Delegate file existence check to wrapped provider (MediaIndexProvider only)
+  // V5.6.7: Delegate file existence check to wrapped provider
+  // All providers inherit checkFileExists from base MediaProvider class
   async checkFileExists(mediaItem) {
-    // Only MediaIndexProvider implements this - delegate if available
-    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.checkFileExists === 'function') {
+    // Delegate to whichever provider is active (both inherit from MediaProvider)
+    if (this.mediaIndexProvider) {
       return await this.mediaIndexProvider.checkFileExists(mediaItem);
     }
     
-    if (this.sequentialProvider && typeof this.sequentialProvider.checkFileExists === 'function') {
+    if (this.sequentialProvider) {
       return await this.sequentialProvider.checkFileExists(mediaItem);
     }
     
-    // SubfolderQueue discovers files from disk, no validation needed
+    // SubfolderQueue doesn't use media_index, no validation available
     return null;
   }
 
