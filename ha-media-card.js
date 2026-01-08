@@ -5334,8 +5334,25 @@ class MediaCard extends LitElement {
     
     // V5.6.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
-    if (this._panelOpen && this._panelMode === 'queue') {
-      this._manualPageChange = false;
+    // (Same logic as _loadNext for consistency)
+    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
+    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
+      // Save current navigationIndex BEFORE it changes so we can check if it was highlighted
+      this._previousNavigationIndex = this.navigationIndex;
+      
+      // Only reset _manualPageChange if current thumbnail is highlighted
+      // If user paged away, keep _manualPageChange=true until they manually navigate back
+      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
+      const currentPageStart = this._panelPageStartIndex || 0;
+      const currentPageEnd = currentPageStart + maxDisplay;
+      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
+      
+      if (isCurrentImageHighlighted) {
+        // Current thumbnail is highlighted, allow panel to follow
+        this._manualPageChange = false;
+      }
+      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
     }
     
     if (!this.provider) {
@@ -6680,9 +6697,19 @@ class MediaCard extends LitElement {
     // Check if this is the last source that failed (video networkState becomes NETWORK_NO_SOURCE)
     // networkState 3 = NETWORK_NO_SOURCE (all sources failed)
     if (videoElement && videoElement.networkState === 3) {
+      // Guard against duplicate handling - check if we're already processing this error
+      if (this._sourceErrorHandled) {
+        this._log('🎬 Source error already handled, skipping duplicate');
+        return;
+      }
+      this._sourceErrorHandled = true;
+      
       this._log('🎬 All video sources failed - treating as 404');
       // Simulate a media error event to trigger the same handling
       this._onMediaError({ target: videoElement });
+      
+      // Reset flag after a short delay to allow handling new videos
+      setTimeout(() => { this._sourceErrorHandled = false; }, 100);
     }
   }
   
@@ -9841,8 +9868,10 @@ class MediaCard extends LitElement {
       const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
       
       // End of day in local timezone as inclusive Unix timestamp in seconds
-      // 24 hours * 60 minutes * 60 seconds = 86400 seconds
-      const endTimestamp = startTimestamp + 86400 - 1;
+      // Use next day midnight minus 1 second to correctly handle DST transitions
+      // (days can be 23 or 25 hours during DST changes)
+      const endOfDay = new Date(localYear, localMonth, localDay + 1, 0, 0, 0);
+      const endTimestamp = Math.floor(endOfDay.getTime() / 1000) - 1;
       
       this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → timestamp range ${startTimestamp} to ${endTimestamp}`);
       
