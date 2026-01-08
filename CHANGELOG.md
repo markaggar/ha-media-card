@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.7 - 2026-01-07
+
+### Added
+
+- **On This Day - Photo Date Toggle**: Choose between today's date or the current photo's date for "Through the Years" searches
+  - Default (unchecked): Uses today's date
+  - Checked: Uses current photo's date to find that same date across all years
+  - Panel heading dynamically shows the date being used and year range of results
+
+### Fixed
+
+- **Same Date / Through the Years Date Accuracy**: Fixed critical timezone bug causing photos from wrong dates (spanning 2-3 days instead of one)
+  - Now uses Unix timestamp filtering for exact calendar day matching
+  - Requires ha-media-index v1.5.9 or later
+
+- **Panel Navigation**: Queue panel now remembers scroll position when opening/closing other panels
+
+- **Slideshow Resume**: Slideshow correctly restarts when closing any panel (previously could get stuck)
+
+- **Video Handling**:
+  - Missing videos are silently skipped (no 404 errors or stuck slideshow)
+  - Fixed video-to-video transitions not loading the new video
+  - Video thumbnails no longer flicker during navigation
+
+- **UI Fixes**:
+  - Clock no longer slides right when hovered at center positions
+  - Tap center during video to hide bottom overlays for access to video controls (auto-restores when video ends)
+
 ## v5.6.5 - 2025-12-27
 
 ### Added

@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.6
+ * Media Card v5.6.7
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -97,6 +97,51 @@ class MediaProvider {
    */
   resume() {
     this.isPaused = false;
+  }
+
+  /**
+   * V5.6.7: Check if file exists using media_index service (lightweight filesystem check)
+   * Shared by all providers that use media_index backend
+   * @param {Object} mediaItem - Media item with path or URI
+   * @returns {Promise<boolean|null>} true if exists, false if not, null if unavailable
+   */
+  async checkFileExists(mediaItem) {
+    try {
+      const entityId = this.config?.media_index?.entity_id;
+      if (!entityId) {
+        // No media_index entity configured
+        return null;
+      }
+
+      const uri = mediaItem?.media_source_uri || mediaItem?.media_content_id;
+      const path = mediaItem?.path;
+
+      if (!uri && !path) {
+        return null;
+      }
+
+      // Call media_index.check_file_exists service
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'check_file_exists',
+        service_data: {
+          media_source_uri: uri,
+          file_path: path
+        },
+        return_response: true
+      };
+      
+      if (entityId) {
+        wsCall.target = { entity_id: entityId };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
+      return response?.response?.exists === true;
+    } catch (error) {
+      // Service doesn't exist (old media_index version) or other error
+      return null;
+    }
   }
 
   /**
@@ -1100,18 +1145,19 @@ class FolderProvider extends MediaProvider {
     return null;
   }
 
-  // V5.6.6: Delegate file existence check to wrapped provider (MediaIndexProvider only)
+  // V5.6.7: Delegate file existence check to wrapped provider
+  // All providers inherit checkFileExists from base MediaProvider class
   async checkFileExists(mediaItem) {
-    // Only MediaIndexProvider implements this - delegate if available
-    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.checkFileExists === 'function') {
+    // Delegate to whichever provider is active (both inherit from MediaProvider)
+    if (this.mediaIndexProvider) {
       return await this.mediaIndexProvider.checkFileExists(mediaItem);
     }
     
-    if (this.sequentialProvider && typeof this.sequentialProvider.checkFileExists === 'function') {
+    if (this.sequentialProvider) {
       return await this.sequentialProvider.checkFileExists(mediaItem);
     }
     
-    // SubfolderQueue discovers files from disk, no validation needed
+    // SubfolderQueue doesn't use media_index, no validation available
     return null;
   }
 
@@ -2565,56 +2611,8 @@ class MediaIndexProvider extends MediaProvider {
     this._lastFilterValues = {}; // Track last known filter values for change detection
   }
   
-  /**
-   * V5.6.6: Check if file exists using media_index service (lightweight filesystem check)
-   * @param {Object} mediaItem - Media item with path or URI
-   * @returns {Promise<boolean|null>} true if exists, false if not, null if unavailable
-   */
-  async checkFileExists(mediaItem) {
-    try {
-      const entityId = this.config?.media_index?.entity_id;
-      if (!entityId) {
-        // No media_index entity configured
-        return null;
-      }
-
-      const uri = mediaItem?.media_source_uri || mediaItem?.media_content_id;
-      const path = mediaItem?.path;
-
-      if (!uri && !path) {
-        this._log('⚠️ No URI or path for file existence check');
-        return null;
-      }
-
-    // Call media_index.check_file_exists service using WebSocket (same pattern as get_random_items)
-    const wsCall = {
-      type: 'call_service',
-      domain: 'media_index',
-      service: 'check_file_exists',
-      service_data: {
-        media_source_uri: uri,
-        file_path: path
-      },
-      return_response: true
-    };
-    
-    // Target specific media_index entity if configured
-    if (entityId) {
-      wsCall.target = {
-        entity_id: entityId
-      };
-    }
-    
-    const response = await this.hass.callWS(wsCall);
-
-    this._log('📁 File existence check result:', response);
-    return response?.response?.exists === true;
-    } catch (error) {
-      // Service doesn't exist (old media_index version) or other error
-      this._log('⚠️ File existence check failed (service unavailable):', error.message);
-      return null; // Fallback to preload
-    }
-  }
+  // V5.6.7: checkFileExists is inherited from base MediaProvider class
+  // No need to duplicate - all providers share the same media_index.check_file_exists service
   
   /**
    * Clean up subscriptions when provider is destroyed
@@ -3958,6 +3956,14 @@ class MediaCard extends LitElement {
     // V5.5: On This Day state (anniversary mode)
     this._onThisDayLoading = false;    // Loading indicator for anniversary query
     this._onThisDayWindowDays = 0;     // Current window size (±N days)
+    this._onThisDayUsePhotoDate = false; // V5.6.7: Use photo's date vs today's date
+    
+    // V5.6.7: Queue panel scroll position preservation
+    this._previousQueuePageIndex = null;   // Saved queue scroll position before special panels
+    this._previousPauseState = null;       // Saved pause state before special panels
+    this._previousNavigationIndex = null;  // Saved navigation index before navigation
+    this._isLoadingNext = false;  // Re-entrance guard for _loadNext()
+    this._isManualNavigation = false; // V5.6.7: Track if navigation is user-initiated vs timer-driven
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -3972,11 +3978,18 @@ class MediaCard extends LitElement {
     this._last404Time = 0;
     this._errorAutoAdvanceTimeout = null;
     
+    // V5.6.7: Hide bottom overlays during video playback (to access video controls)
+    this._hideBottomOverlaysForVideo = false;
+    
     // V5.6: Video thumbnail cache (session-scoped)
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
     
-    // V5.7: Track which navigation index each crossfade layer belongs to
+    // V5.6.7: Track panel content to prevent unnecessary thumbnail re-renders
+    this._lastPanelItemsHash = null;
+    this._cachedThumbnailStripTemplate = null;
+    
+    // V5.6.7: Track which navigation index each crossfade layer belongs to
     this._frontLayerNavigationIndex = null;  // Navigation index for front layer image
     this._backLayerNavigationIndex = null;   // Navigation index for back layer image
     this._frontLayerGeneration = 0;   // Increment when front layer URL changes (prevents stale setTimeout clearing new URLs)
@@ -4574,9 +4587,9 @@ class MediaCard extends LitElement {
       },
       // V5.6: Global overlay opacity control
       overlay_opacity: config.overlay_opacity ?? 0.25,
-      // V5.7: Card background blending - default true for seamless look
+      // V5.6.7: Card background blending - default true for seamless look
       blend_with_background: config.blend_with_background !== false,
-      // V5.7: Edge fade strength (0 = disabled, 1-100 = enabled with fade intensity)
+      // V5.6.7: Edge fade strength (0 = disabled, 1-100 = enabled with fade intensity)
       edge_fade_strength: config.edge_fade_strength ?? 0
     };
     
@@ -4618,14 +4631,14 @@ class MediaCard extends LitElement {
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
     
-    // V5.7: Set blend with background attribute for CSS targeting
+    // V5.6.7: Set blend with background attribute for CSS targeting
     if (this.config.blend_with_background !== false) {
       this.setAttribute('data-blend-with-background', 'true');
     } else {
       this.removeAttribute('data-blend-with-background');
     }
     
-    // V5.7: Set edge fade attribute and strength for CSS targeting
+    // V5.6.7: Set edge fade attribute and strength for CSS targeting
     if (this.config.edge_fade_strength > 0) {
       this.setAttribute('data-edge-fade', 'true');
       this.style.setProperty('--edge-fade-strength', this.config.edge_fade_strength);
@@ -4648,6 +4661,39 @@ class MediaCard extends LitElement {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');
       this._initializeProvider();
     }
+  }
+
+  /**
+   * V5.6.7: Update thumbnail active state without full re-render
+   * Called after every render cycle by Lit
+   */
+  updated(changedProps) {
+    super.updated(changedProps);
+    
+    // Update thumbnail active state whenever render completes
+    if (this._panelOpen) {
+      this._updateThumbnailActiveState();
+    }
+  }
+
+  /**
+   * V5.6.7: Update which thumbnail has 'active' class without re-rendering videos
+   */
+  _updateThumbnailActiveState() {
+    const thumbnailStrip = this.shadowRoot?.querySelector('.thumbnail-strip');
+    if (!thumbnailStrip) return;
+    
+    const thumbnails = thumbnailStrip.querySelectorAll('.thumbnail[data-item-index]');
+    const activeIndex = this._panelMode === 'queue' ? this.navigationIndex : this._panelQueueIndex;
+    
+    thumbnails.forEach(thumb => {
+      const itemIndex = parseInt(thumb.dataset.itemIndex);
+      if (itemIndex === activeIndex) {
+        thumb.classList.add('active');
+      } else {
+        thumb.classList.remove('active');
+      }
+    });
   }
 
   set hass(hass) {
@@ -5004,37 +5050,64 @@ class MediaCard extends LitElement {
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
-    // V5.6: Set flag FIRST to ignore video pause events during navigation
-    // The browser auto-pauses videos when they're removed from DOM
-    this._navigatingAway = true;
+    // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadNext
+    if (this._isLoadingNext) {
+      this._log('⏭️ Skipping _loadNext - already in progress');
+      return;
+    }
+    this._isLoadingNext = true;
+
+    try {
+      // V5.6: Set flag FIRST to ignore video pause events during navigation
+      // The browser auto-pauses videos when they're removed from DOM
+      this._navigatingAway = true;
 
     // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
     // Queue preview mode uses navigationQueue directly, so skip panel navigation
     if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
       this._navigatingAway = false;
+      this._isLoadingNext = false;
       return await this._loadNextPanel();
     }
     
-    // V5.7: Reset manual page flag when navigating with arrow keys/buttons
+    // V5.6.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
     // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
-    if (this._panelOpen && this._panelMode === 'queue') {
-      this._manualPageChange = false;
+    // V5.6.7: Skip panel adjustment during auto-advance of videos (prevents flickering)
+    // but allow panel adjustment during manual navigation, even from/to videos
+    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
+    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
+      // V5.6.7: Save current navigationIndex BEFORE it changes so we can check if it was highlighted
+      this._previousNavigationIndex = this.navigationIndex;
+      
+      // V5.6.7: Only reset _manualPageChange if current thumbnail is highlighted
+      // If user paged away, keep _manualPageChange=true until they manually navigate back
+      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
+      const currentPageStart = this._panelPageStartIndex || 0;
+      const currentPageEnd = currentPageStart + maxDisplay;
+      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
+      
+      if (isCurrentImageHighlighted) {
+        // Current thumbnail is highlighted, allow panel to follow
+        this._manualPageChange = false;
+      }
+      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
     }
     
     if (!this.provider) {
       this._log('_loadNext called but no provider');
       this._navigatingAway = false;
+      this._isLoadingNext = false;
       return;
     }
 
     // V4: Handle auto_advance_mode when manually navigating
     this._handleAutoAdvanceModeOnNavigate();
 
-    try {
-      // V5.3: Navigation Queue Architecture
-      // Store pending index (will be applied when media loads to sync with metadata)
-      let nextIndex = this.navigationIndex + 1;
+    // V5.3: Navigation Queue Architecture
+    // Store pending index (will be applied when media loads to sync with metadata)
+    let nextIndex = this.navigationIndex + 1;
       
       // Need to load more items?
       if (nextIndex >= this.navigationQueue.length) {
@@ -5208,7 +5281,7 @@ class MediaCard extends LitElement {
       // Display the item
       this.currentMedia = item;
       
-      // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
+      // V5.6.7: Store in pending state - will apply when image/video loads (syncs all overlays)
       this._pendingMediaPath = item.media_content_id;
       this._pendingMetadata = item.metadata || null;
       
@@ -5218,42 +5291,68 @@ class MediaCard extends LitElement {
       
       await this._resolveMediaUrl();
       this.requestUpdate();
-      
-      // V5: Setup auto-advance after successfully loading media
-      this._setupAutoRefresh();
 
-      // V5.6: Clear navigation flag after render cycle completes
-      // Use setTimeout to ensure old video element is removed from DOM first
-      setTimeout(() => {
-        this._navigatingAway = false;
-      }, 0);
+      // V5.6.7: Don't clear _navigatingAway here - let _onVideoCanPlay/_onMediaLoaded clear it
+      // when the new media actually loads. Clearing it early causes timer to fire prematurely
+      // for short videos that end before the next video reaches canplay state.
 
       // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
       // Timer only restarts on manual button clicks
 
-      // Refresh metadata from media_index in background after navigation
-      // Ensures overlay reflects latest EXIF/location/favorite flags
-      this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
-    } catch (error) {
-      console.error('[MediaCard] Error loading next media:', error);
-    }
+    // Refresh metadata from media_index in background after navigation
+    // Ensures overlay reflects latest EXIF/location/favorite flags
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+  } catch (error) {
+    console.error('[MediaCard] Error loading next media:', error);
+  } finally {
+    // V5.6.7: Always clear re-entrance guard
+    this._isLoadingNext = false;
+    // V5.6.7: Always clear manual navigation flag after navigation completes
+    this._isManualNavigation = false;
   }
+}
 
   async _loadPrevious() {
-    // V5.6: Set flag FIRST to ignore video pause events during navigation
-    this._navigatingAway = true;
-
-    // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
-    // Queue preview mode uses navigationQueue directly, so skip panel navigation
-    if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
-      this._navigatingAway = false;
-      return await this._loadPreviousPanel();
+    // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadPrevious
+    if (this._isLoadingNext) {
+      this._log('⏮️ Skipping _loadPrevious - already in progress');
+      return;
     }
+    this._isLoadingNext = true;
+
+    try {
+      // V5.6: Set flag FIRST to ignore video pause events during navigation
+      this._navigatingAway = true;
+
+      // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
+      // Queue preview mode uses navigationQueue directly, so skip panel navigation
+      if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
+        this._navigatingAway = false;
+        this._isLoadingNext = false;
+        return await this._loadPreviousPanel();
+      }
     
-    // V5.7: Reset manual page flag when navigating with arrow keys/buttons
+    // V5.6.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
-    if (this._panelOpen && this._panelMode === 'queue') {
-      this._manualPageChange = false;
+    // (Same logic as _loadNext for consistency)
+    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
+    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
+    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
+      // Save current navigationIndex BEFORE it changes so we can check if it was highlighted
+      this._previousNavigationIndex = this.navigationIndex;
+      
+      // Only reset _manualPageChange if current thumbnail is highlighted
+      // If user paged away, keep _manualPageChange=true until they manually navigate back
+      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
+      const currentPageStart = this._panelPageStartIndex || 0;
+      const currentPageEnd = currentPageStart + maxDisplay;
+      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
+      
+      if (isCurrentImageHighlighted) {
+        // Current thumbnail is highlighted, allow panel to follow
+        this._manualPageChange = false;
+      }
+      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
     }
     
     if (!this.provider) {
@@ -5292,7 +5391,7 @@ class MediaCard extends LitElement {
     // Display the item
     this.currentMedia = item;
     
-    // V5.7: Store in pending state - will apply when image/video loads (syncs all overlays)
+    // V5.6.7: Store in pending state - will apply when image/video loads (syncs all overlays)
     this._pendingNavigationIndex = this.navigationIndex;
     this._pendingMediaPath = item.media_content_id;
     this._pendingMetadata = item.metadata || null;
@@ -5315,13 +5414,21 @@ class MediaCard extends LitElement {
     }
     // Images: Timer deferred to _onMediaLoaded() to prevent premature expiration
 
-    // V5.6: Clear navigation flag after render cycle completes
-    setTimeout(() => {
-      this._navigatingAway = false;
-    }, 0);
+      // V5.6: Clear navigation flag after render cycle completes
+      setTimeout(() => {
+        this._navigatingAway = false;
+      }, 0);
 
-    // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
-    // Timer only restarts on manual button clicks
+      // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
+      // Timer only restarts on manual button clicks
+    } catch (error) {
+      console.error('[MediaCard] Error loading previous media:', error);
+    } finally {
+      // V5.6.7: Always clear re-entrance guard
+      this._isLoadingNext = false;
+      // V5.6.7: Always clear manual navigation flag after navigation completes
+      this._isManualNavigation = false;
+    }
   }
 
   // V4: Handle auto_advance_mode behavior when user manually navigates
@@ -5411,11 +5518,11 @@ class MediaCard extends LitElement {
       metadata: metadata
     };
     
-    // V5.7: Store in pending state - will apply when image/video loads
+    // V5.6.7: Store in pending state - will apply when image/video loads
     this._pendingMediaPath = mediaUri;
     this._pendingMetadata = metadata;
     
-    // V5.7: Panel navigation doesn't use queue navigation indices - set to special marker
+    // V5.6.7: Panel navigation doesn't use queue navigation indices - set to special marker
     // This tells _resolveMediaUrl to skip stale navigation checks (only relevant for queue nav)
     this._pendingNavigationIndex = -1; // -1 = panel navigation, not queue navigation
     
@@ -5460,7 +5567,7 @@ class MediaCard extends LitElement {
     const item = this.navigationQueue[queueIndex];
     this.currentMedia = item;
     
-    // V5.7: Store in pending state - will apply when image/video loads  
+    // V5.6.7: Store in pending state - will apply when image/video loads  
     this._pendingNavigationIndex = queueIndex;
     this._pendingMediaPath = item.media_content_id;
     this._pendingMetadata = item.metadata || null;
@@ -5664,6 +5771,14 @@ class MediaCard extends LitElement {
         
         // Check pause states before advancing
         if (!this._isPaused && !this._backgroundPaused) {
+          // V5.6.7: Skip timer callback while navigating to new media
+          // This prevents the timer from calling _loadNext() while the new video is still loading
+          // (which happens when video is paused/buffering and timer fires before canplay event)
+          if (this._navigatingAway) {
+            this._log('⏱️ Timer skipped - navigation in progress');
+            return;
+          }
+          
           // Reset pause log flag (timer is active again)
           this._pauseLogShown = false;
           
@@ -6138,23 +6253,38 @@ class MediaCard extends LitElement {
   async _checkFileExistsViaProvider(mediaItem) {
     // Validate mediaItem exists before proceeding
     if (!mediaItem) {
+      this._log('⚠️ File check skipped - no mediaItem');
       return null;
     }
     
     // Ask provider to check - MediaIndexProvider has service, others return null
     if (typeof this.provider?.checkFileExists === 'function') {
-      return await this.provider.checkFileExists(mediaItem);
+      try {
+        const result = await this.provider.checkFileExists(mediaItem);
+        this._log(`📁 Provider file check result: ${result}`);
+        return result;
+      } catch (err) {
+        this._log(`⚠️ Provider file check error: ${err.message}`);
+        return null;
+      }
     }
+    this._log('📁 Provider does not support file existence checks');
     return null; // Provider doesn't support file existence checks
   }
 
   // V5.6: Helper to set mediaUrl with crossfade transition (validates first for images)
   async _setMediaUrl(url, expectedNavigationIndex) {
-    // V5.7: Guard against stale async resolutions during rapid navigation
+    // V5.6.7: Guard against stale async resolutions during rapid navigation
     // If expectedNavigationIndex is provided and doesn't match current pending index, abort
     if (expectedNavigationIndex !== undefined && this._pendingNavigationIndex !== expectedNavigationIndex) {
       this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
       return;
+    }
+    
+    // V5.6.7: Reset bottom overlay hiding when loading new media
+    // This ensures overlays are visible again for new content
+    if (this._hideBottomOverlaysForVideo) {
+      this._hideBottomOverlaysForVideo = false;
     }
     
     // Only use crossfade for images, not videos
@@ -6190,7 +6320,7 @@ class MediaCard extends LitElement {
         // Just update - render will show single image directly
         this.requestUpdate();
       } else {
-        // V5.7: Check again before setting layer URLs - navigation may have moved on during file check
+        // V5.6.7: Check again before setting layer URLs - navigation may have moved on during file check
         // Use navigationIndex (not _pendingNavigationIndex) since pending gets cleared when image loads
         const currentNavIndex = this._pendingNavigationIndex ?? this.navigationIndex;
         if (expectedNavigationIndex !== undefined && currentNavIndex !== expectedNavigationIndex) {
@@ -6199,7 +6329,7 @@ class MediaCard extends LitElement {
         }
         
         // Crossfade: set new image on hidden layer, then swap after it loads
-        // V5.7: If there's already a pending swap, clear both layers and start fresh
+        // V5.6.7: If there's already a pending swap, clear both layers and start fresh
         // This handles rapid navigation where the previous image hasn't loaded yet
         if (!this._frontLayerUrl && !this._backLayerUrl) {
           // Special case: Both layers empty (first load or after video), show immediately without crossfade
@@ -6239,7 +6369,26 @@ class MediaCard extends LitElement {
         }
       }
     } else {
-      // For videos, just clear the image layers immediately
+      // V5.6.7: For videos, also check file existence before loading (prevents 404 errors getting stuck)
+      this._log('🎬 Checking video file existence before load...');
+      const providerCheckResult = await this._checkFileExistsViaProvider(this.currentMedia);
+      this._log(`🎬 Video file check result: ${providerCheckResult}`);
+      
+      if (providerCheckResult === false) {
+        // Service confirmed file doesn't exist - skip immediately
+        this._log('❌ Video file does not exist (filesystem check):', url);
+        this._log('⏭️ Skipping 404 video, removing from queues and advancing to next media');
+        this._remove404FromQueues(this.currentMedia);
+        setTimeout(() => this._loadNext(), 100);
+        return; // Don't set mediaUrl, abort display
+      } else if (providerCheckResult === true) {
+        this._log('✅ Video file exists (filesystem check):', url);
+      } else {
+        this._log('⚠️ Video file check unavailable (null) - proceeding with load');
+      }
+      // If null, provider doesn't support checks - proceed and let error handler deal with 404s
+      
+      // Clear the image layers immediately
       this._frontLayerUrl = '';
       this._backLayerUrl = '';
       this._frontLayerNavigationIndex = null; // Clear layer navigation indices
@@ -6254,6 +6403,19 @@ class MediaCard extends LitElement {
       this._log('🎬 Loading new video - reset tracking flags');
       
       this.requestUpdate();
+      
+      // V5.6.7: When going video → video, Lit reuses the same <video> element
+      // and just updates <source src>. But changing source doesn't auto-reload!
+      // We must explicitly call video.load() after render to trigger reload.
+      // NOTE: Copilot suggested checking readyState first, but that's wrong -
+      // readyState > 0 means the OLD video has data, not that the NEW source is loading.
+      // We MUST call load() to force browser to load the new source.
+      await this.updateComplete;
+      const videoElement = this.shadowRoot?.querySelector('video');
+      if (videoElement) {
+        this._log('🎬 Explicitly reloading video element for video→video transition');
+        videoElement.load();
+      }
     }
   }
 
@@ -6265,7 +6427,7 @@ class MediaCard extends LitElement {
 
     const mediaId = this.currentMedia.media_content_id;
     
-    // V5.7: Capture pending index for async resolution guard
+    // V5.6.7: Capture pending index for async resolution guard
     const expectedIndex = this._pendingNavigationIndex;
     
     // Validate mediaId exists
@@ -6409,6 +6571,9 @@ class MediaCard extends LitElement {
   }
   
   _onMediaError(e) {
+    // V5.6.7: Clear navigation flag to prevent slideshow getting stuck on 404 errors
+    this._navigatingAway = false;
+    
     // V4 comprehensive error handling
     const target = e.target;
     const error = target?.error;
@@ -6518,6 +6683,33 @@ class MediaCard extends LitElement {
         this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
         this._showMediaError(errorMessage, isSynologyUrl);
       }
+    }
+  }
+  
+  // V5.6.7: Handle errors from <source> elements inside <video>
+  // Source element errors don't bubble to the video element, so we need to handle them separately
+  _onSourceError(e) {
+    const sourceElement = e.target;
+    const videoElement = sourceElement?.parentElement;
+    
+    this._log('🎬 Source element error:', sourceElement?.src);
+    
+    // Check if this is the last source that failed (video networkState becomes NETWORK_NO_SOURCE)
+    // networkState 3 = NETWORK_NO_SOURCE (all sources failed)
+    if (videoElement && videoElement.networkState === 3) {
+      // Guard against duplicate handling - check if we're already processing this error
+      if (this._sourceErrorHandled) {
+        this._log('🎬 Source error already handled, skipping duplicate');
+        return;
+      }
+      this._sourceErrorHandled = true;
+      
+      this._log('🎬 All video sources failed - treating as 404');
+      // Simulate a media error event to trigger the same handling
+      this._onMediaError({ target: videoElement });
+      
+      // Reset flag after a short delay to allow handling new videos
+      setTimeout(() => { this._sourceErrorHandled = false; }, 100);
     }
   }
   
@@ -6702,6 +6894,10 @@ class MediaCard extends LitElement {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
     
+    // V5.6.7: Clear navigation flag now that video is actually ready to play
+    // This prevents timer from firing prematurely during video-to-video transitions
+    this._navigatingAway = false;
+    
     // V5: Apply pending metadata AND navigation index when video is ready
     if (this._pendingMetadata !== null) {
       this._currentMetadata = this._pendingMetadata;
@@ -6852,6 +7048,12 @@ class MediaCard extends LitElement {
     // V5.6.4: Mark that video has completed first playthrough
     this._videoHasEnded = true;
     
+    // V5.6.7: Show bottom overlays when video ends (if they were hidden)
+    if (this._hideBottomOverlaysForVideo) {
+      this._hideBottomOverlaysForVideo = false;
+      this.requestUpdate();
+    }
+    
     // V5.6.5: Check if we should restart video (short video with loop enabled)
     const autoAdvanceSeconds = this.config?.auto_advance_seconds || 
                                this.config?.auto_advance_interval || 
@@ -6983,16 +7185,20 @@ class MediaCard extends LitElement {
     // Handle keyboard navigation
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
+      this._isManualNavigation = true; // V5.6.7: Mark as manual navigation
       this._loadPrevious();
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
+      this._isManualNavigation = true; // V5.6.7: Mark as manual navigation
       this._loadNext();
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       // Space or Enter on navigation zones acts like a click
       if (e.target.classList.contains('nav-zone-left')) {
+        this._isManualNavigation = true; // V5.6.7: Mark as manual navigation
         this._loadPrevious();
       } else if (e.target.classList.contains('nav-zone-right')) {
+        this._isManualNavigation = true; // V5.6.7: Mark as manual navigation
         this._loadNext();
       }
     } else if (e.key === 'p' || e.key === 'P') {
@@ -7052,6 +7258,10 @@ class MediaCard extends LitElement {
     // Log media loaded for images (videos log in _onVideoLoadStart)
     if (!this._isVideoFile(this.mediaUrl)) {
       this._log('Media loaded successfully:', this.mediaUrl);
+      
+      // V5.6.7: Clear navigation flag now that image is loaded
+      // This prevents timer from firing prematurely during transitions
+      this._navigatingAway = false;
     }
     
     // V5: Clear error state and retry attempts on successful load
@@ -7065,12 +7275,13 @@ class MediaCard extends LitElement {
       const loadedUrl = e?.target?.src;
       const expectedUrl = this.mediaUrl; // Use mediaUrl which has the resolved URL
       
-      // V5.7: Determine which layer just loaded by comparing URLs
+      // V5.6.7: Determine which layer just loaded by comparing URLs
       let loadedLayerIndex = null;
+      let normalizedLoaded = ''; // V5.6.7: Declare outside if block to avoid ReferenceError
       
       if (loadedUrl) {
         // Normalize loaded URL for comparison
-        let normalizedLoaded = loadedUrl;
+        normalizedLoaded = loadedUrl;
         try {
           const url = new URL(loadedUrl);
           normalizedLoaded = url.pathname + url.search;
@@ -7094,7 +7305,22 @@ class MediaCard extends LitElement {
       // This prevents swapping to an old image if navigation moved on during load
       const currentNavigationIndex = this._pendingNavigationIndex ?? this.navigationIndex;
       
-      if (loadedLayerIndex !== null && loadedLayerIndex !== currentNavigationIndex) {
+      // V5.6.7: In panel mode (index -1), check URL match instead of navigation index
+      // This handles the case where the same image is already loading when panel opens
+      let normalizedExpected = expectedUrl || '';
+      try {
+        const expUrl = new URL(expectedUrl);
+        normalizedExpected = expUrl.pathname;
+      } catch (e) {
+        // Already a path
+      }
+      normalizedExpected = normalizedExpected.split('?')[0];
+      const urlMatches = normalizedLoaded && normalizedExpected && normalizedLoaded === normalizedExpected;
+      
+      // Skip layer swap if:
+      // 1. Navigation index doesn't match AND
+      // 2. We're not in panel mode OR the URL doesn't match what we want
+      if (loadedLayerIndex !== null && loadedLayerIndex !== currentNavigationIndex && !(currentNavigationIndex === -1 && urlMatches)) {
         this._log(`⏭️ Skipping layer swap - loaded image is for navigation index ${loadedLayerIndex}, current is ${currentNavigationIndex}`);
         
         // Clear the stale layer URL but DON'T clear _pendingLayerSwap
@@ -7111,7 +7337,7 @@ class MediaCard extends LitElement {
         return; // Don't swap layers, but keep _pendingLayerSwap = true
       }
       
-      // V5.7: If we got here, the loaded image is for the current navigation position
+      // V5.6.7: If we got here, the loaded image is for the current navigation position
       // Just swap immediately - no need to compare URLs since we already validated the navigation index
       this._pendingLayerSwap = false;
       
@@ -7444,8 +7670,15 @@ class MediaCard extends LitElement {
       ? `${label} ${stateText}${unit}` 
       : `${stateText}${unit}`;
 
-    // Icon support
-    const icon = entityConfig?.icon;
+    // Icon support (with template evaluation)
+    let icon = entityConfig?.icon;
+    // Check if icon was evaluated from a template
+    if (icon && typeof icon === 'string' && (icon.includes('{{') || icon.includes('{%'))) {
+      const iconCacheKey = `${entityId}:icon`;
+      if (this._entityStyleCache?.has(iconCacheKey)) {
+        icon = this._entityStyleCache.get(iconCacheKey);
+      }
+    }
     const baseIconColor = entityConfig?.icon_color || 'currentColor';
 
     // Evaluate JavaScript/Jinja2 styles (returns { containerStyles, iconColor })
@@ -8156,6 +8389,7 @@ class MediaCard extends LitElement {
         this._lastConditionEvalTs = Date.now();
         this._pendingConditionEval = null;
         this._evaluateAllConditions();
+        this._evaluateAllEntityStyles(); // Re-evaluate styles and icon templates
         this.requestUpdate();
       };
 
@@ -8317,32 +8551,54 @@ class MediaCard extends LitElement {
     
     for (const entityConfig of entities) {
       const entityId = typeof entityConfig === 'string' ? entityConfig : entityConfig.entity;
-      if (!entityId || !entityConfig.styles) continue;
+      if (!entityId) continue;
       
       const state = this.hass.states[entityId];
       if (!state) continue;
       
-      // Evaluate each Jinja2 style property and cache individually
-      for (const [property, template] of Object.entries(entityConfig.styles)) {
-        if (typeof template === 'string') {
-          if (template.includes('[[[') && template.includes(']]]')) {
-            // JavaScript template - skip (evaluated synchronously on render)
-            continue;
-          } else if (template.includes('{{') || template.includes('{%')) {
-            // Jinja2 template - evaluate async and cache per property
-            try {
-              const value = await this._evaluateJinjaTemplate(template);
-              const cacheKey = `${entityId}:${property}`;
-              if (!this._entityStyleCache) {
-                this._entityStyleCache = new Map();
-              }
-              this._entityStyleCache.set(cacheKey, value);
-              this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
-            } catch (error) {
-              console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+      // Skip if entityConfig is not an object (could be a string entity ID)
+      if (typeof entityConfig !== 'object' || entityConfig === null) continue;
+      
+      // Evaluate icon template if present
+      if (entityConfig.icon && typeof entityConfig.icon === 'string') {
+        if (entityConfig.icon.includes('{{') || entityConfig.icon.includes('{%')) {
+          try {
+            const iconValue = await this._evaluateJinjaTemplate(entityConfig.icon);
+            const cacheKey = `${entityId}:icon`;
+            if (!this._entityStyleCache) {
+              this._entityStyleCache = new Map();
             }
+            this._entityStyleCache.set(cacheKey, iconValue);
+            this._log('🎨 Jinja2 icon:', iconValue, 'for', entityId);
+          } catch (error) {
+            console.warn('[MediaCard] Failed to evaluate icon template:', error);
           }
-          // Static values don't need caching
+        }
+      }
+      
+      // Evaluate each Jinja2 style property and cache individually
+      if (entityConfig.styles) {
+        for (const [property, template] of Object.entries(entityConfig.styles)) {
+          if (typeof template === 'string') {
+            if (template.includes('[[[') && template.includes(']]]')) {
+              // JavaScript template - skip (evaluated synchronously on render)
+              continue;
+            } else if (template.includes('{{') || template.includes('{%')) {
+              // Jinja2 template - evaluate async and cache per property
+              try {
+                const value = await this._evaluateJinjaTemplate(template);
+                const cacheKey = `${entityId}:${property}`;
+                if (!this._entityStyleCache) {
+                  this._entityStyleCache = new Map();
+                }
+                this._entityStyleCache.set(cacheKey, value);
+                this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
+              } catch (error) {
+                console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+              }
+            }
+            // Static values don't need caching
+          }
         }
       }
     }
@@ -8840,6 +9096,16 @@ class MediaCard extends LitElement {
     this._onThisDayWindowDays = newWindow;
     
     // Re-query with new window size
+    await this._enterOnThisDayMode();
+  }
+
+  /**
+   * V5.6.7: Handle photo date toggle for On This Day mode
+   */
+  async _handleUsePhotoDateChange(e) {
+    this._onThisDayUsePhotoDate = e.target.checked;
+    
+    // Re-query with new date source
     await this._enterOnThisDayMode();
   }
   
@@ -9465,6 +9731,11 @@ class MediaCard extends LitElement {
       // Save previous panel mode to restore after burst closes
       this._previousPanelMode = this._panelMode; // Could be 'queue' or null
       
+      // V5.6.7: Save queue panel scroll position if coming from queue mode
+      if (this._panelMode === 'queue') {
+        this._previousQueuePageIndex = this._panelPageStartIndex;
+      }
+      
       // Call media_index.get_related_files service with burst mode
       const wsCall = {
         type: 'call_service',
@@ -9525,7 +9796,8 @@ class MediaCard extends LitElement {
         await this._loadPanelItem(0);
       }
       
-      // Pause auto-advance while in burst mode
+      // V5.6.7: Save pause state before pausing, then pause auto-advance while in burst mode
+      this._previousPauseState = this._isPaused;
       if (!this._isPaused) {
         this._setPauseState(true);
       }
@@ -9561,37 +9833,57 @@ class MediaCard extends LitElement {
       // Save previous panel mode to restore after related closes
       this._previousPanelMode = this._panelMode;
       
+      // V5.6.7: Save queue panel scroll position if coming from queue mode
+      if (this._panelMode === 'queue') {
+        this._previousQueuePageIndex = this._panelPageStartIndex;
+      }
+      
       // Extract date from SNAPSHOT metadata (not current, which may have changed)
       const currentDate = metadataSnapshot?.date_taken || metadataSnapshot?.created_time;
       if (!currentDate) {
         throw new Error('No date available for current photo');
       }
       
-      // Format as YYYY-MM-DD for service call (handle string, Date object, or Unix timestamp)
-      let dateStr;
+      // Extract the LOCAL date (what user sees displayed)
+      let localDate;
       if (typeof currentDate === 'number') {
-        // Unix timestamp - convert to Date first
-        const dateObj = new Date(currentDate * 1000); // Convert seconds to milliseconds
-        dateStr = dateObj.toISOString().split('T')[0];
+        const dateObj = new Date(currentDate * 1000);
+        localDate = dateObj;
       } else if (typeof currentDate === 'string') {
-        dateStr = currentDate.split('T')[0]; // Get just the date part
+        localDate = new Date(currentDate);
       } else if (currentDate instanceof Date) {
-        dateStr = currentDate.toISOString().split('T')[0];
+        localDate = currentDate;
       } else {
-        dateStr = String(currentDate).split('T')[0];
+        localDate = new Date(String(currentDate));
       }
       
-      this._log(`📅 Using date: ${dateStr} from metadata (original: ${currentDate})`);
+      // Get start and end of the local date as Unix timestamps
+      // This ensures we match all photos from the calendar day user sees
+      const localYear = localDate.getFullYear();
+      const localMonth = localDate.getMonth();
+      const localDay = localDate.getDate();
       
-      // Call media_index.get_random_items with date filtering
+      // Start of day in local timezone (convert to Unix timestamp in seconds)
+      const startOfDay = new Date(localYear, localMonth, localDay, 0, 0, 0);
+      const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
+      
+      // End of day in local timezone as inclusive Unix timestamp in seconds
+      // Use next day midnight minus 1 second to correctly handle DST transitions
+      // (days can be 23 or 25 hours during DST changes)
+      const endOfDay = new Date(localYear, localMonth, localDay + 1, 0, 0, 0);
+      const endTimestamp = Math.floor(endOfDay.getTime() / 1000) - 1;
+      
+      this._log(`📅 Same Date filter: local date ${localYear}-${String(localMonth+1).padStart(2,'0')}-${String(localDay).padStart(2,'0')} → timestamp range ${startTimestamp} to ${endTimestamp}`);
+      
+      // Call media_index.get_random_items with timestamp filtering
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
         service: 'get_random_items',
         service_data: {
           count: 100, // Get up to 100 photos from this day
-          date_from: dateStr,
-          date_to: dateStr
+          timestamp_from: startTimestamp,
+          timestamp_to: endTimestamp
         },
         return_response: true
       };
@@ -9631,7 +9923,8 @@ class MediaCard extends LitElement {
         await this._loadPanelItem(0);
       }
       
-      // Pause auto-advance while in related mode
+      // V5.6.7: Save pause state before pausing, then pause auto-advance while in related mode
+      this._previousPauseState = this._isPaused;
       if (!this._isPaused) {
         this._setPauseState(true);
       }
@@ -9666,7 +9959,7 @@ class MediaCard extends LitElement {
       this._panelOpen = true;
       
       // Initialize paging for queue preview
-      // V5.7: Use pending index if available (syncs with deferred navigation updates)
+      // V5.6.7: Use pending index if available (syncs with deferred navigation updates)
       const currentIndex = this._pendingNavigationIndex ?? this.navigationIndex;
       this._panelPageStartIndex = currentIndex;
       
@@ -9703,6 +9996,10 @@ class MediaCard extends LitElement {
     // Show loading state
     this._panelLoading = true;
     this._onThisDayLoading = true;
+    
+    // V5.6.7: Save pause state early before operations that might fail
+    this._previousPauseState = this._isPaused;
+    
     this.requestUpdate();
     
     try {
@@ -9713,10 +10010,35 @@ class MediaCard extends LitElement {
       // Save previous panel mode to restore after closing
       this._previousPanelMode = this._panelMode;
       
-      // Get today's month and day
-      const today = new Date();
-      const month = String(today.getMonth() + 1); // 1-12
-      const day = String(today.getDate()); // 1-31
+      // V5.6.7: Save queue panel scroll position if coming from queue mode
+      if (this._panelMode === 'queue') {
+        this._previousQueuePageIndex = this._panelPageStartIndex;
+      }
+      
+      // V5.6.7: Use photo's date or today's date based on toggle
+      // Default (off): Use today's date (for "it's my kid's birthday today")
+      // Checked (on): Use current photo's date (for "show me this birthday across years")
+      let month, day;
+      
+      if (this._onThisDayUsePhotoDate) {
+        // Use current photo's date
+        const currentTimestamp = this._currentMetadata?.date_taken || this._currentMetadata?.created_time;
+        if (!currentTimestamp) {
+          console.warn('Cannot enter On This Day mode: no timestamp for current photo');
+          this._panelLoading = false;
+          this._onThisDayLoading = false;
+          return;
+        }
+        
+        const photoDate = new Date(currentTimestamp * 1000); // Convert Unix timestamp to Date
+        month = String(photoDate.getMonth() + 1); // 1-12
+        day = String(photoDate.getDate()); // 1-31
+      } else {
+        // Use today's date (default)
+        const today = new Date();
+        month = String(today.getMonth() + 1); // 1-12
+        day = String(today.getDate()); // 1-31
+      }
       
       // Use current window setting (default 0 = exact match)
       const windowDays = this._onThisDayWindowDays || 0;
@@ -9765,6 +10087,11 @@ class MediaCard extends LitElement {
       this._panelPageStartIndex = 0; // Start at beginning
       this._panelLoading = false;
       this._onThisDayLoading = false;
+      
+      // V5.6.7: Pause auto-advance while in On This Day mode (pause state already saved earlier)
+      if (!this._isPaused) {
+        this._setPauseState(true);
+      }
       
       this.requestUpdate();
       
@@ -9848,6 +10175,7 @@ class MediaCard extends LitElement {
       
       // Clear panel state (but might restore queue panel below)
       const previousPanelMode = this._previousPanelMode;
+      const preservedPageStartIndex = this._panelPageStartIndex; // V5.6.7: Preserve for queue restoration
       this._panelOpen = false;
       this._panelMode = null;
       this._panelQueue = [];
@@ -9869,16 +10197,40 @@ class MediaCard extends LitElement {
       this._mainQueueIndex = 0;
       this._previousPanelMode = null;
       
+      // V5.6.7: Restore previous pause state BEFORE restoring queue panel
+      // This ensures the pause state is correct whether we restore queue or not
+      const shouldRestoreQueuePanel = (previousPanelMode === 'queue');
+      const shouldRestorePauseState = !isQueuePreview; // Don't restore when closing queue itself
+      
+      if (shouldRestorePauseState && this._previousPauseState !== null) {
+        if (!this._previousPauseState && this._isPaused) {
+          // Was not paused before, currently paused, so resume
+          this._setPauseState(false);
+          // V5.6.7: Explicitly restart auto-refresh to ensure timer is active
+          this._setupAutoRefresh();
+        }
+      }
+      // V5.6.7: Always clear saved pause state after use (not just in restore branch)
+      this._previousPauseState = null;
+      
       // Restore previous panel mode if we were in queue preview before burst
-      if (previousPanelMode === 'queue') {
+      if (shouldRestoreQueuePanel) {
         this._panelMode = 'queue';
         this._panelOpen = true;
+        // V5.6.7: Restore queue scroll position from saved value
+        if (this._previousQueuePageIndex !== null) {
+          this._panelPageStartIndex = this._previousQueuePageIndex;
+          this._previousQueuePageIndex = null; // Clear saved value
+        } else {
+          this._panelPageStartIndex = preservedPageStartIndex;
+        }
         console.warn('↩️ Restored queue preview panel after burst review');
       }
       
-      // Resume auto-advance if it was paused for panel mode (but not if we restored queue panel)
-      if (this._isPaused && this._panelMode !== 'queue') {
-        this._setPauseState(false);
+      // V5.6.7: When closing queue panel, ensure auto-refresh is active if not paused
+      if (isQueuePreview && !this._isPaused) {
+        this._log('▶️ Restarting auto-advance after closing queue panel');
+        this._setupAutoRefresh();
       }
       
       this.requestUpdate();
@@ -10286,6 +10638,14 @@ class MediaCard extends LitElement {
       
       // Start/restart 3s hide timer
       this._startActionButtonsHideTimer();
+    }
+    
+    // V5.6.7: Toggle bottom overlay visibility during video playback
+    // This allows access to video controls (play/pause, seek bar, volume)
+    const isVideo = this._isVideoFile(this.mediaUrl);
+    if (isVideo) {
+      this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+      this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'} for video controls access`);
     }
     
     this.requestUpdate();
@@ -11423,8 +11783,19 @@ class MediaCard extends LitElement {
       transform: scale(1.05);
     }
     
+    /* V5.6.7: Preserve translateX centering on hover for center-positioned clocks */
+    .clock-overlay.clock-center-top.clickable:hover,
+    .clock-overlay.clock-center-bottom.clickable:hover {
+      transform: translateX(-50%) scale(1.05);
+    }
+    
     .clock-overlay.clickable:active {
       transform: scale(0.98);
+    }
+    
+    .clock-overlay.clock-center-top.clickable:active,
+    .clock-overlay.clock-center-bottom.clickable:active {
+      transform: translateX(-50%) scale(0.98);
     }
     
     /* Only apply backdrop-filter if opacity > 0.05 to allow true transparency */
@@ -11494,6 +11865,22 @@ class MediaCard extends LitElement {
       bottom: 12px;
       left: 50%;
       transform: translateX(-50%);
+    }
+
+    /* V5.6.7: Hide bottom overlays during video playback (tap center to toggle)
+       This allows access to native video controls (play/pause, seek bar, volume) */
+    .media-container.hide-bottom-overlays .metadata-overlay.metadata-bottom-left,
+    .media-container.hide-bottom-overlays .metadata-overlay.metadata-bottom-right,
+    .media-container.hide-bottom-overlays .metadata-overlay.metadata-center-bottom,
+    .media-container.hide-bottom-overlays .display-entities.position-bottom-left,
+    .media-container.hide-bottom-overlays .display-entities.position-bottom-right,
+    .media-container.hide-bottom-overlays .display-entities.position-center-bottom,
+    .media-container.hide-bottom-overlays .clock-overlay.clock-bottom-left,
+    .media-container.hide-bottom-overlays .clock-overlay.clock-bottom-right,
+    .media-container.hide-bottom-overlays .clock-overlay.clock-center-bottom {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
     }
 
     /* V4: Action Buttons (Favorite/Delete/Edit) */
@@ -12342,11 +12729,36 @@ class MediaCard extends LitElement {
       gap: 8px;
     }
 
+    .panel-header-actions.stacked .top-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: center;
+    }
+
     .panel-header-actions.stacked .bottom-row {
       display: flex;
       align-items: center;
       gap: 8px;
       justify-content: center;
+    }
+
+    .use-photo-date-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--primary-text-color);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .use-photo-date-checkbox input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--primary-color, #03a9f4);
     }
 
     .panel-action-button {
@@ -12737,10 +13149,13 @@ class MediaCard extends LitElement {
     
     // Disable backdrop-filter when opacity <= 0.05 to allow true transparency
     const transparentClass = overlayOpacity <= 0.05 ? 'transparent-overlays' : '';
+    
+    // V5.6.7: Hide bottom overlays during video playback (tap center to toggle for video control access)
+    const hideBottomOverlaysClass = this._hideBottomOverlaysForVideo ? 'hide-bottom-overlays' : '';
 
     return html`
       <div 
-        class="media-container ${transparentClass}"
+        class="media-container ${transparentClass} ${hideBottomOverlaysClass}"
         style="--ha-media-metadata-scale: ${metadataScale}; --display-entities-transition: ${displayEntitiesTransition}ms; --ha-overlay-opacity: ${overlayOpacity}"
         @click=${this._handleTap}
         @dblclick=${this._handleDoubleTap}
@@ -12749,7 +13164,7 @@ class MediaCard extends LitElement {
         @pointercancel=${this._handlePointerCancel}
       >
         ${isVideo ? html`
-          <video 
+          <video
             controls
             preload="auto"
             playsinline
@@ -12770,9 +13185,9 @@ class MediaCard extends LitElement {
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
           >
-            <source src="${this.mediaUrl}" type="video/mp4">
-            <source src="${this.mediaUrl}" type="video/webm">
-            <source src="${this.mediaUrl}" type="video/ogg">
+            <source src="${this.mediaUrl}" type="video/mp4" @error=${this._onSourceError}>
+            <source src="${this.mediaUrl}" type="video/webm" @error=${this._onSourceError}>
+            <source src="${this.mediaUrl}" type="video/ogg" @error=${this._onSourceError}>
             <p>Your browser does not support the video tag. <a href="${this.mediaUrl}" target="_blank">Download the video</a> instead.</p>
           </video>
           ${this._renderVideoInfo()}
@@ -12834,6 +13249,8 @@ class MediaCard extends LitElement {
            <div class="nav-zone nav-zone-left ${this._showButtonsExplicitly ? 'show-buttons' : ''}"
              @click=${async (e) => { 
             e.stopPropagation(); 
+            // V5.6.7: Mark as manual navigation
+            this._isManualNavigation = true;
             // Navigate first
             await this._loadPrevious(); 
             // If buttons are showing, restart the 3s timer to auto-hide
@@ -12846,6 +13263,8 @@ class MediaCard extends LitElement {
            <div class="nav-zone nav-zone-right ${this._showButtonsExplicitly ? 'show-buttons' : ''}"  
              @click=${async (e) => { 
             e.stopPropagation(); 
+            // V5.6.7: Mark as manual navigation
+            this._isManualNavigation = true;
             // Navigate first
             await this._loadNext(); 
             // If buttons are showing, restart the 3s timer to auto-hide
@@ -12939,9 +13358,23 @@ class MediaCard extends LitElement {
       title = '📅 Same Date';
       subtitle = `${this._panelQueue.length} media items from this date/time`;
     } else if (this._panelMode === 'on_this_day') {
-      const today = new Date();
-      const monthDay = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const currentYear = today.getFullYear();
+      // V5.6.7: Use either today's date or current photo's date based on toggle
+      let displayDate;
+      if (this._onThisDayUsePhotoDate) {
+        // Use current photo's date
+        const currentTimestamp = this._currentMetadata?.date_taken || this._currentMetadata?.created_time;
+        if (currentTimestamp) {
+          displayDate = new Date(currentTimestamp * 1000);
+        } else {
+          displayDate = new Date(); // Fallback to today if no photo timestamp
+        }
+      } else {
+        // Use today's date (default)
+        displayDate = new Date();
+      }
+      
+      const monthDay = displayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      
       // Calculate year range from photos if available, otherwise show reasonable range
       let yearRange = '';
       if (this._panelQueue.length > 0) {
@@ -12975,17 +13408,27 @@ class MediaCard extends LitElement {
             <div class="title-text">${title}</div>
           </div>
           <div class="panel-header-actions stacked">
-            <select 
-              class="window-selector" 
-              .value=${String(this._onThisDayWindowDays)}
-              @change=${this._handleWindowSizeChange}
-              title="Adjust date range">
-              <option value="0">Exact</option>
-              <option value="1">±1 day</option>
-              <option value="3">±3 days</option>
-              <option value="7">±1 week</option>
-              <option value="14">±2 weeks</option>
-            </select>
+            <div class="top-row">
+              <select 
+                class="window-selector" 
+                .value=${String(this._onThisDayWindowDays)}
+                @change=${this._handleWindowSizeChange}
+                title="Adjust date range">
+                <option value="0">Exact</option>
+                <option value="1">±1 day</option>
+                <option value="3">±3 days</option>
+                <option value="7">±1 week</option>
+                <option value="14">±2 weeks</option>
+              </select>
+              <label class="use-photo-date-checkbox" title="Use photo's date instead of today's date">
+                <input 
+                  type="checkbox" 
+                  .checked=${this._onThisDayUsePhotoDate}
+                  @change=${this._handleUsePhotoDateChange}
+                />
+                <span>📸 Photo Date</span>
+              </label>
+            </div>
             <div class="bottom-row">
               <label class="randomize-checkbox" title="Randomize playback order">
                 <input 
@@ -13118,17 +13561,28 @@ class MediaCard extends LitElement {
       }
     }
     
-    // Auto-adjust page for queue mode only (burst/related stay on current page)
+    // Auto-adjust page for queue mode only (burst/related/same_date/on_this_day stay on current page)
+    // V5.6.7: Only auto-adjust if the PREVIOUS image was highlighted (visible in panel)
+    // This prevents panel from jumping back when user manually scrolled away
     if (this._panelMode === 'queue' && !this._manualPageChange) {
       const currentPageEnd = this._panelPageStartIndex + maxDisplay;
       
-      if (this.navigationIndex < this._panelPageStartIndex) {
-        // Navigated backward beyond current page
-        this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
-      } else if (this.navigationIndex >= currentPageEnd) {
-        // Navigated forward beyond current page
-        this._panelPageStartIndex = this.navigationIndex;
+      // Check if previous navigationIndex was within visible range
+      const prevIndex = this._previousNavigationIndex ?? this.navigationIndex;
+      const prevWasVisible = prevIndex >= this._panelPageStartIndex && prevIndex < currentPageEnd;
+      
+      // Only auto-adjust if the previous image was visible (highlighted)
+      if (prevWasVisible) {
+        if (this.navigationIndex < this._panelPageStartIndex) {
+          // Navigated backward beyond current page
+          this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
+        } else if (this.navigationIndex >= currentPageEnd) {
+          // Navigated forward beyond current page
+          this._panelPageStartIndex = this.navigationIndex;
+        }
       }
+      // V5.6.7: Clear saved previous index after adjustment logic completes
+      this._previousNavigationIndex = null;
     }
     
     const displayStartIndex = this._panelPageStartIndex;
@@ -13249,12 +13703,15 @@ class MediaCard extends LitElement {
           const isVideo = this._isVideoItem(item);
           const videoThumbnailTime = this.config.video_thumbnail_time || 1;
           const isVideoLoaded = isVideo && this._isVideoThumbnailLoaded(item);
+          const cacheKey = item.media_content_id || item.path;
           
           return html`
             <div 
-              class="thumbnail ${isActive ? 'active' : ''} ${isFavorited ? 'favorited' : ''}"
+              class="thumbnail ${isFavorited ? 'favorited' : ''}"
+              data-item-index="${actualIndex}"
               @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
               title="${item.filename || item.path}"
+              data-cache-key="${cacheKey}"
             >
               ${item._resolvedUrl ? (
                 isVideo ? html`
@@ -17420,7 +17877,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.6 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.7 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
