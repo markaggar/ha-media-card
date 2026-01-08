@@ -61,6 +61,51 @@ export class MediaProvider {
   }
 
   /**
+   * V5.6.7: Check if file exists using media_index service (lightweight filesystem check)
+   * Shared by all providers that use media_index backend
+   * @param {Object} mediaItem - Media item with path or URI
+   * @returns {Promise<boolean|null>} true if exists, false if not, null if unavailable
+   */
+  async checkFileExists(mediaItem) {
+    try {
+      const entityId = this.config?.media_index?.entity_id;
+      if (!entityId) {
+        // No media_index entity configured
+        return null;
+      }
+
+      const uri = mediaItem?.media_source_uri || mediaItem?.media_content_id;
+      const path = mediaItem?.path;
+
+      if (!uri && !path) {
+        return null;
+      }
+
+      // Call media_index.check_file_exists service
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'check_file_exists',
+        service_data: {
+          media_source_uri: uri,
+          file_path: path
+        },
+        return_response: true
+      };
+      
+      if (entityId) {
+        wsCall.target = { entity_id: entityId };
+      }
+      
+      const response = await this.hass.callWS(wsCall);
+      return response?.response?.exists === true;
+    } catch (error) {
+      // Service doesn't exist (old media_index version) or other error
+      return null;
+    }
+  }
+
+  /**
    * V5: Check if media_index integration is active
    * Active if enabled flag is true OR entity_id is provided (implicit enablement)
    */
