@@ -94,13 +94,15 @@ folder:
   path: media-source://media_source/local/photos/
   mode: random
   random_count: 10  # Optional: queue size
-slideshow_window: 1000  # Optional: probability sampling window
+slideshow_window: 15  # Optional: check for new files every N items
+navigation_queue_size: 200  # Optional: back-navigation history size
 ```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `folder.random_count` | number | `5` | Number of random files to select |
-| `slideshow_window` | number | `1000` | Probability target for sampling (not a hard limit) |
+| `slideshow_window` | number | `15` | How often to check for new files (in items viewed) |
+| `navigation_queue_size` | number | `100` | Maximum items kept in back-navigation history (YAML only) |
 
 ### Sequential Mode Options
 

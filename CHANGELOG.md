@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Path normalization ensures both URI and filesystem path formats are excluded
   - Prevents infinite loop when hitting missing files in sequential mode
 
+- **New Config Option: `navigation_queue_size`** (YAML only)
+  - Controls how many items are kept in back-navigation history
+  - Default: 100 (or `slideshow_window` if larger)
+  - Allows independent tuning of navigation history vs refresh interval
+  - Example: `navigation_queue_size: 200`
+
 ### Fixed
 
 - **Video Overlay Toggle**: Clicking on video now toggles bottom overlays for control access
@@ -63,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`slideshow_window` Behavior**: Now controls periodic refresh interval instead of queue size
-  - `slideshow_window` = how often to check for new files (in items)
+  - `slideshow_window` = how often to check for new files (in items viewed)
   - `navigation_queue_size` = how many items to keep in back-navigation history (default: 100)
   - Navigation queue floor is now 100 items regardless of slideshow_window setting
 
