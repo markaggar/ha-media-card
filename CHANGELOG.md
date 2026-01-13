@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Video Controls On Tap** (Default: `true`): Videos now start with a cleaner presentation without visible playback controls
+  - Native HTML5 video controls (play/pause, seek, volume, fullscreen) hidden until user interaction
+  - **First tap**: Shows video controls, hides metadata/position overlays for unobstructed viewing
+  - **Second tap**: Hides video controls, shows metadata/position overlays
+  - Provides cleaner, more immersive video experience by default
+  - Set `video_controls_on_tap: false` to restore legacy behavior (controls always visible)
+
+
+
 - **Periodic Refresh for New Files**: Slideshow now checks for new files every `slideshow_window` items
   - Works for both database-backed (Media Index) and filesystem providers
   - New files are detected and inserted at the front of the queue without interrupting playback

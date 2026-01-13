@@ -4498,6 +4498,9 @@ class MediaCard extends LitElement {
     // V5.6.7: Hide bottom overlays during video playback (to access video controls)
     this._hideBottomOverlaysForVideo = false;
     
+    // V5.6.8: Video controls visibility (for controls-on-tap feature)
+    this._videoControlsVisible = false;
+    
     // V5.6: Video thumbnail cache (session-scoped)
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
@@ -7551,6 +7554,9 @@ class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
+    // V5.6.8: Reset video controls visibility and overlay state for new video
+    this._videoControlsVisible = false;
+    this._hideBottomOverlaysForVideo = false;
   }
 
   _onVideoCanPlay() {
@@ -12205,6 +12211,38 @@ class MediaCard extends LitElement {
       margin: auto;
     }
 
+    /* V5.6.8: Hide native video controls when controls-on-tap is enabled */
+    video.hide-controls::-webkit-media-controls {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-enclosure {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-panel {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-play-button {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-timeline {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-current-time-display {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-time-remaining-display {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-mute-button {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-volume-slider {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-fullscreen-button {
+      display: none !important;
+    }
+
     :host([data-aspect-mode="viewport-fit"]) .main-content video {
       max-height: var(--available-viewport-height, 100vh) !important;
       max-width: 100vw !important;
@@ -13855,6 +13893,7 @@ class MediaCard extends LitElement {
       >
         ${isVideo ? html`
           <video
+            class="${this.config.video_controls_on_tap !== false && !this._videoControlsVisible ? 'hide-controls' : ''}"
             controls
             preload="auto"
             playsinline
@@ -13872,7 +13911,7 @@ class MediaCard extends LitElement {
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
             @click=${(e) => { 
-              // V5.6.7: Toggle bottom overlays on video click for control access
+              // V5.6.8: Handle video click - toggle controls and overlays together
               // Check if click is on video itself (not controls)
               if (e.target.tagName === 'VIDEO') {
                 // Stop propagation to prevent _handleTap from also toggling
@@ -13882,10 +13921,22 @@ class MediaCard extends LitElement {
                 // Mark as user interaction for video timer logic
                 this._videoUserInteracted = true;
                 
-                // Toggle bottom overlays
-                this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
-                this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'} for video controls access`);
+                // Debug: log state before toggle
+                this._log(`🎬 BEFORE: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
+                
+                // Toggle controls and overlays together (inverse relationship)
+                if (this.config.video_controls_on_tap !== false) {
+                  this._videoControlsVisible = !this._videoControlsVisible;
+                  this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+                  this._log(`🎬 AFTER: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
+                } else {
+                  // Legacy behavior when video_controls_on_tap: false
+                  this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+                  this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'}`);
+                }
                 this.requestUpdate();
+              } else {
+                this._log(`🎬 Click on non-VIDEO element: ${e.target.tagName}`);
               }
             }}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
