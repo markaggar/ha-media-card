@@ -700,6 +700,19 @@ export class MediaIndexProvider extends MediaProvider {
     this.excludedFiles.add(path);
   }
 
+  /**
+   * V5.6.8: Reset provider state for fresh query
+   * Clears queue and excluded files, reinitializes
+   */
+  async reset() {
+    this._log('🔄 Resetting MediaIndexProvider');
+    this.queue = [];
+    this.excludedFiles.clear();
+    this.recentFilesExhausted = false;
+    this._consecutiveEmptyResponses = 0;
+    return await this.initialize();
+  }
+
   // Query for new files (for queue refresh feature)
   // For random mode, we don't filter by date but can query with priority_new_files
   async getFilesNewerThan(dateThreshold) {

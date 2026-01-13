@@ -209,6 +209,10 @@ export class MediaCard extends LitElement {
     this._lastPanelItemsHash = null;
     this._cachedThumbnailStripTemplate = null;
     
+    // V5.6.8: Periodic refresh counter - tracks items since last provider refresh
+    // Triggers a check for new files every slideshow_window items
+    this._itemsSinceRefresh = 0;
+    
     // V5.6.7: Track which navigation index each crossfade layer belongs to
     this._frontLayerNavigationIndex = null;  // Navigation index for front layer image
     this._backLayerNavigationIndex = null;   // Navigation index for back layer image
@@ -871,10 +875,15 @@ export class MediaCard extends LitElement {
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
     this.setAttribute('data-position-indicator-position', positionIndicatorPosition);
     
-    // V5.3: Set max navigation queue size based on slideshow_window
-    const slideshowWindow = this.config.slideshow_window || 100;
-    this.maxNavQueueSize = slideshowWindow * 2;
-    this._log('Set maxNavQueueSize to', this.maxNavQueueSize, '(slideshow_window * 2)');
+    // V5.6.8: Navigation queue size is now independent of slideshow_window
+    // slideshow_window controls how frequently to check for new files (periodic refresh)
+    // navigation_queue_size controls how many items to keep in back-navigation history
+    // Default: max(slideshow_window, 100) - floor of 100, but at least holds one full batch
+    const slideshowWindow = this.config.slideshow_window || 15;
+    const defaultQueueSize = Math.max(slideshowWindow, 100);
+    this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
+    this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
+    this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
     
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
@@ -1369,8 +1378,8 @@ export class MediaCard extends LitElement {
             // Log if we hit the safety limit (indicates provider may be stuck)
             if (attempts >= maxAttempts && alreadyInQueue) {
               this._log('⚠️ Max attempts reached in duplicate detection - provider may be returning same item repeatedly');
-              // Treat as provider exhaustion - wrap to beginning
-              this._log('Treating as provider exhaustion, wrapping to beginning');
+              // Treat as provider exhaustion - wrap to beginning with fresh query
+              this._log('Treating as provider exhaustion, wrapping to beginning with refresh');
               
               // Validate queue has items before wrapping
               if (this.navigationQueue.length === 0) {
@@ -1379,20 +1388,12 @@ export class MediaCard extends LitElement {
                 return;
               }
               
-              // V5.4: Check for new files before wrapping back to position 1
-              const queueRefreshed = await this._checkForNewFiles();
-              if (queueRefreshed) {
-                // Queue was refreshed and reset to position 1 with new files
-                return;
-              }
-              
-              this._pendingNavigationIndex = 0;
+              // V5.6.8: Do fresh query when wrapping to catch new files
+              await this._wrapToBeginningWithRefresh();
               return;
-            }
-            
-            if (!item || alreadyInQueue) {
+            } else if (!item || alreadyInQueue) {
               // All items are duplicates or provider exhausted, wrap to beginning
-              this._log('Provider exhausted or only returning duplicates, wrapping to beginning');
+              this._log('Provider exhausted or only returning duplicates, wrapping to beginning with refresh');
               
               // Validate queue has items before wrapping
               if (this.navigationQueue.length === 0) {
@@ -1401,37 +1402,34 @@ export class MediaCard extends LitElement {
                 return;
               }
               
-              // V5.4: Check for new files before wrapping back to position 1
-              const queueRefreshed = await this._checkForNewFiles();
-              if (queueRefreshed) {
-                // Queue was refreshed and reset to position 1 with new files
-                return;
-              }
-              
-              this._pendingNavigationIndex = 0;
+              // V5.6.8: Do fresh query when wrapping to catch new files
+              await this._wrapToBeginningWithRefresh();
               return;
-            }
-            
-            this._log('✅ Adding new item to navigation queue:', item.title);
+            } else {
+              this._log('✅ Adding new item to navigation queue:', item.title);
           
-            // V5: Extract metadata if not provided
-            if (!item.metadata) {
-              this._log('Extracting metadata for:', item.media_content_id);
-              item.metadata = await this._extractMetadataFromItem(item);
-            }
+              // V5: Extract metadata if not provided
+              if (!item.metadata) {
+                this._log('Extracting metadata for:', item.media_content_id);
+                item.metadata = await this._extractMetadataFromItem(item);
+              }
           
-            // Add to navigation queue
-            this.navigationQueue.push(item);
+              // Add to navigation queue
+              this.navigationQueue.push(item);
           
-            // Implement sliding window: remove oldest if exceeding max size
-            if (this.navigationQueue.length > this.maxNavQueueSize) {
-              this._log('Navigation queue exceeds max size, removing oldest item');
-              this.navigationQueue.shift();
-              this.navigationIndex--; // Adjust index for removed item
+              // Implement sliding window: remove oldest if exceeding max size
+              if (this.navigationQueue.length > this.maxNavQueueSize) {
+                this._log('Navigation queue exceeds max size, removing oldest item');
+                this.navigationQueue.shift();
+                // After shift, point nextIndex to the newly added item (now at end of queue)
+                // We DON'T decrement navigationIndex here because we're intentionally moving
+                // forward to the new item, not staying at the current position
+                nextIndex = this.navigationQueue.length - 1;
+              }
             }
           } else {
-            // No more items available from provider, wrap to beginning
-            this._log('Provider exhausted, wrapping to beginning');
+            // No more items available from provider, wrap to beginning with fresh query
+            this._log('Provider exhausted, wrapping to beginning with refresh');
             
             // Validate queue has items before wrapping
             if (this.navigationQueue.length === 0) {
@@ -1440,16 +1438,9 @@ export class MediaCard extends LitElement {
               return;
             }
             
-            // V5.4: Check for new files before wrapping back to position 1
-            const queueRefreshed = await this._checkForNewFiles();
-            if (queueRefreshed) {
-              // Queue was refreshed and reset to position 1 with new files
-              return;
-            }
-            
-            // V5.6.4: Update nextIndex to 0 after wrapping (matches pattern at line 1258)
-            nextIndex = 0;
-            this._pendingNavigationIndex = 0;
+            // V5.6.8: Do fresh query when wrapping to catch new files
+            await this._wrapToBeginningWithRefresh();
+            return;
           }
         }
       }
@@ -1459,6 +1450,17 @@ export class MediaCard extends LitElement {
       if (!item) {
         this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
+      }
+      
+      // V5.6.8: Increment periodic refresh counter and check if refresh needed
+      // Works for both sequential and random modes - provider handles mode-specific logic
+      this._itemsSinceRefresh++;
+      if (this._itemsSinceRefresh >= this._periodicRefreshInterval) {
+        this._log(`🔄 Periodic refresh triggered after ${this._itemsSinceRefresh} items (interval: ${this._periodicRefreshInterval})`);
+        // Reset counter immediately to prevent multiple triggers
+        this._itemsSinceRefresh = 0;
+        // Do refresh in background (non-blocking) to check for new files
+        this._doPeriodicRefresh().catch(err => this._log('⚠️ Periodic refresh failed:', err));
       }
       
       // Extract filename from path for logging
@@ -2092,6 +2094,150 @@ export class MediaCard extends LitElement {
         // Normal startup - use setInterval from the beginning
         this._refreshInterval = setInterval(timerCallback, intervalMs);
       }
+    }
+  }
+
+  /**
+   * V5.6.8: Wrap to beginning with fresh query
+   * Called when reaching the end of the slideshow to loop back with updated data.
+   * This ensures new files are detected on every loop iteration.
+   * @returns {Promise<void>}
+   */
+  async _wrapToBeginningWithRefresh() {
+    this._log('🔄 Wrapping to beginning with fresh query...');
+    
+    // V5.6.8: Remember total items seen before clearing queue (for position indicator)
+    // This prevents "1 of 30" after wrap when user saw 86 items
+    if (this.navigationQueue.length > 0) {
+      this._totalItemsInLoop = this.navigationQueue.length;
+      this._log(`🔄 Remembering ${this._totalItemsInLoop} items in loop for position indicator`);
+    }
+    
+    // Reset provider to clear cursor and start fresh
+    if (this.provider && typeof this.provider.reset === 'function') {
+      this._log('🔄 Resetting provider for fresh query');
+      await this.provider.reset();
+    }
+    
+    // Clear navigation queue and refill from fresh provider data
+    this.navigationQueue = [];
+    this.navigationIndex = -1;
+    
+    // Get fresh items from provider
+    let loadedCount = 0;
+    const targetCount = Math.min(this.maxNavQueueSize, 30); // Load initial batch
+    
+    while (loadedCount < targetCount) {
+      const item = await this.provider.getNext();
+      if (!item) {
+        this._log('🔄 Provider exhausted during refresh');
+        break;
+      }
+      
+      // Extract metadata if needed
+      if (!item.metadata) {
+        item.metadata = await this._extractMetadataFromItem(item);
+      }
+      
+      this.navigationQueue.push(item);
+      loadedCount++;
+    }
+    
+    if (this.navigationQueue.length === 0) {
+      this._log('ERROR: No items after refresh');
+      this._errorState = 'No media available after refresh';
+      return;
+    }
+    
+    this._log(`🔄 Refreshed queue with ${this.navigationQueue.length} items`);
+    
+    // V5.6.8: Reset periodic refresh counter
+    this._itemsSinceRefresh = 0;
+    
+    // Display first item
+    const firstItem = this.navigationQueue[0];
+    this.navigationIndex = 0;
+    this._pendingNavigationIndex = 0;
+    
+    // Display the media
+    const filename = firstItem.metadata?.filename || firstItem.media_content_id?.split('/').pop() || 'unknown';
+    this._log('🔄 Displaying first item after refresh:', filename);
+    
+    // Add to history
+    const alreadyInHistory = this.history.some(h => h.media_content_id === firstItem.media_content_id);
+    if (!alreadyInHistory) {
+      this.history.push(firstItem);
+    }
+    
+    // Display the media (same pattern as _loadNext)
+    this.currentMedia = firstItem;
+    this._pendingMediaPath = firstItem.media_content_id;
+    this._pendingMetadata = firstItem.metadata || null;
+    this._fullMetadata = null;
+    this._folderDisplayCache = null;
+    
+    await this._resolveMediaUrl();
+    this.requestUpdate();
+  }
+
+  /**
+   * V5.6.8: Periodic refresh - check for new files without disrupting playback
+   * Called every slideshow_window items to detect new files.
+   * Unlike _wrapToBeginningWithRefresh(), this doesn't clear the queue or change position.
+   * It queries the provider for any files newer than the current first item in queue.
+   */
+  async _doPeriodicRefresh() {
+    this._log('🔄 Periodic refresh - checking for new files...');
+    
+    // Check if provider supports checkForNewFiles
+    if (!this.provider) {
+      this._log('🔄 No provider available for periodic refresh');
+      return;
+    }
+    
+    // Try provider directly first (FolderProvider delegates internally)
+    // Also try sequentialProvider for wrapped providers
+    const checkProvider = this.provider.checkForNewFiles ? this.provider :
+                          (this.provider.sequentialProvider?.checkForNewFiles ? this.provider.sequentialProvider :
+                           (this.provider.subfolderQueue?.checkForNewFiles ? this.provider.subfolderQueue : null));
+    
+    if (!checkProvider || typeof checkProvider.checkForNewFiles !== 'function') {
+      this._log('🔄 Provider type does not support checkForNewFiles - periodic refresh skipped');
+      return;
+    }
+    
+    const newItems = await checkProvider.checkForNewFiles();
+    if (newItems && newItems.length > 0) {
+      this._log(`🔄 Found ${newItems.length} new files during periodic refresh`);
+      
+      // Prepend new items to the navigation queue (they're newer = come first in descending order)
+      // But we need to be careful about where in the queue to add them
+      // For descending date order: new files should go at the beginning
+      
+      for (const item of newItems) {
+        // Check if already in queue OR already seen in session history
+        const alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
+        const alreadyInHistory = this.history.some(h => h.media_content_id === item.media_content_id);
+        if (!alreadyInQueue && !alreadyInHistory) {
+          // Extract metadata if needed
+          if (!item.metadata) {
+            item.metadata = await this._extractMetadataFromItem(item);
+          }
+          // Add to beginning of queue (newest first for descending date order)
+          this.navigationQueue.unshift(item);
+          // Adjust navigation index since we added before current position
+          this.navigationIndex++;
+          this._pendingNavigationIndex = this.navigationIndex;
+          this._log(`🔄 Added new file to queue: ${item.metadata?.filename || item.media_content_id}`);
+        }
+      }
+      
+      // Trim queue if exceeds max size (remove oldest = end of array)
+      while (this.navigationQueue.length > this.maxNavQueueSize) {
+        this.navigationQueue.pop();
+      }
+    } else {
+      this._log('🔄 No new files found during periodic refresh');
     }
   }
 
@@ -4263,8 +4409,20 @@ export class MediaCard extends LitElement {
     const currentIndex = this.navigationIndex;
     const currentPosition = currentIndex + 1;
     
-    // Total is the max of queue length and history length
-    const totalSeen = Math.max(totalCount, this.history.length);
+    // V5.6.8: Use remembered total from previous loop if queue is being repopulated
+    // This prevents "1 of 30" showing when user saw 86 items before wrap
+    let totalSeen;
+    if (this._totalItemsInLoop && totalCount < this._totalItemsInLoop) {
+      // Queue is being repopulated after wrap - use remembered total
+      totalSeen = Math.min(this._totalItemsInLoop, this.maxNavQueueSize);
+    } else {
+      // Normal operation - use actual queue size (capped at max)
+      totalSeen = Math.min(totalCount, this.maxNavQueueSize);
+      // Update remembered total if queue grew
+      if (totalCount > (this._totalItemsInLoop || 0)) {
+        this._totalItemsInLoop = totalCount;
+      }
+    }
 
     // Show position indicator if enabled
     let positionIndicator = html``;
@@ -6606,6 +6764,21 @@ export class MediaCard extends LitElement {
     if (!itemIdentifier) {
       this._log('⚠️ Cannot remove 404 item - no identifier found');
       return;
+    }
+
+    // V5.6.8: Tell provider to exclude this file so it won't be returned again
+    // Pass all identifier formats - provider will normalize them
+    if (this.provider && typeof this.provider.excludeFile === 'function') {
+      // Exclude by path (filesystem path)
+      if (item.path) {
+        this.provider.excludeFile(item.path);
+        this._log('🚫 Excluded file from provider (path):', item.path);
+      }
+      // Also exclude by media_source_uri if different from path
+      if (item.media_source_uri && item.media_source_uri !== item.path) {
+        this.provider.excludeFile(item.media_source_uri);
+        this._log('🚫 Excluded file from provider (uri):', item.media_source_uri);
+      }
     }
 
     // Helper to match items by identifier - handle both URI and path formats
@@ -9401,6 +9574,23 @@ export class MediaCard extends LitElement {
             @ended=${this._onVideoEnded}
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
+            @click=${(e) => { 
+              // V5.6.7: Toggle bottom overlays on video click for control access
+              // Check if click is on video itself (not controls)
+              if (e.target.tagName === 'VIDEO') {
+                // Stop propagation to prevent _handleTap from also toggling
+                e.stopPropagation();
+                e.preventDefault();
+                
+                // Mark as user interaction for video timer logic
+                this._videoUserInteracted = true;
+                
+                // Toggle bottom overlays
+                this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+                this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'} for video controls access`);
+                this.requestUpdate();
+              }
+            }}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}

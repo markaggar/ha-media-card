@@ -428,14 +428,46 @@ export class SubfolderQueue {
             return (file.title || '').toLowerCase();
           };
           
+          // Helper to get numeric value for comparison
+          // If key is purely numeric, use it directly
+          // If alphanumeric, try to extract date using MediaProvider helper
+          const getNumericValue = (key) => {
+            if (/^\d+$/.test(key)) {
+              return BigInt(key);
+            }
+            // Try extracting date from the key (which is filename/title)
+            const dateFromKey = MediaProvider.extractDateFromFilename(key, this.card.config);
+            if (dateFromKey) {
+              return BigInt(dateFromKey.getTime());
+            }
+            return null;
+          };
+          
           this.queue.sort((a, b) => {
             const keyA = getTimestampForSort(a);
             const keyB = getTimestampForSort(b);
             
+            const numA = getNumericValue(keyA);
+            const numB = getNumericValue(keyB);
+            
+            // Files with dates should come before files without dates
+            if (numA !== null && numB === null) return -1;
+            if (numA === null && numB !== null) return 1;
+            
+            // Both have numeric dates - compare them
+            if (numA !== null && numB !== null) {
+              if (orderDirection === 'desc') {
+                return numB > numA ? 1 : numB < numA ? -1 : 0;
+              } else {
+                return numA > numB ? 1 : numA < numB ? -1 : 0;
+              }
+            }
+            
+            // Both are non-date filenames - use localeCompare for alphabetical
             if (orderDirection === 'desc') {
-              return keyB.localeCompare(keyA); // Newest first
+              return keyB.localeCompare(keyA);
             } else {
-              return keyA.localeCompare(keyB); // Oldest first
+              return keyA.localeCompare(keyB);
             }
           });
           
@@ -649,19 +681,42 @@ export class SubfolderQueue {
           const keyA = getTimestampForSort(a);
           const keyB = getTimestampForSort(b);
           
-          // Detect if keys are timestamps (14 digits) or filenames (alphabetical)
-          const isTimestampA = /^\d{14}$/.test(keyA);
-          const isTimestampB = /^\d{14}$/.test(keyB);
+          // Helper to get numeric value for comparison
+          // If key is purely numeric, use it directly
+          // If alphanumeric, try to extract date using MediaProvider helper
+          const getNumericValue = (key, file) => {
+            if (/^\d+$/.test(key)) {
+              return BigInt(key);
+            }
+            // Try extracting date from the key (which is filename/title)
+            const dateFromKey = MediaProvider.extractDateFromFilename(key, this.card.config);
+            if (dateFromKey) {
+              return BigInt(dateFromKey.getTime());
+            }
+            return null;
+          };
           
-          // Files with timestamps should always come before files without timestamps
-          if (isTimestampA && !isTimestampB) return -1; // A (has date) before B (no date)
-          if (!isTimestampA && isTimestampB) return 1;  // B (has date) before A (no date)
+          const numA = getNumericValue(keyA, a);
+          const numB = getNumericValue(keyB, b);
           
-          // Both have timestamps OR both are filenames - sort normally
+          // Files with dates should come before files without dates
+          if (numA !== null && numB === null) return -1;
+          if (numA === null && numB !== null) return 1;
+          
+          // Both have numeric dates - compare them
+          if (numA !== null && numB !== null) {
+            if (orderDirection === 'desc') {
+              return numB > numA ? 1 : numB < numA ? -1 : 0; // Newest first
+            } else {
+              return numA > numB ? 1 : numA < numB ? -1 : 0; // Oldest first
+            }
+          }
+          
+          // Both are non-date filenames - use localeCompare for alphabetical
           if (orderDirection === 'desc') {
-            return keyB.localeCompare(keyA); // Newest first (higher timestamp = more recent)
+            return keyB.localeCompare(keyA);
           } else {
-            return keyA.localeCompare(keyB); // Oldest first (lower timestamp = older)
+            return keyA.localeCompare(keyB);
           }
         });
         
@@ -724,17 +779,50 @@ export class SubfolderQueue {
         let sortedSubfolders;
         if (isSequentialMode) {
           // Sequential mode: Sort folders by name (descending = newest first, ascending = oldest first)
-          // Most camera/NVR folders use date-based naming (YYYYMMDD, YYYY-MM-DD, etc.)
+          // Most camera/NVR folders use date-based naming (YYYYMMDD, YYYY-MM-DD, YYYY/M/D, etc.)
           sortedSubfolders = [...subfolders].sort((a, b) => {
-            const nameA = (a.title || a.media_content_id.split('/').pop() || '').toLowerCase();
-            const nameB = (b.title || b.media_content_id.split('/').pop() || '').toLowerCase();
+            const nameA = (a.title || a.media_content_id.split('/').pop() || '');
+            const nameB = (b.title || b.media_content_id.split('/').pop() || '');
+            
+            // Extract numeric parts for proper date comparison
+            // Handles: "2026/1/12", "2026-01-12", "20260112", etc.
+            const extractDateValue = (name) => {
+              // Try to extract all numbers from the name
+              const numbers = name.match(/\d+/g);
+              if (!numbers) return 0;
+              
+              // If looks like YYYYMMDD (8 digits), parse directly
+              if (numbers.length === 1 && numbers[0].length === 8) {
+                return parseInt(numbers[0], 10);
+              }
+              
+              // If we have year/month/day parts (e.g., "2026/1/12" or "2026-01-12")
+              if (numbers.length >= 3) {
+                const year = parseInt(numbers[0], 10);
+                const month = parseInt(numbers[1], 10);
+                const day = parseInt(numbers[2], 10);
+                // Create sortable number: YYYYMMDD
+                return year * 10000 + month * 100 + day;
+              }
+              
+              // If we have just one number (e.g., day folder "12" inside month folder)
+              if (numbers.length === 1) {
+                return parseInt(numbers[0], 10);
+              }
+              
+              // Fallback: join all numbers
+              return parseInt(numbers.join(''), 10) || 0;
+            };
+            
+            const valueA = extractDateValue(nameA);
+            const valueB = extractDateValue(nameB);
             
             if (orderDirection === 'desc') {
-              // Descending: Z to A, newest dates first (20251123 before 20251122)
-              return nameB.localeCompare(nameA);
+              // Descending: newest dates first (higher values first)
+              return valueB - valueA;
             } else {
-              // Ascending: A to Z, oldest dates first (20251122 before 20251123)
-              return nameA.localeCompare(nameB);
+              // Ascending: oldest dates first (lower values first)
+              return valueA - valueB;
             }
           });
           
@@ -1373,6 +1461,87 @@ export class SubfolderQueue {
 
     this._log(`🔍 getFilesNewerThan: Found ${newerFiles.length} files newer than ${dateThreshold.toISOString()} (checked ${this.queue.length} files in queue)`);
     return newerFiles;
+  }
+  
+  /**
+   * V5.6.8: Check for new files since the slideshow started
+   * Rescans the folder tree and returns any files not seen in the original scan.
+   * This is more expensive than the database version but works for filesystem mode.
+   * @returns {Array} New items to prepend to navigation queue
+   */
+  async checkForNewFiles() {
+    // Store the files we knew about at the start
+    if (!this._knownFilesAtStart) {
+      // First call - record current state as baseline
+      this._knownFilesAtStart = new Set(this.queue.map(item => item.media_content_id));
+      this._log(`📝 Recorded ${this._knownFilesAtStart.size} known files as baseline for periodic refresh`);
+      return [];
+    }
+    
+    this._log('🔄 Checking for new files (filesystem mode)...');
+    
+    // Save current queue state
+    const originalQueue = [...this.queue];
+    const originalShown = new Set(this.shownItems);
+    
+    try {
+      // Do a fresh scan
+      this.queue = [];
+      this.shownItems.clear();
+      this._scanCancelled = false;
+      this.isScanning = true;
+      this.discoveryInProgress = true;
+      
+      await this.quickScan();
+      
+      // Find new files (in fresh scan but not in baseline)
+      const newFiles = this.queue.filter(item => 
+        !this._knownFilesAtStart.has(item.media_content_id)
+      );
+      
+      this._log(`📊 Scan found ${this.queue.length} total files, ${newFiles.length} are new since start`);
+      
+      // Restore original queue (don't disrupt current playback)
+      this.queue = originalQueue;
+      this.shownItems = originalShown;
+      
+      if (newFiles.length > 0) {
+        // Update baseline to include new files
+        newFiles.forEach(item => this._knownFilesAtStart.add(item.media_content_id));
+        this._log(`✅ Found ${newFiles.length} new files during periodic refresh`);
+      }
+      
+      return newFiles;
+      
+    } catch (error) {
+      this._log('⚠️ checkForNewFiles failed:', error);
+      // Restore original state on error
+      this.queue = originalQueue;
+      this.shownItems = originalShown;
+      return [];
+    } finally {
+      this.isScanning = false;
+      this.discoveryInProgress = false;
+    }
+  }
+  
+  /**
+   * V5.6.8: Reset the queue for fresh start
+   * Called when wrapping the slideshow to reload latest files
+   */
+  async reset() {
+    this._log('🔄 Resetting SubfolderQueue');
+    
+    // KEEP the known files baseline across resets - this prevents duplicates
+    // when periodic refresh runs after a wrap. The baseline represents
+    // "files known at session start" and should persist across loops.
+    // (Was: this._knownFilesAtStart = null - caused duplicates)
+    
+    // Clear queue and reinitialize
+    this.queue = [];
+    this.shownItems.clear();
+    
+    return await this.initialize();
   }
 }
 

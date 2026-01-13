@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.8 - 2026-01-12
+
+### Added
+
+- **Periodic Refresh for New Files**: Slideshow now checks for new files every `slideshow_window` items
+  - Works for both database-backed (Media Index) and filesystem providers
+  - New files are detected and inserted at the front of the queue without interrupting playback
+  - Previously only checked when looping back to beginning; now checks periodically throughout slideshow
+
+- **Fresh Query on Wrap**: When slideshow loops to beginning, performs fresh database/filesystem query
+  - Catches new files added since slideshow started
+  - Clears cursor and re-queries from beginning with updated data
+  - `reset()` method added to all providers (FolderProvider, SequentialMediaIndexProvider, MediaIndexProvider, SubfolderQueue)
+
+- **404 File Exclusion**: Files that return 404 are now excluded from future provider results
+  - Provider's `excludeFile()` method tracks missing files
+  - Path normalization ensures both URI and filesystem path formats are excluded
+  - Prevents infinite loop when hitting missing files in sequential mode
+
+### Fixed
+
+- **Video Overlay Toggle**: Clicking on video now toggles bottom overlays for control access
+  - Click video to hide metadata/position overlays, click again to show
+  - Overlays auto-restore when video ends
+  - Properly stops event propagation to prevent double-handling
+
+- **Folder Sorting for Date-Based Names**: Fixed numeric sorting for folder structures like `2026/1/12`
+  - String comparison `"2026/1/12"` vs `"2026/1/9"` incorrectly sorted "12" before "9"
+  - Now extracts numeric parts and creates sortable YYYYMMDD values
+  - Properly handles various formats: `2026/1/12`, `2026-01-12`, `20260112`
+
+- **File Sorting with Date-Embedded Filenames**: Improved sorting for files with dates in names
+  - Uses `BigInt` for numeric timestamp comparison (handles large values)
+  - Reuses `MediaProvider.extractDateFromFilename()` for consistent date parsing
+  - Falls back to `localeCompare` for non-date filenames
+
+- **Compound Cursor Pagination**: Fixed duplicate files when paginating with same date_taken values
+  - Now uses `(after_value, after_id)` compound cursor instead of just `after_value`
+  - Secondary cursor (row ID) provides stable ordering when sort values are equal
+  - Prevents items from being returned multiple times across page boundaries
+
+- **Position Indicator After Wrap**: Fixed "1 of 30" showing after viewing 86 items
+  - Now remembers `_totalItemsInLoop` before clearing queue on wrap
+  - Position indicator uses remembered total while queue repopulates
+  - Updates remembered total as queue grows during normal playback
+
+- **Duplicate Files on Periodic Refresh**: Fixed files appearing multiple times after wrap
+  - `SubfolderQueue.reset()` now preserves `_knownFilesAtStart` baseline across loops
+  - `_doPeriodicRefresh()` also checks session `history` to skip already-shown files
+  - Both checks prevent adding items that were already displayed this session
+
+- **Sliding Window Index Adjustment**: Fixed navigation index when queue shifts
+  - When removing oldest item from queue, correctly point to newly added item
+  - Previously could cause navigation to wrong position after queue shift
+
+### Changed
+
+- **`slideshow_window` Behavior**: Now controls periodic refresh interval instead of queue size
+  - `slideshow_window` = how often to check for new files (in items)
+  - `navigation_queue_size` = how many items to keep in back-navigation history (default: 100)
+  - Navigation queue floor is now 100 items regardless of slideshow_window setting
+
 ## v5.6.7 - 2026-01-07
 
 ### Added
