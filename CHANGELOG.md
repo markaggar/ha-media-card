@@ -41,6 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Video Seek Backwards Auto-Advance**: Fixed video auto-advancing when user seeks backwards
+  - Seeking backwards was incorrectly detected as video loop completion
+  - Now skips loop detection entirely when user has interacted with video (seek, pause, click)
+  - Users can freely seek without triggering premature advancement
+
+- **Sequential Provider Cursor Pagination**: Fixed duplicate files appearing in slideshow
+  - Cursor now properly updated after client-side sort (not before)
+  - Removed cursor overwrite in `getNext()` that was causing duplicate fetches
+  - `lastSeenId` now properly reset in `reset()` and `rescanForNewFiles()`
+  - Provider correctly paginates through files without returning same items
+
+- **Navigation Queue Preservation on Wrap**: Queue no longer cleared when slideshow loops
+  - Previously: Queue was cleared and only 30 items reloaded on wrap
+  - Now: Full navigation history preserved (up to `navigation_queue_size`)
+  - Users can navigate back through previously seen items after loop
+  - Queue trimmed from front if exceeds max size
+
 - **Video Overlay Toggle**: Clicking on video now toggles bottom overlays for control access
   - Click video to hide metadata/position overlays, click again to show
   - Overlays auto-restore when video ends

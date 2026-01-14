@@ -3703,24 +3703,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
         return null;
       }
       
-      // Update cursor for pagination
-      // Store the value of the sort field for this item
-      switch(this.orderBy) {
-        case 'date_taken':
-          this.lastSeenValue = item.date_taken;
-          break;
-        case 'filename':
-          this.lastSeenValue = item.filename;
-          break;
-        case 'path':
-          this.lastSeenValue = item.path;
-          break;
-        case 'modified_time':
-          this.lastSeenValue = item.modified_time;
-          break;
-        default:
-          this.lastSeenValue = item.path;
-      }
+      // V5.6.8: Cursor is now managed by _queryOrderedFiles() after client-side sort
+      // DO NOT update cursor here - it would overwrite the correct end-of-batch cursor
+      // with the cursor of the item being returned, causing duplicate fetches
       
       // Extract metadata using MediaProvider helper (V5 architecture)
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
@@ -3977,6 +3962,15 @@ class SequentialMediaIndexProvider extends MediaProvider {
           return this.orderDirection === 'desc' ? dateB - dateA : dateA - dateB;
         });
         this._log('🔄 Applied client-side sort by date_taken with fallback to modified_time/created_time');
+        
+        // V5.6.8: CRITICAL - Update cursor based on LAST item in SORTED array
+        // The cursor must reflect the actual last item we're returning, not the backend's order
+        if (allFilteredItems.length > 0) {
+          const lastSortedItem = allFilteredItems[allFilteredItems.length - 1];
+          localCursor = lastSortedItem.date_taken || lastSortedItem.modified_time || lastSortedItem.created_time;
+          localCursorId = lastSortedItem.id;
+          this._log(`📍 Updated cursor AFTER client-side sort: value=${localCursor}, id=${localCursorId}`);
+        }
       }
       
       // Transform items to include resolved URLs
@@ -4013,6 +4007,11 @@ class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`Item ${idx}: path="${item.path}", ${this.orderBy}=${item[this.orderBy]}`);
         });
       }
+      
+      // V5.6.8: Update class-level cursor so subsequent refills don't re-fetch same items
+      // This is critical for proper pagination when queue.length < 10 triggers immediate refill
+      this.lastSeenValue = localCursor;
+      this.lastSeenId = localCursorId;
       
       return items;
     } catch (error) {
@@ -4070,6 +4069,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this._log('Resetting to beginning of sequence');
     this.queue = [];
     this.lastSeenValue = null;
+    this.lastSeenId = null;  // V5.6.8: Also reset the secondary cursor
     this.hasMore = true;
     this.reachedEnd = false;
     return this.initialize();
@@ -4146,6 +4146,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
     
     // Reset cursor to beginning
     this.lastSeenValue = null;
+    this.lastSeenId = null;  // V5.6.8: Also reset the secondary cursor
     this.hasMore = true;
     this.reachedEnd = false;
     
@@ -6406,7 +6407,7 @@ class MediaCard extends LitElement {
   async _wrapToBeginningWithRefresh() {
     this._log('🔄 Wrapping to beginning with fresh query...');
     
-    // V5.6.8: Remember total items seen before clearing queue (for position indicator)
+    // V5.6.8: Remember total items seen before wrap (for position indicator)
     // This prevents "1 of 30" after wrap when user saw 86 items
     if (this.navigationQueue.length > 0) {
       this._totalItemsInLoop = this.navigationQueue.length;
@@ -6419,60 +6420,69 @@ class MediaCard extends LitElement {
       await this.provider.reset();
     }
     
-    // Clear navigation queue and refill from fresh provider data
-    this.navigationQueue = [];
-    this.navigationIndex = -1;
+    // V5.6.8: DON'T clear navigation queue - keep it for back navigation
+    // Just get fresh items from provider and prepend to queue
+    // The user can still navigate back through previously seen items
     
-    // Get fresh items from provider
-    let loadedCount = 0;
-    const targetCount = Math.min(this.maxNavQueueSize, 30); // Load initial batch
-    
-    while (loadedCount < targetCount) {
-      const item = await this.provider.getNext();
-      if (!item) {
-        this._log('🔄 Provider exhausted during refresh');
-        break;
-      }
-      
-      // Extract metadata if needed
-      if (!item.metadata) {
-        item.metadata = await this._extractMetadataFromItem(item);
-      }
-      
-      this.navigationQueue.push(item);
-      loadedCount++;
-    }
-    
-    if (this.navigationQueue.length === 0) {
-      this._log('ERROR: No items after refresh');
+    // Get first item from fresh provider
+    const firstItem = await this.provider.getNext();
+    if (!firstItem) {
+      this._log('🔄 Provider exhausted during refresh');
       this._errorState = 'No media available after refresh';
       return;
     }
     
-    this._log(`🔄 Refreshed queue with ${this.navigationQueue.length} items`);
+    // Extract metadata if needed
+    if (!firstItem.metadata) {
+      firstItem.metadata = await this._extractMetadataFromItem(firstItem);
+    }
+    
+    // V5.6.8: Insert at beginning of queue (after current items if navigating back)
+    // Or just set as current if queue is at end
+    // Find if this item already exists in queue
+    const existingIndex = this.navigationQueue.findIndex(item => 
+      item.media_content_id === firstItem.media_content_id
+    );
+    
+    if (existingIndex >= 0) {
+      // Item already in queue - jump to it
+      this._log(`🔄 First item already in queue at index ${existingIndex}, jumping to it`);
+      this.navigationIndex = existingIndex;
+    } else {
+      // New item - add to end and navigate to it
+      this.navigationQueue.push(firstItem);
+      this.navigationIndex = this.navigationQueue.length - 1;
+      this._log(`🔄 Added fresh item to queue, now at index ${this.navigationIndex}`);
+    }
+    
+    // Trim queue if too large (remove oldest items from front)
+    while (this.navigationQueue.length > this.maxNavQueueSize) {
+      this.navigationQueue.shift();
+      this.navigationIndex--;
+    }
+    
+    this._log(`🔄 Queue has ${this.navigationQueue.length} items after refresh`);
     
     // V5.6.8: Reset periodic refresh counter
     this._itemsSinceRefresh = 0;
     
-    // Display first item
-    const firstItem = this.navigationQueue[0];
-    this.navigationIndex = 0;
-    this._pendingNavigationIndex = 0;
+    const currentItem = this.navigationQueue[this.navigationIndex];
+    this._pendingNavigationIndex = this.navigationIndex;
     
     // Display the media
-    const filename = firstItem.metadata?.filename || firstItem.media_content_id?.split('/').pop() || 'unknown';
+    const filename = currentItem.metadata?.filename || currentItem.media_content_id?.split('/').pop() || 'unknown';
     this._log('🔄 Displaying first item after refresh:', filename);
     
     // Add to history
-    const alreadyInHistory = this.history.some(h => h.media_content_id === firstItem.media_content_id);
+    const alreadyInHistory = this.history.some(h => h.media_content_id === currentItem.media_content_id);
     if (!alreadyInHistory) {
-      this.history.push(firstItem);
+      this.history.push(currentItem);
     }
     
     // Display the media (same pattern as _loadNext)
-    this.currentMedia = firstItem;
-    this._pendingMediaPath = firstItem.media_content_id;
-    this._pendingMetadata = firstItem.metadata || null;
+    this.currentMedia = currentItem;
+    this._pendingMediaPath = currentItem.media_content_id;
+    this._pendingMetadata = currentItem.metadata || null;
     this._fullMetadata = null;
     this._folderDisplayCache = null;
     
@@ -7644,12 +7654,26 @@ class MediaCard extends LitElement {
 
   // V5: Track video seeking (user interaction)
   _onVideoSeeking(e) {
+    // V5.6.8: Track that we're in the middle of a seek operation
+    this._videoIsSeeking = true;
+    
     // V5.6.4: Only mark as user interaction if video has started playing
     // Browser fires seeking events during initial load - ignore those
     const video = e.target;
     if (video && video.currentTime >= 0.5) {
       this._videoUserInteracted = true;
       this._log('🎬 User interacted with video (seek) - will play to completion');
+    }
+  }
+  
+  // V5.6.8: Track when seeking finishes
+  _onVideoSeeked(e) {
+    this._videoIsSeeking = false;
+    // Update last video time to current position after seek completes
+    // This prevents the next timeupdate from thinking video looped
+    const video = e.target;
+    if (video) {
+      this._lastVideoTime = video.currentTime;
     }
   }
   
@@ -7807,6 +7831,14 @@ class MediaCard extends LitElement {
     // The 'ended' event doesn't fire for videos with loop attribute
     const video = e.target;
     if (!video || !this.config.video_loop) return;
+    
+    // V5.6.8: Ignore time updates during user seeking - seeking also causes backward time jumps
+    // but shouldn't be treated as video loop completion
+    if (this._videoIsSeeking) return;
+    
+    // V5.6.8: If user has interacted (seek, pause, etc), don't detect loops at all
+    // User is controlling the video manually, we'll play to completion regardless
+    if (this._videoUserInteracted) return;
     
     const currentTime = video.currentTime;
     
@@ -13910,6 +13942,7 @@ class MediaCard extends LitElement {
             @ended=${this._onVideoEnded}
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
+            @seeked=${this._onVideoSeeked}
             @click=${(e) => { 
               // V5.6.8: Handle video click - toggle controls and overlays together
               // Check if click is on video itself (not controls)

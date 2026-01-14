@@ -124,24 +124,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         return null;
       }
       
-      // Update cursor for pagination
-      // Store the value of the sort field for this item
-      switch(this.orderBy) {
-        case 'date_taken':
-          this.lastSeenValue = item.date_taken;
-          break;
-        case 'filename':
-          this.lastSeenValue = item.filename;
-          break;
-        case 'path':
-          this.lastSeenValue = item.path;
-          break;
-        case 'modified_time':
-          this.lastSeenValue = item.modified_time;
-          break;
-        default:
-          this.lastSeenValue = item.path;
-      }
+      // V5.6.8: Cursor is now managed by _queryOrderedFiles() after client-side sort
+      // DO NOT update cursor here - it would overwrite the correct end-of-batch cursor
+      // with the cursor of the item being returned, causing duplicate fetches
       
       // Extract metadata using MediaProvider helper (V5 architecture)
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
@@ -398,6 +383,15 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           return this.orderDirection === 'desc' ? dateB - dateA : dateA - dateB;
         });
         this._log('🔄 Applied client-side sort by date_taken with fallback to modified_time/created_time');
+        
+        // V5.6.8: CRITICAL - Update cursor based on LAST item in SORTED array
+        // The cursor must reflect the actual last item we're returning, not the backend's order
+        if (allFilteredItems.length > 0) {
+          const lastSortedItem = allFilteredItems[allFilteredItems.length - 1];
+          localCursor = lastSortedItem.date_taken || lastSortedItem.modified_time || lastSortedItem.created_time;
+          localCursorId = lastSortedItem.id;
+          this._log(`📍 Updated cursor AFTER client-side sort: value=${localCursor}, id=${localCursorId}`);
+        }
       }
       
       // Transform items to include resolved URLs
@@ -434,6 +428,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`Item ${idx}: path="${item.path}", ${this.orderBy}=${item[this.orderBy]}`);
         });
       }
+      
+      // V5.6.8: Update class-level cursor so subsequent refills don't re-fetch same items
+      // This is critical for proper pagination when queue.length < 10 triggers immediate refill
+      this.lastSeenValue = localCursor;
+      this.lastSeenId = localCursorId;
       
       return items;
     } catch (error) {
@@ -491,6 +490,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this._log('Resetting to beginning of sequence');
     this.queue = [];
     this.lastSeenValue = null;
+    this.lastSeenId = null;  // V5.6.8: Also reset the secondary cursor
     this.hasMore = true;
     this.reachedEnd = false;
     return this.initialize();
@@ -567,6 +567,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     
     // Reset cursor to beginning
     this.lastSeenValue = null;
+    this.lastSeenId = null;  // V5.6.8: Also reset the secondary cursor
     this.hasMore = true;
     this.reachedEnd = false;
     
