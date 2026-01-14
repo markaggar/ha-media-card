@@ -2755,6 +2755,28 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       gap: 8px;
       color: var(--primary-text-color);
     }
+
+    .support-footer {
+      margin-top: 24px;
+      padding: 16px;
+      text-align: center;
+      border-top: 1px solid var(--divider-color, #e0e0e0);
+    }
+
+    .support-footer a {
+      color: var(--primary-color, #007bff);
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .support-footer a:hover {
+      text-decoration: underline;
+    }
+
+    .support-footer .coffee-icon {
+      font-size: 16px;
+      margin-right: 6px;
+    }
   `;
 
   render() {
@@ -4089,6 +4111,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show exit instruction at bottom (detects which action has toggle-kiosk configured)</div>
             </div>
           </div>
+        </div>
+
+        <!-- Support Footer -->
+        <div class="support-footer">
+          <a href="https://buymeacoffee.com/markaggar" target="_blank" rel="noopener noreferrer">
+            <span class="coffee-icon">☕</span>Support the many hours and AI costs associated with the continued feature development and bug fixes of Media Card
+          </a>
         </div>
       </div>
     `;
