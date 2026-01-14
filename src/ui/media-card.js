@@ -882,7 +882,7 @@ export class MediaCard extends LitElement {
     // slideshow_window controls how frequently to check for new files (periodic refresh)
     // navigation_queue_size controls how many items to keep in back-navigation history
     // Default: max(slideshow_window, 100) - floor of 100, but at least holds one full batch
-    const slideshowWindow = this.config.slideshow_window || 15;
+    const slideshowWindow = this.config.slideshow_window ?? 100;
     const defaultQueueSize = Math.max(slideshowWindow, 100);
     this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
     this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
@@ -1307,25 +1307,8 @@ export class MediaCard extends LitElement {
     // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
     // V5.6.7: Skip panel adjustment during auto-advance of videos (prevents flickering)
     // but allow panel adjustment during manual navigation, even from/to videos
-    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
-    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
-    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
-      // V5.6.7: Save current navigationIndex BEFORE it changes so we can check if it was highlighted
-      this._previousNavigationIndex = this.navigationIndex;
-      
-      // V5.6.7: Only reset _manualPageChange if current thumbnail is highlighted
-      // If user paged away, keep _manualPageChange=true until they manually navigate back
-      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
-      const currentPageStart = this._panelPageStartIndex || 0;
-      const currentPageEnd = currentPageStart + maxDisplay;
-      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
-      
-      if (isCurrentImageHighlighted) {
-        // Current thumbnail is highlighted, allow panel to follow
-        this._manualPageChange = false;
-      }
-      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
-    }
+    // V5.6.8: Simplified - render function now handles resetting _manualPageChange
+    // when navigationIndex comes back onto the visible page
     
     if (!this.provider) {
       this._log('_loadNext called but no provider');
@@ -1560,25 +1543,8 @@ export class MediaCard extends LitElement {
     // V5.6.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
     // (Same logic as _loadNext for consistency)
-    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
-    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
-    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
-      // Save current navigationIndex BEFORE it changes so we can check if it was highlighted
-      this._previousNavigationIndex = this.navigationIndex;
-      
-      // Only reset _manualPageChange if current thumbnail is highlighted
-      // If user paged away, keep _manualPageChange=true until they manually navigate back
-      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
-      const currentPageStart = this._panelPageStartIndex || 0;
-      const currentPageEnd = currentPageStart + maxDisplay;
-      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
-      
-      if (isCurrentImageHighlighted) {
-        // Current thumbnail is highlighted, allow panel to follow
-        this._manualPageChange = false;
-      }
-      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
-    }
+    // V5.6.8: Simplified - render function now handles resetting _manualPageChange
+    // when navigationIndex comes back onto the visible page
     
     if (!this.provider) {
       this._log('_loadPrevious called but no provider');
@@ -3383,6 +3349,37 @@ export class MediaCard extends LitElement {
   _onVideoClick() {
     this._videoUserInteracted = true;
     this._log('🎬 User interacted with video (click) - will play to completion');
+  }
+  
+  // V5.6.8: Handle video click - toggle controls and overlays together
+  // Extracted to method for performance (avoids creating new function on every render)
+  _onVideoClickToggle(e) {
+    // Check if click is on video itself (not controls)
+    if (e.target.tagName === 'VIDEO') {
+      // Stop propagation to prevent _handleTap from also toggling
+      e.stopPropagation();
+      e.preventDefault();
+      
+      // Mark as user interaction for video timer logic
+      this._videoUserInteracted = true;
+      
+      // Debug: log state before toggle
+      this._log(`🎬 BEFORE: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
+      
+      // Toggle controls and overlays together (inverse relationship)
+      if (this.config.video_controls_on_tap !== false) {
+        this._videoControlsVisible = !this._videoControlsVisible;
+        this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+        this._log(`🎬 AFTER: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
+      } else {
+        // Legacy behavior when video_controls_on_tap: false
+        this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+        this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'}`);
+      }
+      this.requestUpdate();
+    } else {
+      this._log(`🎬 Click on non-VIDEO element: ${e.target.tagName}`);
+    }
   }
 
   // V4 CODE REUSE: Check if we should wait for video to complete before advancing
@@ -9645,35 +9642,7 @@ export class MediaCard extends LitElement {
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
             @seeked=${this._onVideoSeeked}
-            @click=${(e) => { 
-              // V5.6.8: Handle video click - toggle controls and overlays together
-              // Check if click is on video itself (not controls)
-              if (e.target.tagName === 'VIDEO') {
-                // Stop propagation to prevent _handleTap from also toggling
-                e.stopPropagation();
-                e.preventDefault();
-                
-                // Mark as user interaction for video timer logic
-                this._videoUserInteracted = true;
-                
-                // Debug: log state before toggle
-                this._log(`🎬 BEFORE: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
-                
-                // Toggle controls and overlays together (inverse relationship)
-                if (this.config.video_controls_on_tap !== false) {
-                  this._videoControlsVisible = !this._videoControlsVisible;
-                  this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
-                  this._log(`🎬 AFTER: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
-                } else {
-                  // Legacy behavior when video_controls_on_tap: false
-                  this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
-                  this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'}`);
-                }
-                this.requestUpdate();
-              } else {
-                this._log(`🎬 Click on non-VIDEO element: ${e.target.tagName}`);
-              }
-            }}
+            @click=${this._onVideoClickToggle}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
@@ -10055,27 +10024,29 @@ export class MediaCard extends LitElement {
     }
     
     // Auto-adjust page for queue mode only (burst/related/same_date/on_this_day stay on current page)
-    // V5.6.7: Only auto-adjust if the PREVIOUS image was highlighted (visible in panel)
-    // This prevents panel from jumping back when user manually scrolled away
-    if (this._panelMode === 'queue' && !this._manualPageChange) {
+    // V5.6.8: Simplified logic for queue preview auto-paging:
+    // - If current navigationIndex is ON the visible page, keep it visible (auto-page if moving off)
+    // - If current navigationIndex is NOT on visible page AND user manually paged, don't auto-page
+    // - If user navigates and the new position would be highlighted, allow auto-paging again
+    if (this._panelMode === 'queue') {
       const currentPageEnd = this._panelPageStartIndex + maxDisplay;
+      const isCurrentIndexOnPage = this.navigationIndex >= this._panelPageStartIndex && this.navigationIndex < currentPageEnd;
       
-      // Check if previous navigationIndex was within visible range
-      const prevIndex = this._previousNavigationIndex ?? this.navigationIndex;
-      const prevWasVisible = prevIndex >= this._panelPageStartIndex && prevIndex < currentPageEnd;
+      // If current index IS on the page, clear manual flag - user is viewing active item
+      if (isCurrentIndexOnPage) {
+        this._manualPageChange = false;
+      }
       
-      // Only auto-adjust if the previous image was visible (highlighted)
-      if (prevWasVisible) {
+      // Auto-adjust if not manually paged away
+      if (!this._manualPageChange) {
         if (this.navigationIndex < this._panelPageStartIndex) {
           // Navigated backward beyond current page
           this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
         } else if (this.navigationIndex >= currentPageEnd) {
-          // Navigated forward beyond current page
+          // Navigated forward beyond current page  
           this._panelPageStartIndex = this.navigationIndex;
         }
       }
-      // V5.6.7: Clear saved previous index after adjustment logic completes
-      this._previousNavigationIndex = null;
     }
     
     const displayStartIndex = this._panelPageStartIndex;

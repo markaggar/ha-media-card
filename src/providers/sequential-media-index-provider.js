@@ -203,7 +203,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
-      let maxIterations = 5; // Prevent infinite loops
+      // Allow more iterations for larger queues, but cap to avoid infinite loops
+      let maxIterations = Math.max(5, Math.min(20, Math.ceil(this.queueSize / 10)));
       let iteration = 0;
       
       // Keep fetching batches until we have enough valid items OR database is exhausted
@@ -459,7 +460,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     try {
       path = decodeURIComponent(path);
     } catch (e) {
-      // Already decoded or invalid encoding
+      // Log decode failures for debugging while preserving original behavior
+      this._log(`⚠️ Failed to decode path "${path}": ${e?.message || e}`);
     }
     // Strip media-source:// prefix if present
     path = path.replace(/^media-source:\/\/media_source/, '');
