@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.6.8 - 2026-01-12
 
+### ⚠️ BREAKING CHANGE
+
+- **Requires Media Index v1.5.10 or later**: This version changes how the card communicates with Media Index services
+  - Uses `entry_id` parameter instead of entity targeting for service calls
+  - **You MUST update Media Index to v1.5.10+ before using this card version**
+  - If you see "Media Index initialization failed" errors, update your Media Index integration
+
 ### Added
+
+- **Non-Admin User Support**: Dashboard users without admin privileges can now use all Media Index features
+  - Previously, non-admin users would get "Unauthorized" errors when the card called Media Index services
+  - Root cause: Home Assistant's entity permission system blocked service calls with entity targets
+  - Fix: Card now uses `entry_id` parameter (from sensor attributes) instead of entity targeting
+  - Services now work for all dashboard users: favorites, delete, edit, geocode, and all queries
+  - Requires Media Index v1.5.10+ which exposes `entry_id` in sensor attributes
 
 - **Video Controls On Tap** (Default: `true`): Videos now start with a cleaner presentation without visible playback controls
   - Native HTML5 video controls (play/pause, seek, volume, fullscreen) hidden until user interaction
@@ -15,8 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Second tap**: Hides video controls, shows metadata/position overlays
   - Provides cleaner, more immersive video experience by default
   - Set `video_controls_on_tap: false` to restore legacy behavior (controls always visible)
-
-
 
 - **Periodic Refresh for New Files**: Slideshow now checks for new files every `slideshow_window` items
   - Works for both database-backed (Media Index) and filesystem providers

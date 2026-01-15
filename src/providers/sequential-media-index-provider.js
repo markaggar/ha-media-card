@@ -1,5 +1,6 @@
 import { MediaProvider } from '../core/media-provider.js';
 import { MediaUtils } from '../core/media-utils.js';
+import { MediaIndexHelper } from '../core/media-index-helper.js';
 
 /**
  * SEQUENTIAL MEDIA INDEX PROVIDER - Database-backed ordered queries
@@ -30,6 +31,52 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     if (this.config?.debug_mode) {
       console.log('[SequentialMediaIndexProvider]', ...args);
     }
+  }
+  
+  /**
+   * Convert a date value to Unix timestamp (seconds).
+   * Handles: Unix timestamps, Date objects, ISO strings, EXIF date strings
+   * @param {number|string|Date} value - The date value to convert
+   * @returns {number|null} Unix timestamp in seconds, or null if invalid
+   */
+  _toUnixTimestamp(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    
+    // Already a numeric timestamp
+    if (typeof value === 'number') {
+      // If it looks like milliseconds (13+ digits), convert to seconds
+      return value > 9999999999 ? Math.floor(value / 1000) : value;
+    }
+    
+    // Date object
+    if (value instanceof Date) {
+      return Math.floor(value.getTime() / 1000);
+    }
+    
+    // String - try to parse
+    if (typeof value === 'string') {
+      // Try ISO format or other parseable date strings
+      const parsed = Date.parse(value);
+      if (!isNaN(parsed)) {
+        return Math.floor(parsed / 1000);
+      }
+      
+      // Try EXIF format: "2022:07:09 00:15:41"
+      const exifMatch = value.match(/^(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+      if (exifMatch) {
+        const [, year, month, day, hour, min, sec] = exifMatch;
+        const date = new Date(`${year}-${month}-${day}T${hour}:${min}:${sec}`);
+        if (!isNaN(date.getTime())) {
+          return Math.floor(date.getTime() / 1000);
+        }
+      }
+      
+      this._log(`⚠️ Could not parse date string to timestamp: ${value}`);
+    }
+    
+    return null;
   }
 
   async initialize() {
@@ -244,14 +291,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           return_response: true
         };
         
-        // Target specific media_index entity if configured
-        if (this.config.media_index?.entity_id) {
-          wsCall.target = {
-            entity_id: this.config.media_index.entity_id
-          };
-          if (iteration === 1) {
-            this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
-          }
+        // V5.6.8: Use entry_id instead of target for non-admin user support
+        MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+        
+        if (this.config.media_index?.entity_id && iteration === 1) {
+          this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
         }
         
         // Debug logging
@@ -329,9 +373,12 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           const lastItem = response.items[response.items.length - 1];
           
           // Update the sort value cursor
+          // V5.6.8: Use _toUnixTimestamp to ensure date fields are numeric (fixes ISO string errors)
           switch(this.orderBy) {
             case 'date_taken':
-              localCursor = lastItem.date_taken || lastItem.modified_time || lastItem.created_time;
+              localCursor = this._toUnixTimestamp(lastItem.date_taken) || 
+                            this._toUnixTimestamp(lastItem.modified_time) || 
+                            this._toUnixTimestamp(lastItem.created_time);
               break;
             case 'filename':
               localCursor = lastItem.filename;
@@ -340,7 +387,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
               localCursor = lastItem.path;
               break;
             case 'modified_time':
-              localCursor = lastItem.modified_time;
+              localCursor = this._toUnixTimestamp(lastItem.modified_time);
               break;
             default:
               localCursor = lastItem.path;
@@ -387,9 +434,12 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         
         // V5.6.8: CRITICAL - Update cursor based on LAST item in SORTED array
         // The cursor must reflect the actual last item we're returning, not the backend's order
+        // Use _toUnixTimestamp to ensure numeric values (fixes ISO string errors)
         if (allFilteredItems.length > 0) {
           const lastSortedItem = allFilteredItems[allFilteredItems.length - 1];
-          localCursor = lastSortedItem.date_taken || lastSortedItem.modified_time || lastSortedItem.created_time;
+          localCursor = this._toUnixTimestamp(lastSortedItem.date_taken) || 
+                        this._toUnixTimestamp(lastSortedItem.modified_time) || 
+                        this._toUnixTimestamp(lastSortedItem.created_time);
           localCursorId = lastSortedItem.id;
           this._log(`📍 Updated cursor AFTER client-side sort: value=${localCursor}, id=${localCursorId}`);
         }
@@ -535,11 +585,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      if (this.config.media_index?.entity_id) {
-        wsCall.target = {
-          entity_id: this.config.media_index.entity_id
-        };
-      }
+      // V5.6.8: Use entry_id instead of target for non-admin user support
+      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
       
       this._log('🔍 Service call:', wsCall);
       const response = await this.hass.callWS(wsCall);
@@ -650,11 +697,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      if (this.config.media_index?.entity_id) {
-        wsCall.target = {
-          entity_id: this.config.media_index.entity_id
-        };
-      }
+      // V5.6.8: Use entry_id instead of target for non-admin user support
+      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
       
       const wsResponse = await this.hass.callWS(wsCall);
       const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
