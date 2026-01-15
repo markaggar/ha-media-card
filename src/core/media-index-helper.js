@@ -4,42 +4,6 @@
  */
 export class MediaIndexHelper {
   /**
-   * V5.6.8: Get media_index entry_id from entity state attributes
-   * This bypasses HA's entity permission system for non-admin users
-   * @param {Object} hass - Home Assistant connection
-   * @param {Object} config - Card configuration with media_index.entity_id
-   * @returns {string|null} The entry_id or null if not found
-   */
-  static getEntryId(hass, config) {
-    if (!hass || !config?.media_index?.entity_id) return null;
-    
-    try {
-      const entityId = config.media_index.entity_id;
-      const state = hass.states[entityId];
-      if (state?.attributes?.entry_id) {
-        return state.attributes.entry_id;
-      }
-    } catch (e) {
-      console.warn('MediaIndexHelper: Could not get entry_id:', e);
-    }
-    return null;
-  }
-  
-  /**
-   * V5.6.8: Add entry_id to service_data for non-admin user support
-   * Uses entry_id instead of entity target to bypass HA permission checks
-   * @param {Object} hass - Home Assistant connection
-   * @param {Object} config - Card configuration
-   * @param {Object} serviceData - Service data object to modify
-   */
-  static addEntryId(hass, config, serviceData) {
-    const entryId = this.getEntryId(hass, config);
-    if (entryId) {
-      serviceData.entry_id = entryId;
-    }
-  }
-
-  /**
    * Fetch EXIF metadata from media_index backend for a single file
    * This is a NEW v5 feature - V4 only gets metadata via get_random_items
    */
@@ -65,8 +29,12 @@ export class MediaIndexHelper {
         wsCall.service_data.file_path = filePath;
       }
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this.addEntryId(hass, config, wsCall.service_data);
+      // If user specified a media_index entity, add target to route to correct instance
+      if (config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: config.media_index.entity_id
+        };
+      }
       
       const wsResponse = await hass.callWS(wsCall);
       

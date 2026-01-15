@@ -93,8 +93,9 @@ export class MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+      if (entityId) {
+        wsCall.target = { entity_id: entityId };
+      }
       
       const response = await this.hass.callWS(wsCall);
       return response?.response?.exists === true;

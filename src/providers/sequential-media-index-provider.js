@@ -1,6 +1,5 @@
 import { MediaProvider } from '../core/media-provider.js';
 import { MediaUtils } from '../core/media-utils.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
 
 /**
  * SEQUENTIAL MEDIA INDEX PROVIDER - Database-backed ordered queries
@@ -291,11 +290,14 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           return_response: true
         };
         
-        // V5.6.8: Use entry_id instead of target for non-admin user support
-        MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
-        
-        if (this.config.media_index?.entity_id && iteration === 1) {
-          this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
+        // Target specific media_index entity if configured
+        if (this.config.media_index?.entity_id) {
+          wsCall.target = {
+            entity_id: this.config.media_index.entity_id
+          };
+          if (iteration === 1) {
+            this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
+          }
         }
         
         // Debug logging
@@ -585,8 +587,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
       
       this._log('🔍 Service call:', wsCall);
       const response = await this.hass.callWS(wsCall);
@@ -697,8 +702,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
       
       const wsResponse = await this.hass.callWS(wsCall);
       const response = wsResponse?.response || wsResponse?.service_response || wsResponse;

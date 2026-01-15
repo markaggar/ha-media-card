@@ -1,6 +1,5 @@
 import { MediaProvider } from '../core/media-provider.js';
 import { MediaUtils } from '../core/media-utils.js';
-import { MediaIndexHelper } from '../core/media-index-helper.js';
 
 /**
  * MEDIA INDEX PROVIDER - Database-backed random media queries
@@ -596,10 +595,11 @@ export class MediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
-      
+      // V4 CODE: If user specified a media_index entity, add target to route to correct instance
       if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
         this._log('🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
       }
       

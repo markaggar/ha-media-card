@@ -132,8 +132,9 @@ class MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+      if (entityId) {
+        wsCall.target = { entity_id: entityId };
+      }
       
       const response = await this.hass.callWS(wsCall);
       return response?.response?.exists === true;
@@ -564,42 +565,6 @@ class MediaProvider {
  */
 class MediaIndexHelper {
   /**
-   * V5.6.8: Get media_index entry_id from entity state attributes
-   * This bypasses HA's entity permission system for non-admin users
-   * @param {Object} hass - Home Assistant connection
-   * @param {Object} config - Card configuration with media_index.entity_id
-   * @returns {string|null} The entry_id or null if not found
-   */
-  static getEntryId(hass, config) {
-    if (!hass || !config?.media_index?.entity_id) return null;
-    
-    try {
-      const entityId = config.media_index.entity_id;
-      const state = hass.states[entityId];
-      if (state?.attributes?.entry_id) {
-        return state.attributes.entry_id;
-      }
-    } catch (e) {
-      console.warn('MediaIndexHelper: Could not get entry_id:', e);
-    }
-    return null;
-  }
-  
-  /**
-   * V5.6.8: Add entry_id to service_data for non-admin user support
-   * Uses entry_id instead of entity target to bypass HA permission checks
-   * @param {Object} hass - Home Assistant connection
-   * @param {Object} config - Card configuration
-   * @param {Object} serviceData - Service data object to modify
-   */
-  static addEntryId(hass, config, serviceData) {
-    const entryId = this.getEntryId(hass, config);
-    if (entryId) {
-      serviceData.entry_id = entryId;
-    }
-  }
-
-  /**
    * Fetch EXIF metadata from media_index backend for a single file
    * This is a NEW v5 feature - V4 only gets metadata via get_random_items
    */
@@ -625,8 +590,12 @@ class MediaIndexHelper {
         wsCall.service_data.file_path = filePath;
       }
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this.addEntryId(hass, config, wsCall.service_data);
+      // If user specified a media_index entity, add target to route to correct instance
+      if (config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: config.media_index.entity_id
+        };
+      }
       
       const wsResponse = await hass.callWS(wsCall);
       
@@ -1109,8 +1078,12 @@ class FolderProvider extends MediaProvider {
               return_response: true
             };
             
-            // V5.6.8: Use entry_id instead of target for non-admin user support
-            MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+            // Add target entity_id if configured (required for multi-instance setups)
+            if (this.config.media_index?.entity_id) {
+              wsCall.target = {
+                entity_id: this.config.media_index.entity_id
+              };
+            }
             
             this.cardAdapter._log('📡 Calling get_file_metadata with:', wsCall);
             const response = await this.hass.callWS(wsCall);
@@ -3456,10 +3429,11 @@ class MediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
-      
+      // V4 CODE: If user specified a media_index entity, add target to route to correct instance
       if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
         this._log('🎯 Targeting specific media_index entity:', this.config.media_index.entity_id);
       }
       
@@ -3911,11 +3885,14 @@ class SequentialMediaIndexProvider extends MediaProvider {
           return_response: true
         };
         
-        // V5.6.8: Use entry_id instead of target for non-admin user support
-        MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
-        
-        if (this.config.media_index?.entity_id && iteration === 1) {
-          this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
+        // Target specific media_index entity if configured
+        if (this.config.media_index?.entity_id) {
+          wsCall.target = {
+            entity_id: this.config.media_index.entity_id
+          };
+          if (iteration === 1) {
+            this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
+          }
         }
         
         // Debug logging
@@ -4205,8 +4182,11 @@ class SequentialMediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
       
       this._log('🔍 Service call:', wsCall);
       const response = await this.hass.callWS(wsCall);
@@ -4317,8 +4297,11 @@ class SequentialMediaIndexProvider extends MediaProvider {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
       
       const wsResponse = await this.hass.callWS(wsCall);
       const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
@@ -5361,34 +5344,6 @@ class MediaCard extends LitElement {
 
   get hass() {
     return this._hass;
-  }
-
-  /**
-   * Get the media_index entry_id for service calls.
-   * Uses entry_id instead of target entity to avoid permission issues for non-admin users.
-   * @returns {string|null} The config entry ID, or null if not available
-   */
-  _getMediaIndexEntryId() {
-    const entityId = this.config?.media_index?.entity_id;
-    if (!entityId || !this.hass) return null;
-    
-    const entityState = this.hass.states[entityId];
-    if (!entityState) return null;
-    
-    // The entry_id is stored in the entity's config_entry_id attribute
-    return entityState.attributes?.config_entry_id || null;
-  }
-
-  /**
-   * Add media_index entry_id to service data for non-admin user support.
-   * This avoids using target entity which requires entity permissions.
-   * @param {object} serviceData - The service_data object to modify
-   */
-  _addMediaIndexEntryId(serviceData) {
-    const entryId = this._getMediaIndexEntryId();
-    if (entryId) {
-      serviceData.entry_id = entryId;
-    }
   }
 
   async _initializeProvider() {
@@ -9274,43 +9229,15 @@ class MediaCard extends LitElement {
     
     try {
       // render_template is a subscription API - we need to subscribe, get result, unsubscribe
-      // NOTE: This API may require admin permissions in some HA configurations.
-      // If unauthorized, we silently default to showing the entity (return true).
-      
-      // V5.6.8: Wrap in try/catch to handle authorization errors before they're logged by HA
-      let subscribePromise;
-      try {
-        subscribePromise = this.hass.connection.subscribeMessage(
-          () => {}, // Placeholder - we'll handle the message below
-          {
-            type: "render_template",
-            template: condition
-          }
-        );
-      } catch (syncError) {
-        // Synchronous error during subscribe setup
-        this._log('⚠️ Template evaluation not available (sync error)');
-        return true;
-      }
-      
-      return await new Promise((resolve) => {
+      return await new Promise((resolve, reject) => {
         let unsubscribe;
-        let resolved = false;
-        
         const timeout = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            if (unsubscribe) unsubscribe();
-            this._log('⚠️ Template evaluation timeout, defaulting to show');
-            resolve(true);
-          }
+          if (unsubscribe) unsubscribe();
+          reject(new Error('Template evaluation timeout'));
         }, 5000);
         
-        // Create new subscription with actual handler
         this.hass.connection.subscribeMessage(
           (message) => {
-            if (resolved) return;
-            resolved = true;
             clearTimeout(timeout);
             if (unsubscribe) unsubscribe();
             
@@ -9336,21 +9263,11 @@ class MediaCard extends LitElement {
           }
         ).then(unsub => {
           unsubscribe = unsub;
-        }).catch(err => {
-          // V5.6.8: Handle authorization errors gracefully for non-admin users
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timeout);
-            this._log('⚠️ Template evaluation requires admin permissions, defaulting to show');
-            resolve(true);
-          }
         });
       });
     } catch (error) {
-      // V5.6.8: For any template evaluation failure, default to showing the entity
-      // This ensures non-admin users see display entities even if conditions can't be evaluated
-      this._log('⚠️ Template evaluation failed, defaulting to show:', error?.message || error);
-      return true;
+      console.warn('[MediaCard] Failed to evaluate entity condition:', condition, error);
+      return false;
     }
   }
   
@@ -9473,25 +9390,15 @@ class MediaCard extends LitElement {
     if (!this.hass) return null;
     
     try {
-      // NOTE: render_template may require admin permissions in some HA configurations.
-      // V5.6.8: Improved error handling to prevent HA from logging authorization errors
-      return await new Promise((resolve) => {
+      return await new Promise((resolve, reject) => {
         let unsubscribe;
-        let resolved = false;
-        
         const timeout = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            if (unsubscribe) unsubscribe();
-            this._log('⚠️ Jinja2 template timeout');
-            resolve(null);
-          }
+          if (unsubscribe) unsubscribe();
+          reject(new Error('Template evaluation timeout'));
         }, 5000);
         
         this.hass.connection.subscribeMessage(
           (message) => {
-            if (resolved) return;
-            resolved = true;
             clearTimeout(timeout);
             if (unsubscribe) unsubscribe();
             const result = message?.result !== undefined ? message.result : message;
@@ -9503,18 +9410,10 @@ class MediaCard extends LitElement {
           }
         ).then(unsub => {
           unsubscribe = unsub;
-        }).catch(err => {
-          // V5.6.8: Handle authorization errors gracefully for non-admin users
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timeout);
-            this._log('⚠️ Jinja2 template evaluation requires admin permissions');
-            resolve(null);
-          }
         });
       });
     } catch (error) {
-      this._log('⚠️ Jinja2 template failed:', error?.message || error);
+      console.warn('[MediaCard] Failed to evaluate Jinja2 template:', template, error);
       return null;
     }
   }
@@ -9640,8 +9539,10 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      // V4: If entity_id specified, add target object
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
       
       const response = await this.hass.callWS(wsCall);
       
@@ -9849,8 +9750,9 @@ class MediaCard extends LitElement {
           return_response: true
         };
         
-        // V5.6.8: Use entry_id instead of target for non-admin user support
-        this._addMediaIndexEntryId(wsCall.service_data);
+        if (this.config.media_index?.entity_id) {
+          wsCall.target = { entity_id: this.config.media_index.entity_id };
+        }
         
         const response = await this.hass.callWS(wsCall);
         
@@ -10005,8 +9907,9 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
       
       const response = await this.hass.callWS(wsCall);
       
@@ -10158,8 +10061,12 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      // V4: Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
       
       await this.hass.callWS(wsCall);
       
@@ -10495,8 +10402,12 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      // V4: Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = {
+          entity_id: this.config.media_index.entity_id
+        };
+      }
       
       await this.hass.callWS(wsCall);
       
@@ -10621,8 +10532,10 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      // Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
       
       const response = await this.hass.callWS(wsCall);
       
@@ -10755,8 +10668,10 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      // Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
       
       const response = await this.hass.callWS(wsCall);
       
@@ -10924,8 +10839,10 @@ class MediaCard extends LitElement {
         return_response: true
       };
       
-      // V5.6.8: Use entry_id instead of target for non-admin user support
-      this._addMediaIndexEntryId(wsCall.service_data);
+      // Target specific entity if configured
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
       
       const response = await this.hass.callWS(wsCall);
       
@@ -10998,8 +10915,9 @@ class MediaCard extends LitElement {
             return_response: true
           };
           
-          // V5.6.8: Use entry_id instead of target for non-admin user support
-          this._addMediaIndexEntryId(wsCall.service_data);
+          if (this.config.media_index?.entity_id) {
+            wsCall.target = { entity_id: this.config.media_index.entity_id };
+          }
           
           const response = await this.hass.callWS(wsCall);
           this._log('✅ Burst metadata saved:', `${response.response.files_updated} files, ${response.response.favorites_count} favorited`);
@@ -11699,7 +11617,6 @@ class MediaCard extends LitElement {
     const entity = this.config.kiosk_mode_entity.trim();
     
     // Check if entity is off and auto-enable it
-    // V5.6.8: Only attempt if current state is 'off' - non-admin users may not have permission
     if (this.hass?.states?.[entity]?.state === 'off') {
       try {
         await this.hass.callService('input_boolean', 'turn_on', {
@@ -11707,39 +11624,32 @@ class MediaCard extends LitElement {
         });
         this._log('🖼️ Auto-enabled kiosk mode entity:', entity);
       } catch (error) {
-        // V5.6.8: Gracefully handle authorization errors for non-admin users
-        // Non-admin users may not have permission to toggle entities
-        this._log('⚠️ Could not auto-enable kiosk mode (may require admin permissions)');
+        console.warn('Failed to auto-enable kiosk mode entity:', entity, error);
       }
     }
     
     // Set up state monitoring to track entity changes
     // This allows the card to react when kiosk mode is manually toggled
     this._log('🖼️ Setting up kiosk mode state listener for entity:', entity);
-    try {
-      this._kioskStateSubscription = await this.hass.connection.subscribeEvents(
-        (event) => {
-          if (event.data.entity_id === entity) {
-            const newState = event.data.new_state.state;
-            this._log('🖼️ Kiosk mode entity state changed:', newState);
-            // V5.6: Invalidate header cache - kiosk mode changes header visibility
-            this._cachedHeaderElement = null;
-            this._cachedHeaderSelector = null;
-            // Delay viewport height recalculation to allow header transition to complete
-            setTimeout(() => {
-              this._log('🖼️ Triggering viewport height recalculation after kiosk toggle to:', newState);
-              this._updateAvailableHeight();
-            }, 300);
-            this.requestUpdate(); // Re-render to show/hide kiosk indicator
-          }
-        },
-        'state_changed'
-      );
-      this._log('🖼️ Kiosk mode state listener subscribed');
-    } catch (error) {
-      // V5.6.8: Gracefully handle subscription failures for non-admin users
-      this._log('⚠️ Could not subscribe to kiosk mode state changes');
-    }
+    this._kioskStateSubscription = this.hass.connection.subscribeEvents(
+      (event) => {
+        if (event.data.entity_id === entity) {
+          const newState = event.data.new_state.state;
+          this._log('🖼️ Kiosk mode entity state changed:', newState);
+          // V5.6: Invalidate header cache - kiosk mode changes header visibility
+          this._cachedHeaderElement = null;
+          this._cachedHeaderSelector = null;
+          // Delay viewport height recalculation to allow header transition to complete
+          setTimeout(() => {
+            this._log('🖼️ Triggering viewport height recalculation after kiosk toggle to:', newState);
+            this._updateAvailableHeight();
+          }, 300);
+          this.requestUpdate(); // Re-render to show/hide kiosk indicator
+        }
+      },
+      'state_changed'
+    );
+    this._log('🖼️ Kiosk mode state listener subscribed');
   }
 
   _cleanupKioskModeMonitoring() {

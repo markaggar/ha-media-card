@@ -336,8 +336,12 @@ export class FolderProvider extends MediaProvider {
               return_response: true
             };
             
-            // V5.6.8: Use entry_id instead of target for non-admin user support
-            MediaIndexHelper.addEntryId(this.hass, this.config, wsCall.service_data);
+            // Add target entity_id if configured (required for multi-instance setups)
+            if (this.config.media_index?.entity_id) {
+              wsCall.target = {
+                entity_id: this.config.media_index.entity_id
+              };
+            }
             
             this.cardAdapter._log('📡 Calling get_file_metadata with:', wsCall);
             const response = await this.hass.callWS(wsCall);
