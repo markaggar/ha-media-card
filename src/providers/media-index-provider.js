@@ -66,7 +66,11 @@ export class MediaIndexProvider extends MediaProvider {
     this._log('📊 Queue stats:', stats);
     
     // V5.3: Fire event through Home Assistant event bus (shows in Developer Tools)
-    if (this.hass && this.hass.connection && this.hass.connection.sendMessage) {
+    // V5.6.8: Skip for non-admin users - fire_event requires admin permissions
+    // This prevents HA from logging "Unauthorized" errors for dashboard-only users
+    if (this.hass?.user?.is_admin === false) {
+      this._log('⏭️ Skipping fire_event (non-admin user)');
+    } else if (this.hass && this.hass.connection && this.hass.connection.sendMessage) {
       try {
         const promise = this.hass.connection.sendMessage({
           type: 'fire_event',
@@ -77,11 +81,13 @@ export class MediaIndexProvider extends MediaProvider {
         // Only add catch handler if sendMessage returned a promise
         if (promise && typeof promise.catch === 'function') {
           promise.catch(err => {
-            console.warn('[MediaIndexProvider] Failed to fire queue stats event:', err);
+            // Silently ignore - this is optional functionality
+            this._log('⚠️ fire_event failed (may require admin):', err?.message || err);
           });
         }
       } catch (err) {
-        console.warn('[MediaIndexProvider] Error firing queue stats event:', err);
+        // Silently ignore - this is optional functionality
+        this._log('⚠️ fire_event failed (may require admin):', err?.message || err);
       }
     }
     
@@ -229,8 +235,16 @@ export class MediaIndexProvider extends MediaProvider {
   /**
    * V5.3: Subscribe to entity state changes for dynamic filter updates
    * Detects filter entity IDs and subscribes to their state changes
+   * V5.6.8: Gracefully handles non-admin users who can't subscribe to state_changed
    */
   async _subscribeToFilterEntities() {
+    // V5.6.8: Skip for non-admin users - subscribeEvents('state_changed') requires admin permissions
+    // This prevents HA from logging "Unauthorized" errors for dashboard-only users
+    if (this.hass?.user?.is_admin === false) {
+      this._log('⏭️ Skipping entity subscription (non-admin user - filter changes require page refresh)');
+      return;
+    }
+    
     const filters = this.config.filters || {};
     const entityIds = [];
     
@@ -369,7 +383,9 @@ export class MediaIndexProvider extends MediaProvider {
       
       this._log('✅ Subscribed to filter entity state changes (filtering in callback)');
     } catch (error) {
-      console.warn('[MediaIndexProvider] Failed to subscribe to entity changes:', error);
+      // V5.6.8: Silently handle - this is optional functionality for dynamic filter updates
+      // Non-admin users will need to refresh page when filters change
+      this._log('⚠️ Entity subscription failed (filter changes require page refresh):', error?.message || error);
     }
   }
 
@@ -698,6 +714,19 @@ export class MediaIndexProvider extends MediaProvider {
   // Track files that have been moved to _Junk/_Edit folders
   excludeFile(path) {
     this.excludedFiles.add(path);
+  }
+
+  /**
+   * V5.6.8: Reset provider state for fresh query
+   * Clears queue and excluded files, reinitializes
+   */
+  async reset() {
+    this._log('🔄 Resetting MediaIndexProvider');
+    this.queue = [];
+    this.excludedFiles.clear();
+    this.recentFilesExhausted = false;
+    this._consecutiveEmptyResponses = 0;
+    return await this.initialize();
   }
 
   // Query for new files (for queue refresh feature)

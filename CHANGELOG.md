@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.8 - 2026-01-12
+
+### Added
+
+- **Non-Admin User Support**: Dashboard users without admin privileges can now use all Media Index features
+  - Previously, non-admin users would get "Unauthorized" errors when using random mode with Media Index
+  - Root cause: `fire_event` and `subscribeEvents` WebSocket calls require admin permissions
+  - Fix: Card now checks `hass.user.is_admin` and skips admin-only features for non-admin users
+  - All core functionality works for non-admin users: navigation, slideshow, metadata display
+  - No changes required to Media Index - works with existing versions
+
+- **Video Controls On Tap** (Default: `true`): Videos now start with a cleaner presentation without visible playback controls
+  - Native HTML5 video controls (play/pause, seek, volume, fullscreen) hidden until user interaction
+  - **First tap**: Shows video controls, hides metadata/position overlays for unobstructed viewing
+  - **Second tap**: Hides video controls, shows metadata/position overlays
+  - Provides cleaner, more immersive video experience by default
+  - Set `video_controls_on_tap: false` to restore legacy behavior (controls always visible)
+
+- **Periodic Refresh for New Files**: Slideshow now checks for new files every `slideshow_window` items
+  - Works for both database-backed (Media Index) and filesystem providers
+  - New files are detected and inserted at the front of the queue without interrupting playback
+  - Previously only checked when looping back to beginning; now checks periodically throughout slideshow
+
+- **Fresh Query on Wrap**: When slideshow loops to beginning, performs fresh database/filesystem query
+  - Catches new files added since slideshow started
+  - Clears cursor and re-queries from beginning with updated data
+  - `reset()` method added to all providers (FolderProvider, SequentialMediaIndexProvider, MediaIndexProvider, SubfolderQueue)
+
+- **404 File Exclusion**: Files that return 404 are now excluded from future provider results
+  - Provider's `excludeFile()` method tracks missing files
+  - Path normalization ensures both URI and filesystem path formats are excluded
+  - Prevents infinite loop when hitting missing files in sequential mode
+
+- **New Config Option: `navigation_queue_size`** (YAML only)
+  - Controls how many items are kept in back-navigation history
+  - Default: 100 (or `slideshow_window` if larger)
+  - Allows independent tuning of navigation history vs refresh interval
+  - Example: `navigation_queue_size: 200`
+
+### Fixed
+
+- **Video Seek Backwards Auto-Advance**: Fixed video auto-advancing when user seeks backwards
+  - Seeking backwards was incorrectly detected as video loop completion
+  - Now skips loop detection entirely when user has interacted with video (seek, pause, click)
+  - Users can freely seek without triggering premature advancement
+
+- **Sequential Provider Cursor Pagination**: Fixed duplicate files appearing in slideshow
+  - Cursor now properly updated after client-side sort (not before)
+  - Removed cursor overwrite in `getNext()` that was causing duplicate fetches
+  - `lastSeenId` now properly reset in `reset()` and `rescanForNewFiles()`
+  - Provider correctly paginates through files without returning same items
+
+- **Sequential Provider Timestamp Conversion**: Fixed `after_value` cursor errors
+  - Backend expects numeric Unix timestamps, but some date fields returned ISO strings
+  - Added `_toUnixTimestamp()` helper to convert dates to proper format
+  - Handles: ISO strings, Date objects, EXIF format strings, millisecond timestamps
+  - Prevents "Could not convert after_value to numeric" errors
+
+- **Navigation Queue Preservation on Wrap**: Queue no longer cleared when slideshow loops
+  - Previously: Queue was cleared and only 30 items reloaded on wrap
+  - Now: Full navigation history preserved (up to `navigation_queue_size`)
+  - Users can navigate back through previously seen items after loop
+  - Queue trimmed from front if exceeds max size
+
+- **Video Overlay Toggle**: Clicking on video now toggles bottom overlays for control access
+  - Click video to hide metadata/position overlays, click again to show
+  - Overlays auto-restore when video ends
+  - Properly stops event propagation to prevent double-handling
+
+- **Folder Sorting for Date-Based Names**: Fixed numeric sorting for folder structures like `2026/1/12`
+  - String comparison `"2026/1/12"` vs `"2026/1/9"` incorrectly sorted "12" before "9"
+  - Now extracts numeric parts and creates sortable YYYYMMDD values
+  - Properly handles various formats: `2026/1/12`, `2026-01-12`, `20260112`
+
+- **File Sorting with Date-Embedded Filenames**: Improved sorting for files with dates in names
+  - Uses `BigInt` for numeric timestamp comparison (handles large values)
+  - Reuses `MediaProvider.extractDateFromFilename()` for consistent date parsing
+  - Falls back to `localeCompare` for non-date filenames
+
+- **Compound Cursor Pagination**: Fixed duplicate files when paginating with same date_taken values
+  - Now uses `(after_value, after_id)` compound cursor instead of just `after_value`
+  - Secondary cursor (row ID) provides stable ordering when sort values are equal
+  - Prevents items from being returned multiple times across page boundaries
+
+- **Position Indicator After Wrap**: Fixed "1 of 30" showing after viewing 86 items
+  - Now remembers `_totalItemsInLoop` before clearing queue on wrap
+  - Position indicator uses remembered total while queue repopulates
+  - Updates remembered total as queue grows during normal playback
+
+- **Duplicate Files on Periodic Refresh**: Fixed files appearing multiple times after wrap
+  - `SubfolderQueue.reset()` now preserves `_knownFilesAtStart` baseline across loops
+  - `_doPeriodicRefresh()` also checks session `history` to skip already-shown files
+  - Both checks prevent adding items that were already displayed this session
+
+- **Sliding Window Index Adjustment**: Fixed navigation index when queue shifts
+  - When removing oldest item from queue, correctly point to newly added item
+  - Previously could cause navigation to wrong position after queue shift
+
+### Changed
+
+- **`slideshow_window` Behavior**: Now controls periodic refresh interval instead of queue size
+  - `slideshow_window` = how often to check for new files (in items viewed)
+  - `navigation_queue_size` = how many items to keep in back-navigation history (default: 100)
+  - Navigation queue floor is now 100 items regardless of slideshow_window setting
+
 ## v5.6.7 - 2026-01-07
 
 ### Added

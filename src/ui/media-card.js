@@ -201,6 +201,9 @@ export class MediaCard extends LitElement {
     // V5.6.7: Hide bottom overlays during video playback (to access video controls)
     this._hideBottomOverlaysForVideo = false;
     
+    // V5.6.8: Video controls visibility (for controls-on-tap feature)
+    this._videoControlsVisible = false;
+    
     // V5.6: Video thumbnail cache (session-scoped)
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
@@ -208,6 +211,10 @@ export class MediaCard extends LitElement {
     // V5.6.7: Track panel content to prevent unnecessary thumbnail re-renders
     this._lastPanelItemsHash = null;
     this._cachedThumbnailStripTemplate = null;
+    
+    // V5.6.8: Periodic refresh counter - tracks items since last provider refresh
+    // Triggers a check for new files every slideshow_window items
+    this._itemsSinceRefresh = 0;
     
     // V5.6.7: Track which navigation index each crossfade layer belongs to
     this._frontLayerNavigationIndex = null;  // Navigation index for front layer image
@@ -871,10 +878,15 @@ export class MediaCard extends LitElement {
     const positionIndicatorPosition = this.config.position_indicator?.position || 'bottom-right';
     this.setAttribute('data-position-indicator-position', positionIndicatorPosition);
     
-    // V5.3: Set max navigation queue size based on slideshow_window
-    const slideshowWindow = this.config.slideshow_window || 100;
-    this.maxNavQueueSize = slideshowWindow * 2;
-    this._log('Set maxNavQueueSize to', this.maxNavQueueSize, '(slideshow_window * 2)');
+    // V5.6.8: Navigation queue size is now independent of slideshow_window
+    // slideshow_window controls how frequently to check for new files (periodic refresh)
+    // navigation_queue_size controls how many items to keep in back-navigation history
+    // Default: max(slideshow_window, 100) - floor of 100, but at least holds one full batch
+    const slideshowWindow = this.config.slideshow_window ?? 100;
+    const defaultQueueSize = Math.max(slideshowWindow, 100);
+    this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
+    this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
+    this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
     
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
@@ -1295,25 +1307,8 @@ export class MediaCard extends LitElement {
     // (Clicking thumbnails keeps _manualPageChange true to prevent flickering)
     // V5.6.7: Skip panel adjustment during auto-advance of videos (prevents flickering)
     // but allow panel adjustment during manual navigation, even from/to videos
-    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
-    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
-    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
-      // V5.6.7: Save current navigationIndex BEFORE it changes so we can check if it was highlighted
-      this._previousNavigationIndex = this.navigationIndex;
-      
-      // V5.6.7: Only reset _manualPageChange if current thumbnail is highlighted
-      // If user paged away, keep _manualPageChange=true until they manually navigate back
-      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
-      const currentPageStart = this._panelPageStartIndex || 0;
-      const currentPageEnd = currentPageStart + maxDisplay;
-      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
-      
-      if (isCurrentImageHighlighted) {
-        // Current thumbnail is highlighted, allow panel to follow
-        this._manualPageChange = false;
-      }
-      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
-    }
+    // V5.6.8: Simplified - render function now handles resetting _manualPageChange
+    // when navigationIndex comes back onto the visible page
     
     if (!this.provider) {
       this._log('_loadNext called but no provider');
@@ -1369,8 +1364,8 @@ export class MediaCard extends LitElement {
             // Log if we hit the safety limit (indicates provider may be stuck)
             if (attempts >= maxAttempts && alreadyInQueue) {
               this._log('⚠️ Max attempts reached in duplicate detection - provider may be returning same item repeatedly');
-              // Treat as provider exhaustion - wrap to beginning
-              this._log('Treating as provider exhaustion, wrapping to beginning');
+              // Treat as provider exhaustion - wrap to beginning with fresh query
+              this._log('Treating as provider exhaustion, wrapping to beginning with refresh');
               
               // Validate queue has items before wrapping
               if (this.navigationQueue.length === 0) {
@@ -1379,20 +1374,12 @@ export class MediaCard extends LitElement {
                 return;
               }
               
-              // V5.4: Check for new files before wrapping back to position 1
-              const queueRefreshed = await this._checkForNewFiles();
-              if (queueRefreshed) {
-                // Queue was refreshed and reset to position 1 with new files
-                return;
-              }
-              
-              this._pendingNavigationIndex = 0;
+              // V5.6.8: Do fresh query when wrapping to catch new files
+              await this._wrapToBeginningWithRefresh();
               return;
-            }
-            
-            if (!item || alreadyInQueue) {
+            } else if (!item || alreadyInQueue) {
               // All items are duplicates or provider exhausted, wrap to beginning
-              this._log('Provider exhausted or only returning duplicates, wrapping to beginning');
+              this._log('Provider exhausted or only returning duplicates, wrapping to beginning with refresh');
               
               // Validate queue has items before wrapping
               if (this.navigationQueue.length === 0) {
@@ -1401,37 +1388,34 @@ export class MediaCard extends LitElement {
                 return;
               }
               
-              // V5.4: Check for new files before wrapping back to position 1
-              const queueRefreshed = await this._checkForNewFiles();
-              if (queueRefreshed) {
-                // Queue was refreshed and reset to position 1 with new files
-                return;
-              }
-              
-              this._pendingNavigationIndex = 0;
+              // V5.6.8: Do fresh query when wrapping to catch new files
+              await this._wrapToBeginningWithRefresh();
               return;
-            }
-            
-            this._log('✅ Adding new item to navigation queue:', item.title);
+            } else {
+              this._log('✅ Adding new item to navigation queue:', item.title);
           
-            // V5: Extract metadata if not provided
-            if (!item.metadata) {
-              this._log('Extracting metadata for:', item.media_content_id);
-              item.metadata = await this._extractMetadataFromItem(item);
-            }
+              // V5: Extract metadata if not provided
+              if (!item.metadata) {
+                this._log('Extracting metadata for:', item.media_content_id);
+                item.metadata = await this._extractMetadataFromItem(item);
+              }
           
-            // Add to navigation queue
-            this.navigationQueue.push(item);
+              // Add to navigation queue
+              this.navigationQueue.push(item);
           
-            // Implement sliding window: remove oldest if exceeding max size
-            if (this.navigationQueue.length > this.maxNavQueueSize) {
-              this._log('Navigation queue exceeds max size, removing oldest item');
-              this.navigationQueue.shift();
-              this.navigationIndex--; // Adjust index for removed item
+              // Implement sliding window: remove oldest if exceeding max size
+              if (this.navigationQueue.length > this.maxNavQueueSize) {
+                this._log('Navigation queue exceeds max size, removing oldest item');
+                this.navigationQueue.shift();
+                // After shift, point nextIndex to the newly added item (now at end of queue)
+                // We DON'T decrement navigationIndex here because we're intentionally moving
+                // forward to the new item, not staying at the current position
+                nextIndex = this.navigationQueue.length - 1;
+              }
             }
           } else {
-            // No more items available from provider, wrap to beginning
-            this._log('Provider exhausted, wrapping to beginning');
+            // No more items available from provider, wrap to beginning with fresh query
+            this._log('Provider exhausted, wrapping to beginning with refresh');
             
             // Validate queue has items before wrapping
             if (this.navigationQueue.length === 0) {
@@ -1440,16 +1424,9 @@ export class MediaCard extends LitElement {
               return;
             }
             
-            // V5.4: Check for new files before wrapping back to position 1
-            const queueRefreshed = await this._checkForNewFiles();
-            if (queueRefreshed) {
-              // Queue was refreshed and reset to position 1 with new files
-              return;
-            }
-            
-            // V5.6.4: Update nextIndex to 0 after wrapping (matches pattern at line 1258)
-            nextIndex = 0;
-            this._pendingNavigationIndex = 0;
+            // V5.6.8: Do fresh query when wrapping to catch new files
+            await this._wrapToBeginningWithRefresh();
+            return;
           }
         }
       }
@@ -1459,6 +1436,17 @@ export class MediaCard extends LitElement {
       if (!item) {
         this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
+      }
+      
+      // V5.6.8: Increment periodic refresh counter and check if refresh needed
+      // Works for both sequential and random modes - provider handles mode-specific logic
+      this._itemsSinceRefresh++;
+      if (this._itemsSinceRefresh >= this._periodicRefreshInterval) {
+        this._log(`🔄 Periodic refresh triggered after ${this._itemsSinceRefresh} items (interval: ${this._periodicRefreshInterval})`);
+        // Reset counter immediately to prevent multiple triggers
+        this._itemsSinceRefresh = 0;
+        // Do refresh in background (non-blocking) to check for new files
+        this._doPeriodicRefresh().catch(err => this._log('⚠️ Periodic refresh failed:', err));
       }
       
       // Extract filename from path for logging
@@ -1555,25 +1543,8 @@ export class MediaCard extends LitElement {
     // V5.6.7: Reset manual page flag when navigating with arrow keys/buttons
     // This allows auto-adjustment to scroll panel to show newly navigated item
     // (Same logic as _loadNext for consistency)
-    const isCurrentVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
-    const shouldSkipPanelAdjustment = isCurrentVideo && !this._isManualNavigation;
-    if (this._panelOpen && this._panelMode === 'queue' && !shouldSkipPanelAdjustment) {
-      // Save current navigationIndex BEFORE it changes so we can check if it was highlighted
-      this._previousNavigationIndex = this.navigationIndex;
-      
-      // Only reset _manualPageChange if current thumbnail is highlighted
-      // If user paged away, keep _manualPageChange=true until they manually navigate back
-      const maxDisplay = this._calculateOptimalThumbnailCount(this.navigationQueue);
-      const currentPageStart = this._panelPageStartIndex || 0;
-      const currentPageEnd = currentPageStart + maxDisplay;
-      const isCurrentImageHighlighted = this.navigationIndex >= currentPageStart && this.navigationIndex < currentPageEnd;
-      
-      if (isCurrentImageHighlighted) {
-        // Current thumbnail is highlighted, allow panel to follow
-        this._manualPageChange = false;
-      }
-      // If not highlighted, keep _manualPageChange as is (likely true from user paging)
-    }
+    // V5.6.8: Simplified - render function now handles resetting _manualPageChange
+    // when navigationIndex comes back onto the visible page
     
     if (!this.provider) {
       this._log('_loadPrevious called but no provider');
@@ -2092,6 +2063,159 @@ export class MediaCard extends LitElement {
         // Normal startup - use setInterval from the beginning
         this._refreshInterval = setInterval(timerCallback, intervalMs);
       }
+    }
+  }
+
+  /**
+   * V5.6.8: Wrap to beginning with fresh query
+   * Called when reaching the end of the slideshow to loop back with updated data.
+   * This ensures new files are detected on every loop iteration.
+   * @returns {Promise<void>}
+   */
+  async _wrapToBeginningWithRefresh() {
+    this._log('🔄 Wrapping to beginning with fresh query...');
+    
+    // V5.6.8: Remember total items seen before wrap (for position indicator)
+    // This prevents "1 of 30" after wrap when user saw 86 items
+    if (this.navigationQueue.length > 0) {
+      this._totalItemsInLoop = this.navigationQueue.length;
+      this._log(`🔄 Remembering ${this._totalItemsInLoop} items in loop for position indicator`);
+    }
+    
+    // Reset provider to clear cursor and start fresh
+    if (this.provider && typeof this.provider.reset === 'function') {
+      this._log('🔄 Resetting provider for fresh query');
+      await this.provider.reset();
+    }
+    
+    // V5.6.8: DON'T clear navigation queue - keep it for back navigation
+    // Just get fresh items from provider and prepend to queue
+    // The user can still navigate back through previously seen items
+    
+    // Get first item from fresh provider
+    const firstItem = await this.provider.getNext();
+    if (!firstItem) {
+      this._log('🔄 Provider exhausted during refresh');
+      this._errorState = 'No media available after refresh';
+      return;
+    }
+    
+    // Extract metadata if needed
+    if (!firstItem.metadata) {
+      firstItem.metadata = await this._extractMetadataFromItem(firstItem);
+    }
+    
+    // V5.6.8: Insert at beginning of queue (after current items if navigating back)
+    // Or just set as current if queue is at end
+    // Find if this item already exists in queue
+    const existingIndex = this.navigationQueue.findIndex(item => 
+      item.media_content_id === firstItem.media_content_id
+    );
+    
+    if (existingIndex >= 0) {
+      // Item already in queue - jump to it
+      this._log(`🔄 First item already in queue at index ${existingIndex}, jumping to it`);
+      this.navigationIndex = existingIndex;
+    } else {
+      // New item - add to end and navigate to it
+      this.navigationQueue.push(firstItem);
+      this.navigationIndex = this.navigationQueue.length - 1;
+      this._log(`🔄 Added fresh item to queue, now at index ${this.navigationIndex}`);
+    }
+    
+    // Trim queue if too large (remove oldest items from front)
+    while (this.navigationQueue.length > this.maxNavQueueSize) {
+      this.navigationQueue.shift();
+      this.navigationIndex--;
+    }
+    
+    this._log(`🔄 Queue has ${this.navigationQueue.length} items after refresh`);
+    
+    // V5.6.8: Reset periodic refresh counter
+    this._itemsSinceRefresh = 0;
+    
+    const currentItem = this.navigationQueue[this.navigationIndex];
+    this._pendingNavigationIndex = this.navigationIndex;
+    
+    // Display the media
+    const filename = currentItem.metadata?.filename || currentItem.media_content_id?.split('/').pop() || 'unknown';
+    this._log('🔄 Displaying first item after refresh:', filename);
+    
+    // Add to history
+    const alreadyInHistory = this.history.some(h => h.media_content_id === currentItem.media_content_id);
+    if (!alreadyInHistory) {
+      this.history.push(currentItem);
+    }
+    
+    // Display the media (same pattern as _loadNext)
+    this.currentMedia = currentItem;
+    this._pendingMediaPath = currentItem.media_content_id;
+    this._pendingMetadata = currentItem.metadata || null;
+    this._fullMetadata = null;
+    this._folderDisplayCache = null;
+    
+    await this._resolveMediaUrl();
+    this.requestUpdate();
+  }
+
+  /**
+   * V5.6.8: Periodic refresh - check for new files without disrupting playback
+   * Called every slideshow_window items to detect new files.
+   * Unlike _wrapToBeginningWithRefresh(), this doesn't clear the queue or change position.
+   * It queries the provider for any files newer than the current first item in queue.
+   */
+  async _doPeriodicRefresh() {
+    this._log('🔄 Periodic refresh - checking for new files...');
+    
+    // Check if provider supports checkForNewFiles
+    if (!this.provider) {
+      this._log('🔄 No provider available for periodic refresh');
+      return;
+    }
+    
+    // Try provider directly first (FolderProvider delegates internally)
+    // Also try sequentialProvider for wrapped providers
+    const checkProvider = this.provider.checkForNewFiles ? this.provider :
+                          (this.provider.sequentialProvider?.checkForNewFiles ? this.provider.sequentialProvider :
+                           (this.provider.subfolderQueue?.checkForNewFiles ? this.provider.subfolderQueue : null));
+    
+    if (!checkProvider || typeof checkProvider.checkForNewFiles !== 'function') {
+      this._log('🔄 Provider type does not support checkForNewFiles - periodic refresh skipped');
+      return;
+    }
+    
+    const newItems = await checkProvider.checkForNewFiles();
+    if (newItems && newItems.length > 0) {
+      this._log(`🔄 Found ${newItems.length} new files during periodic refresh`);
+      
+      // Prepend new items to the navigation queue (they're newer = come first in descending order)
+      // But we need to be careful about where in the queue to add them
+      // For descending date order: new files should go at the beginning
+      
+      for (const item of newItems) {
+        // Check if already in queue OR already seen in session history
+        const alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
+        const alreadyInHistory = this.history.some(h => h.media_content_id === item.media_content_id);
+        if (!alreadyInQueue && !alreadyInHistory) {
+          // Extract metadata if needed
+          if (!item.metadata) {
+            item.metadata = await this._extractMetadataFromItem(item);
+          }
+          // Add to beginning of queue (newest first for descending date order)
+          this.navigationQueue.unshift(item);
+          // Adjust navigation index since we added before current position
+          this.navigationIndex++;
+          this._pendingNavigationIndex = this.navigationIndex;
+          this._log(`🔄 Added new file to queue: ${item.metadata?.filename || item.media_content_id}`);
+        }
+      }
+      
+      // Trim queue if exceeds max size (remove oldest = end of array)
+      while (this.navigationQueue.length > this.maxNavQueueSize) {
+        this.navigationQueue.pop();
+      }
+    } else {
+      this._log('🔄 No new files found during periodic refresh');
     }
   }
 
@@ -3108,6 +3232,9 @@ export class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
+    // V5.6.8: Reset video controls visibility and overlay state for new video
+    this._videoControlsVisible = false;
+    this._hideBottomOverlaysForVideo = false;
   }
 
   _onVideoCanPlay() {
@@ -3195,6 +3322,9 @@ export class MediaCard extends LitElement {
 
   // V5: Track video seeking (user interaction)
   _onVideoSeeking(e) {
+    // V5.6.8: Track that we're in the middle of a seek operation
+    this._videoIsSeeking = true;
+    
     // V5.6.4: Only mark as user interaction if video has started playing
     // Browser fires seeking events during initial load - ignore those
     const video = e.target;
@@ -3204,10 +3334,52 @@ export class MediaCard extends LitElement {
     }
   }
   
+  // V5.6.8: Track when seeking finishes
+  _onVideoSeeked(e) {
+    this._videoIsSeeking = false;
+    // Update last video time to current position after seek completes
+    // This prevents the next timeupdate from thinking video looped
+    const video = e.target;
+    if (video) {
+      this._lastVideoTime = video.currentTime;
+    }
+  }
+  
   // V5: Track video click (user interaction)
   _onVideoClick() {
     this._videoUserInteracted = true;
     this._log('🎬 User interacted with video (click) - will play to completion');
+  }
+  
+  // V5.6.8: Handle video click - toggle controls and overlays together
+  // Extracted to method for performance (avoids creating new function on every render)
+  _onVideoClickToggle(e) {
+    // Check if click is on video itself (not controls)
+    if (e.target.tagName === 'VIDEO') {
+      // Stop propagation to prevent _handleTap from also toggling
+      e.stopPropagation();
+      e.preventDefault();
+      
+      // Mark as user interaction for video timer logic
+      this._videoUserInteracted = true;
+      
+      // Debug: log state before toggle
+      this._log(`🎬 BEFORE: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
+      
+      // Toggle controls and overlays together (inverse relationship)
+      if (this.config.video_controls_on_tap !== false) {
+        this._videoControlsVisible = !this._videoControlsVisible;
+        this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+        this._log(`🎬 AFTER: controlsVisible=${this._videoControlsVisible}, hideOverlays=${this._hideBottomOverlaysForVideo}`);
+      } else {
+        // Legacy behavior when video_controls_on_tap: false
+        this._hideBottomOverlaysForVideo = !this._hideBottomOverlaysForVideo;
+        this._log(`🎬 Bottom overlays ${this._hideBottomOverlaysForVideo ? 'hidden' : 'shown'}`);
+      }
+      this.requestUpdate();
+    } else {
+      this._log(`🎬 Click on non-VIDEO element: ${e.target.tagName}`);
+    }
   }
 
   // V4 CODE REUSE: Check if we should wait for video to complete before advancing
@@ -3358,6 +3530,14 @@ export class MediaCard extends LitElement {
     // The 'ended' event doesn't fire for videos with loop attribute
     const video = e.target;
     if (!video || !this.config.video_loop) return;
+    
+    // V5.6.8: Ignore time updates during user seeking - seeking also causes backward time jumps
+    // but shouldn't be treated as video loop completion
+    if (this._videoIsSeeking) return;
+    
+    // V5.6.8: If user has interacted (seek, pause, etc), don't detect loops at all
+    // User is controlling the video manually, we'll play to completion regardless
+    if (this._videoUserInteracted) return;
     
     const currentTime = video.currentTime;
     
@@ -4263,8 +4443,20 @@ export class MediaCard extends LitElement {
     const currentIndex = this.navigationIndex;
     const currentPosition = currentIndex + 1;
     
-    // Total is the max of queue length and history length
-    const totalSeen = Math.max(totalCount, this.history.length);
+    // V5.6.8: Use remembered total from previous loop if queue is being repopulated
+    // This prevents "1 of 30" showing when user saw 86 items before wrap
+    let totalSeen;
+    if (this._totalItemsInLoop && totalCount < this._totalItemsInLoop) {
+      // Queue is being repopulated after wrap - use remembered total
+      totalSeen = Math.min(this._totalItemsInLoop, this.maxNavQueueSize);
+    } else {
+      // Normal operation - use actual queue size (capped at max)
+      totalSeen = Math.min(totalCount, this.maxNavQueueSize);
+      // Update remembered total if queue grew
+      if (totalCount > (this._totalItemsInLoop || 0)) {
+        this._totalItemsInLoop = totalCount;
+      }
+    }
 
     // Show position indicator if enabled
     let positionIndicator = html``;
@@ -6608,6 +6800,21 @@ export class MediaCard extends LitElement {
       return;
     }
 
+    // V5.6.8: Tell provider to exclude this file so it won't be returned again
+    // Pass all identifier formats - provider will normalize them
+    if (this.provider && typeof this.provider.excludeFile === 'function') {
+      // Exclude by path (filesystem path)
+      if (item.path) {
+        this.provider.excludeFile(item.path);
+        this._log('🚫 Excluded file from provider (path):', item.path);
+      }
+      // Also exclude by media_source_uri if different from path
+      if (item.media_source_uri && item.media_source_uri !== item.path) {
+        this.provider.excludeFile(item.media_source_uri);
+        this._log('🚫 Excluded file from provider (uri):', item.media_source_uri);
+      }
+    }
+
     // Helper to match items by identifier - handle both URI and path formats
     let debugMatchCount = 0;
     const matchesItem = (q, index) => {
@@ -7733,6 +7940,38 @@ export class MediaCard extends LitElement {
       object-fit: contain;
       background: transparent;
       margin: auto;
+    }
+
+    /* V5.6.8: Hide native video controls when controls-on-tap is enabled */
+    video.hide-controls::-webkit-media-controls {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-enclosure {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-panel {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-play-button {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-timeline {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-current-time-display {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-time-remaining-display {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-mute-button {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-volume-slider {
+      display: none !important;
+    }
+    video.hide-controls::-webkit-media-controls-fullscreen-button {
+      display: none !important;
     }
 
     :host([data-aspect-mode="viewport-fit"]) .main-content video {
@@ -9385,6 +9624,7 @@ export class MediaCard extends LitElement {
       >
         ${isVideo ? html`
           <video
+            class="${this.config.video_controls_on_tap !== false && !this._videoControlsVisible ? 'hide-controls' : ''}"
             controls
             preload="auto"
             playsinline
@@ -9401,6 +9641,8 @@ export class MediaCard extends LitElement {
             @ended=${this._onVideoEnded}
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
+            @seeked=${this._onVideoSeeked}
+            @click=${this._onVideoClickToggle}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
@@ -9782,27 +10024,29 @@ export class MediaCard extends LitElement {
     }
     
     // Auto-adjust page for queue mode only (burst/related/same_date/on_this_day stay on current page)
-    // V5.6.7: Only auto-adjust if the PREVIOUS image was highlighted (visible in panel)
-    // This prevents panel from jumping back when user manually scrolled away
-    if (this._panelMode === 'queue' && !this._manualPageChange) {
+    // V5.6.8: Simplified logic for queue preview auto-paging:
+    // - If current navigationIndex is ON the visible page, keep it visible (auto-page if moving off)
+    // - If current navigationIndex is NOT on visible page AND user manually paged, don't auto-page
+    // - If user navigates and the new position would be highlighted, allow auto-paging again
+    if (this._panelMode === 'queue') {
       const currentPageEnd = this._panelPageStartIndex + maxDisplay;
+      const isCurrentIndexOnPage = this.navigationIndex >= this._panelPageStartIndex && this.navigationIndex < currentPageEnd;
       
-      // Check if previous navigationIndex was within visible range
-      const prevIndex = this._previousNavigationIndex ?? this.navigationIndex;
-      const prevWasVisible = prevIndex >= this._panelPageStartIndex && prevIndex < currentPageEnd;
+      // If current index IS on the page, clear manual flag - user is viewing active item
+      if (isCurrentIndexOnPage) {
+        this._manualPageChange = false;
+      }
       
-      // Only auto-adjust if the previous image was visible (highlighted)
-      if (prevWasVisible) {
+      // Auto-adjust if not manually paged away
+      if (!this._manualPageChange) {
         if (this.navigationIndex < this._panelPageStartIndex) {
           // Navigated backward beyond current page
           this._panelPageStartIndex = Math.max(0, this.navigationIndex - maxDisplay + 1);
         } else if (this.navigationIndex >= currentPageEnd) {
-          // Navigated forward beyond current page
+          // Navigated forward beyond current page  
           this._panelPageStartIndex = this.navigationIndex;
         }
       }
-      // V5.6.7: Clear saved previous index after adjustment logic completes
-      this._previousNavigationIndex = null;
     }
     
     const displayStartIndex = this._panelPageStartIndex;

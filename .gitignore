@@ -47,6 +47,7 @@ rollup.config.js
 *.config.mjs
 
 # Development and test files
+LOCAL_SETUP.md
 
 # Development documentation (keep locally but don't track)
 dev-docs/

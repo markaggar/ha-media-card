@@ -419,6 +419,31 @@ export class FolderProvider extends MediaProvider {
     return null;
   }
 
+  // V5.6.8: Delegate 404 file exclusion to wrapped provider
+  // This allows the card to tell the provider to exclude files that 404
+  excludeFile(path) {
+    if (!path) return;
+    
+    this.cardAdapter._log(`🚫 FolderProvider.excludeFile: ${path}`);
+    
+    // Delegate to whichever provider is active
+    if (this.sequentialProvider && typeof this.sequentialProvider.excludeFile === 'function') {
+      this.sequentialProvider.excludeFile(path);
+    }
+    
+    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.excludeFile === 'function') {
+      this.mediaIndexProvider.excludeFile(path);
+    }
+    
+    // For SubfolderQueue, track excluded files locally
+    if (this.subfolderQueue) {
+      if (!this._excludedFiles) {
+        this._excludedFiles = new Set();
+      }
+      this._excludedFiles.add(path);
+    }
+  }
+
   // Query for files newer than the given date (for queue refresh feature)
   async getFilesNewerThan(dateThreshold) {
     // Delegate to the underlying provider
@@ -457,6 +482,60 @@ export class FolderProvider extends MediaProvider {
     
     this.cardAdapter._log('⚠️ No rescan method available for this provider');
     return { queueChanged: false };
+  }
+  
+  /**
+   * V5.6.8: Check for new files since the slideshow started
+   * Delegates to underlying provider (SequentialMediaIndexProvider or SubfolderQueue)
+   * Returns array of new items to prepend to navigation queue
+   */
+  async checkForNewFiles() {
+    // Delegate to SequentialMediaIndexProvider (database-backed)
+    if (this.sequentialProvider && typeof this.sequentialProvider.checkForNewFiles === 'function') {
+      this.cardAdapter._log('🔍 Delegating checkForNewFiles to SequentialMediaIndexProvider');
+      return await this.sequentialProvider.checkForNewFiles();
+    }
+    
+    // Delegate to SubfolderQueue (filesystem mode)
+    if (this.subfolderQueue && typeof this.subfolderQueue.checkForNewFiles === 'function') {
+      this.cardAdapter._log('🔍 Delegating checkForNewFiles to SubfolderQueue');
+      return await this.subfolderQueue.checkForNewFiles();
+    }
+    
+    this.cardAdapter._log('⚠️ No checkForNewFiles implementation for this provider');
+    return [];
+  }
+  
+  /**
+   * V5.6.8: Reset provider to beginning for fresh query
+   * Used when wrapping slideshow to start over with fresh data
+   */
+  async reset() {
+    this.cardAdapter._log('🔄 Resetting FolderProvider');
+    
+    // Delegate to SequentialMediaIndexProvider (database-backed)
+    if (this.sequentialProvider && typeof this.sequentialProvider.reset === 'function') {
+      this.cardAdapter._log('🔄 Delegating reset to SequentialMediaIndexProvider');
+      return await this.sequentialProvider.reset();
+    }
+    
+    // For SubfolderQueue (filesystem), reinitialize
+    if (this.subfolderQueue) {
+      this.cardAdapter._log('🔄 Re-scanning filesystem via SubfolderQueue');
+      // Clear and reinitialize the queue
+      this.subfolderQueue.queue = [];
+      this.subfolderQueue.shownItems = new Set();
+      return await this.subfolderQueue.initialize();
+    }
+    
+    // For MediaIndexProvider (random mode), reinitialize
+    if (this.mediaIndexProvider && typeof this.mediaIndexProvider.reset === 'function') {
+      this.cardAdapter._log('🔄 Delegating reset to MediaIndexProvider');
+      return await this.mediaIndexProvider.reset();
+    }
+    
+    this.cardAdapter._log('⚠️ No reset implementation for this provider');
+    return false;
   }
 
 }

@@ -94,13 +94,15 @@ folder:
   path: media-source://media_source/local/photos/
   mode: random
   random_count: 10  # Optional: queue size
-slideshow_window: 1000  # Optional: probability sampling window
+slideshow_window: 15  # Optional: check for new files every N items
+navigation_queue_size: 200  # Optional: back-navigation history size
 ```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `folder.random_count` | number | `5` | Number of random files to select |
-| `slideshow_window` | number | `1000` | Probability target for sampling (not a hard limit) |
+| `slideshow_window` | number | `15` | How often to check for new files (in items viewed) |
+| `navigation_queue_size` | number | `100` | Maximum items kept in back-navigation history (YAML only) |
 
 ### Sequential Mode Options
 
@@ -301,6 +303,7 @@ Requires `enable_keyboard_navigation: true` and card must be focused (click on i
 | `video_autoplay` | boolean | `false` | Auto-start video playback |
 | `video_loop` | boolean | `false` | Loop video continuously |
 | `video_muted` | boolean | `false` | Start video muted |
+| `video_controls_on_tap` | boolean | `true` | Hide native video controls until tap; first tap shows controls/hides overlays, second tap reverses |
 | `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
 
 ### Video Completion Auto-Advance

@@ -73,3 +73,57 @@ media_index:
 
 **Last Updated:** November 9, 2025  
 **Affects Versions:** v5.0.0+
+
+---
+
+## Sequential Folder Mode with SubfolderQueue
+
+**Status:** Limited Support  
+**Affects:** v5.6.8+  
+**Impact:** `slideshow_window` limits total files scanned in sequential filesystem mode
+
+### Problem Description
+
+When using **sequential mode with filesystem scanning** (i.e., `folder.mode: sequential` without Media Index), the `slideshow_window` setting constrains the total number of files discovered during the initial scan.
+
+This means:
+- If you have 500 files in your folder structure but `slideshow_window: 30`, only ~30 files will be loaded
+- New files added after slideshow starts won't be detected until a page refresh
+- The slideshow will loop through the limited set indefinitely
+
+### Why This Happens
+
+SubfolderQueue's filesystem scanning was designed for **random mode** where probability sampling limits files per folder. In sequential mode, this sampling still applies, limiting total discovery.
+
+### Recommended Workaround
+
+For sequential slideshows with large collections, use **Media Index** instead of filesystem scanning:
+
+```yaml
+type: custom:media-card
+media_source_type: folder
+media_index:
+  entity_id: sensor.media_index_your_sensor
+folder:
+  path: /media/photos/
+  mode: sequential
+  use_media_index_for_discovery: true  # Uses database queries instead of filesystem
+```
+
+Media Index's `SequentialMediaIndexProvider`:
+- Has no file count limits
+- Properly paginates through entire collection
+- Detects new files periodically
+- Performs fresh queries on wrap
+
+### Random Mode Works Fine
+
+This limitation **only affects sequential mode**. Random mode with SubfolderQueue works correctly:
+- Files are probabilistically sampled to ensure variety
+- Queue refills automatically as items are shown
+- New files are discovered on periodic refresh
+
+---
+
+**Last Updated:** January 13, 2026  
+**Affects Versions:** v5.6.8+
