@@ -46,7 +46,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 ### **Media Discovery Features** (requires Media Index)
 - 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot
 - 📅 **Same Date**: View other media items from the same date as the current photo
-- 📆 **Through the Years**: See photos from today's date across all years in your library (with adjustable ±N day window)
+- 📆 **Through the Years**: See photos from today's or the media item's date across all years in your library (with adjustable ±N day window)
 - 💾 **Burst Metadata Persistence**: Save favorite selections from burst reviews to file metadata for future reference
 - 🎞️ **Enhanced Thumbnails**: Adaptive sizing based on aspect ratio, video film strip icons, favorite badges, optimized pagination
 ### **Advanced Capabilities**

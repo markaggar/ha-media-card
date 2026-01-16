@@ -18,13 +18,22 @@ body:
       label: Media Card Version
       description: What version of the media card are you running? (Check the first line in browser console)
       options:
-        - Lastest version
-        - v5.4.0 
-        - v5.3.0
-        - v5.1.0
-        - v5.0.0
-        - v4.1.0
-        - v4.0.0
+        - v5.6.8
+        - v5.6.7
+        - v5.6.6
+        - v5.6.5
+        - v5.6.4
+        - v5.6.3
+        - v5.6.2
+        - v5.6.1
+        - v5.6.0
+        - v5.5.x
+        - v5.4.x 
+        - v5.3.x
+        - v5.1.x
+        - v5.0.x
+        - v4.1.x
+        - v4.0.x
         - Earlier version
       default: 0
     validations:
@@ -109,7 +118,7 @@ body:
         **HIGHLY RECOMMENDED**: Open browser Developer Tools (F12), go to Console tab, reproduce the issue, then copy/paste any error messages or relevant logs.
         Look for lines starting with `[MediaCard]` or error stack traces.
       placeholder: |
-        [MediaCard] MEDIA-CARD v5.4.0 Loaded
+        [MediaCard] MEDIA-CARD v5.6.8 Loaded
         [MediaCard] Initializing with config: {...}
         Error: Failed to load media - 404 Not Found
         ... stack trace ...
