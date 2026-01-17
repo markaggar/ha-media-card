@@ -204,6 +204,10 @@ export class MediaCard extends LitElement {
     // V5.6.8: Video controls visibility (for controls-on-tap feature)
     this._videoControlsVisible = false;
     
+    // V5.6.9: Safari detection - Safari needs conditional controls attribute, Chrome uses CSS
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    this._isSafari = /Safari/.test(ua) && !/Chrome/.test(ua) && !/Chromium/.test(ua);
+    
     // V5.6: Video thumbnail cache (session-scoped)
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
@@ -9624,8 +9628,8 @@ export class MediaCard extends LitElement {
       >
         ${isVideo ? html`
           <video
-            class="${this.config.video_controls_on_tap !== false && !this._videoControlsVisible ? 'hide-controls' : ''}"
-            controls
+            class="${!this._isSafari && this.config.video_controls_on_tap !== false && !this._videoControlsVisible ? 'hide-controls' : ''}"
+            ?controls=${this._isSafari ? (this.config.video_controls_on_tap === false || this._videoControlsVisible) : true}
             preload="auto"
             playsinline
             crossorigin="anonymous"
