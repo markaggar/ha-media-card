@@ -3481,6 +3481,12 @@ export class MediaCard extends LitElement {
     
     // If we have auto-advance configured, advance to next media after video completes
     if (hasAutoAdvance) {
+      // V5.6.9: Don't advance if slideshow is paused
+      if (this._isPaused) {
+        this._log('🎬 Video completed but slideshow is paused - not advancing');
+        return;
+      }
+      
       this._log('🎬 Video completed naturally - advancing to next media');
       setTimeout(async () => {
         // Check for new files first (at position 1 in sequential mode)
