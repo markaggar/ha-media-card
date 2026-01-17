@@ -5,16 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.9 - 2026-01-17
+
+### Fixed
+
+- **Safari/iPad Video Controls**: Fixed video controls not hiding on Safari and iPad
+  - Safari doesn't respect CSS `::-webkit-media-controls` pseudo-element styling
+  - Now uses conditional `controls` attribute for Safari, CSS hiding for Chrome
+  - Browser detection enables different code paths for proper cross-browser behavior
+
+- **Pause During Video Playback**: Fixed slideshow advancing when paused during video
+  - If user pauses slideshow while a video is playing, video completion no longer triggers advance
+  - Slideshow now properly stays paused on current video until user resumes
+
 ## v5.6.8 - 2026-01-12
 
 ### Added
-
-- **Non-Admin User Support**: Dashboard users without admin privileges can now use all Media Index features
-  - Previously, non-admin users would get "Unauthorized" errors when using random mode with Media Index
-  - Root cause: `fire_event` and `subscribeEvents` WebSocket calls require admin permissions
-  - Fix: Card now checks `hass.user.is_admin` and skips admin-only features for non-admin users
-  - All core functionality works for non-admin users: navigation, slideshow, metadata display
-  - No changes required to Media Index - works with existing versions
 
 - **Video Controls On Tap** (Default: `true`): Videos now start with a cleaner presentation without visible playback controls
   - Native HTML5 video controls (play/pause, seek, volume, fullscreen) hidden until user interaction
@@ -103,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - When removing oldest item from queue, correctly point to newly added item
   - Previously could cause navigation to wrong position after queue shift
 
+- **"Unauthorized" errors**: Non-admin users would cause "Unauthorized" system log errors when using random mode
+  - Root cause: `fire_event` and `subscribeEvents` WebSocket calls require admin permissions
+  - Fix: Card now checks `hass.user.is_admin` and skips admin-only features for non-admin users
+  - Side-effect: Using entities to control favorites and date ranges will require a refresh of the dashboard to pick up for non-admin users
+  
 ### Changed
 
 - **`slideshow_window` Behavior**: Now controls periodic refresh interval instead of queue size
