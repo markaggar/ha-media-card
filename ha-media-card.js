@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.9
+ * Media Card v5.6.10
  */
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
@@ -4457,7 +4457,7 @@ class MediaCard extends LitElement {
         recursive: true
       },
       media_type: 'all',
-      auto_advance_duration: 5,
+      auto_advance_seconds: 5,
       show_metadata: true,
       enable_navigation_zones: true,
       title: 'Media Slideshow'
@@ -14632,7 +14632,22 @@ class MediaCardEditor extends LitElement {
       sanitizedConfig.auto_refresh_seconds = undefined;
     }
     
+    // Check if legacy fields exist before cleanup
+    const hasLegacyFields = sanitizedConfig.auto_advance_duration !== undefined || 
+                           sanitizedConfig.auto_advance_interval !== undefined;
+    
+    // Clean up legacy auto-advance fields to prevent conflicts
+    delete sanitizedConfig.auto_advance_duration;
+    delete sanitizedConfig.auto_advance_interval;
+    
     this._config = sanitizedConfig;
+    
+    // If legacy fields were removed, automatically save the cleaned config
+    if (hasLegacyFields) {
+      this._log('🧹 Detected legacy auto-advance fields, automatically saving cleaned config');
+      // Use setTimeout to ensure the config is set before firing the change event
+      setTimeout(() => this._fireConfigChanged(), 0);
+    }
   }
 
   // V4 to V5 Migration
@@ -18761,7 +18776,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.9 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.10 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

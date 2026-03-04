@@ -89,7 +89,7 @@ export class MediaCard extends LitElement {
         recursive: true
       },
       media_type: 'all',
-      auto_advance_duration: 5,
+      auto_advance_seconds: 5,
       show_metadata: true,
       enable_navigation_zones: true,
       title: 'Media Slideshow'

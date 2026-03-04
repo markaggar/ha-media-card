@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.10 - 2026-03-04
+
+### Fixed
+
+- **Duplicate Auto-Advance Fields**: Fixed new card configurations showing both `auto_advance_seconds` and `auto_advance_duration`
+  - Updated `getStubConfig()` to use current field name `auto_advance_seconds` instead of legacy `auto_advance_duration`
+  - Prevents confusion when creating new cards with default configurations
+
+- **Card Editor Legacy Field Cleanup**: Fixed card editor hanging when editing configurations with legacy auto-advance fields
+  - Editor now automatically removes `auto_advance_duration` and `auto_advance_interval` fields when loading configurations
+  - Automatically saves cleaned configuration without requiring user to modify auto-advance settings
+  - Ensures clean, consistent configurations and prevents conflicts between legacy and current field names
+  - Maintains backward compatibility - cards continue to work with legacy fields
+
 ## v5.6.9 - 2026-01-17
 
 ### Fixed
