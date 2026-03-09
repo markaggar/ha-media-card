@@ -105,7 +105,7 @@ export class MediaIndexProvider extends MediaProvider {
   _log(...args) {
     if (this.config?.debug_mode) {
       // V5.6.10: Include card ID in logs for multi-card debugging
-      const cardId = this.card?.id || 'unknown-card';
+      const cardId = this.config.media_index?.entity_id || 'unknown-card';
       console.log(`[MediaIndexProvider:${cardId}]`, ...args);
     }
   }

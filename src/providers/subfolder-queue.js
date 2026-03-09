@@ -95,7 +95,7 @@ export class SubfolderQueue {
     }
     
     // V5.6.10: Include card ID in logs for multi-card debugging
-    const cardId = this.card?.id || 'unknown-card';
+    const cardId = this.card.config?.media_path || 'unknown-card';
     console.log(`📂 SubfolderQueue[${cardId}]:`, ...args);
   }
 
