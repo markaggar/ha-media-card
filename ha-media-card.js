@@ -1378,9 +1378,10 @@ class SubfolderQueue {
       return;
     }
     
-    // V5.6.10: Include card ID in logs for multi-card debugging
-    const cardId = this.card.config?.media_path || 'unknown-card';
-    console.log(`📂 SubfolderQueue[${cardId}]:`, ...args);
+    // V5.6.10: Include card ID and media path in logs for multi-card debugging
+    const cardId = this.card?._cardId || 'unknown-card';
+    const mediaPath = this.card.config?.media_path?.split('/').pop() || 'unknown-path';
+    console.log(`📂 SubfolderQueue[${cardId}:${mediaPath}]:`, ...args);
   }
 
   _checkPathChange() {
@@ -2940,9 +2941,10 @@ class MediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      // V5.6.10: Include card ID in logs for multi-card debugging
-      const cardId = this.config.media_index?.entity_id || 'unknown-card';
-      console.log(`[MediaIndexProvider:${cardId}]`, ...args);
+      // V5.6.10: Include card ID and entity ID in logs for multi-card debugging
+      const cardId = this.card?._cardId || 'unknown-card';
+      const entityId = this.config.media_index?.entity_id?.split('.').pop() || 'unknown-entity';
+      console.log(`[MediaIndexProvider:${cardId}:${entityId}]`, ...args);
     }
   }
 
@@ -3624,9 +3626,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      // V5.6.10: Include card ID in logs for multi-card debugging
-      const cardId = this.config.media_index?.entity_id || 'unknown-card';
-      console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
+      // V5.6.10: Include card ID and entity ID in logs for multi-card debugging
+      const cardId = this.card?._cardId || 'unknown-card';
+      const entityId = this.config.media_index?.entity_id?.split('.').pop() || 'unknown-entity';
+      console.log(`[SequentialMediaIndexProvider:${cardId}:${entityId}]`, ...args);
     }
   }
   

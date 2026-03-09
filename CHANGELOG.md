@@ -21,10 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Items are successfully added to queue despite undefined log message
 
 - **Provider Log Identification**: Provider logs now include meaningful card IDs for multi-card debugging
-  - MediaIndexProvider logs now show `[MediaIndexProvider:entity-id]` using the media_index entity name
-  - SequentialMediaIndexProvider logs now show `[SequentialMediaIndexProvider:entity-id]` using the media_index entity name
-  - SubfolderQueue logs now show `📂 SubfolderQueue[media-path]:` using the media folder path
-  - Eliminates "unknown-card" placeholders and makes it easy to correlate logs with specific card instances
+  - MediaIndexProvider logs now show `[MediaIndexProvider:card-id:entity-name]` using both card ID and media_index entity name
+  - SequentialMediaIndexProvider logs now show `[SequentialMediaIndexProvider:card-id:entity-name]` using both card ID and media_index entity name
+  - SubfolderQueue logs now show `📂 SubfolderQueue[card-id:folder-name]:` using both card ID and media folder name
+  - Eliminates confusion when multiple cards use the same media index or folder
+  - Makes it easy to correlate provider logs with specific card instances
 
 - **Card Log Identification**: Main card logs now use meaningful identifiers for multi-card debugging
   - Previously showed `[card-randomid:no-path]` for media_index cards
