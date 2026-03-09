@@ -1378,7 +1378,9 @@ class SubfolderQueue {
       return;
     }
     
-    console.log('📂 SubfolderQueue:', ...args);
+    // V5.6.10: Include card ID in logs for multi-card debugging
+    const cardId = this.card?.id || 'unknown-card';
+    console.log(`📂 SubfolderQueue[${cardId}]:`, ...args);
   }
 
   _checkPathChange() {
@@ -2938,7 +2940,9 @@ class MediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      console.log('[MediaIndexProvider]', ...args);
+      // V5.6.10: Include card ID in logs for multi-card debugging
+      const cardId = this.card?.id || 'unknown-card';
+      console.log(`[MediaIndexProvider:${cardId}]`, ...args);
     }
   }
 
@@ -3620,7 +3624,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      console.log('[SequentialMediaIndexProvider]', ...args);
+      // V5.6.10: Include card ID in logs for multi-card debugging
+      const cardId = this.card?.id || 'unknown-card';
+      console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
   }
   
