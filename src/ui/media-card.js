@@ -1350,7 +1350,7 @@ export class MediaCard extends LitElement {
           let item = await this.provider.getNext();
         
           if (item) {
-            this._log('Got item from provider:', item.title);
+            this._log('Got item from provider:', item.filename || item.media_content_id);
           
             // V5.3: Check if item already exists in navigation queue (prevent duplicates)
             let alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
@@ -1396,7 +1396,7 @@ export class MediaCard extends LitElement {
               await this._wrapToBeginningWithRefresh();
               return;
             } else {
-              this._log('✅ Adding new item to navigation queue:', item.title);
+              this._log('✅ Adding new item to navigation queue:', item.filename || item.media_content_id);
           
               // V5: Extract metadata if not provided
               if (!item.metadata) {

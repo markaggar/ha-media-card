@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed: Now properly passes `(50, true)` to query 50 items with priority_new_files enabled
   - Resolves "Got item from provider: undefined" errors and queue starvation
 
+- **Item Provider Logging**: Fixed log messages showing "undefined" instead of filename
+  - Logging was trying to access `item.title` which doesn't exist on provider items
+  - Now logs `item.filename || item.media_content_id` for readable debug output
+  - Items are successfully added to queue despite undefined log message
+
 - **Duplicate Auto-Advance Fields**: Fixed new card configurations showing both `auto_advance_seconds` and `auto_advance_duration`
   - Updated `getStubConfig()` to use current field name `auto_advance_seconds` instead of legacy `auto_advance_duration`
   - Prevents confusion when creating new cards with default configurations
