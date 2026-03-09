@@ -2844,9 +2844,7 @@ class MediaIndexProvider extends MediaProvider {
   constructor(config, hass, card = null) {
     super(config, hass);
     this.queue = []; // Internal queue of items from database
-    // V5.6.10: Use fixed queue size (100 items) independent of slideshow_window
-    // slideshow_window now controls periodic refresh interval, not database query size
-    this.queueSize = 100;
+    this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files (moved to _Junk/_Edit)
     this.card = card; // V5: Reference to card for accessing navigation history
     
@@ -3577,11 +3575,8 @@ class MediaIndexProvider extends MediaProvider {
       this._log('🔍 Checking for new files (random mode - using priority_new_files)');
       
       // Query with priority_new_files to get recently indexed files
-      const result = await this._queryMediaIndex({
-        priority_new_files: true,
-        new_files_threshold_seconds: 3600, // Last hour
-        count: 50 // Check first 50 new files
-      });
+      // V5.6.10: Fixed method signature - pass count as first parameter, priority mode as second
+      const result = await this._queryMediaIndex(50, true);
       
       if (result && result.length > 0) {
         this._log(`✅ Found ${result.length} new files`);

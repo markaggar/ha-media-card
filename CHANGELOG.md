@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Media Index Queue Size**: Fixed MediaIndexProvider querying for only 1 item when `slideshow_window: 1`
-  - Root cause: Provider incorrectly used `slideshow_window` (refresh interval) to control database query size
-  - Now uses fixed internal queue size (100 items) independent of `slideshow_window` setting
-  - `slideshow_window` now controls only the periodic refresh interval (checking for new files), not batch query size
-  - Fixes "Got item from provider: undefined" errors in random mode with low `slideshow_window` values
+- **Media Index Query Only Returning 1 Item**: Fixed random mode querying for 1 item instead of configured batch size
+  - Root cause: `rescanForNewFiles()` called `_queryMediaIndex()` with object parameter instead of positional parameters
+  - Method signature expects `(count, forcePriorityMode)` but was receiving `{ priority_new_files: true, count: 50 }`
+  - Fixed: Now properly passes `(50, true)` to query 50 items with priority_new_files enabled
+  - Resolves "Got item from provider: undefined" errors and queue starvation
 
 - **Duplicate Auto-Advance Fields**: Fixed new card configurations showing both `auto_advance_seconds` and `auto_advance_duration`
   - Updated `getStubConfig()` to use current field name `auto_advance_seconds` instead of legacy `auto_advance_duration`
