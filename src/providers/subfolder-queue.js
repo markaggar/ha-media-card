@@ -94,10 +94,9 @@ export class SubfolderQueue {
       return;
     }
     
-    // V5.6.10: Include card ID and media path in logs for multi-card debugging
+    // V5.6.10: Include card ID in logs for multi-card debugging
     const cardId = this.card?._cardId || 'unknown-card';
-    const mediaPath = this.card.config?.media_path?.split('/').pop() || 'unknown-path';
-    console.log(`📂 SubfolderQueue[${cardId}:${mediaPath}]:`, ...args);
+    console.log(`📂 SubfolderQueue[${cardId}]:`, ...args);
   }
 
   _checkPathChange() {

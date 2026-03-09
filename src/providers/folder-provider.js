@@ -21,7 +21,8 @@ export class FolderProvider extends MediaProvider {
       _backgroundPaused: false,
       _log: (...args) => {
         if (this.config.debug_mode) {
-          console.log('[FolderProvider]', ...args);
+          const cardId = this.card?._cardId || 'unknown-card';
+          console.log(`[FolderProvider:${cardId}]`, ...args);
         }
       },
       

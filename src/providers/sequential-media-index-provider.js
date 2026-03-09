@@ -28,10 +28,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      // V5.6.10: Include card ID and entity ID in logs for multi-card debugging
+      // V5.6.10: Include card ID in logs for multi-card debugging
       const cardId = this.card?._cardId || 'unknown-card';
-      const entityId = this.config.media_index?.entity_id?.split('.').pop() || 'unknown-entity';
-      console.log(`[SequentialMediaIndexProvider:${cardId}:${entityId}]`, ...args);
+      console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
   }
   
