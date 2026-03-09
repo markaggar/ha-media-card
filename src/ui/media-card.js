@@ -546,11 +546,8 @@ export class MediaCard extends LitElement {
   // V4: Debug logging with throttling
   _log(...args) {
     if (this._debugMode || window.location.hostname === 'localhost') {
-      // Prefix all logs with card ID and identifier for debugging
-      const identifier = this.config?.single_media?.path?.split('/').pop() || 
-                        this.config?.media_path?.split('/').pop() || 
-                        this.config?.media_index?.entity_id?.split('.').pop() || 'no-id';
-      const prefix = `[${this._cardId}:${identifier}]`;
+      // Prefix all logs with card ID for debugging
+      const prefix = `[${this._cardId}]`;
       const message = args.join(' ');
       
       // Throttle certain frequent messages to avoid spam

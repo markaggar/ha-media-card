@@ -28,11 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Eliminates confusion when multiple cards use the same media index or folder
   - Keeps logs concise while providing clear card-to-provider correlation
 
-- **Card Log Identification**: Main card logs now use meaningful identifiers for multi-card debugging
-  - Previously showed `[card-randomid:no-path]` for media_index cards
-  - Now shows `[card-randomid:entity-name]` using the media_index entity name (e.g., `media_photo_onedrive_total_files`)
+- **Card Log Identification**: Main card logs now use card IDs for multi-card debugging
+  - Previously showed `[card-randomid:entity-name]` for media_index cards
+  - Now shows `[card-randomid]` for all card logs
   - Each card gets a unique random ID for instance identification
-  - Makes it easy to correlate logs across multiple cards using the same media index
+  - Keeps logs concise while providing clear card correlation
 
 - **Provider Log Identification**: Provider logs now include card ID for multi-card debugging
   - MediaIndexProvider logs now show `[MediaIndexProvider:card-id]` instead of just `[MediaIndexProvider]`
