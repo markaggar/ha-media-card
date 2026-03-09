@@ -5,9 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v5.6.10 - 2026-03-04
+## v5.6.10 - 2026-03-09
 
 ### Fixed
+
+- **Media Index Queue Size**: Fixed MediaIndexProvider querying for only 1 item when `slideshow_window: 1`
+  - Root cause: Provider incorrectly used `slideshow_window` (refresh interval) to control database query size
+  - Now uses fixed internal queue size (100 items) independent of `slideshow_window` setting
+  - `slideshow_window` now controls only the periodic refresh interval (checking for new files), not batch query size
+  - Fixes "Got item from provider: undefined" errors in random mode with low `slideshow_window` values
 
 - **Duplicate Auto-Advance Fields**: Fixed new card configurations showing both `auto_advance_seconds` and `auto_advance_duration`
   - Updated `getStubConfig()` to use current field name `auto_advance_seconds` instead of legacy `auto_advance_duration`

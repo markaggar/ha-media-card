@@ -10,7 +10,9 @@ export class MediaIndexProvider extends MediaProvider {
   constructor(config, hass, card = null) {
     super(config, hass);
     this.queue = []; // Internal queue of items from database
-    this.queueSize = config.slideshow_window || 100;
+    // V5.6.10: Use fixed queue size (100 items) independent of slideshow_window
+    // slideshow_window now controls periodic refresh interval, not database query size
+    this.queueSize = 100;
     this.excludedFiles = new Set(); // Track excluded files (moved to _Junk/_Edit)
     this.card = card; // V5: Reference to card for accessing navigation history
     
