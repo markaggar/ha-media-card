@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.6.10 - 2026-03-09
 
+### Added
+
+- **Offline Mode Support**: Users on isolated networks can now host Lit locally and run Media Card without CDN access
+  - See [docs/OFFLINE_MODE.md](docs/OFFLINE_MODE.md) for complete setup instructions
+  - Simple 5-minute setup: download Lit, create preload script, add to Lovelace resources
+  - All Media Card features work fully offline
+
 ### Fixed
 
 - **Media Index Query Only Returning 1 Item**: Fixed random mode querying for 1 item instead of configured batch size

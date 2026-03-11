@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
+import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
 import { MediaProvider } from '../core/media-provider.js';
 import { MediaUtils } from '../core/media-utils.js';
 
@@ -11,7 +11,7 @@ export class MediaCard extends LitElement {
   static CARD_HEIGHT_MIN = 100;
   static CARD_HEIGHT_MAX = 5000;
   static CARD_HEIGHT_STEP = 50;
-  
+
   // Friendly state names for HA binary sensor device classes (v5.6)
   static FRIENDLY_STATES = {
     'battery': { 'on': 'Low', 'off': 'Normal' },

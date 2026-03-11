@@ -2,10 +2,54 @@
  * Media Card v5.6.10
  */
 
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
+// Async wrapper for dynamic Lit loading (supports offline mode)
+(async () => {
+  // Default CDN URL for Lit
+  const LIT_CDN_URL = 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
+  
+  let LitElement, html, css;
+  
+  // Check if Lit was preloaded globally (for offline support)
+  if (window.LitElement && window.html && window.css) {
+    console.log('[Media Card] Using preloaded Lit from window');
+    LitElement = window.LitElement;
+    html = window.html;
+    css = window.css;
+  } else if (window.__LIT_PRELOAD_PROMISE__) {
+    // Preload script is loading Lit - wait for it
+    console.log('[Media Card] Waiting for Lit preload to complete...');
+    try {
+      await window.__LIT_PRELOAD_PROMISE__;
+      LitElement = window.LitElement;
+      html = window.html;
+      css = window.css;
+      console.log('[Media Card] Using preloaded Lit from window');
+    } catch (e) {
+      console.error('[Media Card] Lit preload failed:', e);
+      console.error('[Media Card] For offline use, check your preload script. See docs/OFFLINE_MODE.md');
+      return;
+    }
+  } else {
+    // Load Lit dynamically from CDN
+    try {
+      const litModule = await import(LIT_CDN_URL);
+      LitElement = litModule.LitElement;
+      html = litModule.html;
+      css = litModule.css;
+      // Also set on window for consistency
+      window.LitElement = LitElement;
+      window.html = html;
+      window.css = css;
+      console.log('[Media Card] Loaded Lit from CDN');
+    } catch (e) {
+      console.error('[Media Card] Failed to load Lit:', e);
+      console.error('[Media Card] For offline use, preload Lit before this card. See docs/OFFLINE_MODE.md');
+      return; // Can't continue without Lit
+    }
+  }
 
 // Shared utility functions for media detection
-export const MediaUtils = {
+const MediaUtils = {
   detectFileType(filePath) {
     if (!filePath) return null;
     
@@ -4383,7 +4427,7 @@ class MediaCard extends LitElement {
   static CARD_HEIGHT_MIN = 100;
   static CARD_HEIGHT_MAX = 5000;
   static CARD_HEIGHT_STEP = 50;
-  
+
   // Friendly state names for HA binary sensor device classes (v5.6)
   static FRIENDLY_STATES = {
     'battery': { 'on': 'Low', 'off': 'Normal' },
@@ -18756,7 +18800,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
   }
 }
-
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
   customElements.define('media-card', MediaCard);
@@ -18783,3 +18826,5 @@ console.info(
   'color: white; font-weight: bold; background: green'
 );
 
+
+})();

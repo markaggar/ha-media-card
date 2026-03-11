@@ -78,6 +78,8 @@ It is highly recommended you also install the [Media Index Integration](https://
 - **[Configuration Reference](docs/guides/configuration.md)** - All available options and parameters
 
 - **[Examples](docs/guides/examples.md)** - Real-world configurations for common use cases
+
+- **[Offline Mode Guide](docs/OFFLINE_MODE.md)** - Configure Media Card for clients on isolated networks without internet access
    
 **Features & Advanced Usage**
 

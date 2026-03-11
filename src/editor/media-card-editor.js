@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
+import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
 
 /**
  * MediaCardEditor - Card editor with full functionality
