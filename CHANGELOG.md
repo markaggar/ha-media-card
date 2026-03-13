@@ -41,12 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Each card gets a unique random ID for instance identification
   - Keeps logs concise while providing clear card correlation
 
-- **Provider Log Identification**: Provider logs now include card ID for multi-card debugging
-  - MediaIndexProvider logs now show `[MediaIndexProvider:card-id]` instead of just `[MediaIndexProvider]`
-  - SequentialMediaIndexProvider logs now show `[SequentialMediaIndexProvider:card-id]`
-  - SubfolderQueue logs now show `📂 SubfolderQueue[card-id]:`
-  - Makes it easy to correlate provider logs with specific card instances on multi-card dashboards
-
 - **Duplicate Auto-Advance Fields**: Fixed new card configurations showing both `auto_advance_seconds` and `auto_advance_duration`
   - Updated `getStubConfig()` to use current field name `auto_advance_seconds` instead of legacy `auto_advance_duration`
   - Prevents confusion when creating new cards with default configurations
