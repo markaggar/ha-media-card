@@ -104,7 +104,9 @@ export class MediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      console.log('[MediaIndexProvider]', ...args);
+      // V5.6.10: Include card ID in logs for multi-card debugging
+      const cardId = this.card?._cardId || 'unknown-card';
+      console.log(`[MediaIndexProvider:${cardId}]`, ...args);
     }
   }
 
@@ -741,11 +743,8 @@ export class MediaIndexProvider extends MediaProvider {
       this._log('🔍 Checking for new files (random mode - using priority_new_files)');
       
       // Query with priority_new_files to get recently indexed files
-      const result = await this._queryMediaIndex({
-        priority_new_files: true,
-        new_files_threshold_seconds: 3600, // Last hour
-        count: 50 // Check first 50 new files
-      });
+      // V5.6.10: Fixed method signature - pass count as first parameter, priority mode as second
+      const result = await this._queryMediaIndex(50, true);
       
       if (result && result.length > 0) {
         this._log(`✅ Found ${result.length} new files`);

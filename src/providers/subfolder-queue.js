@@ -94,7 +94,9 @@ export class SubfolderQueue {
       return;
     }
     
-    console.log('📂 SubfolderQueue:', ...args);
+    // V5.6.10: Include card ID in logs for multi-card debugging
+    const cardId = this.card?._cardId || 'unknown-card';
+    console.log(`📂 SubfolderQueue[${cardId}]:`, ...args);
   }
 
   _checkPathChange() {

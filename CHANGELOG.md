@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.6.10 - 2026-03-09
+
+### Added
+
+- **Offline Mode Support**: Users on isolated networks can now host Lit locally and run Media Card without CDN access
+  - See [docs/OFFLINE_MODE.md](docs/OFFLINE_MODE.md) for complete setup instructions
+  - Simple 5-minute setup: download Lit, create preload script, add to Lovelace resources
+  - All Media Card features work fully offline
+
+### Fixed
+
+- **Media Index Query Only Returning 1 Item**: Fixed random mode querying for 1 item instead of configured batch size
+  - Root cause: `rescanForNewFiles()` called `_queryMediaIndex()` with object parameter instead of positional parameters
+  - Method signature expects `(count, forcePriorityMode)` but was receiving `{ priority_new_files: true, count: 50 }`
+  - Fixed: Now properly passes `(50, true)` to query 50 items with priority_new_files enabled
+  - Resolves "Got item from provider: undefined" errors and queue starvation
+
+- **Item Provider Logging**: Fixed log messages showing "undefined" instead of filename
+  - Logging was trying to access `item.title` which doesn't exist on provider items
+  - Now logs `item.filename || item.media_content_id` for readable debug output
+  - Items are successfully added to queue despite undefined log message
+
+- **Provider Log Identification**: Provider logs now include card IDs for multi-card debugging
+  - MediaIndexProvider logs now show `[MediaIndexProvider:card-id]` using the card's unique random ID
+  - SequentialMediaIndexProvider logs now show `[SequentialMediaIndexProvider:card-id]` using the card's unique random ID
+  - SubfolderQueue logs now show `📂 SubfolderQueue[card-id]:` using the card's unique random ID
+  - FolderProvider logs now show `[FolderProvider:card-id]` using the card's unique random ID
+  - Eliminates confusion when multiple cards use the same media index or folder
+  - Keeps logs concise while providing clear card-to-provider correlation
+
+- **Card Log Identification**: Main card logs now use card IDs for multi-card debugging
+  - Previously showed `[card-randomid:entity-name]` for media_index cards
+  - Now shows `[card-randomid]` for all card logs
+  - Each card gets a unique random ID for instance identification
+  - Keeps logs concise while providing clear card correlation
+
+- **Duplicate Auto-Advance Fields**: Fixed new card configurations showing both `auto_advance_seconds` and `auto_advance_duration`
+  - Updated `getStubConfig()` to use current field name `auto_advance_seconds` instead of legacy `auto_advance_duration`
+  - Prevents confusion when creating new cards with default configurations
+
+- **Card Editor Legacy Field Cleanup**: Fixed card editor hanging when editing configurations with legacy auto-advance fields
+  - Editor now automatically removes `auto_advance_duration` and `auto_advance_interval` fields when loading configurations
+  - Automatically saves cleaned configuration without requiring user to modify auto-advance settings
+  - Ensures clean, consistent configurations and prevents conflicts between legacy and current field names
+  - Maintains backward compatibility - cards continue to work with legacy fields
+
 ## v5.6.9 - 2026-01-17
 
 ### Fixed

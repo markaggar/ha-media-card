@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
+import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
 import { MediaProvider } from '../core/media-provider.js';
 import { MediaUtils } from '../core/media-utils.js';
 
@@ -11,7 +11,7 @@ export class MediaCard extends LitElement {
   static CARD_HEIGHT_MIN = 100;
   static CARD_HEIGHT_MAX = 5000;
   static CARD_HEIGHT_STEP = 50;
-  
+
   // Friendly state names for HA binary sensor device classes (v5.6)
   static FRIENDLY_STATES = {
     'battery': { 'on': 'Low', 'off': 'Normal' },
@@ -89,7 +89,7 @@ export class MediaCard extends LitElement {
         recursive: true
       },
       media_type: 'all',
-      auto_advance_duration: 5,
+      auto_advance_seconds: 5,
       show_metadata: true,
       enable_navigation_zones: true,
       title: 'Media Slideshow'
@@ -546,10 +546,8 @@ export class MediaCard extends LitElement {
   // V4: Debug logging with throttling
   _log(...args) {
     if (this._debugMode || window.location.hostname === 'localhost') {
-      // Prefix all logs with card ID and path for debugging
-      const path = this.config?.single_media?.path?.split('/').pop() || 
-                   this.config?.media_path?.split('/').pop() || 'no-path';
-      const prefix = `[${this._cardId}:${path}]`;
+      // Prefix all logs with card ID for debugging
+      const prefix = `[${this._cardId}]`;
       const message = args.join(' ');
       
       // Throttle certain frequent messages to avoid spam
@@ -1350,7 +1348,7 @@ export class MediaCard extends LitElement {
           let item = await this.provider.getNext();
         
           if (item) {
-            this._log('Got item from provider:', item.title);
+            this._log('Got item from provider:', item.filename || item.media_content_id);
           
             // V5.3: Check if item already exists in navigation queue (prevent duplicates)
             let alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
@@ -1396,7 +1394,7 @@ export class MediaCard extends LitElement {
               await this._wrapToBeginningWithRefresh();
               return;
             } else {
-              this._log('✅ Adding new item to navigation queue:', item.title);
+              this._log('✅ Adding new item to navigation queue:', item.filename || item.media_content_id);
           
               // V5: Extract metadata if not provided
               if (!item.metadata) {

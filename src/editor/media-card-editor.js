@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module';
+import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
 
 /**
  * MediaCardEditor - Card editor with full functionality
@@ -29,7 +29,22 @@ export class MediaCardEditor extends LitElement {
       sanitizedConfig.auto_refresh_seconds = undefined;
     }
     
+    // Check if legacy fields exist before cleanup
+    const hasLegacyFields = sanitizedConfig.auto_advance_duration !== undefined || 
+                           sanitizedConfig.auto_advance_interval !== undefined;
+    
+    // Clean up legacy auto-advance fields to prevent conflicts
+    delete sanitizedConfig.auto_advance_duration;
+    delete sanitizedConfig.auto_advance_interval;
+    
     this._config = sanitizedConfig;
+    
+    // If legacy fields were removed, automatically save the cleaned config
+    if (hasLegacyFields) {
+      this._log('🧹 Detected legacy auto-advance fields, automatically saving cleaned config');
+      // Use setTimeout to ensure the config is set before firing the change event
+      setTimeout(() => this._fireConfigChanged(), 0);
+    }
   }
 
   // V4 to V5 Migration

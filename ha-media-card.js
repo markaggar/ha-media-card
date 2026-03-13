@@ -1,11 +1,55 @@
 /** 
- * Media Card v5.6.9
+ * Media Card v5.6.10
  */
 
-import { LitElement, html, css } from 'https://unpkg.com/lit@3/index.js?module'
+// Async wrapper for dynamic Lit loading (supports offline mode)
+(async () => {
+  // Default CDN URL for Lit
+  const LIT_CDN_URL = 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
+  
+  let LitElement, html, css;
+  
+  // Check if Lit was preloaded globally (for offline support)
+  if (window.LitElement && window.html && window.css) {
+    console.log('[Media Card] Using preloaded Lit from window');
+    LitElement = window.LitElement;
+    html = window.html;
+    css = window.css;
+  } else if (window.__LIT_PRELOAD_PROMISE__) {
+    // Preload script is loading Lit - wait for it
+    console.log('[Media Card] Waiting for Lit preload to complete...');
+    try {
+      await window.__LIT_PRELOAD_PROMISE__;
+      LitElement = window.LitElement;
+      html = window.html;
+      css = window.css;
+      console.log('[Media Card] Using preloaded Lit from window');
+    } catch (e) {
+      console.error('[Media Card] Lit preload failed:', e);
+      console.error('[Media Card] For offline use, check your preload script. See docs/OFFLINE_MODE.md');
+      return;
+    }
+  } else {
+    // Load Lit dynamically from CDN
+    try {
+      const litModule = await import(LIT_CDN_URL);
+      LitElement = litModule.LitElement;
+      html = litModule.html;
+      css = litModule.css;
+      // Also set on window for consistency
+      window.LitElement = LitElement;
+      window.html = html;
+      window.css = css;
+      console.log('[Media Card] Loaded Lit from CDN');
+    } catch (e) {
+      console.error('[Media Card] Failed to load Lit:', e);
+      console.error('[Media Card] For offline use, preload Lit before this card. See docs/OFFLINE_MODE.md');
+      return; // Can't continue without Lit
+    }
+  }
 
 // Shared utility functions for media detection
-export const MediaUtils = {
+const MediaUtils = {
   detectFileType(filePath) {
     if (!filePath) return null;
     
@@ -330,6 +374,8 @@ class MediaProvider {
       /(\d{4})-(\d{2})-(\d{2})/,
       // YYYYMMDD format (date only, 8 consecutive digits)
       /(\d{8})/,
+      // UNIX Timestamp (10-digit, standalone)
+      /\b(\d{10})\b/,
       // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
@@ -349,6 +395,10 @@ class MediaProvider {
             hour = parseInt(ts.substring(8, 10));
             minute = parseInt(ts.substring(10, 12));
             second = parseInt(ts.substring(12, 14));
+          }
+          // Handle 10-digit UNIX Timestamp
+          else if (match[1] && match[1].length === 10) {
+            return new Date(Number(match[1]) * 1000);
           }
           // Handle 8-digit date (YYYYMMDD)
           else if (match[1] && match[1].length === 8) {
@@ -763,7 +813,8 @@ class FolderProvider extends MediaProvider {
       _backgroundPaused: false,
       _log: (...args) => {
         if (this.config.debug_mode) {
-          console.log('[FolderProvider]', ...args);
+          const cardId = this.card?._cardId || 'unknown-card';
+          console.log(`[FolderProvider:${cardId}]`, ...args);
         }
       },
       
@@ -1378,7 +1429,9 @@ class SubfolderQueue {
       return;
     }
     
-    console.log('📂 SubfolderQueue:', ...args);
+    // V5.6.10: Include card ID in logs for multi-card debugging
+    const cardId = this.card?._cardId || 'unknown-card';
+    console.log(`📂 SubfolderQueue[${cardId}]:`, ...args);
   }
 
   _checkPathChange() {
@@ -2938,7 +2991,9 @@ class MediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      console.log('[MediaIndexProvider]', ...args);
+      // V5.6.10: Include card ID in logs for multi-card debugging
+      const cardId = this.card?._cardId || 'unknown-card';
+      console.log(`[MediaIndexProvider:${cardId}]`, ...args);
     }
   }
 
@@ -3575,11 +3630,8 @@ class MediaIndexProvider extends MediaProvider {
       this._log('🔍 Checking for new files (random mode - using priority_new_files)');
       
       // Query with priority_new_files to get recently indexed files
-      const result = await this._queryMediaIndex({
-        priority_new_files: true,
-        new_files_threshold_seconds: 3600, // Last hour
-        count: 50 // Check first 50 new files
-      });
+      // V5.6.10: Fixed method signature - pass count as first parameter, priority mode as second
+      const result = await this._queryMediaIndex(50, true);
       
       if (result && result.length > 0) {
         this._log(`✅ Found ${result.length} new files`);
@@ -3623,7 +3675,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
 
   _log(...args) {
     if (this.config?.debug_mode) {
-      console.log('[SequentialMediaIndexProvider]', ...args);
+      // V5.6.10: Include card ID in logs for multi-card debugging
+      const cardId = this.card?._cardId || 'unknown-card';
+      console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
   }
   
@@ -4379,7 +4433,7 @@ class MediaCard extends LitElement {
   static CARD_HEIGHT_MIN = 100;
   static CARD_HEIGHT_MAX = 5000;
   static CARD_HEIGHT_STEP = 50;
-  
+
   // Friendly state names for HA binary sensor device classes (v5.6)
   static FRIENDLY_STATES = {
     'battery': { 'on': 'Low', 'off': 'Normal' },
@@ -4457,7 +4511,7 @@ class MediaCard extends LitElement {
         recursive: true
       },
       media_type: 'all',
-      auto_advance_duration: 5,
+      auto_advance_seconds: 5,
       show_metadata: true,
       enable_navigation_zones: true,
       title: 'Media Slideshow'
@@ -4914,10 +4968,8 @@ class MediaCard extends LitElement {
   // V4: Debug logging with throttling
   _log(...args) {
     if (this._debugMode || window.location.hostname === 'localhost') {
-      // Prefix all logs with card ID and path for debugging
-      const path = this.config?.single_media?.path?.split('/').pop() || 
-                   this.config?.media_path?.split('/').pop() || 'no-path';
-      const prefix = `[${this._cardId}:${path}]`;
+      // Prefix all logs with card ID for debugging
+      const prefix = `[${this._cardId}]`;
       const message = args.join(' ');
       
       // Throttle certain frequent messages to avoid spam
@@ -5718,7 +5770,7 @@ class MediaCard extends LitElement {
           let item = await this.provider.getNext();
         
           if (item) {
-            this._log('Got item from provider:', item.title);
+            this._log('Got item from provider:', item.filename || item.media_content_id);
           
             // V5.3: Check if item already exists in navigation queue (prevent duplicates)
             let alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
@@ -5764,7 +5816,7 @@ class MediaCard extends LitElement {
               await this._wrapToBeginningWithRefresh();
               return;
             } else {
-              this._log('✅ Adding new item to navigation queue:', item.title);
+              this._log('✅ Adding new item to navigation queue:', item.filename || item.media_content_id);
           
               // V5: Extract metadata if not provided
               if (!item.metadata) {
@@ -14632,7 +14684,22 @@ class MediaCardEditor extends LitElement {
       sanitizedConfig.auto_refresh_seconds = undefined;
     }
     
+    // Check if legacy fields exist before cleanup
+    const hasLegacyFields = sanitizedConfig.auto_advance_duration !== undefined || 
+                           sanitizedConfig.auto_advance_interval !== undefined;
+    
+    // Clean up legacy auto-advance fields to prevent conflicts
+    delete sanitizedConfig.auto_advance_duration;
+    delete sanitizedConfig.auto_advance_interval;
+    
     this._config = sanitizedConfig;
+    
+    // If legacy fields were removed, automatically save the cleaned config
+    if (hasLegacyFields) {
+      this._log('🧹 Detected legacy auto-advance fields, automatically saving cleaned config');
+      // Use setTimeout to ensure the config is set before firing the change event
+      setTimeout(() => this._fireConfigChanged(), 0);
+    }
   }
 
   // V4 to V5 Migration
@@ -18739,7 +18806,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
   }
 }
-
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
   customElements.define('media-card', MediaCard);
@@ -18761,8 +18827,10 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.9 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.10 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
 
+
+})();
