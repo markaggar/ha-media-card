@@ -289,10 +289,10 @@ export class MediaProvider {
       /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
       // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
-      // UNIX Timestamp
-      /(\d{10})/,
       // YYYYMMDD format (date only, 8 consecutive digits)
       /(\d{8})/,
+      // UNIX Timestamp (10-digit, standalone)
+      /\b(\d{10})\b/,
       // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
