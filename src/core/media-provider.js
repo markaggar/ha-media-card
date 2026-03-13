@@ -289,6 +289,8 @@ export class MediaProvider {
       /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
       // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
+      // UNIX Timestamp
+      /(\d{10})/,
       // YYYYMMDD format (date only, 8 consecutive digits)
       /(\d{8})/,
       // DD-MM-YYYY format (date only)
@@ -310,6 +312,10 @@ export class MediaProvider {
             hour = parseInt(ts.substring(8, 10));
             minute = parseInt(ts.substring(10, 12));
             second = parseInt(ts.substring(12, 14));
+          }
+          // Handle 10-digit UNIX Timestamp
+          else if (match[1] && match[1].length === 10) {
+            return new Date(Number(match[1]) * 1000);
           }
           // Handle 8-digit date (YYYYMMDD)
           else if (match[1] && match[1].length === 8) {
