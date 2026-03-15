@@ -16490,7 +16490,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Force remove any existing dialogs first
     const existingDialogs = document.querySelectorAll('[data-media-browser-dialog="true"]');
     existingDialogs.forEach(d => {
-      if (d.close) d.close();
+      if (d instanceof HTMLDialogElement && d.open) {
+        d.close();
+      }
       d.remove();
     });
     
@@ -16593,7 +16595,16 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
     });
 
-    // Handle Escape key (native dialog behavior, but we clean up)
+    // Handle Escape key - prevent bubbling to HA's card editor
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDialog();
+      }
+    });
+
+    // Handle native dialog close event (cleanup)
     dialog.addEventListener('close', () => {
       if (dialog.parentNode) {
         dialog.parentNode.removeChild(dialog);
@@ -16895,7 +16906,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           this._log('File clicked:', item.media_content_id);
           this._handleMediaPicked(item.media_content_id);
           if (dialog) {
-            if (dialog.close) dialog.close();
+            if (dialog.open) dialog.close();
             if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
           }
           return false;
@@ -16986,7 +16997,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       this._fireConfigChanged();
       
       if (dialog) {
-        if (dialog.close) dialog.close();
+        if (dialog.open) dialog.close();
         if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
       }
     };
