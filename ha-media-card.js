@@ -8041,7 +8041,15 @@ class MediaCard extends LitElement {
   }
 
   // V5.6.12: Toggle mute preference and apply to current video if playing
-  _handleMuteToggle() {
+  _handleMuteToggle(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
     // Toggle the preference
     const currentEffective = this._getEffectiveMuteState();
     this._userMutePreference = !currentEffective;
