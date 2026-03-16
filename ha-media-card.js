@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.10
+ * Media Card v5.6.11
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -16489,49 +16489,41 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     // Force remove any existing dialogs first
     const existingDialogs = document.querySelectorAll('[data-media-browser-dialog="true"]');
-    existingDialogs.forEach(d => d.remove());
+    existingDialogs.forEach(d => {
+      if (d instanceof HTMLDialogElement && d.open) {
+        d.close();
+      }
+      d.remove();
+    });
     
-    // Create a custom dialog element with proper event isolation
-    const dialog = document.createElement('div');
+    // Use native <dialog> element with showModal() for top-layer rendering
+    // This guarantees the dialog appears above everything, including HA's card editor
+    const dialog = document.createElement('dialog');
     dialog.setAttribute('data-media-browser-dialog', 'true');
     
-    // Remove any inert attributes and force interactive state
-    dialog.removeAttribute('inert');
-    dialog.setAttribute('aria-modal', 'true');
-    dialog.setAttribute('role', 'dialog');
-    
     dialog.style.cssText = `
-      position: fixed !important;
-      top: 0 !important;
-      left: 0 !important;
-      width: 100vw !important;
-      height: 100vh !important;
-      background: rgba(0, 0, 0, 0.9) !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      z-index: 2147483647 !important;
-      backdrop-filter: blur(3px) !important;
-      font-family: system-ui, -apple-system, sans-serif !important;
-      pointer-events: auto !important;
-    `;
-
-    const dialogContent = document.createElement('div');
-    dialogContent.setAttribute('aria-labelledby', 'media-browser-title');
-    dialogContent.style.cssText = `
-      background: var(--card-background-color, #fff) !important;
+      border: none !important;
       border-radius: 8px !important;
       padding: 20px !important;
       max-width: 600px !important;
+      width: 90vw !important;
       max-height: 80vh !important;
       overflow-y: auto !important;
-      color: var(--primary-text-color, #333) !important;
+      background: var(--card-background-color, #1c1c1c) !important;
+      color: var(--primary-text-color, #fff) !important;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
-      position: relative !important;
-      margin: 20px !important;
-      pointer-events: auto !important;
-      transform: scale(1) !important;
+      font-family: system-ui, -apple-system, sans-serif !important;
     `;
+    
+    // Style the backdrop
+    const styleEl = document.createElement('style');
+    styleEl.textContent = `
+      dialog[data-media-browser-dialog]::backdrop {
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(3px);
+      }
+    `;
+    dialog.appendChild(styleEl);
 
     const title = document.createElement('h3');
     title.id = 'media-browser-title';
@@ -16539,11 +16531,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     title.style.cssText = `
       margin-top: 0 !important;
       margin-bottom: 16px !important;
-      color: var(--primary-text-color, #333) !important;
-      border-bottom: 1px solid var(--divider-color, #ddd) !important;
+      color: var(--primary-text-color, #fff) !important;
+      border-bottom: 1px solid var(--divider-color, #444) !important;
       padding-bottom: 8px !important;
       font-size: 18px !important;
-      pointer-events: none !important;
     `;
 
     const fileList = document.createElement('div');
@@ -16553,7 +16544,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       margin: 16px 0 !important;
       max-height: 400px !important;
       overflow-y: auto !important;
-      pointer-events: auto !important;
     `;
 
     // Add media files to the list
@@ -16562,12 +16552,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     const buttonContainer = document.createElement('div');
     buttonContainer.style.cssText = `
       display: flex !important;
-      justify-content: space-between !important;
+      justify-content: flex-end !important;
       gap: 8px !important;
       margin-top: 16px !important;
-      border-top: 1px solid var(--divider-color, #ddd) !important;
+      border-top: 1px solid var(--divider-color, #444) !important;
       padding-top: 16px !important;
-      pointer-events: auto !important;
     `;
 
     const closeButton = document.createElement('button');
@@ -16580,58 +16569,57 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       cursor: pointer !important;
       color: white !important;
       font-size: 14px !important;
-      pointer-events: auto !important;
-      z-index: 999999999 !important;
     `;
 
     // Dialog close function with proper cleanup
     const closeDialog = () => {
       this._log('Closing media browser dialog');
-      document.removeEventListener('keydown', handleKeydown);
-      if (dialog && dialog.parentNode) {
-        document.body.removeChild(dialog);
-        this._log('Dialog closed successfully');
+      if (dialog.open) {
+        dialog.close();
       }
+      if (dialog.parentNode) {
+        dialog.parentNode.removeChild(dialog);
+      }
+      this._log('Dialog closed successfully');
     };
 
     closeButton.onclick = (e) => {
       this._log('Cancel button clicked');
       closeDialog();
-      return false;
     };
 
-    dialog.onclick = (e) => {
+    // Handle clicking outside the dialog (on backdrop)
+    dialog.addEventListener('click', (e) => {
       if (e.target === dialog) {
         closeDialog();
       }
-    };
+    });
 
-    const handleKeydown = (e) => {
+    // Handle Escape key - prevent bubbling to HA's card editor
+    dialog.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        this._log('Escape key pressed');
+        e.preventDefault();
+        e.stopPropagation();
         closeDialog();
       }
-    };
-    document.addEventListener('keydown', handleKeydown);
+    });
+
+    // Handle native dialog close event (cleanup)
+    dialog.addEventListener('close', () => {
+      if (dialog.parentNode) {
+        dialog.parentNode.removeChild(dialog);
+      }
+    });
 
     buttonContainer.appendChild(closeButton);
-    dialogContent.appendChild(title);
-    dialogContent.appendChild(fileList);
-    dialogContent.appendChild(buttonContainer);
-    dialog.appendChild(dialogContent);
+    dialog.appendChild(title);
+    dialog.appendChild(fileList);
+    dialog.appendChild(buttonContainer);
     
-    this._log('Appending dialog to document.body');
+    // Append to document.body and show as modal (uses browser's top-layer)
     document.body.appendChild(dialog);
-    
-    // Force focus and remove inert state
-    requestAnimationFrame(() => {
-      dialog.removeAttribute('inert');
-      dialogContent.removeAttribute('inert');
-      document.querySelectorAll('[inert]').forEach(el => el.removeAttribute('inert'));
-      dialog.focus();
-      dialog.setAttribute('tabindex', '0');
-      this._log('Media browser dialog opened and focused');
-    });
+    dialog.showModal();
+    this._log('Media browser dialog opened with showModal()');
   }
 
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
@@ -16917,8 +16905,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         fileItem.onclick = () => {
           this._log('File clicked:', item.media_content_id);
           this._handleMediaPicked(item.media_content_id);
-          if (dialog && dialog.parentNode) {
-            document.body.removeChild(dialog);
+          if (dialog) {
+            if (dialog.open) dialog.close();
+            if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
           }
           return false;
         };
@@ -17007,8 +16996,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       
       this._fireConfigChanged();
       
-      if (dialog && dialog.parentNode) {
-        document.body.removeChild(dialog);
+      if (dialog) {
+        if (dialog.open) dialog.close();
+        if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
       }
     };
 
@@ -18827,7 +18817,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.10 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.6.11 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
