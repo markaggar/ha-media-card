@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.11
+ * Media Card v5.7.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -18912,7 +18912,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.11 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.7.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
