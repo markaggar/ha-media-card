@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.6.11
+ * Media Card v5.7.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -4654,6 +4654,10 @@ class MediaCard extends LitElement {
     this._actionButtonsBaseTimeout = 3000;  // 3s minimum for touchscreen
     this._actionButtonsMaxTimeout = 15000;  // 15s maximum for touchscreen
     
+    // V5.6.12: User mute preference state
+    this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
+    this._mutePreferenceTimestamp = 0;    // When user last changed preference
+    
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
 
@@ -5240,6 +5244,8 @@ class MediaCard extends LitElement {
       overlay_opacity: config.overlay_opacity ?? 0.25,
       // V5.6.7: Card background blending - default true for seamless look
       blend_with_background: config.blend_with_background !== false,
+      // V5.6.12: Mute preference timeout (seconds) - how long user's mute choice persists
+      mute_preference_timeout: config.mute_preference_timeout ?? 300,
       // V5.6.7: Edge fade strength (0 = disabled, 1-100 = enabled with fade intensity)
       edge_fade_strength: config.edge_fade_strength ?? 0
     };
@@ -7999,15 +8005,78 @@ class MediaCard extends LitElement {
 
   _onVideoLoadedMetadata() {
     const video = this.shadowRoot?.querySelector('video');
-    if (video && this.config.video_muted) {
-      // Ensure video is actually muted and the mute icon is visible
-      video.muted = true;
+    if (video) {
+      // V5.6.12: Apply user mute preference if valid, otherwise use config default
+      const shouldBeMuted = this._getEffectiveMuteState();
+      video.muted = shouldBeMuted;
+      this._log(`🔊 Video loaded - muted=${shouldBeMuted} (preference=${this._userMutePreference}, valid=${this._isUserMutePreferenceValid()})`);
+      
       // Force the video controls to update by toggling muted state
       setTimeout(() => {
-        video.muted = false;
-        video.muted = true;
+        const currentMuted = video.muted;
+        video.muted = !currentMuted;
+        video.muted = currentMuted;
       }, 50);
     }
+  }
+
+  // V5.6.12: Check if user's mute preference is still valid (within timeout)
+  // Timeout of 0 means "never timeout" - preference persists forever
+  _isUserMutePreferenceValid() {
+    if (this._userMutePreference === null) return false;
+    const timeout = this.config?.mute_preference_timeout ?? 300;
+    // Timeout of 0 = never expire
+    if (timeout === 0) return true;
+    const elapsed = (Date.now() - this._mutePreferenceTimestamp) / 1000;
+    return elapsed < timeout;
+  }
+
+  // V5.6.12: Get the effective mute state (user preference if valid, else config default)
+  _getEffectiveMuteState() {
+    if (this._isUserMutePreferenceValid()) {
+      return this._userMutePreference;
+    }
+    // Fall back to config default (video_muted defaults to true)
+    return this.config?.video_muted !== false;
+  }
+
+  // V5.6.12: Toggle mute preference and apply to current video if playing
+  _handleMuteToggle(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+    
+    // Toggle the preference
+    const currentEffective = this._getEffectiveMuteState();
+    this._userMutePreference = !currentEffective;
+    this._mutePreferenceTimestamp = Date.now();
+    
+    this._log(`🔊 Mute toggled: ${currentEffective} → ${this._userMutePreference}`);
+    
+    // Apply to current video if one is playing
+    const video = this.shadowRoot?.querySelector('video');
+    if (video) {
+      video.muted = this._userMutePreference;
+      
+      // If unmuting, we need to handle potential autoplay policy issues
+      if (!this._userMutePreference && video.paused) {
+        // Try to play - this user interaction should unlock audio
+        video.play().catch(err => {
+          this._log(`🔊 Unmuted playback failed, reverting to muted:`, err.message);
+          // Revert if browser blocks unmuted playback
+          video.muted = true;
+          this._userMutePreference = true;
+          this._mutePreferenceTimestamp = Date.now();
+          this.requestUpdate();
+        });
+      }
+    }
+    
+    this.requestUpdate();
   }
 
   // V4: Keyboard navigation handler
@@ -8703,8 +8772,12 @@ class MediaCard extends LitElement {
     // Show button if enabled and queue has items (or still loading)
     const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length >= 1;
     
+    // V5.6.12: Mute button - show unless slideshow is configured for images only
+    const mediaType = this.config.media_type || 'all';
+    const showMuteButton = mediaType !== 'image';  // Show for 'all' or 'video'
+    
     // Don't render anything if all buttons are disabled
-    const anyButtonEnabled = enablePause || enableDebugButton || enableRefresh || enableFullscreen || 
+    const anyButtonEnabled = enablePause || showMuteButton || enableDebugButton || enableRefresh || enableFullscreen || 
                             (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos || enableOnThisDay)) ||
                             showQueueButton;
     if (!anyButtonEnabled) {
@@ -8723,6 +8796,9 @@ class MediaCard extends LitElement {
     const isOnThisDayActive = this._panelMode === 'on_this_day';
     const isQueueActive = this._panelMode === 'queue';
     const position = config.position || 'top-right';
+    
+    // V5.6.12: Mute button shows anticipated state (what WILL happen to next video)
+    const isMuted = this._getEffectiveMuteState();
 
     return html`
       <div class="action-buttons action-buttons-${position} ${this._showButtonsExplicitly ? 'show-buttons' : ''}">
@@ -8732,6 +8808,14 @@ class MediaCard extends LitElement {
             @click=${this._handlePauseClick}
             title="${isPaused ? 'Resume' : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMuteButton ? html`
+          <button
+            class="action-btn mute-btn ${isMuted ? 'muted' : ''}"
+            @click=${this._handleMuteToggle}
+            title="${isMuted ? 'Unmute Videos' : 'Mute Videos'}">
+            <ha-icon icon="${isMuted ? 'mdi:volume-off' : 'mdi:volume-high'}"></ha-icon>
           </button>
         ` : ''}
         ${enableDebugButton ? html`
@@ -12865,6 +12949,17 @@ class MediaCard extends LitElement {
       background: rgba(3, 169, 244, 0.25);
     }
 
+    /* V5.6.12: Mute button - highlight when muted */
+    .mute-btn.muted {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.15);
+    }
+
+    .mute-btn.muted:hover {
+      color: var(--warning-color, #ff9800);
+      background: rgba(255, 152, 0, 0.25);
+    }
+
     /* Debug button active state - warning color when enabled */
     .debug-btn.active {
       color: var(--warning-color, #ff9800);
@@ -14061,7 +14156,7 @@ class MediaCard extends LitElement {
             crossorigin="anonymous"
             ?loop=${(this.config.video_loop || false) && !(this.config.auto_advance_seconds > 0)}
             ?autoplay=${this.config.video_autoplay !== false}
-            ?muted=${this.config.video_muted !== false}
+            ?muted=${this._getEffectiveMuteState()}
             @loadstart=${this._onVideoLoadStart}
             @error=${this._onMediaError}
             @canplay=${this._onVideoCanPlay}
@@ -18817,7 +18912,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.6.11 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.7.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

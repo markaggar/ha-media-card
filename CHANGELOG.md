@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.6.11 - 2026-03-15
 
+### Added
+
+- **Mute/Unmute Action Button**: New button to control video audio with smart preference memory
+  - Button appears next to pause button (hidden when `media_type: image`)
+  - Icon shows anticipated state: 🔊 (unmuted) or 🔇 (muted with warning highlight)
+  - User's choice persists for subsequent videos within a configurable timeout
+  - Works on both images and videos - set preference before video plays
+  - Compatible with Chrome and Safari autoplay policies
+
+- **Mute Preference Timeout** (`mute_preference_timeout`): YAML config option to control how long user's mute choice persists
+  - Default: `300` seconds (5 minutes)
+  - Set to `0` for preference to never expire (persists until page refresh)
+  - After timeout, reverts to `video_muted` config default
+  - Example: If `video_muted: true` and user unmutes, videos auto-mute again after timeout
+
 ### Fixed
 
 - **Folder Browser Dialog Hidden Behind Card Editor**: Fixed browse button dialog appearing behind the card editor modal
