@@ -298,11 +298,13 @@ Requires `enable_keyboard_navigation: true` and card must be focused (click on i
 
 ## Video Options
 
+By default, videos will autoplay and start muted.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `video_autoplay` | boolean | `false` | Auto-start video playback |
+| `video_autoplay` | boolean | `true` | Auto-start video playback |
 | `video_loop` | boolean | `false` | Loop video continuously |
-| `video_muted` | boolean | `false` | Start video muted (default audio state) |
+| `video_muted` | boolean | `true` | Start video muted (default audio state) |
 | `mute_preference_timeout` | number | `300` | Seconds before user's mute choice reverts to default. Set to `0` to never revert. |
 | `video_controls_on_tap` | boolean | `true` | Hide native video controls until tap; first tap shows controls/hides overlays, second tap reverses |
 | `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
