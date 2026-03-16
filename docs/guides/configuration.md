@@ -302,9 +302,30 @@ Requires `enable_keyboard_navigation: true` and card must be focused (click on i
 |--------|------|---------|-------------|
 | `video_autoplay` | boolean | `false` | Auto-start video playback |
 | `video_loop` | boolean | `false` | Loop video continuously |
-| `video_muted` | boolean | `false` | Start video muted |
+| `video_muted` | boolean | `false` | Start video muted (default audio state) |
+| `mute_preference_timeout` | number | `300` | Seconds before user's mute choice reverts to default. Set to `0` to never revert. |
 | `video_controls_on_tap` | boolean | `true` | Hide native video controls until tap; first tap shows controls/hides overlays, second tap reverses |
 | `hide_video_controls_display` | boolean | `false` | Hide "Video options" text |
+
+### Mute Button Behavior
+
+The mute button (🔊/🔇) appears next to the pause button and shows the *anticipated* state for upcoming videos:
+
+- **Icon reflects next video's audio**: Shows what the next video will do, not current state
+- **Preference memory**: User's choice persists for `mute_preference_timeout` seconds (default 5 min)
+- **Auto-revert**: After timeout, reverts to `video_muted` config setting
+- **Never revert**: Set `mute_preference_timeout: 0` to keep user's choice forever (until refresh)
+- **Works on images**: Toggle while viewing an image to set preference before next video plays
+
+```yaml
+# Example: Videos unmuted by default, but user choice persists for 10 minutes
+video_muted: false
+mute_preference_timeout: 600
+
+# Example: Videos muted, user choice never reverts
+video_muted: true
+mute_preference_timeout: 0
+```
 
 ### Video Completion Auto-Advance
 
