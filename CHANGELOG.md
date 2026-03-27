@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Path Exclusion Filtering** (`excluded_paths`): YAML config option to exclude media from specified folder paths
+  - Supports glob-style wildcards: `*` (any chars in single segment), `**` (any depth), `?` (single char)
+  - Exact folder pattern (e.g., `/Screenshots`) excludes only that folder, not subfolders
+  - Recursive pattern (e.g., `/Screenshots/**`) excludes folder and all contents
+  - Depth-agnostic patterns (e.g., `**/Thumbnails/**`) match at any level
+  - INFO logging at card initialization shows configured patterns with behavior descriptions
+  - DEBUG logging shows individual items being excluded (enable `debug_mode: true`)
+  - Works with all provider types: SubfolderQueue, MediaIndexProvider, SequentialMediaIndexProvider
+  - See [Configuration Guide](docs/guides/configuration.md#path-exclusion-filtering) for full documentation
+
 - **Mute/Unmute Action Button**: New button to control video audio with smart preference memory
   - Button appears next to pause button (hidden when `media_type: image`)
   - Icon shows anticipated state: 🔊 (unmuted) or 🔇 (muted with warning highlight)

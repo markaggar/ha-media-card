@@ -7,8 +7,9 @@ import { MediaUtils } from '../core/media-utils.js';
  * Uses media_index.get_ordered_files service for deterministic ordering
  */
 export class SequentialMediaIndexProvider extends MediaProvider {
-  constructor(config, hass) {
+  constructor(config, hass, card = null) {
     super(config, hass);
+    this.card = card; // V5.7: Reference to card for card ID logging
     this.queue = []; // Internal queue of items from database
     this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files
@@ -251,12 +252,15 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
-      // Allow more iterations for larger queues, but cap to avoid infinite loops
-      let maxIterations = Math.max(5, Math.min(20, Math.ceil(this.queueSize / 10)));
       let iteration = 0;
+      // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
+      // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
+      // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
+      let consecutiveAllExcludedBatches = 0;
+      const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
       
       // Keep fetching batches until we have enough valid items OR database is exhausted
-      while (allFilteredItems.length < this.queueSize && iteration < maxIterations) {
+      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED) {
         iteration++;
         
         // Build service data
@@ -403,6 +407,20 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`📍 Updated compound cursor: value=${localCursor}, id=${localCursorId}`);
         }
         
+        // Track consecutive fully-excluded batches (all items filtered out)
+        // This is the only escape valve now - keeps going through large excluded folders
+        // but stops if config excludes literally everything in the database
+        const validFromThisBatch = filteredItems.length;
+        if (validFromThisBatch === 0 && response.items.length > 0) {
+          consecutiveAllExcludedBatches++;
+          if (consecutiveAllExcludedBatches >= MAX_CONSECUTIVE_EXCLUDED) {
+            this._log(`⚠️ Stopping after ${MAX_CONSECUTIVE_EXCLUDED} consecutive fully-excluded batches - excluded_paths may be too broad`);
+            break;
+          }
+        } else {
+          consecutiveAllExcludedBatches = 0; // Reset on any progress
+        }
+        
         // If we got enough items OR database is exhausted, exit loop
         if (allFilteredItems.length >= this.queueSize || !this.hasMore) {
           break;
@@ -534,11 +552,22 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this._log(`🚫 excludedFiles now has ${this.excludedFiles.size} entries`);
   }
 
-  // Check if a file is excluded
+  // Check if a file is excluded (individual 404 exclusions OR config path patterns)
   _isExcluded(path) {
     if (!path) return false;
     const normalizedPath = this._normalizePath(path);
-    return this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath);
+    // Check explicitly excluded individual files (404s, etc.)
+    if (this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath)) return true;
+    // V5.7: Check excluded path patterns from config
+    const excludedPatterns = this.config?._excludedPathPatterns;
+    if (excludedPatterns && excludedPatterns.length > 0) {
+      const result = MediaProvider.matchesExcludedPath(path, excludedPatterns);
+      if (result.excluded) {
+        this._log(`🚫 Path pattern excluded: "${result.matchedPattern}" matches ${path}`);
+        return true;
+      }
+    }
+    return false;
   }
 
   // Reset to beginning of sequence (for loop functionality)

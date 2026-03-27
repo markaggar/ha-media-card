@@ -104,7 +104,7 @@ export class FolderProvider extends MediaProvider {
       if (useMediaIndex) {
         // Full sequential mode with database ordering
         this.cardAdapter._log('Using SequentialMediaIndexProvider for ordered queries');
-        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass);
+        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.sequentialProvider.initialize();
         
         if (!success) {

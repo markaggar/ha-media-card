@@ -896,6 +896,22 @@ export class MediaCard extends LitElement {
     this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
     
+    // V5.7: Compile excluded_paths patterns for path filtering
+    // Patterns are compiled to regex once for performance, then passed to providers
+    this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
+    
+    // Attach to config so providers can access them without needing card reference
+    this.config._excludedPathPatterns = this._excludedPathPatterns;
+    
+    // Log configured exclusions at INFO level (always shown, helps users verify patterns)
+    if (this._excludedPathPatterns.length > 0) {
+      console.log(`📁 [MediaCard:${this._cardId}] Path exclusions configured:`);
+      for (const compiled of this._excludedPathPatterns) {
+        const description = MediaProvider.describeExclusionPattern(compiled.pattern, compiled.isRecursive);
+        console.log(`   • ${compiled.pattern} (${description})`);
+      }
+    }
+    
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
       this._log('📝 setConfig: Triggering provider reinitialization with existing hass');

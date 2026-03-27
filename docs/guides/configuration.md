@@ -161,6 +161,83 @@ folder:
 
 **With estimate**: Probability calculations stay consistent, ensuring true statistical fairness across all folders.
 
+## Path Exclusion Filtering
+
+Exclude media from specific folder paths using glob-style patterns. This is useful for filtering out folders containing screenshots, temporary files, or other unwanted content.
+
+### Configuration (YAML only)
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `excluded_paths` | array | `[]` | List of folder path patterns to exclude |
+
+### Pattern Syntax
+
+| Pattern | Matches | Example |
+|---------|---------|---------|
+| `/Screenshots` | Exact folder named "Screenshots" only (child subfolders not excluded) | `/Photos/Screenshots/` |
+| `/Screenshots/**` | Folder and all subfolders recursively | `/Photos/Screenshots/`, `/Photos/Screenshots/2024/` |
+| `**/Screenshots` | Any folder named "Screenshots" at any depth | `/A/B/Screenshots/`, `/Screenshots/` |
+| `**/Screenshots/**` | Any folder named "Screenshots" at any depth, plus subfolders | All of the above |
+| `/2024-??-*` | Folders matching pattern (? = single char, * = any chars) | `/2024-01-vacation/`, `/2024-12-christmas/` |
+
+### Example Configurations
+
+**Exclude specific folder:**
+```yaml
+type: custom:media-card
+media_source_type: folder
+folder:
+  path: media-source://media_source/media/photo/
+  mode: random
+  recursive: true
+excluded_paths:
+  - "/Screenshots"  # Excludes only /photo/Screenshots/, not subfolders
+```
+
+**Exclude folder and all subfolders:**
+```yaml
+excluded_paths:
+  - "/Screenshots/**"  # Excludes /Screenshots/ and everything inside it
+```
+
+**Exclude folders at any depth:**
+```yaml
+excluded_paths:
+  - "**/Thumbnails/**"  # Any folder named "Thumbnails" anywhere
+  - "**/.thumbnails/**"  # Hidden thumbnail folders
+  - "**/Temp/**"         # Any Temp folder
+```
+
+**Multiple exclusions:**
+```yaml
+excluded_paths:
+  - "**/Screenshots/**"
+  - "**/Thumbnails/**"
+  - "**/_Junk/**"
+  - "**/Temp/**"
+  - "/Archive/Old Photos/**"
+```
+
+### Behavior Notes
+
+- Patterns are **case-insensitive**
+- Patterns match against the **folder path**, not the filename
+- Items matching excluded patterns are silently skipped during navigation
+- Exclusions are logged at INFO level on card initialization for verification
+- Individual excluded items are logged at DEBUG level (enable `debug_mode: true`)
+
+### Logging Output
+
+When the card loads, you'll see INFO logs showing your configured exclusions:
+
+```
+📁 Media Card: Configuring 3 excluded path patterns:
+  • "**/Screenshots/**" (recursive - folder and all subfolders)
+  • "/Temp" (exact folder only - child subfolders will not be excluded)
+  • "**/Thumbnails/**" (recursive - folder and all subfolders)
+```
+
 ## Overlay System
 
 ### Global Overlay Opacity

@@ -1,6 +1,6 @@
 {
   "name": "ha-media-card",
-  "version": "5.7.0",
+  "version": "5.8.0",
   "description": "Home Assistant dashboard card for displaying media with slideshow, favorites, and metadata",
   "type": "module",
   "scripts": {

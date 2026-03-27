@@ -508,6 +508,131 @@ export class MediaProvider {
   }
 
   /**
+   * V5.7: Compile glob patterns to regex for path exclusion
+   * Called once at config load time for performance
+   * @param {string[]} patterns - Array of glob patterns from excluded_paths config
+   * @returns {Object[]} Array of compiled pattern objects { pattern, regex, isRecursive }
+   */
+  static compileExcludedPathPatterns(patterns) {
+    if (!patterns || !Array.isArray(patterns) || patterns.length === 0) {
+      return [];
+    }
+    
+    return patterns
+      .filter(p => p && typeof p === 'string' && p.trim().length > 0)
+      .map(pattern => {
+        // Normalize: convert backslashes to forward slashes, strip trailing slash
+        let normalized = pattern.replace(/\\/g, '/').replace(/\/+$/, '');
+        
+        // Detect if pattern is recursive (ends with /**)
+        const isRecursive = normalized.endsWith('/**');
+        
+        // Build regex from glob pattern
+        // 1. Escape regex special chars (except * and ?)
+        let regexStr = normalized
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          // 2. Convert ** to placeholder, then * to single-segment match, then restore **
+          .replace(/\*\*/g, '{{GLOBSTAR}}')
+          .replace(/\*/g, '[^/]*')
+          .replace(/\?/g, '[^/]')
+          .replace(/\{\{GLOBSTAR\}\}/g, '.*');
+        
+        // For recursive patterns ending in /**, match the folder itself OR any subfolder
+        // Use (?:$|/) suffix to enforce a full path segment boundary
+        // e.g. "Burst/**" must match "/Burst" but NOT "/BurstPhotos"
+        if (isRecursive) {
+          regexStr = regexStr.replace(/\/\.\*$/, '(?:$|/)');
+        }
+        
+        // Anchor pattern based on how it starts:
+        //   /Pattern  → starts with / → anchor to root (absolute path)
+        //   **/Patt   → starts with ** → no prefix (greedy .* handles any prefix)
+        //   Pattern   → relative name → match at any path segment boundary
+        if (normalized.startsWith('/')) {
+          // Absolute: strip leading / from regexStr then anchor to segment boundary
+          // This lets "/Screenshots/**" match "/media/Photo/Screenshots" not just "^/Screenshots"
+          regexStr = regexStr.replace(/^\//, '');
+          regexStr = '(?:^|/)' + regexStr;
+        } else if (!normalized.startsWith('**')) {
+          // Relative pattern: match at any path segment boundary
+          regexStr = '(?:^|/)' + regexStr;
+        }
+        // Globstar (**) patterns: no prefix needed, leading .* handles any prefix
+        
+        // End anchor: for non-recursive, must end at a full segment boundary
+        if (!isRecursive) {
+          regexStr = regexStr + '$';
+        }
+        
+        return {
+          pattern: pattern,  // Original pattern for logging
+          regex: new RegExp(regexStr, 'i'),  // Case-insensitive
+          isRecursive: isRecursive
+        };
+      });
+  }
+  
+  /**
+   * V5.7: Check if a file path matches any excluded path pattern
+   * @param {string} itemPath - Full path to the media file
+   * @param {Object[]} compiledPatterns - Array from compileExcludedPathPatterns()
+   * @returns {{ excluded: boolean, matchedPattern: string|null }} Exclusion result
+   */
+  static matchesExcludedPath(itemPath, compiledPatterns) {
+    if (!itemPath || !compiledPatterns || compiledPatterns.length === 0) {
+      return { excluded: false, matchedPattern: null };
+    }
+    
+    // Normalize path: convert backslashes, decode URI encoding
+    let normalizedPath = itemPath.replace(/\\/g, '/');
+    try {
+      normalizedPath = decodeURIComponent(normalizedPath);
+    } catch (e) {
+      // Keep original if decode fails
+    }
+    
+    // Extract folder path (dirname) - we match against folder, not filename
+    const lastSlash = normalizedPath.lastIndexOf('/');
+    const folderPath = lastSlash > 0 ? normalizedPath.substring(0, lastSlash) : normalizedPath;
+    
+    // Test against each compiled pattern
+    for (const compiled of compiledPatterns) {
+      if (compiled.regex.test(folderPath)) {
+        return { excluded: true, matchedPattern: compiled.pattern };
+      }
+    }
+    
+    return { excluded: false, matchedPattern: null };
+  }
+  
+  /**
+   * V5.7: Generate human-readable description of exclusion pattern behavior
+   * Used for INFO logging at card initialization
+   * @param {string} pattern - Original glob pattern
+   * @param {boolean} isRecursive - Whether pattern ends with /**
+   * @returns {string} Description of matching behavior
+   */
+  static describeExclusionPattern(pattern, isRecursive) {
+    // Detect pattern type
+    const startsWithGlobstar = pattern.startsWith('**/');
+    const containsWildcard = pattern.includes('*') && !pattern.endsWith('/**');
+    
+    if (startsWithGlobstar) {
+      // **/FolderName or **/FolderName/**
+      const folderPart = pattern.replace(/^\*\*\//, '').replace(/\/\*\*$/, '');
+      if (isRecursive) {
+        return `any "${folderPart}" folder, recursive`;
+      } else {
+        return `any "${folderPart}" folder, exact only - child subfolders will not be excluded`;
+      }
+    } else if (isRecursive) {
+      return 'folder and all subfolders';
+    } else {
+      return 'exact folder only - child subfolders will not be excluded';
+    }
+  }
+
+  /**
    * Serialize provider state for reconnection
    * Override in subclass to save provider-specific state
    */

@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.7.0
+ * Media Card v5.8.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -591,6 +591,131 @@ class MediaProvider {
   }
 
   /**
+   * V5.7: Compile glob patterns to regex for path exclusion
+   * Called once at config load time for performance
+   * @param {string[]} patterns - Array of glob patterns from excluded_paths config
+   * @returns {Object[]} Array of compiled pattern objects { pattern, regex, isRecursive }
+   */
+  static compileExcludedPathPatterns(patterns) {
+    if (!patterns || !Array.isArray(patterns) || patterns.length === 0) {
+      return [];
+    }
+    
+    return patterns
+      .filter(p => p && typeof p === 'string' && p.trim().length > 0)
+      .map(pattern => {
+        // Normalize: convert backslashes to forward slashes, strip trailing slash
+        let normalized = pattern.replace(/\\/g, '/').replace(/\/+$/, '');
+        
+        // Detect if pattern is recursive (ends with /**)
+        const isRecursive = normalized.endsWith('/**');
+        
+        // Build regex from glob pattern
+        // 1. Escape regex special chars (except * and ?)
+        let regexStr = normalized
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          // 2. Convert ** to placeholder, then * to single-segment match, then restore **
+          .replace(/\*\*/g, '{{GLOBSTAR}}')
+          .replace(/\*/g, '[^/]*')
+          .replace(/\?/g, '[^/]')
+          .replace(/\{\{GLOBSTAR\}\}/g, '.*');
+        
+        // For recursive patterns ending in /**, match the folder itself OR any subfolder
+        // Use (?:$|/) suffix to enforce a full path segment boundary
+        // e.g. "Burst/**" must match "/Burst" but NOT "/BurstPhotos"
+        if (isRecursive) {
+          regexStr = regexStr.replace(/\/\.\*$/, '(?:$|/)');
+        }
+        
+        // Anchor pattern based on how it starts:
+        //   /Pattern  → starts with / → anchor to root (absolute path)
+        //   **/Patt   → starts with ** → no prefix (greedy .* handles any prefix)
+        //   Pattern   → relative name → match at any path segment boundary
+        if (normalized.startsWith('/')) {
+          // Absolute: strip leading / from regexStr then anchor to segment boundary
+          // This lets "/Screenshots/**" match "/media/Photo/Screenshots" not just "^/Screenshots"
+          regexStr = regexStr.replace(/^\//, '');
+          regexStr = '(?:^|/)' + regexStr;
+        } else if (!normalized.startsWith('**')) {
+          // Relative pattern: match at any path segment boundary
+          regexStr = '(?:^|/)' + regexStr;
+        }
+        // Globstar (**) patterns: no prefix needed, leading .* handles any prefix
+        
+        // End anchor: for non-recursive, must end at a full segment boundary
+        if (!isRecursive) {
+          regexStr = regexStr + '$';
+        }
+        
+        return {
+          pattern: pattern,  // Original pattern for logging
+          regex: new RegExp(regexStr, 'i'),  // Case-insensitive
+          isRecursive: isRecursive
+        };
+      });
+  }
+  
+  /**
+   * V5.7: Check if a file path matches any excluded path pattern
+   * @param {string} itemPath - Full path to the media file
+   * @param {Object[]} compiledPatterns - Array from compileExcludedPathPatterns()
+   * @returns {{ excluded: boolean, matchedPattern: string|null }} Exclusion result
+   */
+  static matchesExcludedPath(itemPath, compiledPatterns) {
+    if (!itemPath || !compiledPatterns || compiledPatterns.length === 0) {
+      return { excluded: false, matchedPattern: null };
+    }
+    
+    // Normalize path: convert backslashes, decode URI encoding
+    let normalizedPath = itemPath.replace(/\\/g, '/');
+    try {
+      normalizedPath = decodeURIComponent(normalizedPath);
+    } catch (e) {
+      // Keep original if decode fails
+    }
+    
+    // Extract folder path (dirname) - we match against folder, not filename
+    const lastSlash = normalizedPath.lastIndexOf('/');
+    const folderPath = lastSlash > 0 ? normalizedPath.substring(0, lastSlash) : normalizedPath;
+    
+    // Test against each compiled pattern
+    for (const compiled of compiledPatterns) {
+      if (compiled.regex.test(folderPath)) {
+        return { excluded: true, matchedPattern: compiled.pattern };
+      }
+    }
+    
+    return { excluded: false, matchedPattern: null };
+  }
+  
+  /**
+   * V5.7: Generate human-readable description of exclusion pattern behavior
+   * Used for INFO logging at card initialization
+   * @param {string} pattern - Original glob pattern
+   * @param {boolean} isRecursive - Whether pattern ends with /**
+   * @returns {string} Description of matching behavior
+   */
+  static describeExclusionPattern(pattern, isRecursive) {
+    // Detect pattern type
+    const startsWithGlobstar = pattern.startsWith('**/');
+    const containsWildcard = pattern.includes('*') && !pattern.endsWith('/**');
+    
+    if (startsWithGlobstar) {
+      // **/FolderName or **/FolderName/**
+      const folderPart = pattern.replace(/^\*\*\//, '').replace(/\/\*\*$/, '');
+      if (isRecursive) {
+        return `any "${folderPart}" folder, recursive`;
+      } else {
+        return `any "${folderPart}" folder, exact only - child subfolders will not be excluded`;
+      }
+    } else if (isRecursive) {
+      return 'folder and all subfolders';
+    } else {
+      return 'exact folder only - child subfolders will not be excluded';
+    }
+  }
+
+  /**
    * Serialize provider state for reconnection
    * Override in subclass to save provider-specific state
    */
@@ -896,7 +1021,7 @@ class FolderProvider extends MediaProvider {
       if (useMediaIndex) {
         // Full sequential mode with database ordering
         this.cardAdapter._log('Using SequentialMediaIndexProvider for ordered queries');
-        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass);
+        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.sequentialProvider.initialize();
         
         if (!success) {
@@ -2322,41 +2447,56 @@ class SubfolderQueue {
   // V5: Simplified - just return next item from queue
   // Card manages history/navigation, provider just supplies items
   getNextItem() {
-    // Refill if empty
-    if (this.queue.length === 0) {
-      this.refillQueue();
+    const excludedPatterns = this.card?.config?._excludedPathPatterns;
+
+    // Outer retry loop: handles "all shown" case without recursion.
+    // First pass is the normal path; subsequent passes happen after ageOut+refill.
+    const MAX_RETRY_CYCLES = 3;
+    for (let cycle = 0; cycle < MAX_RETRY_CYCLES; cycle++) {
+      // Refill if empty
       if (this.queue.length === 0) {
-        return null;
-      }
-    }
-
-    // Find first unshown item
-    for (let i = 0; i < this.queue.length; i++) {
-      const item = this.queue[i];
-      if (!this.shownItems.has(item.media_content_id)) {
-        this.shownItems.add(item.media_content_id);
-        this.queue.splice(i, 1);
-        
-        // Trigger refill if running low
-        if (this.needsRefill()) {
-          setTimeout(() => this.refillQueue(), 100);
+        this.refillQueue();
+        if (this.queue.length === 0) {
+          return null;
         }
-        
-        return item;
       }
+
+      // Find first unshown item that isn't excluded
+      for (let i = 0; i < this.queue.length; i++) {
+        const item = this.queue[i];
+        if (!this.shownItems.has(item.media_content_id)) {
+          // Check if item matches an excluded path pattern
+          if (excludedPatterns && excludedPatterns.length > 0) {
+            const itemPath = item.media_content_id || item.path || '';
+            const exclusionResult = MediaProvider.matchesExcludedPath(itemPath, excludedPatterns);
+            if (exclusionResult.excluded) {
+              this._log(`🚫 Excluding item matching pattern "${exclusionResult.matchedPattern}":`, itemPath);
+              // Mark as shown so we don't keep checking it
+              this.shownItems.add(item.media_content_id);
+              this.queue.splice(i, 1);
+              i--; // Adjust index since we removed an item
+              continue;
+            }
+          }
+
+          this.shownItems.add(item.media_content_id);
+          this.queue.splice(i, 1);
+
+          // Trigger refill if running low
+          if (this.needsRefill()) {
+            setTimeout(() => this.refillQueue(), 100);
+          }
+
+          return item;
+        }
+      }
+
+      // All items in current queue have been shown/excluded - age out and try again
+      this.ageOutShownItems();
+      this.refillQueue();
+      // Loop continues to retry with freshly refilled queue
     }
 
-    // All items in queue have been shown - age out and try again
-    this.ageOutShownItems();
-    this.refillQueue();
-    
-    if (this.queue.length > 0) {
-      const item = this.queue[0];
-      this.shownItems.add(item.media_content_id);
-      this.queue.shift();
-      return item;
-    }
-    
     return null;
   }
 
@@ -3366,6 +3506,7 @@ class MediaIndexProvider extends MediaProvider {
     }
     
     // Return next item from queue
+    // Note: excluded path patterns are filtered in _queryMediaIndex(), so queue items are pre-validated
     if (this.queue.length > 0) {
       const item = this.queue.shift();
       
@@ -3514,11 +3655,21 @@ class MediaIndexProvider extends MediaProvider {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
         // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
+        const excludedPatterns = this.config?._excludedPathPatterns;
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {
             this._log(`⏭️ Filtering out excluded file: ${item.path}`);
             return false;
+          }
+          
+          // V5.7: Also filter by excluded path patterns configured in YAML
+          if (excludedPatterns && excludedPatterns.length > 0) {
+            const exclusionResult = MediaProvider.matchesExcludedPath(item.path, excludedPatterns);
+            if (exclusionResult.excluded) {
+              this._log(`🚫 Path pattern excluded "${exclusionResult.matchedPattern}": ${item.path}`);
+              return false;
+            }
           }
           
           // V4 CODE: Filter out unsupported media formats
@@ -3654,8 +3805,9 @@ class MediaIndexProvider extends MediaProvider {
  * Uses media_index.get_ordered_files service for deterministic ordering
  */
 class SequentialMediaIndexProvider extends MediaProvider {
-  constructor(config, hass) {
+  constructor(config, hass, card = null) {
     super(config, hass);
+    this.card = card; // V5.7: Reference to card for card ID logging
     this.queue = []; // Internal queue of items from database
     this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files
@@ -3898,12 +4050,15 @@ class SequentialMediaIndexProvider extends MediaProvider {
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
-      // Allow more iterations for larger queues, but cap to avoid infinite loops
-      let maxIterations = Math.max(5, Math.min(20, Math.ceil(this.queueSize / 10)));
       let iteration = 0;
+      // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
+      // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
+      // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
+      let consecutiveAllExcludedBatches = 0;
+      const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
       
       // Keep fetching batches until we have enough valid items OR database is exhausted
-      while (allFilteredItems.length < this.queueSize && iteration < maxIterations) {
+      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED) {
         iteration++;
         
         // Build service data
@@ -4050,6 +4205,20 @@ class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`📍 Updated compound cursor: value=${localCursor}, id=${localCursorId}`);
         }
         
+        // Track consecutive fully-excluded batches (all items filtered out)
+        // This is the only escape valve now - keeps going through large excluded folders
+        // but stops if config excludes literally everything in the database
+        const validFromThisBatch = filteredItems.length;
+        if (validFromThisBatch === 0 && response.items.length > 0) {
+          consecutiveAllExcludedBatches++;
+          if (consecutiveAllExcludedBatches >= MAX_CONSECUTIVE_EXCLUDED) {
+            this._log(`⚠️ Stopping after ${MAX_CONSECUTIVE_EXCLUDED} consecutive fully-excluded batches - excluded_paths may be too broad`);
+            break;
+          }
+        } else {
+          consecutiveAllExcludedBatches = 0; // Reset on any progress
+        }
+        
         // If we got enough items OR database is exhausted, exit loop
         if (allFilteredItems.length >= this.queueSize || !this.hasMore) {
           break;
@@ -4181,11 +4350,22 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this._log(`🚫 excludedFiles now has ${this.excludedFiles.size} entries`);
   }
 
-  // Check if a file is excluded
+  // Check if a file is excluded (individual 404 exclusions OR config path patterns)
   _isExcluded(path) {
     if (!path) return false;
     const normalizedPath = this._normalizePath(path);
-    return this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath);
+    // Check explicitly excluded individual files (404s, etc.)
+    if (this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath)) return true;
+    // V5.7: Check excluded path patterns from config
+    const excludedPatterns = this.config?._excludedPathPatterns;
+    if (excludedPatterns && excludedPatterns.length > 0) {
+      const result = MediaProvider.matchesExcludedPath(path, excludedPatterns);
+      if (result.excluded) {
+        this._log(`🚫 Path pattern excluded: "${result.matchedPattern}" matches ${path}`);
+        return true;
+      }
+    }
+    return false;
   }
 
   // Reset to beginning of sequence (for loop functionality)
@@ -5317,6 +5497,22 @@ class MediaCard extends LitElement {
     this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
     this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
+    
+    // V5.7: Compile excluded_paths patterns for path filtering
+    // Patterns are compiled to regex once for performance, then passed to providers
+    this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
+    
+    // Attach to config so providers can access them without needing card reference
+    this.config._excludedPathPatterns = this._excludedPathPatterns;
+    
+    // Log configured exclusions at INFO level (always shown, helps users verify patterns)
+    if (this._excludedPathPatterns.length > 0) {
+      console.log(`📁 [MediaCard:${this._cardId}] Path exclusions configured:`);
+      for (const compiled of this._excludedPathPatterns) {
+        const description = MediaProvider.describeExclusionPattern(compiled.pattern, compiled.isRecursive);
+        console.log(`   • ${compiled.pattern} (${description})`);
+      }
+    }
     
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
@@ -18912,7 +19108,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.7.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.8.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
