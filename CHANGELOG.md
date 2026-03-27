@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
   - Added `\b` word boundaries to the 8-digit pattern to prevent it matching substrings of longer digit sequences
 
-## v5.6.11 - 2026-03-15
+## v5.7.0 - 2026-03-15
 
 ### Added
 
