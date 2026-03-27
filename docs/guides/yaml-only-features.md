@@ -1,6 +1,6 @@
 # YAML-Only Configuration Options
 
-Some Media Card features are only configurable by editing the card's YAML directly. These options are intentionally omitted from the visual editor because they require list or nested inputs that are easier to express in YAML.
+Some Media Card features are only configurable by editing the card's YAML directly. These options are intentionally omitted from the visual editor because they require list or nested inputs that are easier to express in YAML, or aren't broadly applicable to a large number of users.
 
 To edit YAML in Home Assistant:
 1. Open the card editor
