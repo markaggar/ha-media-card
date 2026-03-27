@@ -20,7 +20,7 @@ excluded_paths:
   - "Burst/**"           # Exclude a specific subfolder and all its contents
   - "**/Thumbnails/**"   # Exclude any folder named "Thumbnails" at any depth
   - "**/_Junk/**"        # Exclude any hidden/junk folders
-  - "/Archive/Old/**"    # Absolute path from root of your media folder
+  - "/Archive/Old/**"    # Matches any "Archive/Old" segment at any depth (see note below)
 ```
 
 | Pattern | Behaviour |
@@ -28,8 +28,10 @@ excluded_paths:
 | `Burst/**` | Matches `Burst/` folder and all contents at any depth |
 | `**/Name/**` | Matches any folder named `Name` anywhere in the tree, recursively |
 | `**/Name` | Matches only the folder named `Name`, not its subfolders |
-| `/Exact/Path/**` | Absolute match from the root of your configured media path |
+| `/Exact/Path/**` | Segment-boundary match for `Exact/Path` — the leading `/` is notation, not a strict root anchor |
 | `2024-??-*` | Glob wildcards: `?` = single char, `*` = any chars within one segment |
+
+> **Note on leading `/`**: A pattern like `/Screenshots` is **not** strictly anchored to the root of your media folder. It matches any folder named `Screenshots` at any path-segment boundary — the same as writing `**/Screenshots`. The leading `/` is just a visual convention. To narrow the match, use a longer path, e.g. `/PhotoLibrary/Screenshots/**`.
 
 Patterns are **case-insensitive** and matched against the **folder path**, not the filename.
 

@@ -226,6 +226,7 @@ excluded_paths:
 - Items matching excluded patterns are silently skipped during navigation
 - Exclusions are logged at INFO level on card initialization for verification
 - Individual excluded items are logged at DEBUG level (enable `debug_mode: true`)
+- **Leading `/` is not a strict root anchor**: `/Screenshots` matches any folder named `Screenshots` at any depth — the same as `**/Screenshots`. Use a longer path (e.g. `/PhotoLibrary/Screenshots/**`) to narrow the match to a specific location.
 
 ### Logging Output
 

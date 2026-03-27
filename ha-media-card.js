@@ -630,12 +630,14 @@ class MediaProvider {
         }
         
         // Anchor pattern based on how it starts:
-        //   /Pattern  → starts with / → anchor to root (absolute path)
+        //   /Pattern  → starts with / → segment-boundary match (leading / is notation, NOT a strict root anchor)
+        //              "/Screenshots" matches at ANY depth that has a "Screenshots" segment,
+        //              e.g. both "/Photos/Screenshots" and "/Vacations/Europe/Screenshots".
+        //              Use a longer path ("/PhotoLibrary/Screenshots") to narrow the match.
         //   **/Patt   → starts with ** → no prefix (greedy .* handles any prefix)
         //   Pattern   → relative name → match at any path segment boundary
         if (normalized.startsWith('/')) {
-          // Absolute: strip leading / from regexStr then anchor to segment boundary
-          // This lets "/Screenshots/**" match "/media/Photo/Screenshots" not just "^/Screenshots"
+          // Strip leading / then apply same segment-boundary anchor as relative patterns
           regexStr = regexStr.replace(/^\//, '');
           regexStr = '(?:^|/)' + regexStr;
         } else if (!normalized.startsWith('**')) {
@@ -999,7 +1001,9 @@ class FolderProvider extends MediaProvider {
         max_shown_items_history: this.config.slideshow_window || 1000,
         background_scan: true
       },
-      suppress_subfolder_logging: false  // TEMP: Force logging to see what's happening
+      suppress_subfolder_logging: false,  // TEMP: Force logging to see what's happening
+      // V5.8: Pass compiled excluded path patterns so SubfolderQueue can filter items
+      _excludedPathPatterns: this.config._excludedPathPatterns || []
     };
   }
 
