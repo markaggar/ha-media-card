@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.8.0 - 2026-03-26
+
+### Fixed
+
+- **10-digit UNIX timestamp parsing in filenames**: Files named with UNIX timestamps (e.g., `1772236849-camera_person.mp4`) were parsed incorrectly because the 8-digit `YYYYMMDD` pattern matched the first 8 digits before the 10-digit pattern could run
+  - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
+  - Added `\b` word boundaries to the 8-digit pattern to prevent it matching substrings of longer digit sequences
+
 ## v5.6.11 - 2026-03-15
 
 ### Added

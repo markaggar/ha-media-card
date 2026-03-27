@@ -372,10 +372,12 @@ class MediaProvider {
       /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
       // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format (date only, 8 consecutive digits)
-      /(\d{8})/,
-      // UNIX Timestamp (10-digit, standalone)
+      // UNIX Timestamp (10-digit, standalone) - MUST come before 8-digit to avoid (\d{8}) consuming
+      // the first 8 digits of a 10-digit number (e.g. 1772236849-camera.mp4)
       /\b(\d{10})\b/,
+      // YYYYMMDD format (date only, 8 consecutive digits) - word boundary prevents matching
+      // substrings of longer digit sequences like UNIX timestamps
+      /\b(\d{8})\b/,
       // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
