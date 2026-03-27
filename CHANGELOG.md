@@ -7,16 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.8.0 - 2026-03-26
 
-### Fixed
-
-- **10-digit UNIX timestamp parsing in filenames**: Files named with UNIX timestamps (e.g., `1772236849-camera_person.mp4`) were parsed incorrectly because the 8-digit `YYYYMMDD` pattern matched the first 8 digits before the 10-digit pattern could run
-  - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
-  - Added `\b` word boundaries to the 8-digit pattern to prevent it matching substrings of longer digit sequences
-
-## v5.7.0 - 2026-03-15
-
 ### Added
-
 - **Path Exclusion Filtering** (`excluded_paths`): YAML config option to exclude media from specified folder paths
   - Supports glob-style wildcards: `*` (any chars in single segment), `**` (any depth), `?` (single char)
   - Exact folder pattern (e.g., `/Screenshots`) excludes only that folder, not subfolders
@@ -26,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - DEBUG logging shows individual items being excluded (enable `debug_mode: true`)
   - Works with all provider types: SubfolderQueue, MediaIndexProvider, SequentialMediaIndexProvider
   - See [Configuration Guide](docs/guides/configuration.md#path-exclusion-filtering) for full documentation
+
+### Fixed
+- **10-digit UNIX timestamp parsing in filenames**: Files named with UNIX timestamps (e.g., `1772236849-camera_person.mp4`) were parsed incorrectly because the 8-digit `YYYYMMDD` pattern matched the first 8 digits before the 10-digit pattern could run
+  - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
+  - Added `\b` word boundaries to the 8-digit pattern to prevent it matching substrings of longer digit sequences
+
+## v5.7.0 - 2026-03-15
+
+### Added
 
 - **Mute/Unmute Action Button**: New button to control video audio with smart preference memory
   - Button appears next to pause button (hidden when `media_type: image`)
