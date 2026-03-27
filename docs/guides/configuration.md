@@ -232,10 +232,10 @@ excluded_paths:
 When the card loads, you'll see INFO logs showing your configured exclusions:
 
 ```
-📁 Media Card: Configuring 3 excluded path patterns:
-  • "**/Screenshots/**" (recursive - folder and all subfolders)
-  • "/Temp" (exact folder only - child subfolders will not be excluded)
-  • "**/Thumbnails/**" (recursive - folder and all subfolders)
+📁 [MediaCard:driveway_card] Path exclusions configured:
+  • **/Screenshots/** (recursive - folder and all subfolders)
+  • /Temp (exact folder only - child subfolders will not be excluded)
+  • **/Thumbnails/** (recursive - folder and all subfolders)
 ```
 
 ## Overlay System
