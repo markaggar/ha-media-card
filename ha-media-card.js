@@ -7865,6 +7865,13 @@ class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
+    // V5.8: If the user has an active unmute preference, every subsequent video is treated
+    // as "interacted" so it plays to completion rather than being cut off by max_video_duration.
+    // This automatically stops when the mute preference expires or the user mutes again.
+    if (!this._getEffectiveMuteState()) {
+      this._videoUserInteracted = true;
+      this._log('🎬 Active unmute preference - treating new video as interacted (plays to end, ignores max_video_duration)');
+    }
     // V5.6.8: Reset video controls visibility and overlay state for new video
     this._videoControlsVisible = false;
     this._hideBottomOverlaysForVideo = false;
