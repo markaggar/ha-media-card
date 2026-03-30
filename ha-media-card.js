@@ -11579,6 +11579,7 @@ class MediaCard extends LitElement {
       // The emoji overlay (🎞️) will remain visible as a placeholder.
       const target = e.target;
       if (target) target.style.display = 'none';
+      item._thumbnailFailed = true; // V5.8: triggers text placeholder in render
       this.requestUpdate();
       return;
     }
@@ -14355,6 +14356,45 @@ class MediaCard extends LitElement {
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 
+    /* V5.8: Placeholder shown when video thumbnail fails to load (e.g. Reolink 400) */
+    .thumbnail-failed-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 6px 4px;
+      box-sizing: border-box;
+    }
+
+    .thumbnail-failed-placeholder .tfp-icon {
+      font-size: 1.4em;
+      line-height: 1;
+    }
+
+    .thumbnail-failed-placeholder .tfp-time {
+      color: #fff;
+      font-size: 0.85em;
+      font-weight: 600;
+      font-family: monospace;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      text-align: center;
+    }
+
+    .thumbnail-failed-placeholder .tfp-duration {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.75em;
+      font-family: monospace;
+      white-space: nowrap;
+    }
+
     .no-items {
       grid-column: 1 / -1;
       text-align: center;
@@ -15081,7 +15121,25 @@ class MediaCard extends LitElement {
               data-cache-key="${cacheKey}"
             >
               ${item._resolvedUrl ? (
-                isVideo ? html`
+                isVideo ? (() => {
+                  if (item._thumbnailFailed) {
+                    // V5.8: Video thumbnail failed (e.g. Reolink NVR returned 400).
+                    // Show a text placeholder with time + duration derived from item.filename
+                    // (format: "HH:MM:SS D:MM:SS" e.g. "12:22:48 0:02:50") or a raw timestamp.
+                    // Parse by splitting on the first space; both halves already formatted.
+                    const fname = item.filename || '';
+                    const spaceIdx = fname.indexOf(' ');
+                    const tfpTime = spaceIdx > 0 ? fname.substring(0, spaceIdx) : fname;
+                    const tfpDuration = spaceIdx > 0 ? fname.substring(spaceIdx + 1) : '';
+                    return html`
+                      <div class="thumbnail-failed-placeholder">
+                        <span class="tfp-icon">🎞️</span>
+                        ${tfpTime ? html`<span class="tfp-time">${tfpTime}</span>` : ''}
+                        ${tfpDuration ? html`<span class="tfp-duration">${tfpDuration}</span>` : ''}
+                      </div>
+                    `;
+                  }
+                  return html`
                   <video 
                     class="thumbnail-video ${isVideoLoaded ? 'loaded' : ''}"
                     preload="metadata"
@@ -15095,7 +15153,8 @@ class MediaCard extends LitElement {
                     @error=${(e) => this._handleThumbnailError(e, item)}
                   ></video>
                   <div class="video-icon-overlay">🎞️</div>
-                ` : html`
+                `;
+                })() : html`
                   <img 
                     src="${item._resolvedUrl}" 
                     alt="${item.filename || 'Thumbnail'}"
