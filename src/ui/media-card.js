@@ -898,11 +898,10 @@ export class MediaCard extends LitElement {
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
     
     // V5.7: Compile excluded_paths patterns for path filtering
-    // Patterns are compiled to regex once for performance, then passed to providers
+    // Patterns are compiled to regex once and stored on the card instance.
+    // Providers access them via card._excludedPathPatterns (not via config, which must
+    // remain plain data safe for YAML serialization by the card editor).
     this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
-    
-    // Attach to config so providers can access them without needing card reference
-    this.config._excludedPathPatterns = this._excludedPathPatterns;
     
     // Log configured exclusions at INFO level (always shown, helps users verify patterns)
     if (this._excludedPathPatterns.length > 0) {
@@ -3257,10 +3256,12 @@ export class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
-    // V5.8: If the user has an active unmute preference, every subsequent video is treated
-    // as "interacted" so it plays to completion rather than being cut off by max_video_duration.
-    // This automatically stops when the mute preference expires or the user mutes again.
-    if (!this._getEffectiveMuteState()) {
+    // V5.8: If the user has an active unmute preference (they explicitly chose to unmute),
+    // treat each new video as "interacted" so it plays to completion without being cut off
+    // by max_video_duration. Uses _isUserMutePreferenceValid() + _userMutePreference===false
+    // rather than _getEffectiveMuteState() so that the default video_muted:false config
+    // setting does NOT trigger this path - only an explicit user action does.
+    if (this._isUserMutePreferenceValid() && this._userMutePreference === false) {
       this._videoUserInteracted = true;
       this._log('🎬 Active unmute preference - treating new video as interacted (plays to end, ignores max_video_duration)');
     }

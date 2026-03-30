@@ -628,7 +628,8 @@ export class MediaIndexProvider extends MediaProvider {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
         // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
-        const excludedPatterns = this.config?._excludedPathPatterns;
+        // Read patterns from card instance (not config) - config must stay as plain data
+        const excludedPatterns = this.card?._excludedPathPatterns;
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {

@@ -82,7 +82,8 @@ export class FolderProvider extends MediaProvider {
       },
       suppress_subfolder_logging: false,  // TEMP: Force logging to see what's happening
       // V5.8: Pass compiled excluded path patterns so SubfolderQueue can filter items
-      _excludedPathPatterns: this.config._excludedPathPatterns || []
+      // Source from card._excludedPathPatterns (not config) - config must stay as plain data
+      _excludedPathPatterns: this.card?._excludedPathPatterns || []
     };
   }
 

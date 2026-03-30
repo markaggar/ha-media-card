@@ -258,9 +258,13 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
+      // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
+      // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
+      // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
+      const MAX_ITERATIONS = 20;
       
       // Keep fetching batches until we have enough valid items OR database is exhausted
-      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED) {
+      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED && iteration < MAX_ITERATIONS) {
         iteration++;
         
         // Build service data
@@ -428,6 +432,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         
         this._log(`🔄 Need more items (have ${allFilteredItems.length}, need ${this.queueSize}) - fetching next batch...`);
       }
+
+      if (iteration >= MAX_ITERATIONS && allFilteredItems.length < this.queueSize) {
+        this._log(`⚠️ Stopped after ${MAX_ITERATIONS} iterations with only ${allFilteredItems.length} items - excluded_paths may be excluding most of the database`);
+      }
       
       // Now process all accumulated items
       if (allFilteredItems.length === 0) {
@@ -558,8 +566,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     const normalizedPath = this._normalizePath(path);
     // Check explicitly excluded individual files (404s, etc.)
     if (this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath)) return true;
-    // V5.7: Check excluded path patterns from config
-    const excludedPatterns = this.config?._excludedPathPatterns;
+    // V5.7: Check excluded path patterns - read from card instance (not config)
+    const excludedPatterns = this.card?._excludedPathPatterns;
     if (excludedPatterns && excludedPatterns.length > 0) {
       const result = MediaProvider.matchesExcludedPath(path, excludedPatterns);
       if (result.excluded) {

@@ -1005,7 +1005,8 @@ class FolderProvider extends MediaProvider {
       },
       suppress_subfolder_logging: false,  // TEMP: Force logging to see what's happening
       // V5.8: Pass compiled excluded path patterns so SubfolderQueue can filter items
-      _excludedPathPatterns: this.config._excludedPathPatterns || []
+      // Source from card._excludedPathPatterns (not config) - config must stay as plain data
+      _excludedPathPatterns: this.card?._excludedPathPatterns || []
     };
   }
 
@@ -3663,7 +3664,8 @@ class MediaIndexProvider extends MediaProvider {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
         // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
-        const excludedPatterns = this.config?._excludedPathPatterns;
+        // Read patterns from card instance (not config) - config must stay as plain data
+        const excludedPatterns = this.card?._excludedPathPatterns;
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {
@@ -4064,9 +4066,13 @@ class SequentialMediaIndexProvider extends MediaProvider {
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
+      // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
+      // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
+      // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
+      const MAX_ITERATIONS = 20;
       
       // Keep fetching batches until we have enough valid items OR database is exhausted
-      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED) {
+      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED && iteration < MAX_ITERATIONS) {
         iteration++;
         
         // Build service data
@@ -4234,6 +4240,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
         
         this._log(`🔄 Need more items (have ${allFilteredItems.length}, need ${this.queueSize}) - fetching next batch...`);
       }
+
+      if (iteration >= MAX_ITERATIONS && allFilteredItems.length < this.queueSize) {
+        this._log(`⚠️ Stopped after ${MAX_ITERATIONS} iterations with only ${allFilteredItems.length} items - excluded_paths may be excluding most of the database`);
+      }
       
       // Now process all accumulated items
       if (allFilteredItems.length === 0) {
@@ -4364,8 +4374,8 @@ class SequentialMediaIndexProvider extends MediaProvider {
     const normalizedPath = this._normalizePath(path);
     // Check explicitly excluded individual files (404s, etc.)
     if (this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath)) return true;
-    // V5.7: Check excluded path patterns from config
-    const excludedPatterns = this.config?._excludedPathPatterns;
+    // V5.7: Check excluded path patterns - read from card instance (not config)
+    const excludedPatterns = this.card?._excludedPathPatterns;
     if (excludedPatterns && excludedPatterns.length > 0) {
       const result = MediaProvider.matchesExcludedPath(path, excludedPatterns);
       if (result.excluded) {
@@ -5508,11 +5518,10 @@ class MediaCard extends LitElement {
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
     
     // V5.7: Compile excluded_paths patterns for path filtering
-    // Patterns are compiled to regex once for performance, then passed to providers
+    // Patterns are compiled to regex once and stored on the card instance.
+    // Providers access them via card._excludedPathPatterns (not via config, which must
+    // remain plain data safe for YAML serialization by the card editor).
     this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
-    
-    // Attach to config so providers can access them without needing card reference
-    this.config._excludedPathPatterns = this._excludedPathPatterns;
     
     // Log configured exclusions at INFO level (always shown, helps users verify patterns)
     if (this._excludedPathPatterns.length > 0) {
@@ -7867,10 +7876,12 @@ class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
-    // V5.8: If the user has an active unmute preference, every subsequent video is treated
-    // as "interacted" so it plays to completion rather than being cut off by max_video_duration.
-    // This automatically stops when the mute preference expires or the user mutes again.
-    if (!this._getEffectiveMuteState()) {
+    // V5.8: If the user has an active unmute preference (they explicitly chose to unmute),
+    // treat each new video as "interacted" so it plays to completion without being cut off
+    // by max_video_duration. Uses _isUserMutePreferenceValid() + _userMutePreference===false
+    // rather than _getEffectiveMuteState() so that the default video_muted:false config
+    // setting does NOT trigger this path - only an explicit user action does.
+    if (this._isUserMutePreferenceValid() && this._userMutePreference === false) {
       this._videoUserInteracted = true;
       this._log('🎬 Active unmute preference - treating new video as interacted (plays to end, ignores max_video_duration)');
     }
