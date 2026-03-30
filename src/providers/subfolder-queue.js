@@ -987,41 +987,56 @@ export class SubfolderQueue {
   // V5: Simplified - just return next item from queue
   // Card manages history/navigation, provider just supplies items
   getNextItem() {
-    // Refill if empty
-    if (this.queue.length === 0) {
-      this.refillQueue();
+    const excludedPatterns = this.card?.config._excludedPathPatterns;
+
+    // Outer retry loop: handles "all shown" case without recursion.
+    // First pass is the normal path; subsequent passes happen after ageOut+refill.
+    const MAX_RETRY_CYCLES = 3;
+    for (let cycle = 0; cycle < MAX_RETRY_CYCLES; cycle++) {
+      // Refill if empty
       if (this.queue.length === 0) {
-        return null;
-      }
-    }
-
-    // Find first unshown item
-    for (let i = 0; i < this.queue.length; i++) {
-      const item = this.queue[i];
-      if (!this.shownItems.has(item.media_content_id)) {
-        this.shownItems.add(item.media_content_id);
-        this.queue.splice(i, 1);
-        
-        // Trigger refill if running low
-        if (this.needsRefill()) {
-          setTimeout(() => this.refillQueue(), 100);
+        this.refillQueue();
+        if (this.queue.length === 0) {
+          return null;
         }
-        
-        return item;
       }
+
+      // Find first unshown item that isn't excluded
+      for (let i = 0; i < this.queue.length; i++) {
+        const item = this.queue[i];
+        if (!this.shownItems.has(item.media_content_id)) {
+          // Check if item matches an excluded path pattern
+          if (excludedPatterns && excludedPatterns.length > 0) {
+            const itemPath = item.media_content_id || item.path || '';
+            const exclusionResult = MediaProvider.matchesExcludedPath(itemPath, excludedPatterns);
+            if (exclusionResult.excluded) {
+              this._log(`🚫 Excluding item matching pattern "${exclusionResult.matchedPattern}":`, itemPath);
+              // Mark as shown so we don't keep checking it
+              this.shownItems.add(item.media_content_id);
+              this.queue.splice(i, 1);
+              i--; // Adjust index since we removed an item
+              continue;
+            }
+          }
+
+          this.shownItems.add(item.media_content_id);
+          this.queue.splice(i, 1);
+
+          // Trigger refill if running low
+          if (this.needsRefill()) {
+            setTimeout(() => this.refillQueue(), 100);
+          }
+
+          return item;
+        }
+      }
+
+      // All items in current queue have been shown/excluded - age out and try again
+      this.ageOutShownItems();
+      this.refillQueue();
+      // Loop continues to retry with freshly refilled queue
     }
 
-    // All items in queue have been shown - age out and try again
-    this.ageOutShownItems();
-    this.refillQueue();
-    
-    if (this.queue.length > 0) {
-      const item = this.queue[0];
-      this.shownItems.add(item.media_content_id);
-      this.queue.shift();
-      return item;
-    }
-    
     return null;
   }
 

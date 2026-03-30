@@ -17,6 +17,7 @@ export class FolderProvider extends MediaProvider {
     this.cardAdapter = {
       config: this._adaptConfigForV4(),
       hass: hass,
+      _cardId: card?._cardId || 'unknown-card', // V5.8: Forward card ID so SubfolderQueue logs show correct card
       _debugMode: !!this.config.debug_mode,  // Controlled via YAML config
       _backgroundPaused: false,
       _log: (...args) => {
@@ -80,7 +81,10 @@ export class FolderProvider extends MediaProvider {
         max_shown_items_history: this.config.slideshow_window || 1000,
         background_scan: true
       },
-      suppress_subfolder_logging: false  // TEMP: Force logging to see what's happening
+      suppress_subfolder_logging: false,  // TEMP: Force logging to see what's happening
+      // V5.8: Pass compiled excluded path patterns so SubfolderQueue can filter items
+      // Source from card._excludedPathPatterns (not config) - config must stay as plain data
+      _excludedPathPatterns: this.card?._excludedPathPatterns || []
     };
   }
 
@@ -104,7 +108,7 @@ export class FolderProvider extends MediaProvider {
       if (useMediaIndex) {
         // Full sequential mode with database ordering
         this.cardAdapter._log('Using SequentialMediaIndexProvider for ordered queries');
-        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass);
+        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.sequentialProvider.initialize();
         
         if (!success) {

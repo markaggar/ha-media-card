@@ -119,6 +119,7 @@ export class MediaCard extends LitElement {
     this.isLoading = false;
     this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
+    this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
     this._errorState = null; // V4 error state tracking
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
@@ -235,6 +236,7 @@ export class MediaCard extends LitElement {
     // V5.6.12: User mute preference state
     this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
+    this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -895,6 +897,21 @@ export class MediaCard extends LitElement {
     this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
     this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
+    
+    // V5.7: Compile excluded_paths patterns for path filtering
+    // Patterns are compiled to regex once and stored on the card instance.
+    // Providers access them via card._excludedPathPatterns (not via config, which must
+    // remain plain data safe for YAML serialization by the card editor).
+    this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
+    
+    // Log configured exclusions at INFO level (always shown, helps users verify patterns)
+    if (this._excludedPathPatterns.length > 0) {
+      console.log(`📁 [MediaCard:${this._cardId}] Path exclusions configured:`);
+      for (const compiled of this._excludedPathPatterns) {
+        const description = MediaProvider.describeExclusionPattern(compiled.pattern, compiled.isRecursive);
+        console.log(`   • ${compiled.pattern} (${description})`);
+      }
+    }
     
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
@@ -2639,8 +2656,13 @@ export class MediaCard extends LitElement {
       this._hideBottomOverlaysForVideo = false;
     }
     
-    // Only use crossfade for images, not videos
-    const isVideo = this._isVideoFile(url);
+    // Only use crossfade for images, not videos.
+    // V5.8: Also check _isCurrentItemVideo() as a fallback for integration sources (Reolink,
+    // Immich, etc.) whose resolved URLs have no file extension.  Without this, _isVideoFile()
+    // returns false and _setMediaUrl takes the image crossfade path, which never calls
+    // videoElement.load().  Lit reuses the same <video> DOM node between navigations and the
+    // browser does NOT auto-reload when <source src> changes — so the video never plays.
+    const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo();
     
     // For images, validate they exist before displaying (MediaIndexProvider only)
     if (!isVideo) {
@@ -3014,11 +3036,16 @@ export class MediaCard extends LitElement {
       } else {
         // For folder/queue modes, if it's a 404, remove from queue and skip to next automatically
         if (is404) {
-          this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
-          // Remove from navigation queue and panel queue to prevent showing again
-          this._remove404FromQueues(this.currentMedia);
-          // Skip to next without showing error
-          setTimeout(() => this._loadNext(), 100);
+          // V5.8: For video items, use transient-failure threshold before permanently removing.
+          // MEDIA_ERR_SRC_NOT_SUPPORTED fires for ANY HTTP error (400, 403, 404, 500) not just 404.
+          // Reolink's NVR can return 400 when rejecting concurrent download requests.
+          if (this._isCurrentItemVideo()) {
+            this._handleVideoFolderFailure();
+          } else {
+            this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
+            this._remove404FromQueues(this.currentMedia);
+            setTimeout(() => this._loadNext(), 100);
+          }
         } else {
           this._showMediaError(errorMessage, isSynologyUrl);
         }
@@ -3027,9 +3054,14 @@ export class MediaCard extends LitElement {
       // Already tried to retry this URL
       if (is404 && this.config.media_source_type !== 'single_media') {
         // For 404s in folder/queue mode, remove from queue and skip to next instead of showing error
-        this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
-        this._remove404FromQueues(this.currentMedia);
-        setTimeout(() => this._loadNext(), 100);
+        // V5.8: Apply transient-failure threshold for video items (same rationale as Path A above)
+        if (this._isCurrentItemVideo()) {
+          this._handleVideoFolderFailure();
+        } else {
+          this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
+          this._remove404FromQueues(this.currentMedia);
+          setTimeout(() => this._loadNext(), 100);
+        }
       } else {
         // Show error for non-404 errors or single media mode
         this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
@@ -3179,7 +3211,15 @@ export class MediaCard extends LitElement {
       this._log('🔇 Skipping 404 error UI - will auto-advance silently');
       
       // V5: Remove from queues to prevent showing again
+      // V5.8: For video items, apply transient-failure threshold before permanent removal.
+      // MEDIA_ERR_SRC_NOT_SUPPORTED fires for ANY HTTP error (400, 403, 404, 500) – Reolink's NVR
+      // can return 400 when it rejects concurrent download requests.  Allow one transient skip
+      // before permanently removing.  _handleVideoFolderFailure() also calls _loadNext().
       if (this.currentMedia) {
+        if (this._isCurrentItemVideo()) {
+          this._handleVideoFolderFailure();
+          return; // _handleVideoFolderFailure handles advancing
+        }
         this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
         this._remove404FromQueues(this.currentMedia);
       }
@@ -3240,6 +3280,15 @@ export class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
+    // V5.8: If the user has an active unmute preference (they explicitly chose to unmute),
+    // treat each new video as "interacted" so it plays to completion without being cut off
+    // by max_video_duration. Uses _isUserMutePreferenceValid() + _userMutePreference===false
+    // rather than _getEffectiveMuteState() so that the default video_muted:false config
+    // setting does NOT trigger this path - only an explicit user action does.
+    if (this._isUserMutePreferenceValid() && this._userMutePreference === false) {
+      this._videoUserInteracted = true;
+      this._log('🎬 Active unmute preference - treating new video as interacted (plays to end, ignores max_video_duration)');
+    }
     // V5.6.8: Reset video controls visibility and overlay state for new video
     this._videoControlsVisible = false;
     this._hideBottomOverlaysForVideo = false;
@@ -3248,6 +3297,10 @@ export class MediaCard extends LitElement {
   _onVideoCanPlay() {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
+    
+    // V5.8: Clear transient failure counter – video loaded successfully this time
+    const itemId = this.currentMedia?.media_content_id;
+    if (itemId) this._videoTransientFailures.delete(itemId);
     
     // V5.6.7: Clear navigation flag now that video is actually ready to play
     // This prevents timer from firing prematurely during video-to-video transitions
@@ -3590,10 +3643,13 @@ export class MediaCard extends LitElement {
       this._log(`🔊 Video loaded - muted=${shouldBeMuted} (preference=${this._userMutePreference}, valid=${this._isUserMutePreferenceValid()})`);
       
       // Force the video controls to update by toggling muted state
+      // V5.8: Suppress the volumechange handler during this programmatic toggle
       setTimeout(() => {
+        this._suppressVolumeChangeHandler = true;
         const currentMuted = video.muted;
         video.muted = !currentMuted;
         video.muted = currentMuted;
+        this._suppressVolumeChangeHandler = false;
       }, 50);
     }
   }
@@ -3633,6 +3689,12 @@ export class MediaCard extends LitElement {
     this._userMutePreference = !currentEffective;
     this._mutePreferenceTimestamp = Date.now();
     
+    // V5.8: Unmuting counts as a user interaction - video should play to end
+    if (!this._userMutePreference) {
+      this._videoUserInteracted = true;
+      this._log('🎬 User unmuted via action button - will play to completion');
+    }
+    
     this._log(`🔊 Mute toggled: ${currentEffective} → ${this._userMutePreference}`);
     
     // Apply to current video if one is playing
@@ -3655,6 +3717,32 @@ export class MediaCard extends LitElement {
     }
     
     this.requestUpdate();
+  }
+
+  // V5.8: Track mute/unmute via native browser video controls
+  // _handleMuteToggle updates _userMutePreference BEFORE setting video.muted, so for action
+  // button changes video.muted already matches _getEffectiveMuteState() when this fires.
+  // A mismatch means the change came from the native controls.
+  _onVideoVolumeChange(e) {
+    if (this._suppressVolumeChangeHandler) return;
+    const video = e.target;
+    if (!video) return;
+
+    const expectedMuted = this._getEffectiveMuteState();
+    if (video.muted !== expectedMuted) {
+      // Sync our preference to match what native controls set
+      this._userMutePreference = video.muted;
+      this._mutePreferenceTimestamp = Date.now();
+      this._log(`🔊 Native controls changed mute: ${expectedMuted} → ${video.muted}`);
+
+      // V5.8: Unmuting counts as user interaction - video should play to end
+      if (!video.muted) {
+        this._videoUserInteracted = true;
+        this._log('🎬 User unmuted via native controls - will play to completion');
+      }
+
+      this.requestUpdate();
+    }
   }
 
   // V4: Keyboard navigation handler
@@ -6762,8 +6850,74 @@ export class MediaCard extends LitElement {
    */
   _isVideoItem(item) {
     if (!item) return false;
+    // V5.8: Check media_content_type first – most reliable for integration sources.
+    // Reolink/Immich items have opaque URIs with no file extension, so _isVideoFile() returns
+    // null, but browse_media returns media_class: 'video' which is stored as media_content_type.
+    if (item.media_content_type?.startsWith('video')) return true;
     const path = item.media_content_id || item.path || '';
     return this._isVideoFile(path);
+  }
+
+  /**
+   * V5.8: Check if the currently displayed item is a video, using all available signals.
+   * _isVideoFile() checks file extension but fails for Reolink (media-source://reolink/FILE|...)
+   * and other integration sources that use opaque URIs with no extension.
+   * This method also checks media_content_type (set from HA browse_media response where
+   * Reolink returns media_class='video') and the resolved mediaUrl.
+   */
+  _isCurrentItemVideo() {
+    // Check media_content_type first – most reliable for integration sources (Reolink, Immich, etc.)
+    if (this.currentMedia?.media_content_type?.startsWith('video')) return true;
+    // Fall back to extension-based detection on the canonical ID or resolved URL
+    return this._isVideoFile(this.currentMedia?.media_content_id) || this._isVideoFile(this.mediaUrl);
+  }
+
+  /**
+   * V5.8: Handle a video failure in folder mode with transient error protection.
+   *
+   * Problem: The browser fires MEDIA_ERR_SRC_NOT_SUPPORTED for ANY HTTP error on a <source>
+   * element (400, 403, 404, 500) – not just a real 404.  Reolink's NVR can return HTTP 400
+   * when it rejects concurrent download requests (e.g. when two cards pre-load the same
+   * camera stream simultaneously).  The card was treating these as "file not found" and
+   * permanently removing the items from the queue.
+   *
+   * Fix: Track consecutive failures per item.  Allow one transient skip before permanently
+   * removing.  If the error was genuinely transient (NVR busy), the retry will succeed and
+   * the counter is cleared by _onVideoCanPlay.  If the file is truly missing, it will fail
+   * twice and be permanently removed on the second attempt.
+   */
+  _handleVideoFolderFailure() {
+    const itemId = this.currentMedia?.media_content_id;
+    if (!itemId) {
+      // No item ID to track — just advance to next
+      setTimeout(() => this._loadNext(), 100);
+      return;
+    }
+
+    const THRESHOLD = 2; // Remove permanently after this many consecutive failures
+    const count = (this._videoTransientFailures.get(itemId) || 0) + 1;
+    this._videoTransientFailures.set(itemId, count);
+
+    // Prevent unbounded growth of the failure map
+    if (this._videoTransientFailures.size > 100) {
+      const firstKey = this._videoTransientFailures.keys().next().value;
+      this._videoTransientFailures.delete(firstKey);
+    }
+
+    if (count < THRESHOLD) {
+      this._log(
+        `⚠️ Video load failed (attempt ${count}/${THRESHOLD}) – skipping without permanent removal.` +
+        ` May be a transient error (e.g. Reolink NVR rejecting concurrent request with 400).`
+      );
+      setTimeout(() => this._loadNext(), 100);
+    } else {
+      this._log(
+        `🗑️ Video failed ${count} consecutive times – permanently removing from queue: ${itemId}`
+      );
+      this._videoTransientFailures.delete(itemId);
+      this._remove404FromQueues(this.currentMedia);
+      setTimeout(() => this._loadNext(), 100);
+    }
   }
   
   /**
@@ -6790,7 +6944,25 @@ export class MediaCard extends LitElement {
   
   _handleThumbnailError(e, item) {
     // Handle 404s for queue thumbnails - mark item as invalid and hide it
-    this._log('📭 Thumbnail failed to load (404):', item.filename || item.path);
+    this._log('📭 Thumbnail failed to load (404):', item?.filename || item?.media_content_id || item?.path);
+    
+    // V5.8: Never remove video items from the navigation queue on thumbnail failure.
+    // Video thumbnails can fail transiently (e.g. Reolink NVR returns 400 for concurrent requests)
+    // even when the video itself is perfectly playable. The main video error handler
+    // (_handleVideoFolderFailure) is the correct place to detect genuinely missing videos.
+    // Additionally, _isVideoItem() was previously returning false for Reolink items (opaque URIs,
+    // no file extension) so they were rendering as <img> which always fails on a video URL.
+    if (item && this._isVideoItem(item)) {
+      this._log(`⚠️ Video thumbnail failed – hiding media element but keeping container clickable: ${item.media_content_id || item.filename}`);
+      // V5.8: Hide only the <video>/<img> element itself.  The .thumbnail container must stay
+      // visible and clickable so the user can still navigate to the item via the queue panel.
+      // The emoji overlay (🎞️) will remain visible as a placeholder.
+      const target = e.target;
+      if (target) target.style.display = 'none';
+      item._thumbnailFailed = true; // V5.8: triggers text placeholder in render
+      this.requestUpdate();
+      return;
+    }
     
     // Mark the item as invalid so it won't be displayed
     if (item) {
@@ -6863,7 +7035,7 @@ export class MediaCard extends LitElement {
     const target = e.target;
     if (target) {
       // Find the parent thumbnail container and hide it
-      const thumbnailContainer = target.closest('.thumbnail-item');
+      const thumbnailContainer = target.closest('.thumbnail');
       if (thumbnailContainer) {
         thumbnailContainer.style.display = 'none';
       }
@@ -9564,6 +9736,45 @@ export class MediaCard extends LitElement {
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 
+    /* V5.8: Placeholder shown when video thumbnail fails to load (e.g. Reolink 400) */
+    .thumbnail-failed-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 6px 4px;
+      box-sizing: border-box;
+    }
+
+    .thumbnail-failed-placeholder .tfp-icon {
+      font-size: 1.4em;
+      line-height: 1;
+    }
+
+    .thumbnail-failed-placeholder .tfp-time {
+      color: #fff;
+      font-size: 0.85em;
+      font-weight: 600;
+      font-family: monospace;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      text-align: center;
+    }
+
+    .thumbnail-failed-placeholder .tfp-duration {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.75em;
+      font-family: monospace;
+      white-space: nowrap;
+    }
+
     .no-items {
       grid-column: 1 / -1;
       text-align: center;
@@ -9698,9 +9909,17 @@ export class MediaCard extends LitElement {
       return html`<div class="placeholder">Resolving media URL...</div>`;
     }
 
-    // V4: Detect media type from media_content_type or filename
-    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
-                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
+    // V4: Detect media type from the *resolved* mediaUrl (not currentMedia.media_content_id).
+    // IMPORTANT: currentMedia is set as a reactive Lit property before mediaUrl is resolved.
+    // If we used currentMedia to determine isVideo here, a premature render (triggered by the
+    // reactive property change) would create a <video> element with the OLD mediaUrl (e.g. a jpg
+    // from the previous item), causing the video to "fail" and the correct mp4 to be falsely
+    // removed from the queue as a 404.
+    // By using the resolved mediaUrl, the element type and src are always in sync.
+    // Fallback: use media_content_type for extensionless URLs (e.g. Immich integration).
+    const resolvedUrlType = this.mediaUrl ? MediaUtils.detectFileType(this.mediaUrl) : null;
+    const isVideo = resolvedUrlType === 'video' ||
+                    (resolvedUrlType !== 'image' && this.currentMedia?.media_content_type?.startsWith('video'));
 
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
     const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
@@ -9745,6 +9964,7 @@ export class MediaCard extends LitElement {
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
             @seeked=${this._onVideoSeeked}
+            @volumechange=${this._onVideoVolumeChange}
             @click=${this._onVideoClickToggle}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
@@ -10277,11 +10497,31 @@ export class MediaCard extends LitElement {
               class="thumbnail ${isFavorited ? 'favorited' : ''}"
               data-item-index="${actualIndex}"
               @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
-              title="${item.filename || item.path}"
+              title="${item.title || item.filename || item.path}"
               data-cache-key="${cacheKey}"
             >
               ${item._resolvedUrl ? (
-                isVideo ? html`
+                isVideo ? (() => {
+                  if (item._thumbnailFailed) {
+                    // V5.8: Video thumbnail failed (e.g. Reolink NVR returned 400).
+                    // Show a text placeholder with time + duration derived from item.title or
+                    // item.filename (format: "HH:MM:SS D:MM:SS" e.g. "12:22:48 0:02:50").
+                    // Reolink queue items use item.title (set by timestamp extraction in
+                    // SubfolderQueue); file-based items use item.filename.
+                    // Parse by splitting on the first space; both halves already formatted.
+                    const fname = item.title || item.filename || '';
+                    const spaceIdx = fname.indexOf(' ');
+                    const tfpTime = spaceIdx > 0 ? fname.substring(0, spaceIdx) : fname;
+                    const tfpDuration = spaceIdx > 0 ? fname.substring(spaceIdx + 1) : '';
+                    return html`
+                      <div class="thumbnail-failed-placeholder">
+                        <span class="tfp-icon">🎞️</span>
+                        ${tfpTime ? html`<span class="tfp-time">${tfpTime}</span>` : ''}
+                        ${tfpDuration ? html`<span class="tfp-duration">${tfpDuration}</span>` : ''}
+                      </div>
+                    `;
+                  }
+                  return html`
                   <video 
                     class="thumbnail-video ${isVideoLoaded ? 'loaded' : ''}"
                     preload="metadata"
@@ -10295,7 +10535,8 @@ export class MediaCard extends LitElement {
                     @error=${(e) => this._handleThumbnailError(e, item)}
                   ></video>
                   <div class="video-icon-overlay">🎞️</div>
-                ` : html`
+                `;
+                })() : html`
                   <img 
                     src="${item._resolvedUrl}" 
                     alt="${item.filename || 'Thumbnail'}"

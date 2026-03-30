@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.7.0
+ * Media Card v5.8.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -372,10 +372,12 @@ class MediaProvider {
       /(\d{4})-(\d{2})-(\d{2})[_T\s](\d{2})[:-](\d{2})[:-](\d{2})/,
       // YYYY-MM-DD format (date only)
       /(\d{4})-(\d{2})-(\d{2})/,
-      // YYYYMMDD format (date only, 8 consecutive digits)
-      /(\d{8})/,
-      // UNIX Timestamp (10-digit, standalone)
+      // UNIX Timestamp (10-digit, standalone) - MUST come before 8-digit to avoid (\d{8}) consuming
+      // the first 8 digits of a 10-digit number (e.g. 1772236849-camera.mp4)
       /\b(\d{10})\b/,
+      // YYYYMMDD format (date only, 8 consecutive digits) - word boundary prevents matching
+      // substrings of longer digit sequences like UNIX timestamps
+      /\b(\d{8})\b/,
       // DD-MM-YYYY format (date only)
       /(\d{2})-(\d{2})-(\d{4})/
     ];
@@ -588,6 +590,135 @@ class MediaProvider {
     }
     
     return metadata;
+  }
+
+  /**
+   * V5.7: Compile glob patterns to regex for path exclusion
+   * Called once at config load time for performance
+   * @param {string[]} patterns - Array of glob patterns from excluded_paths config
+   * @returns {Object[]} Array of compiled pattern objects { pattern, regex, isRecursive }
+   */
+  static compileExcludedPathPatterns(patterns) {
+    if (!patterns || !Array.isArray(patterns) || patterns.length === 0) {
+      return [];
+    }
+    
+    return patterns
+      .filter(p => p && typeof p === 'string' && p.trim().length > 0)
+      .map(pattern => {
+        // Normalize: convert backslashes to forward slashes, strip trailing slash
+        let normalized = pattern.replace(/\\/g, '/').replace(/\/+$/, '');
+        
+        // Detect if pattern is recursive (ends with /**)
+        const isRecursive = normalized.endsWith('/**');
+        
+        // Build regex from glob pattern
+        // 1. Escape regex special chars (except * and ?)
+        let regexStr = normalized
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          // 2. Convert ** to placeholder, then * to single-segment match, then restore **
+          .replace(/\*\*/g, '{{GLOBSTAR}}')
+          .replace(/\*/g, '[^/]*')
+          .replace(/\?/g, '[^/]')
+          .replace(/\{\{GLOBSTAR\}\}/g, '.*');
+        
+        // For recursive patterns ending in /**, match the folder itself OR any subfolder
+        // Use (?:$|/) suffix to enforce a full path segment boundary
+        // e.g. "Burst/**" must match "/Burst" but NOT "/BurstPhotos"
+        if (isRecursive) {
+          regexStr = regexStr.replace(/\/\.\*$/, '(?:$|/)');
+        }
+        
+        // Anchor pattern based on how it starts:
+        //   /Pattern  → starts with / → segment-boundary match (leading / is notation, NOT a strict root anchor)
+        //              "/Screenshots" matches at ANY depth that has a "Screenshots" segment,
+        //              e.g. both "/Photos/Screenshots" and "/Vacations/Europe/Screenshots".
+        //              Use a longer path ("/PhotoLibrary/Screenshots") to narrow the match.
+        //   **/Patt   → starts with ** → no prefix (greedy .* handles any prefix)
+        //   Pattern   → relative name → match at any path segment boundary
+        if (normalized.startsWith('/')) {
+          // Strip leading / then apply same segment-boundary anchor as relative patterns
+          regexStr = regexStr.replace(/^\//, '');
+          regexStr = '(?:^|/)' + regexStr;
+        } else if (!normalized.startsWith('**')) {
+          // Relative pattern: match at any path segment boundary
+          regexStr = '(?:^|/)' + regexStr;
+        }
+        // Globstar (**) patterns: no prefix needed, leading .* handles any prefix
+        
+        // End anchor: for non-recursive, must end at a full segment boundary
+        if (!isRecursive) {
+          regexStr = regexStr + '$';
+        }
+        
+        return {
+          pattern: pattern,  // Original pattern for logging
+          regex: new RegExp(regexStr, 'i'),  // Case-insensitive
+          isRecursive: isRecursive
+        };
+      });
+  }
+  
+  /**
+   * V5.7: Check if a file path matches any excluded path pattern
+   * @param {string} itemPath - Full path to the media file
+   * @param {Object[]} compiledPatterns - Array from compileExcludedPathPatterns()
+   * @returns {{ excluded: boolean, matchedPattern: string|null }} Exclusion result
+   */
+  static matchesExcludedPath(itemPath, compiledPatterns) {
+    if (!itemPath || !compiledPatterns || compiledPatterns.length === 0) {
+      return { excluded: false, matchedPattern: null };
+    }
+    
+    // Normalize path: convert backslashes, decode URI encoding
+    let normalizedPath = itemPath.replace(/\\/g, '/');
+    try {
+      normalizedPath = decodeURIComponent(normalizedPath);
+    } catch (e) {
+      // Keep original if decode fails
+    }
+    
+    // Extract folder path (dirname) - we match against folder, not filename
+    const lastSlash = normalizedPath.lastIndexOf('/');
+    const folderPath = lastSlash > 0 ? normalizedPath.substring(0, lastSlash) : normalizedPath;
+    
+    // Test against each compiled pattern
+    for (const compiled of compiledPatterns) {
+      if (compiled.regex.test(folderPath)) {
+        return { excluded: true, matchedPattern: compiled.pattern };
+      }
+    }
+    
+    return { excluded: false, matchedPattern: null };
+  }
+  
+  /**
+   * V5.7: Generate human-readable description of exclusion pattern behavior
+   * Used for INFO logging at card initialization
+   * @param {string} pattern - Original glob pattern
+   * @param {boolean} isRecursive - Whether pattern ends with /**
+   * @returns {string} Description of matching behavior
+   */
+  static describeExclusionPattern(pattern, isRecursive) {
+    // Detect pattern type
+    const startsWithGlobstar = pattern.startsWith('**/');
+    const containsWildcard = pattern.includes('*') || pattern.includes('?');
+
+    if (startsWithGlobstar) {
+      // **/FolderName or **/FolderName/**
+      const folderPart = pattern.replace(/^\*\*\//, '').replace(/\/\*\*$/, '');
+      if (isRecursive) {
+        return `any "${folderPart}" folder, recursive`;
+      } else {
+        return `any "${folderPart}" folder, exact only - child subfolders will not be excluded`;
+      }
+    } else if (isRecursive) {
+      return 'folder and all subfolders';
+    } else if (containsWildcard) {
+      return 'wildcard pattern - matches any folder segment at any depth';
+    } else {
+      return 'exact folder only - child subfolders will not be excluded';
+    }
   }
 
   /**
@@ -809,6 +940,7 @@ class FolderProvider extends MediaProvider {
     this.cardAdapter = {
       config: this._adaptConfigForV4(),
       hass: hass,
+      _cardId: card?._cardId || 'unknown-card', // V5.8: Forward card ID so SubfolderQueue logs show correct card
       _debugMode: !!this.config.debug_mode,  // Controlled via YAML config
       _backgroundPaused: false,
       _log: (...args) => {
@@ -872,7 +1004,10 @@ class FolderProvider extends MediaProvider {
         max_shown_items_history: this.config.slideshow_window || 1000,
         background_scan: true
       },
-      suppress_subfolder_logging: false  // TEMP: Force logging to see what's happening
+      suppress_subfolder_logging: false,  // TEMP: Force logging to see what's happening
+      // V5.8: Pass compiled excluded path patterns so SubfolderQueue can filter items
+      // Source from card._excludedPathPatterns (not config) - config must stay as plain data
+      _excludedPathPatterns: this.card?._excludedPathPatterns || []
     };
   }
 
@@ -896,7 +1031,7 @@ class FolderProvider extends MediaProvider {
       if (useMediaIndex) {
         // Full sequential mode with database ordering
         this.cardAdapter._log('Using SequentialMediaIndexProvider for ordered queries');
-        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass);
+        this.sequentialProvider = new SequentialMediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.sequentialProvider.initialize();
         
         if (!success) {
@@ -2322,41 +2457,56 @@ class SubfolderQueue {
   // V5: Simplified - just return next item from queue
   // Card manages history/navigation, provider just supplies items
   getNextItem() {
-    // Refill if empty
-    if (this.queue.length === 0) {
-      this.refillQueue();
+    const excludedPatterns = this.card?.config._excludedPathPatterns;
+
+    // Outer retry loop: handles "all shown" case without recursion.
+    // First pass is the normal path; subsequent passes happen after ageOut+refill.
+    const MAX_RETRY_CYCLES = 3;
+    for (let cycle = 0; cycle < MAX_RETRY_CYCLES; cycle++) {
+      // Refill if empty
       if (this.queue.length === 0) {
-        return null;
-      }
-    }
-
-    // Find first unshown item
-    for (let i = 0; i < this.queue.length; i++) {
-      const item = this.queue[i];
-      if (!this.shownItems.has(item.media_content_id)) {
-        this.shownItems.add(item.media_content_id);
-        this.queue.splice(i, 1);
-        
-        // Trigger refill if running low
-        if (this.needsRefill()) {
-          setTimeout(() => this.refillQueue(), 100);
+        this.refillQueue();
+        if (this.queue.length === 0) {
+          return null;
         }
-        
-        return item;
       }
+
+      // Find first unshown item that isn't excluded
+      for (let i = 0; i < this.queue.length; i++) {
+        const item = this.queue[i];
+        if (!this.shownItems.has(item.media_content_id)) {
+          // Check if item matches an excluded path pattern
+          if (excludedPatterns && excludedPatterns.length > 0) {
+            const itemPath = item.media_content_id || item.path || '';
+            const exclusionResult = MediaProvider.matchesExcludedPath(itemPath, excludedPatterns);
+            if (exclusionResult.excluded) {
+              this._log(`🚫 Excluding item matching pattern "${exclusionResult.matchedPattern}":`, itemPath);
+              // Mark as shown so we don't keep checking it
+              this.shownItems.add(item.media_content_id);
+              this.queue.splice(i, 1);
+              i--; // Adjust index since we removed an item
+              continue;
+            }
+          }
+
+          this.shownItems.add(item.media_content_id);
+          this.queue.splice(i, 1);
+
+          // Trigger refill if running low
+          if (this.needsRefill()) {
+            setTimeout(() => this.refillQueue(), 100);
+          }
+
+          return item;
+        }
+      }
+
+      // All items in current queue have been shown/excluded - age out and try again
+      this.ageOutShownItems();
+      this.refillQueue();
+      // Loop continues to retry with freshly refilled queue
     }
 
-    // All items in queue have been shown - age out and try again
-    this.ageOutShownItems();
-    this.refillQueue();
-    
-    if (this.queue.length > 0) {
-      const item = this.queue[0];
-      this.shownItems.add(item.media_content_id);
-      this.queue.shift();
-      return item;
-    }
-    
     return null;
   }
 
@@ -3366,6 +3516,7 @@ class MediaIndexProvider extends MediaProvider {
     }
     
     // Return next item from queue
+    // Note: excluded path patterns are filtered in _queryMediaIndex(), so queue items are pre-validated
     if (this.queue.length > 0) {
       const item = this.queue.shift();
       
@@ -3514,11 +3665,22 @@ class MediaIndexProvider extends MediaProvider {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
         // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
+        // Read patterns from card instance (not config) - config must stay as plain data
+        const excludedPatterns = this.card?._excludedPathPatterns;
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {
             this._log(`⏭️ Filtering out excluded file: ${item.path}`);
             return false;
+          }
+          
+          // V5.7: Also filter by excluded path patterns configured in YAML
+          if (excludedPatterns && excludedPatterns.length > 0) {
+            const exclusionResult = MediaProvider.matchesExcludedPath(item.path, excludedPatterns);
+            if (exclusionResult.excluded) {
+              this._log(`🚫 Path pattern excluded "${exclusionResult.matchedPattern}": ${item.path}`);
+              return false;
+            }
           }
           
           // V4 CODE: Filter out unsupported media formats
@@ -3654,8 +3816,9 @@ class MediaIndexProvider extends MediaProvider {
  * Uses media_index.get_ordered_files service for deterministic ordering
  */
 class SequentialMediaIndexProvider extends MediaProvider {
-  constructor(config, hass) {
+  constructor(config, hass, card = null) {
     super(config, hass);
+    this.card = card; // V5.7: Reference to card for card ID logging
     this.queue = []; // Internal queue of items from database
     this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files
@@ -3898,12 +4061,19 @@ class SequentialMediaIndexProvider extends MediaProvider {
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
-      // Allow more iterations for larger queues, but cap to avoid infinite loops
-      let maxIterations = Math.max(5, Math.min(20, Math.ceil(this.queueSize / 10)));
       let iteration = 0;
+      // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
+      // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
+      // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
+      let consecutiveAllExcludedBatches = 0;
+      const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
+      // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
+      // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
+      // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
+      const MAX_ITERATIONS = 20;
       
       // Keep fetching batches until we have enough valid items OR database is exhausted
-      while (allFilteredItems.length < this.queueSize && iteration < maxIterations) {
+      while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED && iteration < MAX_ITERATIONS) {
         iteration++;
         
         // Build service data
@@ -4050,12 +4220,30 @@ class SequentialMediaIndexProvider extends MediaProvider {
           this._log(`📍 Updated compound cursor: value=${localCursor}, id=${localCursorId}`);
         }
         
+        // Track consecutive fully-excluded batches (all items filtered out)
+        // This is the only escape valve now - keeps going through large excluded folders
+        // but stops if config excludes literally everything in the database
+        const validFromThisBatch = filteredItems.length;
+        if (validFromThisBatch === 0 && response.items.length > 0) {
+          consecutiveAllExcludedBatches++;
+          if (consecutiveAllExcludedBatches >= MAX_CONSECUTIVE_EXCLUDED) {
+            this._log(`⚠️ Stopping after ${MAX_CONSECUTIVE_EXCLUDED} consecutive fully-excluded batches - excluded_paths may be too broad`);
+            break;
+          }
+        } else {
+          consecutiveAllExcludedBatches = 0; // Reset on any progress
+        }
+        
         // If we got enough items OR database is exhausted, exit loop
         if (allFilteredItems.length >= this.queueSize || !this.hasMore) {
           break;
         }
         
         this._log(`🔄 Need more items (have ${allFilteredItems.length}, need ${this.queueSize}) - fetching next batch...`);
+      }
+
+      if (iteration >= MAX_ITERATIONS && allFilteredItems.length < this.queueSize) {
+        this._log(`⚠️ Stopped after ${MAX_ITERATIONS} iterations with only ${allFilteredItems.length} items - excluded_paths may be excluding most of the database`);
       }
       
       // Now process all accumulated items
@@ -4181,11 +4369,22 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this._log(`🚫 excludedFiles now has ${this.excludedFiles.size} entries`);
   }
 
-  // Check if a file is excluded
+  // Check if a file is excluded (individual 404 exclusions OR config path patterns)
   _isExcluded(path) {
     if (!path) return false;
     const normalizedPath = this._normalizePath(path);
-    return this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath);
+    // Check explicitly excluded individual files (404s, etc.)
+    if (this.excludedFiles.has(path) || this.excludedFiles.has(normalizedPath)) return true;
+    // V5.7: Check excluded path patterns - read from card instance (not config)
+    const excludedPatterns = this.card?._excludedPathPatterns;
+    if (excludedPatterns && excludedPatterns.length > 0) {
+      const result = MediaProvider.matchesExcludedPath(path, excludedPatterns);
+      if (result.excluded) {
+        this._log(`🚫 Path pattern excluded: "${result.matchedPattern}" matches ${path}`);
+        return true;
+      }
+    }
+    return false;
   }
 
   // Reset to beginning of sequence (for loop functionality)
@@ -4541,6 +4740,7 @@ class MediaCard extends LitElement {
     this.isLoading = false;
     this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
+    this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
     this._errorState = null; // V4 error state tracking
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
@@ -4657,6 +4857,7 @@ class MediaCard extends LitElement {
     // V5.6.12: User mute preference state
     this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
+    this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -5317,6 +5518,21 @@ class MediaCard extends LitElement {
     this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
     this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
+    
+    // V5.7: Compile excluded_paths patterns for path filtering
+    // Patterns are compiled to regex once and stored on the card instance.
+    // Providers access them via card._excludedPathPatterns (not via config, which must
+    // remain plain data safe for YAML serialization by the card editor).
+    this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
+    
+    // Log configured exclusions at INFO level (always shown, helps users verify patterns)
+    if (this._excludedPathPatterns.length > 0) {
+      console.log(`📁 [MediaCard:${this._cardId}] Path exclusions configured:`);
+      for (const compiled of this._excludedPathPatterns) {
+        const description = MediaProvider.describeExclusionPattern(compiled.pattern, compiled.isRecursive);
+        console.log(`   • ${compiled.pattern} (${description})`);
+      }
+    }
     
     // V5: Trigger reinitialization if we already have hass
     if (this._hass) {
@@ -7061,8 +7277,13 @@ class MediaCard extends LitElement {
       this._hideBottomOverlaysForVideo = false;
     }
     
-    // Only use crossfade for images, not videos
-    const isVideo = this._isVideoFile(url);
+    // Only use crossfade for images, not videos.
+    // V5.8: Also check _isCurrentItemVideo() as a fallback for integration sources (Reolink,
+    // Immich, etc.) whose resolved URLs have no file extension.  Without this, _isVideoFile()
+    // returns false and _setMediaUrl takes the image crossfade path, which never calls
+    // videoElement.load().  Lit reuses the same <video> DOM node between navigations and the
+    // browser does NOT auto-reload when <source src> changes — so the video never plays.
+    const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo();
     
     // For images, validate they exist before displaying (MediaIndexProvider only)
     if (!isVideo) {
@@ -7436,11 +7657,16 @@ class MediaCard extends LitElement {
       } else {
         // For folder/queue modes, if it's a 404, remove from queue and skip to next automatically
         if (is404) {
-          this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
-          // Remove from navigation queue and panel queue to prevent showing again
-          this._remove404FromQueues(this.currentMedia);
-          // Skip to next without showing error
-          setTimeout(() => this._loadNext(), 100);
+          // V5.8: For video items, use transient-failure threshold before permanently removing.
+          // MEDIA_ERR_SRC_NOT_SUPPORTED fires for ANY HTTP error (400, 403, 404, 500) not just 404.
+          // Reolink's NVR can return 400 when rejecting concurrent download requests.
+          if (this._isCurrentItemVideo()) {
+            this._handleVideoFolderFailure();
+          } else {
+            this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
+            this._remove404FromQueues(this.currentMedia);
+            setTimeout(() => this._loadNext(), 100);
+          }
         } else {
           this._showMediaError(errorMessage, isSynologyUrl);
         }
@@ -7449,9 +7675,14 @@ class MediaCard extends LitElement {
       // Already tried to retry this URL
       if (is404 && this.config.media_source_type !== 'single_media') {
         // For 404s in folder/queue mode, remove from queue and skip to next instead of showing error
-        this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
-        this._remove404FromQueues(this.currentMedia);
-        setTimeout(() => this._loadNext(), 100);
+        // V5.8: Apply transient-failure threshold for video items (same rationale as Path A above)
+        if (this._isCurrentItemVideo()) {
+          this._handleVideoFolderFailure();
+        } else {
+          this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
+          this._remove404FromQueues(this.currentMedia);
+          setTimeout(() => this._loadNext(), 100);
+        }
       } else {
         // Show error for non-404 errors or single media mode
         this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
@@ -7601,7 +7832,15 @@ class MediaCard extends LitElement {
       this._log('🔇 Skipping 404 error UI - will auto-advance silently');
       
       // V5: Remove from queues to prevent showing again
+      // V5.8: For video items, apply transient-failure threshold before permanent removal.
+      // MEDIA_ERR_SRC_NOT_SUPPORTED fires for ANY HTTP error (400, 403, 404, 500) – Reolink's NVR
+      // can return 400 when it rejects concurrent download requests.  Allow one transient skip
+      // before permanently removing.  _handleVideoFolderFailure() also calls _loadNext().
       if (this.currentMedia) {
+        if (this._isCurrentItemVideo()) {
+          this._handleVideoFolderFailure();
+          return; // _handleVideoFolderFailure handles advancing
+        }
         this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
         this._remove404FromQueues(this.currentMedia);
       }
@@ -7662,6 +7901,15 @@ class MediaCard extends LitElement {
     this._videoWaitStartTime = null;
     // Reset user interaction flag for new video
     this._videoUserInteracted = false;
+    // V5.8: If the user has an active unmute preference (they explicitly chose to unmute),
+    // treat each new video as "interacted" so it plays to completion without being cut off
+    // by max_video_duration. Uses _isUserMutePreferenceValid() + _userMutePreference===false
+    // rather than _getEffectiveMuteState() so that the default video_muted:false config
+    // setting does NOT trigger this path - only an explicit user action does.
+    if (this._isUserMutePreferenceValid() && this._userMutePreference === false) {
+      this._videoUserInteracted = true;
+      this._log('🎬 Active unmute preference - treating new video as interacted (plays to end, ignores max_video_duration)');
+    }
     // V5.6.8: Reset video controls visibility and overlay state for new video
     this._videoControlsVisible = false;
     this._hideBottomOverlaysForVideo = false;
@@ -7670,6 +7918,10 @@ class MediaCard extends LitElement {
   _onVideoCanPlay() {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
+    
+    // V5.8: Clear transient failure counter – video loaded successfully this time
+    const itemId = this.currentMedia?.media_content_id;
+    if (itemId) this._videoTransientFailures.delete(itemId);
     
     // V5.6.7: Clear navigation flag now that video is actually ready to play
     // This prevents timer from firing prematurely during video-to-video transitions
@@ -8012,10 +8264,13 @@ class MediaCard extends LitElement {
       this._log(`🔊 Video loaded - muted=${shouldBeMuted} (preference=${this._userMutePreference}, valid=${this._isUserMutePreferenceValid()})`);
       
       // Force the video controls to update by toggling muted state
+      // V5.8: Suppress the volumechange handler during this programmatic toggle
       setTimeout(() => {
+        this._suppressVolumeChangeHandler = true;
         const currentMuted = video.muted;
         video.muted = !currentMuted;
         video.muted = currentMuted;
+        this._suppressVolumeChangeHandler = false;
       }, 50);
     }
   }
@@ -8055,6 +8310,12 @@ class MediaCard extends LitElement {
     this._userMutePreference = !currentEffective;
     this._mutePreferenceTimestamp = Date.now();
     
+    // V5.8: Unmuting counts as a user interaction - video should play to end
+    if (!this._userMutePreference) {
+      this._videoUserInteracted = true;
+      this._log('🎬 User unmuted via action button - will play to completion');
+    }
+    
     this._log(`🔊 Mute toggled: ${currentEffective} → ${this._userMutePreference}`);
     
     // Apply to current video if one is playing
@@ -8077,6 +8338,32 @@ class MediaCard extends LitElement {
     }
     
     this.requestUpdate();
+  }
+
+  // V5.8: Track mute/unmute via native browser video controls
+  // _handleMuteToggle updates _userMutePreference BEFORE setting video.muted, so for action
+  // button changes video.muted already matches _getEffectiveMuteState() when this fires.
+  // A mismatch means the change came from the native controls.
+  _onVideoVolumeChange(e) {
+    if (this._suppressVolumeChangeHandler) return;
+    const video = e.target;
+    if (!video) return;
+
+    const expectedMuted = this._getEffectiveMuteState();
+    if (video.muted !== expectedMuted) {
+      // Sync our preference to match what native controls set
+      this._userMutePreference = video.muted;
+      this._mutePreferenceTimestamp = Date.now();
+      this._log(`🔊 Native controls changed mute: ${expectedMuted} → ${video.muted}`);
+
+      // V5.8: Unmuting counts as user interaction - video should play to end
+      if (!video.muted) {
+        this._videoUserInteracted = true;
+        this._log('🎬 User unmuted via native controls - will play to completion');
+      }
+
+      this.requestUpdate();
+    }
   }
 
   // V4: Keyboard navigation handler
@@ -11184,8 +11471,74 @@ class MediaCard extends LitElement {
    */
   _isVideoItem(item) {
     if (!item) return false;
+    // V5.8: Check media_content_type first – most reliable for integration sources.
+    // Reolink/Immich items have opaque URIs with no file extension, so _isVideoFile() returns
+    // null, but browse_media returns media_class: 'video' which is stored as media_content_type.
+    if (item.media_content_type?.startsWith('video')) return true;
     const path = item.media_content_id || item.path || '';
     return this._isVideoFile(path);
+  }
+
+  /**
+   * V5.8: Check if the currently displayed item is a video, using all available signals.
+   * _isVideoFile() checks file extension but fails for Reolink (media-source://reolink/FILE|...)
+   * and other integration sources that use opaque URIs with no extension.
+   * This method also checks media_content_type (set from HA browse_media response where
+   * Reolink returns media_class='video') and the resolved mediaUrl.
+   */
+  _isCurrentItemVideo() {
+    // Check media_content_type first – most reliable for integration sources (Reolink, Immich, etc.)
+    if (this.currentMedia?.media_content_type?.startsWith('video')) return true;
+    // Fall back to extension-based detection on the canonical ID or resolved URL
+    return this._isVideoFile(this.currentMedia?.media_content_id) || this._isVideoFile(this.mediaUrl);
+  }
+
+  /**
+   * V5.8: Handle a video failure in folder mode with transient error protection.
+   *
+   * Problem: The browser fires MEDIA_ERR_SRC_NOT_SUPPORTED for ANY HTTP error on a <source>
+   * element (400, 403, 404, 500) – not just a real 404.  Reolink's NVR can return HTTP 400
+   * when it rejects concurrent download requests (e.g. when two cards pre-load the same
+   * camera stream simultaneously).  The card was treating these as "file not found" and
+   * permanently removing the items from the queue.
+   *
+   * Fix: Track consecutive failures per item.  Allow one transient skip before permanently
+   * removing.  If the error was genuinely transient (NVR busy), the retry will succeed and
+   * the counter is cleared by _onVideoCanPlay.  If the file is truly missing, it will fail
+   * twice and be permanently removed on the second attempt.
+   */
+  _handleVideoFolderFailure() {
+    const itemId = this.currentMedia?.media_content_id;
+    if (!itemId) {
+      // No item ID to track — just advance to next
+      setTimeout(() => this._loadNext(), 100);
+      return;
+    }
+
+    const THRESHOLD = 2; // Remove permanently after this many consecutive failures
+    const count = (this._videoTransientFailures.get(itemId) || 0) + 1;
+    this._videoTransientFailures.set(itemId, count);
+
+    // Prevent unbounded growth of the failure map
+    if (this._videoTransientFailures.size > 100) {
+      const firstKey = this._videoTransientFailures.keys().next().value;
+      this._videoTransientFailures.delete(firstKey);
+    }
+
+    if (count < THRESHOLD) {
+      this._log(
+        `⚠️ Video load failed (attempt ${count}/${THRESHOLD}) – skipping without permanent removal.` +
+        ` May be a transient error (e.g. Reolink NVR rejecting concurrent request with 400).`
+      );
+      setTimeout(() => this._loadNext(), 100);
+    } else {
+      this._log(
+        `🗑️ Video failed ${count} consecutive times – permanently removing from queue: ${itemId}`
+      );
+      this._videoTransientFailures.delete(itemId);
+      this._remove404FromQueues(this.currentMedia);
+      setTimeout(() => this._loadNext(), 100);
+    }
   }
   
   /**
@@ -11212,7 +11565,25 @@ class MediaCard extends LitElement {
   
   _handleThumbnailError(e, item) {
     // Handle 404s for queue thumbnails - mark item as invalid and hide it
-    this._log('📭 Thumbnail failed to load (404):', item.filename || item.path);
+    this._log('📭 Thumbnail failed to load (404):', item?.filename || item?.media_content_id || item?.path);
+    
+    // V5.8: Never remove video items from the navigation queue on thumbnail failure.
+    // Video thumbnails can fail transiently (e.g. Reolink NVR returns 400 for concurrent requests)
+    // even when the video itself is perfectly playable. The main video error handler
+    // (_handleVideoFolderFailure) is the correct place to detect genuinely missing videos.
+    // Additionally, _isVideoItem() was previously returning false for Reolink items (opaque URIs,
+    // no file extension) so they were rendering as <img> which always fails on a video URL.
+    if (item && this._isVideoItem(item)) {
+      this._log(`⚠️ Video thumbnail failed – hiding media element but keeping container clickable: ${item.media_content_id || item.filename}`);
+      // V5.8: Hide only the <video>/<img> element itself.  The .thumbnail container must stay
+      // visible and clickable so the user can still navigate to the item via the queue panel.
+      // The emoji overlay (🎞️) will remain visible as a placeholder.
+      const target = e.target;
+      if (target) target.style.display = 'none';
+      item._thumbnailFailed = true; // V5.8: triggers text placeholder in render
+      this.requestUpdate();
+      return;
+    }
     
     // Mark the item as invalid so it won't be displayed
     if (item) {
@@ -11285,7 +11656,7 @@ class MediaCard extends LitElement {
     const target = e.target;
     if (target) {
       // Find the parent thumbnail container and hide it
-      const thumbnailContainer = target.closest('.thumbnail-item');
+      const thumbnailContainer = target.closest('.thumbnail');
       if (thumbnailContainer) {
         thumbnailContainer.style.display = 'none';
       }
@@ -13986,6 +14357,45 @@ class MediaCard extends LitElement {
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 
+    /* V5.8: Placeholder shown when video thumbnail fails to load (e.g. Reolink 400) */
+    .thumbnail-failed-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 6px 4px;
+      box-sizing: border-box;
+    }
+
+    .thumbnail-failed-placeholder .tfp-icon {
+      font-size: 1.4em;
+      line-height: 1;
+    }
+
+    .thumbnail-failed-placeholder .tfp-time {
+      color: #fff;
+      font-size: 0.85em;
+      font-weight: 600;
+      font-family: monospace;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      text-align: center;
+    }
+
+    .thumbnail-failed-placeholder .tfp-duration {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.75em;
+      font-family: monospace;
+      white-space: nowrap;
+    }
+
     .no-items {
       grid-column: 1 / -1;
       text-align: center;
@@ -14120,9 +14530,17 @@ class MediaCard extends LitElement {
       return html`<div class="placeholder">Resolving media URL...</div>`;
     }
 
-    // V4: Detect media type from media_content_type or filename
-    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
-                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
+    // V4: Detect media type from the *resolved* mediaUrl (not currentMedia.media_content_id).
+    // IMPORTANT: currentMedia is set as a reactive Lit property before mediaUrl is resolved.
+    // If we used currentMedia to determine isVideo here, a premature render (triggered by the
+    // reactive property change) would create a <video> element with the OLD mediaUrl (e.g. a jpg
+    // from the previous item), causing the video to "fail" and the correct mp4 to be falsely
+    // removed from the queue as a 404.
+    // By using the resolved mediaUrl, the element type and src are always in sync.
+    // Fallback: use media_content_type for extensionless URLs (e.g. Immich integration).
+    const resolvedUrlType = this.mediaUrl ? MediaUtils.detectFileType(this.mediaUrl) : null;
+    const isVideo = resolvedUrlType === 'video' ||
+                    (resolvedUrlType !== 'image' && this.currentMedia?.media_content_type?.startsWith('video'));
 
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
     const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
@@ -14167,6 +14585,7 @@ class MediaCard extends LitElement {
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
             @seeked=${this._onVideoSeeked}
+            @volumechange=${this._onVideoVolumeChange}
             @click=${this._onVideoClickToggle}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
@@ -14699,11 +15118,31 @@ class MediaCard extends LitElement {
               class="thumbnail ${isFavorited ? 'favorited' : ''}"
               data-item-index="${actualIndex}"
               @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
-              title="${item.filename || item.path}"
+              title="${item.title || item.filename || item.path}"
               data-cache-key="${cacheKey}"
             >
               ${item._resolvedUrl ? (
-                isVideo ? html`
+                isVideo ? (() => {
+                  if (item._thumbnailFailed) {
+                    // V5.8: Video thumbnail failed (e.g. Reolink NVR returned 400).
+                    // Show a text placeholder with time + duration derived from item.title or
+                    // item.filename (format: "HH:MM:SS D:MM:SS" e.g. "12:22:48 0:02:50").
+                    // Reolink queue items use item.title (set by timestamp extraction in
+                    // SubfolderQueue); file-based items use item.filename.
+                    // Parse by splitting on the first space; both halves already formatted.
+                    const fname = item.title || item.filename || '';
+                    const spaceIdx = fname.indexOf(' ');
+                    const tfpTime = spaceIdx > 0 ? fname.substring(0, spaceIdx) : fname;
+                    const tfpDuration = spaceIdx > 0 ? fname.substring(spaceIdx + 1) : '';
+                    return html`
+                      <div class="thumbnail-failed-placeholder">
+                        <span class="tfp-icon">🎞️</span>
+                        ${tfpTime ? html`<span class="tfp-time">${tfpTime}</span>` : ''}
+                        ${tfpDuration ? html`<span class="tfp-duration">${tfpDuration}</span>` : ''}
+                      </div>
+                    `;
+                  }
+                  return html`
                   <video 
                     class="thumbnail-video ${isVideoLoaded ? 'loaded' : ''}"
                     preload="metadata"
@@ -14717,7 +15156,8 @@ class MediaCard extends LitElement {
                     @error=${(e) => this._handleThumbnailError(e, item)}
                   ></video>
                   <div class="video-icon-overlay">🎞️</div>
-                ` : html`
+                `;
+                })() : html`
                   <img 
                     src="${item._resolvedUrl}" 
                     alt="${item.filename || 'Thumbnail'}"
@@ -17875,6 +18315,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           ` : ''}
+
+          <!-- excluded_paths callout - always shown for folder mode -->
+          <div style="grid-column: 1 / -1; margin-top: 8px; padding: 12px 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--info-color, #4ba3e3);">
+            <div style="font-weight: 500; margin-bottom: 6px; color: var(--primary-text-color);">📁 Exclude Subfolders (YAML only)</div>
+            <div style="color: var(--secondary-text-color); font-size: 0.9em; line-height: 1.5; margin-bottom: 8px;">Use <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 1px 4px; border-radius: 3px;">excluded_paths</code> in YAML to skip specific subfolders. Supports glob patterns:</div>
+            <pre style="margin: 0 0 8px 0; padding: 8px; background: var(--code-background-color, rgba(0,0,0,0.15)); border-radius: 4px; font-size: 0.8em; overflow-x: auto; color: var(--primary-text-color);">excluded_paths:
+  - "Burst/**"           # folder + all contents
+  - "**/Thumbnails/**"   # any depth
+  - "**/.thumbnails/**"</pre>
+            <a href="https://github.com/markaggar/ha-media-card/blob/master/docs/guides/yaml-only-features.md#excluded_paths" target="_blank" rel="noopener noreferrer" style="color: var(--primary-color); font-size: 0.85em;">View full pattern syntax →</a>
+          </div>
         ` : ''}
 
         <div class="config-row">
@@ -18879,6 +19330,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         </div>
 
         <div class="support-footer">
+          <a href="https://github.com/markaggar/ha-media-card/blob/master/docs/guides/yaml-only-features.md" target="_blank" rel="noopener noreferrer">
+            📋 Some options are only configurable via YAML &mdash; view the YAML-only features reference
+          </a>
+
           <a href="https://github.com/markaggar/ha-media-card/issues" target="_blank" rel="noopener noreferrer">
             Report an issue or request a feature on GitHub
           </a>
@@ -18912,7 +19367,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.7.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.8.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

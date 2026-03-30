@@ -479,6 +479,7 @@ export class MediaIndexProvider extends MediaProvider {
     }
     
     // Return next item from queue
+    // Note: excluded path patterns are filtered in _queryMediaIndex(), so queue items are pre-validated
     if (this.queue.length > 0) {
       const item = this.queue.shift();
       
@@ -627,11 +628,22 @@ export class MediaIndexProvider extends MediaProvider {
         this._log('✅ Received', response.items.length, 'items from media_index');
         
         // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
+        // Read patterns from card instance (not config) - config must stay as plain data
+        const excludedPatterns = this.card?._excludedPathPatterns;
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {
             this._log(`⏭️ Filtering out excluded file: ${item.path}`);
             return false;
+          }
+          
+          // V5.7: Also filter by excluded path patterns configured in YAML
+          if (excludedPatterns && excludedPatterns.length > 0) {
+            const exclusionResult = MediaProvider.matchesExcludedPath(item.path, excludedPatterns);
+            if (exclusionResult.excluded) {
+              this._log(`🚫 Path pattern excluded "${exclusionResult.matchedPattern}": ${item.path}`);
+              return false;
+            }
           }
           
           // V4 CODE: Filter out unsupported media formats
