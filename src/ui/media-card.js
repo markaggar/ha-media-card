@@ -9757,9 +9757,17 @@ export class MediaCard extends LitElement {
       return html`<div class="placeholder">Resolving media URL...</div>`;
     }
 
-    // V4: Detect media type from media_content_type or filename
-    const isVideo = this.currentMedia?.media_content_type?.startsWith('video') || 
-                    MediaUtils.detectFileType(this.currentMedia?.media_content_id || this.currentMedia?.title || this.mediaUrl) === 'video';
+    // V4: Detect media type from the *resolved* mediaUrl (not currentMedia.media_content_id).
+    // IMPORTANT: currentMedia is set as a reactive Lit property before mediaUrl is resolved.
+    // If we used currentMedia to determine isVideo here, a premature render (triggered by the
+    // reactive property change) would create a <video> element with the OLD mediaUrl (e.g. a jpg
+    // from the previous item), causing the video to "fail" and the correct mp4 to be falsely
+    // removed from the queue as a 404.
+    // By using the resolved mediaUrl, the element type and src are always in sync.
+    // Fallback: use media_content_type for extensionless URLs (e.g. Immich integration).
+    const resolvedUrlType = this.mediaUrl ? MediaUtils.detectFileType(this.mediaUrl) : null;
+    const isVideo = resolvedUrlType === 'video' ||
+                    (resolvedUrlType !== 'image' && this.currentMedia?.media_content_type?.startsWith('video'));
 
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
     const metadataScale = Math.max(0.3, Math.min(4, Number(this.config?.metadata?.scale) || 1));
