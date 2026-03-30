@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Works with all provider types: SubfolderQueue, MediaIndexProvider, SequentialMediaIndexProvider
   - See [Configuration Guide](docs/guides/configuration.md#path-exclusion-filtering) for full documentation
 
+- **Fallback text overlay for failed video thumbnails**: When a video thumbnail cannot be loaded (e.g. Reolink opaque stream URLs that have no file extension), the thumbnail slot now shows a film-strip icon (🎞️) with the item's time and duration instead of a blank or missing tile. For Reolink items this displays the clip's start time and length, which are encoded in the item title by the integration.
+
 ### Changed
 
 - **Unmuting a video now counts as a user interaction**: When the user unmutes a video — via the mute action button or the native browser video controls — the video will play to completion rather than being cut off by `max_video_duration` or the slideshow timer. This is consistent with existing behavior for pause, seek, and click interactions.
@@ -35,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **10-digit UNIX timestamp parsing in filenames**: Files named with UNIX timestamps (e.g., `1772236849-camera_person.mp4`) were parsed incorrectly because the 8-digit `YYYYMMDD` pattern matched the first 8 digits before the 10-digit pattern could run
   - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
   - Added `\b` word boundaries to the 8-digit pattern to prevent it matching substrings of longer digit sequences
+
+- **Reolink (opaque URI) videos also removed from queue by the thumbnail strip**: In addition to the main player, the thumbnail strip was independently removing Reolink video items from the navigation queue. Root cause: `_isVideoItem()` only checked the file extension, so Reolink URLs (no extension) were classified as images, rendered as `<img>` elements with the stream URL, which always failed to load, triggering queue removal. Fix: `_isVideoItem()` now checks `media_content_type` first; video thumbnail load errors hide the failed element and set a failed-placeholder flag instead of modifying the queue.
+
+- **Navigation permanently stuck on first video for Reolink**: After a thumbnail error cleared Reolink items from the queue, any remaining Reolink video would also never advance because `_setMediaUrl` used extension-based detection to decide whether to call `videoElement.load()`. With no file extension, the card took the image crossfade code path and never reloaded the `<source>` element, so the browser never fetched the new stream. Fix: `isVideo` now also checks `_isCurrentItemVideo()` (which inspects `media_content_type`), ensuring `videoElement.load()` is always called for integration video items.
+
+- **Thumbnail container hidden entirely on load error (items unclickable)**: `_handleThumbnailError` was hiding the entire `.thumbnail` container div, making the failed item invisible and unclickable in the strip — the failed-placeholder overlay was also suppressed. Fix: only the failed `<img>` or `<video>` element itself is now hidden; the container and any overlay remain visible and interactive.
+
+- **SubfolderQueue logs showing `[unknown-card]` instead of card ID**: `FolderProvider` creates a plain `cardAdapter` object for V4 compatibility. `SubfolderQueue._log` reads `this.card._cardId` for its log prefix, but `cardAdapter` had no `_cardId` property. Fix: `cardAdapter` now forwards `_cardId` from the real card so SubfolderQueue logs correctly identify which card instance they belong to.
 
 ## v5.7.0 - 2026-03-15
 
