@@ -15117,17 +15117,19 @@ class MediaCard extends LitElement {
               class="thumbnail ${isFavorited ? 'favorited' : ''}"
               data-item-index="${actualIndex}"
               @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
-              title="${item.filename || item.path}"
+              title="${item.title || item.filename || item.path}"
               data-cache-key="${cacheKey}"
             >
               ${item._resolvedUrl ? (
                 isVideo ? (() => {
                   if (item._thumbnailFailed) {
                     // V5.8: Video thumbnail failed (e.g. Reolink NVR returned 400).
-                    // Show a text placeholder with time + duration derived from item.filename
-                    // (format: "HH:MM:SS D:MM:SS" e.g. "12:22:48 0:02:50") or a raw timestamp.
+                    // Show a text placeholder with time + duration derived from item.title or
+                    // item.filename (format: "HH:MM:SS D:MM:SS" e.g. "12:22:48 0:02:50").
+                    // Reolink queue items use item.title (set by timestamp extraction in
+                    // SubfolderQueue); file-based items use item.filename.
                     // Parse by splitting on the first space; both halves already formatted.
-                    const fname = item.filename || '';
+                    const fname = item.title || item.filename || '';
                     const spaceIdx = fname.indexOf(' ');
                     const tfpTime = spaceIdx > 0 ? fname.substring(0, spaceIdx) : fname;
                     const tfpDuration = spaceIdx > 0 ? fname.substring(spaceIdx + 1) : '';
