@@ -619,8 +619,8 @@ export class MediaProvider {
   static describeExclusionPattern(pattern, isRecursive) {
     // Detect pattern type
     const startsWithGlobstar = pattern.startsWith('**/');
-    const containsWildcard = pattern.includes('*') && !pattern.endsWith('/**');
-    
+    const containsWildcard = pattern.includes('*') || pattern.includes('?');
+
     if (startsWithGlobstar) {
       // **/FolderName or **/FolderName/**
       const folderPart = pattern.replace(/^\*\*\//, '').replace(/\/\*\*$/, '');
@@ -631,6 +631,8 @@ export class MediaProvider {
       }
     } else if (isRecursive) {
       return 'folder and all subfolders';
+    } else if (containsWildcard) {
+      return 'wildcard pattern - matches any folder segment at any depth';
     } else {
       return 'exact folder only - child subfolders will not be excluded';
     }
