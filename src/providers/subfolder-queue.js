@@ -987,7 +987,7 @@ export class SubfolderQueue {
   // V5: Simplified - just return next item from queue
   // Card manages history/navigation, provider just supplies items
   getNextItem() {
-    const excludedPatterns = this.card?.config?._excludedPathPatterns;
+    const excludedPatterns = this.card?.config._excludedPathPatterns;
 
     // Outer retry loop: handles "all shown" case without recursion.
     // First pass is the normal path; subsequent passes happen after ageOut+refill.
