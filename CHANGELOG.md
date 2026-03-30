@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Active unmute preference carries over to subsequent videos**: While the user's unmute preference is active, every new video that starts is treated as "interacted with" and plays to completion. `max_video_duration` is not enforced while audio is playing. Behaviour reverts automatically when the mute preference expires (per `mute_preference_timeout`) or the user mutes again.
 
 ### Fixed
+- **Videos silently removed from queue as false 404s when following an image**: A Lit rendering race condition caused the `<video>` element to be rendered with the previous item's image URL, making the video appear to fail. The mp4 was then incorrectly removed from the navigation queue as a missing file. Root cause: `currentMedia` is a reactive `state: true` property — setting it queues a Lit re-render immediately, which fired in the `await` gap before `_resolveMediaUrl()` had set the new `mediaUrl`. Fix: `_renderMedia` now derives `isVideo` from the resolved `mediaUrl` rather than `currentMedia.media_content_id`, so the element type and src attribute are always consistent.
+
 - **10-digit UNIX timestamp parsing in filenames**: Files named with UNIX timestamps (e.g., `1772236849-camera_person.mp4`) were parsed incorrectly because the 8-digit `YYYYMMDD` pattern matched the first 8 digits before the 10-digit pattern could run
   - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
   - Added `\b` word boundaries to the 8-digit pattern to prevent it matching substrings of longer digit sequences
