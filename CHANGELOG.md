@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Works with all provider types: SubfolderQueue, MediaIndexProvider, SequentialMediaIndexProvider
   - See [Configuration Guide](docs/guides/configuration.md#path-exclusion-filtering) for full documentation
 
+### Changed
+
+- **Unmuting a video now counts as a user interaction**: When the user unmutes a video — via the mute action button or the native browser video controls — the video will play to completion rather than being cut off by `max_video_duration` or the slideshow timer. This is consistent with existing behavior for pause, seek, and click interactions.
+  - Action button unmute sets `_videoUserInteracted = true` immediately
+  - Native browser control unmutes are detected via the `volumechange` event
+  - Muting again or the mute preference expiring restores normal timer behaviour
+
+- **Active unmute preference carries over to subsequent videos**: While the user's unmute preference is active, every new video that starts is treated as "interacted with" and plays to completion. `max_video_duration` is not enforced while audio is playing. Behaviour reverts automatically when the mute preference expires (per `mute_preference_timeout`) or the user mutes again.
+
 ### Fixed
 - **10-digit UNIX timestamp parsing in filenames**: Files named with UNIX timestamps (e.g., `1772236849-camera_person.mp4`) were parsed incorrectly because the 8-digit `YYYYMMDD` pattern matched the first 8 digits before the 10-digit pattern could run
   - Moved the 10-digit UNIX timestamp pattern before the 8-digit pattern in the regex priority list
