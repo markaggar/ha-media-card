@@ -940,6 +940,7 @@ class FolderProvider extends MediaProvider {
     this.cardAdapter = {
       config: this._adaptConfigForV4(),
       hass: hass,
+      _cardId: card?._cardId || 'unknown-card', // V5.8: Forward card ID so SubfolderQueue logs show correct card
       _debugMode: !!this.config.debug_mode,  // Controlled via YAML config
       _backgroundPaused: false,
       _log: (...args) => {
