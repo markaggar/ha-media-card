@@ -11465,6 +11465,10 @@ class MediaCard extends LitElement {
    */
   _isVideoItem(item) {
     if (!item) return false;
+    // V5.8: Check media_content_type first – most reliable for integration sources.
+    // Reolink/Immich items have opaque URIs with no file extension, so _isVideoFile() returns
+    // null, but browse_media returns media_class: 'video' which is stored as media_content_type.
+    if (item.media_content_type?.startsWith('video')) return true;
     const path = item.media_content_id || item.path || '';
     return this._isVideoFile(path);
   }
@@ -11555,7 +11559,24 @@ class MediaCard extends LitElement {
   
   _handleThumbnailError(e, item) {
     // Handle 404s for queue thumbnails - mark item as invalid and hide it
-    this._log('📭 Thumbnail failed to load (404):', item.filename || item.path);
+    this._log('📭 Thumbnail failed to load (404):', item?.filename || item?.media_content_id || item?.path);
+    
+    // V5.8: Never remove video items from the navigation queue on thumbnail failure.
+    // Video thumbnails can fail transiently (e.g. Reolink NVR returns 400 for concurrent requests)
+    // even when the video itself is perfectly playable. The main video error handler
+    // (_handleVideoFolderFailure) is the correct place to detect genuinely missing videos.
+    // Additionally, _isVideoItem() was previously returning false for Reolink items (opaque URIs,
+    // no file extension) so they were rendering as <img> which always fails on a video URL.
+    if (item && this._isVideoItem(item)) {
+      this._log(`⚠️ Video thumbnail failed – hiding thumbnail but keeping item in queue: ${item.media_content_id || item.filename}`);
+      const target = e.target;
+      if (target) {
+        const thumbnailContainer = target.closest('.thumbnail');
+        if (thumbnailContainer) thumbnailContainer.style.display = 'none';
+      }
+      this.requestUpdate();
+      return;
+    }
     
     // Mark the item as invalid so it won't be displayed
     if (item) {
@@ -11628,7 +11649,7 @@ class MediaCard extends LitElement {
     const target = e.target;
     if (target) {
       // Find the parent thumbnail container and hide it
-      const thumbnailContainer = target.closest('.thumbnail-item');
+      const thumbnailContainer = target.closest('.thumbnail');
       if (thumbnailContainer) {
         thumbnailContainer.style.display = 'none';
       }
