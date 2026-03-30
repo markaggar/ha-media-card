@@ -119,6 +119,7 @@ export class MediaCard extends LitElement {
     this.isLoading = false;
     this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
+    this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
     this._errorState = null; // V4 error state tracking
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
@@ -3030,11 +3031,16 @@ export class MediaCard extends LitElement {
       } else {
         // For folder/queue modes, if it's a 404, remove from queue and skip to next automatically
         if (is404) {
-          this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
-          // Remove from navigation queue and panel queue to prevent showing again
-          this._remove404FromQueues(this.currentMedia);
-          // Skip to next without showing error
-          setTimeout(() => this._loadNext(), 100);
+          // V5.8: For video items, use transient-failure threshold before permanently removing.
+          // MEDIA_ERR_SRC_NOT_SUPPORTED fires for ANY HTTP error (400, 403, 404, 500) not just 404.
+          // Reolink's NVR can return 400 when rejecting concurrent download requests.
+          if (this._isCurrentItemVideo()) {
+            this._handleVideoFolderFailure();
+          } else {
+            this._log('⏭️ Skipping 404 file, removing from queues and advancing to next media');
+            this._remove404FromQueues(this.currentMedia);
+            setTimeout(() => this._loadNext(), 100);
+          }
         } else {
           this._showMediaError(errorMessage, isSynologyUrl);
         }
@@ -3043,9 +3049,14 @@ export class MediaCard extends LitElement {
       // Already tried to retry this URL
       if (is404 && this.config.media_source_type !== 'single_media') {
         // For 404s in folder/queue mode, remove from queue and skip to next instead of showing error
-        this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
-        this._remove404FromQueues(this.currentMedia);
-        setTimeout(() => this._loadNext(), 100);
+        // V5.8: Apply transient-failure threshold for video items (same rationale as Path A above)
+        if (this._isCurrentItemVideo()) {
+          this._handleVideoFolderFailure();
+        } else {
+          this._log('⏭️ Skipping 404 file after retry, removing from queues and advancing to next media');
+          this._remove404FromQueues(this.currentMedia);
+          setTimeout(() => this._loadNext(), 100);
+        }
       } else {
         // Show error for non-404 errors or single media mode
         this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
@@ -3195,7 +3206,15 @@ export class MediaCard extends LitElement {
       this._log('🔇 Skipping 404 error UI - will auto-advance silently');
       
       // V5: Remove from queues to prevent showing again
+      // V5.8: For video items, apply transient-failure threshold before permanent removal.
+      // MEDIA_ERR_SRC_NOT_SUPPORTED fires for ANY HTTP error (400, 403, 404, 500) – Reolink's NVR
+      // can return 400 when it rejects concurrent download requests.  Allow one transient skip
+      // before permanently removing.  _handleVideoFolderFailure() also calls _loadNext().
       if (this.currentMedia) {
+        if (this._isCurrentItemVideo()) {
+          this._handleVideoFolderFailure();
+          return; // _handleVideoFolderFailure handles advancing
+        }
         this._log(`🗑️ File not found (404) - removing from queue: ${currentPath}`);
         this._remove404FromQueues(this.currentMedia);
       }
@@ -3273,6 +3292,10 @@ export class MediaCard extends LitElement {
   _onVideoCanPlay() {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
+    
+    // V5.8: Clear transient failure counter – video loaded successfully this time
+    const itemId = this.currentMedia?.media_content_id;
+    if (itemId) this._videoTransientFailures.delete(itemId);
     
     // V5.6.7: Clear navigation flag now that video is actually ready to play
     // This prevents timer from firing prematurely during video-to-video transitions
@@ -6824,6 +6847,68 @@ export class MediaCard extends LitElement {
     if (!item) return false;
     const path = item.media_content_id || item.path || '';
     return this._isVideoFile(path);
+  }
+
+  /**
+   * V5.8: Check if the currently displayed item is a video, using all available signals.
+   * _isVideoFile() checks file extension but fails for Reolink (media-source://reolink/FILE|...)
+   * and other integration sources that use opaque URIs with no extension.
+   * This method also checks media_content_type (set from HA browse_media response where
+   * Reolink returns media_class='video') and the resolved mediaUrl.
+   */
+  _isCurrentItemVideo() {
+    // Check media_content_type first – most reliable for integration sources (Reolink, Immich, etc.)
+    if (this.currentMedia?.media_content_type?.startsWith('video')) return true;
+    // Fall back to extension-based detection on the canonical ID or resolved URL
+    return this._isVideoFile(this.currentMedia?.media_content_id) || this._isVideoFile(this.mediaUrl);
+  }
+
+  /**
+   * V5.8: Handle a video failure in folder mode with transient error protection.
+   *
+   * Problem: The browser fires MEDIA_ERR_SRC_NOT_SUPPORTED for ANY HTTP error on a <source>
+   * element (400, 403, 404, 500) – not just a real 404.  Reolink's NVR can return HTTP 400
+   * when it rejects concurrent download requests (e.g. when two cards pre-load the same
+   * camera stream simultaneously).  The card was treating these as "file not found" and
+   * permanently removing the items from the queue.
+   *
+   * Fix: Track consecutive failures per item.  Allow one transient skip before permanently
+   * removing.  If the error was genuinely transient (NVR busy), the retry will succeed and
+   * the counter is cleared by _onVideoCanPlay.  If the file is truly missing, it will fail
+   * twice and be permanently removed on the second attempt.
+   */
+  _handleVideoFolderFailure() {
+    const itemId = this.currentMedia?.media_content_id;
+    if (!itemId) {
+      // No item ID to track — just advance to next
+      setTimeout(() => this._loadNext(), 100);
+      return;
+    }
+
+    const THRESHOLD = 2; // Remove permanently after this many consecutive failures
+    const count = (this._videoTransientFailures.get(itemId) || 0) + 1;
+    this._videoTransientFailures.set(itemId, count);
+
+    // Prevent unbounded growth of the failure map
+    if (this._videoTransientFailures.size > 100) {
+      const firstKey = this._videoTransientFailures.keys().next().value;
+      this._videoTransientFailures.delete(firstKey);
+    }
+
+    if (count < THRESHOLD) {
+      this._log(
+        `⚠️ Video load failed (attempt ${count}/${THRESHOLD}) – skipping without permanent removal.` +
+        ` May be a transient error (e.g. Reolink NVR rejecting concurrent request with 400).`
+      );
+      setTimeout(() => this._loadNext(), 100);
+    } else {
+      this._log(
+        `🗑️ Video failed ${count} consecutive times – permanently removing from queue: ${itemId}`
+      );
+      this._videoTransientFailures.delete(itemId);
+      this._remove404FromQueues(this.currentMedia);
+      setTimeout(() => this._loadNext(), 100);
+    }
   }
   
   /**
