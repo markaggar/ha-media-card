@@ -7276,8 +7276,13 @@ class MediaCard extends LitElement {
       this._hideBottomOverlaysForVideo = false;
     }
     
-    // Only use crossfade for images, not videos
-    const isVideo = this._isVideoFile(url);
+    // Only use crossfade for images, not videos.
+    // V5.8: Also check _isCurrentItemVideo() as a fallback for integration sources (Reolink,
+    // Immich, etc.) whose resolved URLs have no file extension.  Without this, _isVideoFile()
+    // returns false and _setMediaUrl takes the image crossfade path, which never calls
+    // videoElement.load().  Lit reuses the same <video> DOM node between navigations and the
+    // browser does NOT auto-reload when <source src> changes — so the video never plays.
+    const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo();
     
     // For images, validate they exist before displaying (MediaIndexProvider only)
     if (!isVideo) {
@@ -11568,12 +11573,12 @@ class MediaCard extends LitElement {
     // Additionally, _isVideoItem() was previously returning false for Reolink items (opaque URIs,
     // no file extension) so they were rendering as <img> which always fails on a video URL.
     if (item && this._isVideoItem(item)) {
-      this._log(`⚠️ Video thumbnail failed – hiding thumbnail but keeping item in queue: ${item.media_content_id || item.filename}`);
+      this._log(`⚠️ Video thumbnail failed – hiding media element but keeping container clickable: ${item.media_content_id || item.filename}`);
+      // V5.8: Hide only the <video>/<img> element itself.  The .thumbnail container must stay
+      // visible and clickable so the user can still navigate to the item via the queue panel.
+      // The emoji overlay (🎞️) will remain visible as a placeholder.
       const target = e.target;
-      if (target) {
-        const thumbnailContainer = target.closest('.thumbnail');
-        if (thumbnailContainer) thumbnailContainer.style.display = 'none';
-      }
+      if (target) target.style.display = 'none';
       this.requestUpdate();
       return;
     }
