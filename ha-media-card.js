@@ -4843,6 +4843,7 @@ class MediaCard extends LitElement {
     // V5.6.12: User mute preference state
     this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
+    this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -8214,10 +8215,13 @@ class MediaCard extends LitElement {
       this._log(`🔊 Video loaded - muted=${shouldBeMuted} (preference=${this._userMutePreference}, valid=${this._isUserMutePreferenceValid()})`);
       
       // Force the video controls to update by toggling muted state
+      // V5.8: Suppress the volumechange handler during this programmatic toggle
       setTimeout(() => {
+        this._suppressVolumeChangeHandler = true;
         const currentMuted = video.muted;
         video.muted = !currentMuted;
         video.muted = currentMuted;
+        this._suppressVolumeChangeHandler = false;
       }, 50);
     }
   }
@@ -8257,6 +8261,12 @@ class MediaCard extends LitElement {
     this._userMutePreference = !currentEffective;
     this._mutePreferenceTimestamp = Date.now();
     
+    // V5.8: Unmuting counts as a user interaction - video should play to end
+    if (!this._userMutePreference) {
+      this._videoUserInteracted = true;
+      this._log('🎬 User unmuted via action button - will play to completion');
+    }
+    
     this._log(`🔊 Mute toggled: ${currentEffective} → ${this._userMutePreference}`);
     
     // Apply to current video if one is playing
@@ -8279,6 +8289,32 @@ class MediaCard extends LitElement {
     }
     
     this.requestUpdate();
+  }
+
+  // V5.8: Track mute/unmute via native browser video controls
+  // _handleMuteToggle updates _userMutePreference BEFORE setting video.muted, so for action
+  // button changes video.muted already matches _getEffectiveMuteState() when this fires.
+  // A mismatch means the change came from the native controls.
+  _onVideoVolumeChange(e) {
+    if (this._suppressVolumeChangeHandler) return;
+    const video = e.target;
+    if (!video) return;
+
+    const expectedMuted = this._getEffectiveMuteState();
+    if (video.muted !== expectedMuted) {
+      // Sync our preference to match what native controls set
+      this._userMutePreference = video.muted;
+      this._mutePreferenceTimestamp = Date.now();
+      this._log(`🔊 Native controls changed mute: ${expectedMuted} → ${video.muted}`);
+
+      // V5.8: Unmuting counts as user interaction - video should play to end
+      if (!video.muted) {
+        this._videoUserInteracted = true;
+        this._log('🎬 User unmuted via native controls - will play to completion');
+      }
+
+      this.requestUpdate();
+    }
   }
 
   // V4: Keyboard navigation handler
@@ -14369,6 +14405,7 @@ class MediaCard extends LitElement {
             @timeupdate=${this._onVideoTimeUpdate}
             @seeking=${this._onVideoSeeking}
             @seeked=${this._onVideoSeeked}
+            @volumechange=${this._onVideoVolumeChange}
             @click=${this._onVideoClickToggle}
             @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
