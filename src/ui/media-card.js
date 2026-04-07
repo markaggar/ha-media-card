@@ -2662,7 +2662,12 @@ export class MediaCard extends LitElement {
     // returns false and _setMediaUrl takes the image crossfade path, which never calls
     // videoElement.load().  Lit reuses the same <video> DOM node between navigations and the
     // browser does NOT auto-reload when <source src> changes — so the video never plays.
-    const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo();
+    // IMPORTANT: Pass `url` (the new URL) to _isCurrentItemVideo() so it checks the incoming
+    // URL rather than this.mediaUrl, which still holds the PREVIOUS item's URL at this point.
+    // Without this, a JPG following an mp4 is incorrectly classified as a video: both image
+    // layers get cleared, _renderMedia renders nothing, _onMediaLoaded never fires, and
+    // _navigatingAway stays true — freezing the slideshow timer permanently.
+    const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo(url);
     
     // For images, validate they exist before displaying (MediaIndexProvider only)
     if (!isVideo) {
@@ -6864,12 +6869,19 @@ export class MediaCard extends LitElement {
    * and other integration sources that use opaque URIs with no extension.
    * This method also checks media_content_type (set from HA browse_media response where
    * Reolink returns media_class='video') and the resolved mediaUrl.
+   *
+   * @param {string|null} resolvedUrl - The newly resolved URL being set. When provided (e.g.
+   *   from _setMediaUrl before this.mediaUrl is updated), this URL is used instead of the
+   *   potentially stale this.mediaUrl. Omit to use this.mediaUrl (safe once URL is current).
    */
-  _isCurrentItemVideo() {
+  _isCurrentItemVideo(resolvedUrl = null) {
     // Check media_content_type first – most reliable for integration sources (Reolink, Immich, etc.)
     if (this.currentMedia?.media_content_type?.startsWith('video')) return true;
-    // Fall back to extension-based detection on the canonical ID or resolved URL
-    return this._isVideoFile(this.currentMedia?.media_content_id) || this._isVideoFile(this.mediaUrl);
+    // Fall back to extension-based detection on the canonical ID or resolved URL.
+    // NOTE: When called from _setMediaUrl, resolvedUrl is the NEW url being set — this.mediaUrl
+    // is still the PREVIOUS item's URL at that point (stale). Always pass resolvedUrl from
+    // _setMediaUrl to avoid classifying a JPG as a video just because the previous item was an mp4.
+    return this._isVideoFile(this.currentMedia?.media_content_id) || this._isVideoFile(resolvedUrl ?? this.mediaUrl);
   }
 
   /**
