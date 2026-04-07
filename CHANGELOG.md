@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.8.1 - 2026-04-06
+
+### Changed
+- **HACS integration renamed to "Media Card"**: The card name in HACS has been simplified from "Home Assistant Media Card" to "Media Card" for better discoverability in the HACS UI panel.
+
+### Fixed
+- **Slideshow freezes after video when next item is an image**: After a video played to completion, the slideshow timer would log "Timer skipped - navigation in progress" indefinitely and never advance
+  - Root cause: `_isCurrentItemVideo()` used `this.mediaUrl` to detect video items, but in `_setMediaUrl()` the URL hasn't been updated yet — so when a JPG followed an mp4, `this.mediaUrl` still held the old mp4 URL and the JPG was incorrectly classified as a video
+  - The video code path clears both image layers then sets `this.mediaUrl` to the JPG URL; `_renderMedia` then rendered nothing (no `<img>`), `_onMediaLoaded` never fired, and `_navigatingAway` stayed `true` permanently
+  - Fix: `_isCurrentItemVideo()` now accepts an optional `resolvedUrl` parameter; `_setMediaUrl` passes the incoming URL so the type check uses the new URL rather than the stale previous one
+
 ## v5.8.0 - 2026-03-26
 
 ### Added
