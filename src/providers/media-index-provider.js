@@ -663,6 +663,10 @@ export class MediaIndexProvider extends MediaProvider {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
         }
         
+        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
+        // can use the unfiltered count to determine if the collection is genuinely small
+        this._lastRawQueryCount = response.items.length;
+        
         // V4 CODE: Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
           // V5 URI: Use media_source_uri for URL resolution when available

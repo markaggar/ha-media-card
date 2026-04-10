@@ -5,7 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.9.0 - 2026-04-10
+
+### Added
+- **Burst Favorite Auto-Select** (`auto_select_burst_favorite`) *promoted from v5.8.1 beta*: Automatically advances to a favorited image when the current item belongs to a burst group with previously favorited members. See [YAML-only features guide](docs/guides/yaml-only-features.md#burst-favorite-auto-select).
+
+### Fixed
+- **Burst favorite auto-select cancelled immediately on every attempt**: The path-capture logic used `_currentMediaPath || _pendingMediaPath`, but `_maybeSwapForBurstFavorite` is called from `_refreshMetadata` while the new image is still loading — at that point `_currentMediaPath` still holds the *previous* item's path. The 2-second timer would then see a path mismatch and cancel the swap every time. Fixed by flipping priority to `_pendingMediaPath || _currentMediaPath` so the snapshot is always taken from the incoming item.
+
+- **Slideshow loops the same items forever when `excluded_paths` reduces results below `slideshow_window`**: `_preloadSmallCollection` measured the post-exclusion queue count to decide whether to pre-load the full collection. If local path exclusions filtered a batch of results down to fewer items than `slideshow_window` (e.g. DB returned 5 of 5 requested but 3 were excluded), the card incorrectly treated those 2 remaining items as a "small collection", pre-loaded them into the navigation queue, and looped them indefinitely without ever calling `getNext()`. Fixed: `_queryMediaIndex` now stores `this._lastRawQueryCount` (pre-exclusion DB count); `_preloadSmallCollection` uses that value for the small-collection check so genuinely large collections are not mis-classified.
+
 ## v5.8.1 - 2026-04-06
+
+### Added
+- **Burst Favorite Auto-Select** (`auto_select_burst_favorite`): New opt-in config option that automatically advances to a favorited image when the current item belongs to a burst group that has one or more previously favorited members
+  - After 2 seconds the original image is replaced (with crossfade) by a randomly selected favorited image from the burst group
+  - The original image is preserved in the navigation queue so users can click Back to see it and delete it if desired
+  - Requires the burst group to have been reviewed in the burst panel at least once (favorites are stored on panel exit via `update_burst_metadata`)
+  - Skipped if the currently displayed image is itself already a burst favorite
+  - Uses the existing `get_related_files` burst service to fetch the group
+  - Disabled by default — add `auto_select_burst_favorite: true` to your card YAML to enable
+  - Example config:
+    ```yaml
+    type: custom:media-card
+    media_source_type: media_index
+    auto_select_burst_favorite: true
+    ```
 
 ### Changed
 - **HACS integration renamed to "Media Card"**: The card name in HACS has been simplified from "Home Assistant Media Card" to "Media Card" for better discoverability in the HACS UI panel.

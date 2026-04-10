@@ -237,6 +237,10 @@ export class MediaCard extends LitElement {
     this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
     this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
+
+    // V5.8.1: Burst favorite auto-select state
+    this._burstFavoriteSwappedPath = null; // Path of item for which a burst-favorite swap was already initiated (loop guard)
+    this._burstFavoriteSwapTimer = null;   // Pending setTimeout handle for the 2s swap delay
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -345,6 +349,12 @@ export class MediaCard extends LitElement {
     
     // V5.6: Cleanup clock timer
     this._stopClockTimer();
+
+    // V5.8.1: Cancel any pending burst favorite swap timer
+    if (this._burstFavoriteSwapTimer) {
+      clearTimeout(this._burstFavoriteSwapTimer);
+      this._burstFavoriteSwapTimer = null;
+    }
   }
 
   // V4: Force video reload when URL changes
@@ -1237,7 +1247,13 @@ export class MediaCard extends LitElement {
       // MediaIndexProvider (random mode): Small if initial query returned less than requested
       estimatedSize = actualProvider.queue.length;
       const requestedSize = actualProvider.queueSize || 100;
-      isSmallCollection = estimatedSize < requestedSize;
+      // V5.8.2: Use raw DB count (before local path exclusions) to determine if collection is small.
+      // If exclude_paths filtered some results locally, the post-filter count may be falsely low
+      // (e.g., DB returned 5 of 5 requested but 3 were excluded → only 2 remain, NOT a small collection).
+      const rawCount = actualProvider._lastRawQueryCount !== undefined
+        ? actualProvider._lastRawQueryCount
+        : estimatedSize;
+      isSmallCollection = rawCount < requestedSize;
     }
     
     if (!isSmallCollection) {
@@ -2612,10 +2628,163 @@ export class MediaCard extends LitElement {
         }
         
         this.requestUpdate();
+
+        // V5.8.1: Check if we should auto-swap to a burst favorite (fire-and-forget)
+        this._maybeSwapForBurstFavorite(freshMetadata).catch(err =>
+          this._log('⚠️ Burst favorite swap check failed:', err)
+        );
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
     }
+  }
+
+  /**
+   * V5.8.1: Auto-select a burst favorite when displaying a non-favorite image that belongs
+   * to a burst group with one or more favorited members.
+   *
+   * Flow:
+   *  1. Called after metadata refresh detects burst_favorites is non-empty for current item.
+   *  2. If the current item is already favorited, skip (already the best pick).
+   *  3. After a 2-second delay (so user briefly sees the original), fetch the burst group.
+   *  4. Pick a random favorited item from the group, splice it into the navigation queue
+   *     right after the current position, and call _loadNext() to display it.
+   *  5. The original item is preserved in the queue for back-navigation.
+   *
+   * Requires config: `auto_select_burst_favorite: true` (default: off)
+   */
+  async _maybeSwapForBurstFavorite(freshMetadata) {
+    // Gate: opt-in config flag
+    if (!this.config?.auto_select_burst_favorite) return;
+
+    // Gate: only active during normal slideshow, not in burst/panel/single-media modes
+    if (this._panelOpen) return;
+    if (this.config.media_source_type === 'single_media') return;
+
+    // Gate: must have burst_favorites data
+    const burstFavoritesRaw = freshMetadata?.burst_favorites;
+    if (!burstFavoritesRaw) return;
+
+    let burstFavorites;
+    try {
+      burstFavorites = typeof burstFavoritesRaw === 'string'
+        ? JSON.parse(burstFavoritesRaw)
+        : burstFavoritesRaw;
+    } catch {
+      return;
+    }
+    if (!Array.isArray(burstFavorites) || burstFavorites.length === 0) return;
+
+    // Gate: if the current item is already one of the burst favorites, no swap needed
+    if (freshMetadata.is_favorited) {
+      this._log('🌟 Current item is already a burst favorite - no auto-select needed');
+      return;
+    }
+
+    // Capture the path we are acting on (snapshot before async delay).
+    // IMPORTANT: Use _pendingMediaPath first — when called from _refreshMetadata while
+    // the image is still loading, _pendingMediaPath holds the NEW item's path and
+    // _currentMediaPath still holds the PREVIOUS item's path. If we captured
+    // _currentMediaPath first we'd be acting on the wrong item, and the timer's
+    // path-change check would then always see a mismatch and cancel the swap.
+    const currentPath = this._pendingMediaPath || this._currentMediaPath;
+    if (!currentPath) return;
+
+    // Gate: don't initiate a second swap for the same item (prevents re-trigger on every
+    // metadata refresh while the item is still displayed)
+    if (this._burstFavoriteSwappedPath === currentPath) return;
+    this._burstFavoriteSwappedPath = currentPath;
+
+    this._log(`🌟 Burst favorites detected (${burstFavorites.length} favorited in group) - scheduling auto-select in 2s`);
+
+    // Cancel any previously pending swap for a different item (rapid navigation edge case)
+    if (this._burstFavoriteSwapTimer) {
+      clearTimeout(this._burstFavoriteSwapTimer);
+    }
+
+    this._burstFavoriteSwapTimer = setTimeout(async () => {
+      this._burstFavoriteSwapTimer = null;
+
+      // Re-check: abort if user has navigated away or opened a panel
+      const activeNow = this._currentMediaPath || this._pendingMediaPath;
+      if (activeNow !== currentPath || this._panelOpen || this._navigatingAway) {
+        this._log('🌟 Burst favorite auto-select cancelled - navigated away');
+        return;
+      }
+
+      try {
+        this._log('🌟 Fetching burst group for auto-select...');
+        const wsCall = {
+          type: 'call_service',
+          domain: 'media_index',
+          service: 'get_related_files',
+          service_data: {
+            mode: 'burst',
+            time_window_seconds: 15,
+            prefer_same_location: true,
+            location_tolerance_meters: 20,
+            sort_order: 'time_asc'
+          },
+          return_response: true
+        };
+
+        if (currentPath.startsWith('media-source://')) {
+          wsCall.service_data.media_source_uri = currentPath;
+        } else {
+          wsCall.service_data.reference_path = currentPath;
+        }
+
+        if (this.config.media_index?.entity_id) {
+          wsCall.target = { entity_id: this.config.media_index.entity_id };
+        }
+
+        const response = await this.hass.callWS(wsCall);
+        const items = response.response?.items || [];
+
+        // Find items that are currently marked as favorited in the DB
+        const favoriteItems = items.filter(item => item.is_favorited);
+
+        if (favoriteItems.length === 0) {
+          this._log('🌟 No favorited items found in burst group - skipping auto-select');
+          return;
+        }
+
+        // Pick randomly so the same burst group shows variety across sessions
+        const chosen = favoriteItems[Math.floor(Math.random() * favoriteItems.length)];
+        const chosenUri = chosen.media_source_uri || chosen.path;
+
+        this._log(`🌟 Auto-selecting burst favorite: ${chosen.filename || chosenUri}`);
+
+        // Build a navigation-queue-compatible item for the chosen favorite
+        const favoriteNavItem = {
+          media_content_id: chosenUri,
+          media_content_type: MediaUtils.detectFileType(chosen.path || chosenUri) || 'image',
+          title: chosen.filename,
+          metadata: {
+            ...chosen,
+            path: chosen.path,
+            filename: chosen.filename,
+            date_taken: chosen.date_taken,
+            is_favorited: chosen.is_favorited,
+            latitude: chosen.latitude,
+            longitude: chosen.longitude,
+            location_city: chosen.location_city,
+            location_state: chosen.location_state,
+            location_country: chosen.location_country
+          }
+        };
+
+        // Splice into queue immediately after the current position so _loadNext() picks it up.
+        // The original item is preserved at navigationIndex for back-navigation.
+        this.navigationQueue.splice(this.navigationIndex + 1, 0, favoriteNavItem);
+
+        this._log(`🌟 Spliced burst favorite into queue at position ${this.navigationIndex + 1} - advancing`);
+        await this._loadNext();
+
+      } catch (err) {
+        this._log('⚠️ Burst favorite auto-select failed:', err?.message || err);
+      }
+    }, 2000);
   }
 
   // V5.6.6: Check if file exists via provider (delegates to media_index service if available)

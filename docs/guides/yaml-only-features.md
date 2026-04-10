@@ -79,6 +79,41 @@ folder:
 
 ---
 
+## Burst Favorite Auto-Select
+
+### `auto_select_burst_favorite`
+
+When enabled, the card automatically replaces a non-favorite burst image with a favorited one from the same burst group, after a short 2-second delay.
+
+**How it works:**
+1. An image loads and its metadata is fetched from `media_index`
+2. If the image belongs to a burst group that has one or more favorited members, a timer starts
+3. After 2 seconds the card fetches the burst group via `get_related_files` and crossfades to a randomly selected favorited image
+4. The original (non-favorite) image is kept in the navigation queue so users can navigate **Back** to see and optionally delete it
+
+**Requirements:**
+- `media_source_type: media_index` or `folder` with `use_media_index_for_discovery: true`
+- The burst group must have been reviewed in the burst panel at least once — favorites are saved on panel exit via `update_burst_metadata`
+- The `ha-media-index` integration must be v1.5.10 or later
+
+```yaml
+type: custom:media-card
+media_source_type: folder
+folder:
+  path: media-source://media_source/media/Photo/PhotoLibrary/
+  mode: random
+  use_media_index_for_discovery: true
+auto_select_burst_favorite: true
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `auto_select_burst_favorite` | boolean | `false` | Enable automatic swap to a favorited burst image |
+
+> **Note:** The swap is skipped silently if the currently displayed image is already a burst favorite, if no favorites exist in the burst group, or if the user navigates away during the 2-second window.
+
+---
+
 ## Slideshow Window
 
 ### `slideshow_window`
@@ -160,6 +195,7 @@ excluded_paths:
   - "Burst/**"
   - "**/Thumbnails/**"
   - "**/.thumbnails/**"
+auto_select_burst_favorite: false
 slideshow_window: 100
 debug_mode: false
 ```
