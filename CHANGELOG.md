@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.9.0 - 2026-04-10
 
 ### Added
+- **Burst Count in Metadata Header** (`metadata.show_burst_info`): New toggle in the visual editor (and `metadata.show_burst_info: true` in YAML) that displays a 📸 N indicator in the metadata header when the current image belongs to a burst group of more than one shot. Uses `burst_count` already fetched by the existing metadata refresh — no extra service calls. Disabled by default; requires media_index integration.
+
+- **Burst Favorite Auto-Select in Visual Editor** (`auto_select_burst_favorite`): The opt-in burst auto-select flag is now configurable directly from the card's visual editor (under the Metadata section), in addition to the existing YAML option.
+
 - **Burst Favorite Auto-Select** (`auto_select_burst_favorite`) *promoted from v5.8.1 beta*: Automatically advances to a favorited image when the current item belongs to a burst group with previously favorited members. See [YAML-only features guide](docs/guides/yaml-only-features.md#burst-favorite-auto-select).
 
 ### Fixed

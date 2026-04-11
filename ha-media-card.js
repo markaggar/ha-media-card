@@ -5435,6 +5435,7 @@ class MediaCard extends LitElement {
         show_time: false,
         show_location: true,
         show_rating: false,
+        show_burst_info: false,
         show_root_folder: true,
         position: 'bottom-left',
         ...config.metadata
@@ -8888,6 +8889,11 @@ class MediaCard extends LitElement {
       } else if (metadata.rating && metadata.rating > 0) {
         parts.push('⭐'.repeat(Math.min(5, Math.max(0, metadata.rating))));
       }
+    }
+
+    // Show burst group size if available (from media_index)
+    if (this.config.metadata.show_burst_info && metadata.burst_count > 1) {
+      parts.push(`📸 ${metadata.burst_count}`);
     }
     
     // Show geocoded location if available (from media_index)
@@ -16563,6 +16569,25 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _metadataShowBurstInfoChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_burst_info: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _autoSelectBurstFavoriteChanged(ev) {
+    this._config = {
+      ...this._config,
+      auto_select_burst_favorite: ev.target.checked
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataScaleChanged(ev) {
     // Accept empty to clear (use default = 1)
     const raw = ev.target.value;
@@ -18964,6 +18989,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._metadataShowRatingChanged}
               />
               <div class="help-text">Display heart icon for favorites or star rating (requires media_index integration)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Show Burst Count</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_burst_info === true}
+                @change=${this._metadataShowBurstInfoChanged}
+              />
+              <div class="help-text">Display 📸 N burst group size in the metadata header (requires media_index integration)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Auto-Select Burst Favorite</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.auto_select_burst_favorite === true}
+                @change=${this._autoSelectBurstFavoriteChanged}
+              />
+              <div class="help-text">After 2 s, automatically advance to a favorited image when the current item belongs to a burst group with reviewed favorites (requires media_index integration)</div>
             </div>
           </div>
 

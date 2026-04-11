@@ -112,6 +112,8 @@ auto_select_burst_favorite: true
 
 > **Note:** The swap is skipped silently if the currently displayed image is already a burst favorite, if no favorites exist in the burst group, or if the user navigates away during the 2-second window.
 
+> **Visual editor:** `auto_select_burst_favorite` is also available as a toggle in the card's visual editor under the **Metadata** section.
+
 ---
 
 ## Slideshow Window
@@ -199,3 +201,5 @@ auto_select_burst_favorite: false
 slideshow_window: 100
 debug_mode: false
 ```
+
+> **Tip:** `auto_select_burst_favorite` and `metadata.show_burst_info` are also configurable from the visual editor under the **Metadata** section.

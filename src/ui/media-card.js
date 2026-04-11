@@ -804,6 +804,7 @@ export class MediaCard extends LitElement {
         show_time: false,
         show_location: true,
         show_rating: false,
+        show_burst_info: false,
         show_root_folder: true,
         position: 'bottom-left',
         ...config.metadata
@@ -4257,6 +4258,11 @@ export class MediaCard extends LitElement {
       } else if (metadata.rating && metadata.rating > 0) {
         parts.push('⭐'.repeat(Math.min(5, Math.max(0, metadata.rating))));
       }
+    }
+
+    // Show burst group size if available (from media_index)
+    if (this.config.metadata.show_burst_info && metadata.burst_count > 1) {
+      parts.push(`📸 ${metadata.burst_count}`);
     }
     
     // Show geocoded location if available (from media_index)
