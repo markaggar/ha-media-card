@@ -79,44 +79,6 @@ folder:
 
 ---
 
-## Prefer Burst Favorites
-
-### `auto_select_burst_favorite`
-
-When enabled, the card passes this flag to `get_random_items` and the backend filters out non-favorite burst members **in the database query** before results are sent to the card. No splicing, no timers, no session state — items that would not be shown simply never arrive.
-
-**How it works:**
-
-1. Run `media_index.index_burst_groups` once on your library (or after each bulk import). This groups photos by time/GPS proximity and records which files belong to which burst group.
-2. Enable `auto_select_burst_favorite: true` on the card.
-3. When the card requests media, it passes `auto_select_burst_favorite: true` to `get_random_items`. The backend excludes any non-favorite file whose burst group contains at least one favorited file.
-4. Files with no burst group (not indexed, or genuinely solo shots) are returned normally — nothing is hidden.
-
-**Requirements:**
-- `media_source_type: media_index` or `folder` with `use_media_index_for_discovery: true`
-- `media_index.index_burst_groups` must have been run (ha-media-index v1.5.10+)
-- Burst favorites must be set via the burst review panel (`update_burst_metadata`) before filtering takes effect for a group
-
-```yaml
-type: custom:media-card
-media_source_type: folder
-folder:
-  path: media-source://media_source/media/Photo/PhotoLibrary/
-  mode: random
-  use_media_index_for_discovery: true
-auto_select_burst_favorite: true
-```
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `auto_select_burst_favorite` | boolean | `false` | Exclude non-favorite images from indexed burst groups at query time |
-
-> **Setup tip:** Run `media_index.index_burst_groups` from Developer Tools → Services after your initial library scan. It completes in seconds for typical libraries and only needs to be re-run after bulk imports.
-
-> **Visual editor:** `auto_select_burst_favorite` is also available as **Prefer Burst Favorites** in the card's visual editor under the **Metadata** section.
-
----
-
 ## Slideshow Window
 
 ### `slideshow_window`
