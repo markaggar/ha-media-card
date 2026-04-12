@@ -83,25 +83,19 @@ folder:
 
 ### `auto_select_burst_favorite`
 
-When enabled, the card ensures only favorited images are shown from burst groups that have already been reviewed. Non-favorites from those groups are silently skipped throughout the entire session.
+When enabled, the card passes this flag to `get_random_items` and the backend filters out non-favorite burst members **in the database query** before results are sent to the card. No splicing, no timers, no session state — items that would not be shown simply never arrive.
 
 **How it works:**
 
-**For already-reviewed burst groups** (burst panel was previously opened and favorites were saved):
-- Non-favorite images from the group are removed from the navigation queue before they appear
-- Once a favorite from a group is confirmed by `media_index`, all other non-favorites from that group are suppressed for the entire session
-- This applies both to items already in the queue (checked on load) and new items fetched later
-
-**For unreviewed burst groups** (burst group detected but no favorites saved yet):
-- The original image is shown normally
-- After a 2-second delay, the card fetches the burst group via `get_related_files`
-- If any favorited items are found, it crossfades to a randomly selected one
-- The original is then blocked from appearing again in that session
+1. Run `media_index.index_burst_groups` once on your library (or after each bulk import). This groups photos by time/GPS proximity and records which files belong to which burst group.
+2. Enable `auto_select_burst_favorite: true` on the card.
+3. When the card requests media, it passes `auto_select_burst_favorite: true` to `get_random_items`. The backend excludes any non-favorite file whose burst group contains at least one favorited file.
+4. Files with no burst group (not indexed, or genuinely solo shots) are returned normally — nothing is hidden.
 
 **Requirements:**
 - `media_source_type: media_index` or `folder` with `use_media_index_for_discovery: true`
-- Burst groups must have been reviewed via the burst panel at least once (favorites written by `update_burst_metadata`), or use the new `index_burst_groups` service to scan the full library
-- The `ha-media-index` integration must be v1.5.10 or later
+- `media_index.index_burst_groups` must have been run (ha-media-index v1.5.10+)
+- Burst favorites must be set via the burst review panel (`update_burst_metadata`) before filtering takes effect for a group
 
 ```yaml
 type: custom:media-card
@@ -115,9 +109,9 @@ auto_select_burst_favorite: true
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `auto_select_burst_favorite` | boolean | `false` | Show only favorited images from reviewed burst groups; suppress non-favorites |
+| `auto_select_burst_favorite` | boolean | `false` | Exclude non-favorite images from indexed burst groups at query time |
 
-> **Note:** Suppression is session-scoped — it resets when the card reloads. Images that arrive in the queue before their burst group is confirmed may be displayed briefly before being skipped.
+> **Setup tip:** Run `media_index.index_burst_groups` from Developer Tools → Services after your initial library scan. It completes in seconds for typical libraries and only needs to be re-run after bulk imports.
 
 > **Visual editor:** `auto_select_burst_favorite` is also available as **Prefer Burst Favorites** in the card's visual editor under the **Metadata** section.
 

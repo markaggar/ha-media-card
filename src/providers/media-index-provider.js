@@ -595,7 +595,10 @@ export class MediaIndexProvider extends MediaProvider {
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: priorityNewFiles,
-          new_files_threshold_seconds: thresholdSeconds
+          new_files_threshold_seconds: thresholdSeconds,
+          // V5.9: Backend-side burst filtering — excludes non-favorite burst members
+          // when index_burst_groups has been run. Items with no burst data pass through unchanged.
+          auto_select_burst_favorite: this.config.auto_select_burst_favorite || false
         },
         return_response: true
       };

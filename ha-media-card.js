@@ -3638,7 +3638,10 @@ class MediaIndexProvider extends MediaProvider {
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: priorityNewFiles,
-          new_files_threshold_seconds: thresholdSeconds
+          new_files_threshold_seconds: thresholdSeconds,
+          // V5.9: Backend-side burst filtering — excludes non-favorite burst members
+          // when index_burst_groups has been run. Items with no burst data pass through unchanged.
+          auto_select_burst_favorite: this.config.auto_select_burst_favorite || false
         },
         return_response: true
       };
@@ -4871,12 +4874,6 @@ class MediaCard extends LitElement {
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
     this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
 
-    // V5.8.1: Burst favorite auto-select state
-    this._burstFavoriteSwappedPath = null; // Path of item for which a burst-favorite swap was already initiated (loop guard)
-    this._burstFavoriteSwapTimer = null;   // Pending setTimeout handle for the 2s swap delay
-    this._resolvedBurstGroups = new Set(); // Keys of burst groups where a favorite has already been displayed (non-favorites skipped)
-    this._lastNavigationDirection = 'forward'; // 'forward' or 'backward' — used to skip non-favorites in the correct direction
-    
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
 
@@ -4984,12 +4981,6 @@ class MediaCard extends LitElement {
     
     // V5.6: Cleanup clock timer
     this._stopClockTimer();
-
-    // V5.8.1: Cancel any pending burst favorite swap timer
-    if (this._burstFavoriteSwapTimer) {
-      clearTimeout(this._burstFavoriteSwapTimer);
-      this._burstFavoriteSwapTimer = null;
-    }
   }
 
   // V4: Force video reload when URL changes
@@ -5967,7 +5958,6 @@ class MediaCard extends LitElement {
       return;
     }
     this._isLoadingNext = true;
-    this._lastNavigationDirection = 'forward';
 
     try {
       // V5.6: Set flag FIRST to ignore video pause events during navigation
@@ -6118,36 +6108,6 @@ class MediaCard extends LitElement {
         return;
       }
 
-      // V5.9: Skip non-favorites from burst groups that have indexed favorites.
-      // Guard is only active when auto_select_burst_favorite is enabled.
-      //
-      // Two cases:
-      //  1. burst_favorites is populated in the queue item (index_burst_groups has run) →
-      //     skip immediately without showing the image at all. Fire an async fetch in the
-      //     background to inject the actual favorite into the queue.
-      //  2. Group is already in _resolvedBurstGroups (a favorite was confirmed this session) →
-      //     skip (same as before).
-      if (this.config?.auto_select_burst_favorite && item.metadata && !item.metadata.is_favorited) {
-        const groupKey = this._getBurstGroupKey(item.metadata);
-        if (groupKey) {
-          const reason = this._resolvedBurstGroups.has(groupKey)
-            ? 'group already resolved'
-            : 'group has indexed favorites';
-          this._log(`🌟 Skipping non-favorite burst member at index ${nextIndex} - ${reason}`);
-          this._resolvedBurstGroups.add(groupKey);
-          // Remove from queue so it doesn't reappear on back-navigation either
-          this.navigationQueue.splice(nextIndex, 1);
-          // If this is a first-encounter skip (not previously resolved), inject the favorite
-          // asynchronously so it appears shortly after the next item is displayed.
-          this._fetchAndInjectBurstFavorite(item).catch(err =>
-            this._log('⚠️ Burst favorite inject failed:', err)
-          );
-          // Release the re-entrance guard and recurse to load the next real item
-          this._isLoadingNext = false;
-          return this._loadNext();
-        }
-      }
-      
       // V5.6.8: Increment periodic refresh counter and check if refresh needed
       // Works for both sequential and random modes - provider handles mode-specific logic
       this._itemsSinceRefresh++;
@@ -6271,8 +6231,6 @@ class MediaCard extends LitElement {
       return;
     }
 
-    this._lastNavigationDirection = 'backward';
-
     // Move backward in navigation queue
     this.navigationIndex--;
     
@@ -6287,22 +6245,6 @@ class MediaCard extends LitElement {
     if (!item) {
       this._log('ERROR: No item at navigationIndex', this.navigationIndex);
       return;
-    }
-
-    // V5.9: Skip non-favorites from resolved burst groups when going backward.
-    // Parallel to the same check in _loadNext for the forward direction.
-    // Only fires when burst_favorites is already in the queue item metadata (indexed library).
-    if (this.config?.auto_select_burst_favorite && !item.metadata?.is_favorited) {
-      const groupKey = this._getBurstGroupKey(item.metadata);
-      if (groupKey && this._resolvedBurstGroups.has(groupKey)) {
-        this._log(`🌟 Skipping non-favorite burst member going backward at index ${this.navigationIndex} - group already resolved`);
-        // Remove so it can't block navigation in either direction again
-        this.navigationQueue.splice(this.navigationIndex, 1);
-        // navigationIndex now points to what was at index+1 (shifted down).
-        // _loadPrevious will decrement again to reach the item before the removed one.
-        this._isLoadingNext = false;
-        return this._loadPrevious();
-      }
     }
     
     this._log('Going back to navigation queue item:', item.title, 'at index', this.navigationIndex);
@@ -7330,314 +7272,13 @@ class MediaCard extends LitElement {
         this.requestUpdate();
 
         // V5.9: Burst group resolution tracking (only when auto_select_burst_favorite is on).
-        // When a favorite from a burst group is confirmed by the DB, record its group key
-        // so that any future non-favorites from the same group are silently skipped.
-        // When a non-favorite arrives but its group is already resolved (e.g. burst_favorites
-        // was null at queue-load time so _loadNext couldn't skip it), advance past it now.
-        if (this.config?.auto_select_burst_favorite) {
-          const burstGroupKey = this._getBurstGroupKey(freshMetadata);
-          if (burstGroupKey) {
-            if (freshMetadata.is_favorited) {
-              if (!this._resolvedBurstGroups.has(burstGroupKey)) {
-                this._resolvedBurstGroups.add(burstGroupKey);
-                this._log(`🌟 Burst group resolved - favorite confirmed (${this._resolvedBurstGroups.size} groups tracked)`);
-              }
-            } else if (this._resolvedBurstGroups.has(burstGroupKey)) {
-              // Non-favorite whose group is already resolved and burst_favorites was null at
-              // queue-load time (so _loadNext/_loadPrevious couldn't catch it pre-display).
-              // Remove from queue then navigate in the same direction the user was going —
-              // so pressing Back actually goes back rather than bouncing forward.
-              const removeIdx = this._pendingNavigationIndex ?? this.navigationIndex;
-              this._log(`🌟 Skipping non-favorite burst member (group already resolved) at index ${removeIdx} - navigating ${this._lastNavigationDirection}`);
-              this.navigationQueue.splice(removeIdx, 1);
-              if (this._lastNavigationDirection === 'backward') {
-                this._loadPrevious().catch(err => this._log('⚠️ Burst skip backward failed:', err));
-              } else {
-                this._loadNext().catch(err => this._log('⚠️ Burst skip forward failed:', err));
-              }
-              return;
-            }
-          }
-        }
-
-        // V5.8.1: Check if we should auto-swap to a burst favorite (fire-and-forget).
-        // This path only runs for items whose burst_favorites was null at queue-load time
-        // (i.e. index_burst_groups has not been run). For indexed bursts, _loadNext already
-        // skips non-favorites and calls _fetchAndInjectBurstFavorite instead.
-        this._maybeSwapForBurstFavorite(freshMetadata).catch(err =>
-          this._log('⚠️ Burst favorite swap check failed:', err)
-        );
+        // When a favorite from a burst group is confirmed by the DB, there is nothing
+        // further to do on the card side — the backend already filtered out non-favorites
+        // before they reached the queue (auto_select_burst_favorite param to get_random_items).
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
     }
-  }
-
-  /**
-   * Fetch the burst group for a skipped non-favorite item and inject a favorited member
-   * directly into the navigation queue (no delay). Called fire-and-forget from _loadNext
-   * when a non-favorite with indexed burst_favorites is skipped before display.
-   *
-   * Unlike _maybeSwapForBurstFavorite this does NOT call _loadNext — the caller is already
-   * recursing to the next item. The injected favorite will appear as the next (or a near-
-   * future) queue item.
-   */
-  async _fetchAndInjectBurstFavorite(skippedItem) {
-    if (!this.config?.auto_select_burst_favorite || !this.hass) return;
-
-    const refUri = skippedItem?.media_content_id;
-    if (!refUri) return;
-
-    const wsCall = {
-      type: 'call_service',
-      domain: 'media_index',
-      service: 'get_related_files',
-      service_data: {
-        mode: 'burst',
-        time_window_seconds: 15,
-        prefer_same_location: true,
-        location_tolerance_meters: 20,
-        sort_order: 'time_asc'
-      },
-      return_response: true
-    };
-
-    if (refUri.startsWith('media-source://')) {
-      wsCall.service_data.media_source_uri = refUri;
-    } else {
-      wsCall.service_data.reference_path = refUri;
-    }
-
-    if (this.config.media_index?.entity_id) {
-      wsCall.target = { entity_id: this.config.media_index.entity_id };
-    }
-
-    const response = await this.hass.callWS(wsCall);
-    const items = response.response?.items || [];
-    const favoriteItems = items.filter(item => item.is_favorited);
-
-    if (favoriteItems.length === 0) {
-      this._log('🌟 No favorited items found for skipped burst item - nothing to inject');
-      return;
-    }
-
-    const chosen = favoriteItems[Math.floor(Math.random() * favoriteItems.length)];
-    const chosenUri = chosen.media_source_uri || chosen.path;
-
-    if (this.navigationQueue.some(q => (q.media_content_id || '') === chosenUri)) {
-      this._log('🌟 Burst favorite already in queue - not injecting duplicate');
-      return;
-    }
-
-    const favoriteNavItem = {
-      media_content_id: chosenUri,
-      media_content_type: MediaUtils.detectFileType(chosen.path || chosenUri) || 'image',
-      title: chosen.filename,
-      metadata: {
-        ...chosen,
-        path: chosen.path,
-        filename: chosen.filename,
-        date_taken: chosen.date_taken,
-        is_favorited: chosen.is_favorited,
-        latitude: chosen.latitude,
-        longitude: chosen.longitude,
-        location_city: chosen.location_city,
-        location_state: chosen.location_state,
-        location_country: chosen.location_country,
-        burst_count: chosen.burst_count || skippedItem.metadata?.burst_count || null,
-        burst_favorites: chosen.burst_favorites || skippedItem.metadata?.burst_favorites || null
-      }
-    };
-
-    // Inject immediately after current position so it's the next item the slideshow shows.
-    this.navigationQueue.splice(this.navigationIndex + 1, 0, favoriteNavItem);
-    this._log(`🌟 Injected burst favorite into queue at position ${this.navigationIndex + 1}: ${chosen.filename}`);
-  }
-
-  /**
-   * Returns a stable key for a burst group based on the list of favorited filenames.
-   * All members of the same burst group share identical burst_favorites data (written by
-   * update_burst_metadata), so this key is the same regardless of which member is the
-   * reference. Returns null if the metadata has no usable burst_favorites.
-   */
-  _getBurstGroupKey(metadata) {
-    if (!metadata?.burst_favorites) return null;
-    try {
-      const favs = typeof metadata.burst_favorites === 'string'
-        ? JSON.parse(metadata.burst_favorites)
-        : metadata.burst_favorites;
-      if (!Array.isArray(favs) || favs.length === 0) return null;
-      return [...favs].sort().join('|');
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * V5.8.1: Auto-select a burst favorite when displaying a non-favorite image that belongs
-   * to a burst group with one or more favorited members.
-   *
-   * Flow:
-   *  1. Called after metadata refresh detects burst_favorites is non-empty for current item.
-   *  2. If the current item is already favorited, skip (already the best pick).
-   *  3. After a 2-second delay (so user briefly sees the original), fetch the burst group.
-   *  4. Pick a random favorited item from the group, splice it into the navigation queue
-   *     right after the current position, and call _loadNext() to display it.
-   *  5. The original item is preserved in the queue for back-navigation.
-   *
-   * Requires config: `auto_select_burst_favorite: true` (default: off)
-   */
-  async _maybeSwapForBurstFavorite(freshMetadata) {
-    // Gate: opt-in config flag
-    if (!this.config?.auto_select_burst_favorite) return;
-
-    // Gate: only active during normal slideshow, not in burst/panel/single-media modes
-    if (this._panelOpen) return;
-    if (this.config.media_source_type === 'single_media') return;
-
-    // Gate: must have burst_favorites data
-    const burstFavoritesRaw = freshMetadata?.burst_favorites;
-    if (!burstFavoritesRaw) return;
-
-    let burstFavorites;
-    try {
-      burstFavorites = typeof burstFavoritesRaw === 'string'
-        ? JSON.parse(burstFavoritesRaw)
-        : burstFavoritesRaw;
-    } catch {
-      return;
-    }
-    if (!Array.isArray(burstFavorites) || burstFavorites.length === 0) return;
-
-    // Gate: if the current item is already one of the burst favorites, no swap needed
-    if (freshMetadata.is_favorited) {
-      this._log('🌟 Current item is already a burst favorite - no auto-select needed');
-      return;
-    }
-
-    // Capture the path we are acting on (snapshot before async delay).
-    // IMPORTANT: Use _pendingMediaPath first — when called from _refreshMetadata while
-    // the image is still loading, _pendingMediaPath holds the NEW item's path and
-    // _currentMediaPath still holds the PREVIOUS item's path. If we captured
-    // _currentMediaPath first we'd be acting on the wrong item, and the timer's
-    // path-change check would then always see a mismatch and cancel the swap.
-    const currentPath = this._pendingMediaPath || this._currentMediaPath;
-    if (!currentPath) return;
-
-    // Gate: don't initiate a second swap for the same item (prevents re-trigger on every
-    // metadata refresh while the item is still displayed)
-    if (this._burstFavoriteSwappedPath === currentPath) return;
-    this._burstFavoriteSwappedPath = currentPath;
-
-    this._log(`🌟 Burst favorites detected (${burstFavorites.length} favorited in group) - scheduling auto-select in 2s`);
-
-    // Cancel any previously pending swap for a different item (rapid navigation edge case)
-    if (this._burstFavoriteSwapTimer) {
-      clearTimeout(this._burstFavoriteSwapTimer);
-    }
-
-    this._burstFavoriteSwapTimer = setTimeout(async () => {
-      this._burstFavoriteSwapTimer = null;
-
-      // Re-check: abort if user has navigated away or opened a panel
-      const activeNow = this._currentMediaPath || this._pendingMediaPath;
-      if (activeNow !== currentPath || this._panelOpen || this._navigatingAway) {
-        this._log('🌟 Burst favorite auto-select cancelled - navigated away');
-        // Reset the guard so if the user navigates back to this image, it retries
-        this._burstFavoriteSwappedPath = null;
-        return;
-      }
-
-      try {
-        this._log('🌟 Fetching burst group for auto-select...');
-        const wsCall = {
-          type: 'call_service',
-          domain: 'media_index',
-          service: 'get_related_files',
-          service_data: {
-            mode: 'burst',
-            time_window_seconds: 15,
-            prefer_same_location: true,
-            location_tolerance_meters: 20,
-            sort_order: 'time_asc'
-          },
-          return_response: true
-        };
-
-        if (currentPath.startsWith('media-source://')) {
-          wsCall.service_data.media_source_uri = currentPath;
-        } else {
-          wsCall.service_data.reference_path = currentPath;
-        }
-
-        if (this.config.media_index?.entity_id) {
-          wsCall.target = { entity_id: this.config.media_index.entity_id };
-        }
-
-        const response = await this.hass.callWS(wsCall);
-        const items = response.response?.items || [];
-
-        // Find items that are currently marked as favorited in the DB
-        const favoriteItems = items.filter(item => item.is_favorited);
-
-        if (favoriteItems.length === 0) {
-          this._log('🌟 No favorited items found in burst group - skipping auto-select');
-          return;
-        }
-
-        // Pick randomly so the same burst group shows variety across sessions
-        const chosen = favoriteItems[Math.floor(Math.random() * favoriteItems.length)];
-        const chosenUri = chosen.media_source_uri || chosen.path;
-
-        // Guard: if the chosen item is already present anywhere in the navigation queue,
-        // splicing it in would cause the same image to appear twice in quick succession
-        // (once from the splice, once from its existing queue position). Skip the splice —
-        // the item will appear naturally when the slideshow reaches its existing position.
-        const alreadyInQueue = this.navigationQueue.some(
-          q => (q.media_content_id || '') === chosenUri
-        );
-        if (alreadyInQueue) {
-          this._log(`🌟 Burst favorite already in navigation queue - skipping splice to avoid duplicate`);
-          return;
-        }
-
-        this._log(`🌟 Auto-selecting burst favorite: ${chosen.filename || chosenUri}`);
-
-        // Build a navigation-queue-compatible item for the chosen favorite
-        const favoriteNavItem = {
-          media_content_id: chosenUri,
-          media_content_type: MediaUtils.detectFileType(chosen.path || chosenUri) || 'image',
-          title: chosen.filename,
-          metadata: {
-            ...chosen,
-            path: chosen.path,
-            filename: chosen.filename,
-            date_taken: chosen.date_taken,
-            is_favorited: chosen.is_favorited,
-            latitude: chosen.latitude,
-            longitude: chosen.longitude,
-            location_city: chosen.location_city,
-            location_state: chosen.location_state,
-            location_country: chosen.location_country,
-            // Carry burst fields from the triggering image's freshMetadata so the
-            // swapped-in favorite immediately shows the burst count/favorites indicator
-            // (get_related_files doesn't return these; _refreshMetadata will update later)
-            burst_count: chosen.burst_count || freshMetadata?.burst_count || null,
-            burst_favorites: chosen.burst_favorites || freshMetadata?.burst_favorites || null
-          }
-        };
-
-        // Splice into queue immediately after the current position so _loadNext() picks it up.
-        // The original item is preserved at navigationIndex for back-navigation.
-        this.navigationQueue.splice(this.navigationIndex + 1, 0, favoriteNavItem);
-
-        this._log(`🌟 Spliced burst favorite into queue at position ${this.navigationIndex + 1} - advancing`);
-        await this._loadNext();
-
-      } catch (err) {
-        this._log('⚠️ Burst favorite auto-select failed:', err?.message || err);
-      }
-    }, 2000);
   }
 
   // V5.6.6: Check if file exists via provider (delegates to media_index service if available)
