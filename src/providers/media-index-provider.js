@@ -512,7 +512,9 @@ export class MediaIndexProvider extends MediaProvider {
           is_geocoded: item.is_geocoded || false,
           latitude: item.latitude,
           longitude: item.longitude,
-          is_favorited: item.is_favorited || false
+          is_favorited: item.is_favorited || false,
+          burst_count: item.burst_count || null,
+          burst_favorites: item.burst_favorites || null
         }
       };
     }

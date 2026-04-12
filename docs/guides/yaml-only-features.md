@@ -79,21 +79,28 @@ folder:
 
 ---
 
-## Burst Favorite Auto-Select
+## Prefer Burst Favorites
 
 ### `auto_select_burst_favorite`
 
-When enabled, the card automatically replaces a non-favorite burst image with a favorited one from the same burst group, after a short 2-second delay.
+When enabled, the card ensures only favorited images are shown from burst groups that have already been reviewed. Non-favorites from those groups are silently skipped throughout the entire session.
 
 **How it works:**
-1. An image loads and its metadata is fetched from `media_index`
-2. If the image belongs to a burst group that has one or more favorited members, a timer starts
-3. After 2 seconds the card fetches the burst group via `get_related_files` and crossfades to a randomly selected favorited image
-4. The original (non-favorite) image is kept in the navigation queue so users can navigate **Back** to see and optionally delete it
+
+**For already-reviewed burst groups** (burst panel was previously opened and favorites were saved):
+- Non-favorite images from the group are removed from the navigation queue before they appear
+- Once a favorite from a group is confirmed by `media_index`, all other non-favorites from that group are suppressed for the entire session
+- This applies both to items already in the queue (checked on load) and new items fetched later
+
+**For unreviewed burst groups** (burst group detected but no favorites saved yet):
+- The original image is shown normally
+- After a 2-second delay, the card fetches the burst group via `get_related_files`
+- If any favorited items are found, it crossfades to a randomly selected one
+- The original is then blocked from appearing again in that session
 
 **Requirements:**
 - `media_source_type: media_index` or `folder` with `use_media_index_for_discovery: true`
-- The burst group must have been reviewed in the burst panel at least once — favorites are saved on panel exit via `update_burst_metadata`
+- Burst groups must have been reviewed via the burst panel at least once (favorites written by `update_burst_metadata`), or use the new `index_burst_groups` service to scan the full library
 - The `ha-media-index` integration must be v1.5.10 or later
 
 ```yaml
@@ -108,11 +115,11 @@ auto_select_burst_favorite: true
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `auto_select_burst_favorite` | boolean | `false` | Enable automatic swap to a favorited burst image |
+| `auto_select_burst_favorite` | boolean | `false` | Show only favorited images from reviewed burst groups; suppress non-favorites |
 
-> **Note:** The swap is skipped silently if the currently displayed image is already a burst favorite, if no favorites exist in the burst group, or if the user navigates away during the 2-second window.
+> **Note:** Suppression is session-scoped — it resets when the card reloads. Images that arrive in the queue before their burst group is confirmed may be displayed briefly before being skipped.
 
-> **Visual editor:** `auto_select_burst_favorite` is also available as a toggle in the card's visual editor under the **Metadata** section.
+> **Visual editor:** `auto_select_burst_favorite` is also available as **Prefer Burst Favorites** in the card's visual editor under the **Metadata** section.
 
 ---
 

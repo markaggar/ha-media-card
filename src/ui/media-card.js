@@ -241,6 +241,8 @@ export class MediaCard extends LitElement {
     // V5.8.1: Burst favorite auto-select state
     this._burstFavoriteSwappedPath = null; // Path of item for which a burst-favorite swap was already initiated (loop guard)
     this._burstFavoriteSwapTimer = null;   // Pending setTimeout handle for the 2s swap delay
+    this._resolvedBurstGroups = new Set(); // Keys of burst groups where a favorite has already been displayed (non-favorites skipped)
+    this._lastNavigationDirection = 'forward'; // 'forward' or 'backward' — used to skip non-favorites in the correct direction
     
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -1308,7 +1310,9 @@ export class MediaCard extends LitElement {
             is_geocoded: rawItem.is_geocoded || false,
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,
-            is_favorited: rawItem.is_favorited || false
+            is_favorited: rawItem.is_favorited || false,
+            burst_count: rawItem.burst_count || null,
+            burst_favorites: rawItem.burst_favorites || null
           }
         };
         
@@ -1330,6 +1334,7 @@ export class MediaCard extends LitElement {
       return;
     }
     this._isLoadingNext = true;
+    this._lastNavigationDirection = 'forward';
 
     try {
       // V5.6: Set flag FIRST to ignore video pause events during navigation
@@ -1479,6 +1484,36 @@ export class MediaCard extends LitElement {
         this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
       }
+
+      // V5.9: Skip non-favorites from burst groups that have indexed favorites.
+      // Guard is only active when auto_select_burst_favorite is enabled.
+      //
+      // Two cases:
+      //  1. burst_favorites is populated in the queue item (index_burst_groups has run) →
+      //     skip immediately without showing the image at all. Fire an async fetch in the
+      //     background to inject the actual favorite into the queue.
+      //  2. Group is already in _resolvedBurstGroups (a favorite was confirmed this session) →
+      //     skip (same as before).
+      if (this.config?.auto_select_burst_favorite && item.metadata && !item.metadata.is_favorited) {
+        const groupKey = this._getBurstGroupKey(item.metadata);
+        if (groupKey) {
+          const reason = this._resolvedBurstGroups.has(groupKey)
+            ? 'group already resolved'
+            : 'group has indexed favorites';
+          this._log(`🌟 Skipping non-favorite burst member at index ${nextIndex} - ${reason}`);
+          this._resolvedBurstGroups.add(groupKey);
+          // Remove from queue so it doesn't reappear on back-navigation either
+          this.navigationQueue.splice(nextIndex, 1);
+          // If this is a first-encounter skip (not previously resolved), inject the favorite
+          // asynchronously so it appears shortly after the next item is displayed.
+          this._fetchAndInjectBurstFavorite(item).catch(err =>
+            this._log('⚠️ Burst favorite inject failed:', err)
+          );
+          // Release the re-entrance guard and recurse to load the next real item
+          this._isLoadingNext = false;
+          return this._loadNext();
+        }
+      }
       
       // V5.6.8: Increment periodic refresh counter and check if refresh needed
       // Works for both sequential and random modes - provider handles mode-specific logic
@@ -1603,6 +1638,8 @@ export class MediaCard extends LitElement {
       return;
     }
 
+    this._lastNavigationDirection = 'backward';
+
     // Move backward in navigation queue
     this.navigationIndex--;
     
@@ -1617,6 +1654,22 @@ export class MediaCard extends LitElement {
     if (!item) {
       this._log('ERROR: No item at navigationIndex', this.navigationIndex);
       return;
+    }
+
+    // V5.9: Skip non-favorites from resolved burst groups when going backward.
+    // Parallel to the same check in _loadNext for the forward direction.
+    // Only fires when burst_favorites is already in the queue item metadata (indexed library).
+    if (this.config?.auto_select_burst_favorite && !item.metadata?.is_favorited) {
+      const groupKey = this._getBurstGroupKey(item.metadata);
+      if (groupKey && this._resolvedBurstGroups.has(groupKey)) {
+        this._log(`🌟 Skipping non-favorite burst member going backward at index ${this.navigationIndex} - group already resolved`);
+        // Remove so it can't block navigation in either direction again
+        this.navigationQueue.splice(this.navigationIndex, 1);
+        // navigationIndex now points to what was at index+1 (shifted down).
+        // _loadPrevious will decrement again to reach the item before the removed one.
+        this._isLoadingNext = false;
+        return this._loadPrevious();
+      }
     }
     
     this._log('Going back to navigation queue item:', item.title, 'at index', this.navigationIndex);
@@ -1654,6 +1707,10 @@ export class MediaCard extends LitElement {
 
       // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
       // Timer only restarts on manual button clicks
+
+    // Refresh metadata from media_index in background after backward navigation
+    // Ensures overlay (burst count, location, favorites) reflects latest data
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
       console.error('[MediaCard] Error loading previous media:', error);
     } finally {
@@ -2604,6 +2661,15 @@ export class MediaCard extends LitElement {
       );
       
       if (freshMetadata) {
+        // TOCTOU guard: by the time the async fetch returns the card may have navigated
+        // to a different item. Only apply if targetPath still matches the active path.
+        const stillActive = this._pendingMediaPath === targetPath ||
+                            this._currentMediaPath === targetPath;
+        if (!stillActive) {
+          this._log('📊 Metadata refresh discarded - card navigated away before result returned');
+          return;
+        }
+
         // V5.6.5: If we have pending metadata, update that instead of current
         // This prevents refreshed metadata from being applied before media loads
         if (this._pendingMetadata !== null) {
@@ -2630,13 +2696,147 @@ export class MediaCard extends LitElement {
         
         this.requestUpdate();
 
-        // V5.8.1: Check if we should auto-swap to a burst favorite (fire-and-forget)
+        // V5.9: Burst group resolution tracking (only when auto_select_burst_favorite is on).
+        // When a favorite from a burst group is confirmed by the DB, record its group key
+        // so that any future non-favorites from the same group are silently skipped.
+        // When a non-favorite arrives but its group is already resolved (e.g. burst_favorites
+        // was null at queue-load time so _loadNext couldn't skip it), advance past it now.
+        if (this.config?.auto_select_burst_favorite) {
+          const burstGroupKey = this._getBurstGroupKey(freshMetadata);
+          if (burstGroupKey) {
+            if (freshMetadata.is_favorited) {
+              if (!this._resolvedBurstGroups.has(burstGroupKey)) {
+                this._resolvedBurstGroups.add(burstGroupKey);
+                this._log(`🌟 Burst group resolved - favorite confirmed (${this._resolvedBurstGroups.size} groups tracked)`);
+              }
+            } else if (this._resolvedBurstGroups.has(burstGroupKey)) {
+              // Non-favorite whose group is already resolved and burst_favorites was null at
+              // queue-load time (so _loadNext/_loadPrevious couldn't catch it pre-display).
+              // Remove from queue then navigate in the same direction the user was going —
+              // so pressing Back actually goes back rather than bouncing forward.
+              const removeIdx = this._pendingNavigationIndex ?? this.navigationIndex;
+              this._log(`🌟 Skipping non-favorite burst member (group already resolved) at index ${removeIdx} - navigating ${this._lastNavigationDirection}`);
+              this.navigationQueue.splice(removeIdx, 1);
+              if (this._lastNavigationDirection === 'backward') {
+                this._loadPrevious().catch(err => this._log('⚠️ Burst skip backward failed:', err));
+              } else {
+                this._loadNext().catch(err => this._log('⚠️ Burst skip forward failed:', err));
+              }
+              return;
+            }
+          }
+        }
+
+        // V5.8.1: Check if we should auto-swap to a burst favorite (fire-and-forget).
+        // This path only runs for items whose burst_favorites was null at queue-load time
+        // (i.e. index_burst_groups has not been run). For indexed bursts, _loadNext already
+        // skips non-favorites and calls _fetchAndInjectBurstFavorite instead.
         this._maybeSwapForBurstFavorite(freshMetadata).catch(err =>
           this._log('⚠️ Burst favorite swap check failed:', err)
         );
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
+    }
+  }
+
+  /**
+   * Fetch the burst group for a skipped non-favorite item and inject a favorited member
+   * directly into the navigation queue (no delay). Called fire-and-forget from _loadNext
+   * when a non-favorite with indexed burst_favorites is skipped before display.
+   *
+   * Unlike _maybeSwapForBurstFavorite this does NOT call _loadNext — the caller is already
+   * recursing to the next item. The injected favorite will appear as the next (or a near-
+   * future) queue item.
+   */
+  async _fetchAndInjectBurstFavorite(skippedItem) {
+    if (!this.config?.auto_select_burst_favorite || !this.hass) return;
+
+    const refUri = skippedItem?.media_content_id;
+    if (!refUri) return;
+
+    const wsCall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service: 'get_related_files',
+      service_data: {
+        mode: 'burst',
+        time_window_seconds: 15,
+        prefer_same_location: true,
+        location_tolerance_meters: 20,
+        sort_order: 'time_asc'
+      },
+      return_response: true
+    };
+
+    if (refUri.startsWith('media-source://')) {
+      wsCall.service_data.media_source_uri = refUri;
+    } else {
+      wsCall.service_data.reference_path = refUri;
+    }
+
+    if (this.config.media_index?.entity_id) {
+      wsCall.target = { entity_id: this.config.media_index.entity_id };
+    }
+
+    const response = await this.hass.callWS(wsCall);
+    const items = response.response?.items || [];
+    const favoriteItems = items.filter(item => item.is_favorited);
+
+    if (favoriteItems.length === 0) {
+      this._log('🌟 No favorited items found for skipped burst item - nothing to inject');
+      return;
+    }
+
+    const chosen = favoriteItems[Math.floor(Math.random() * favoriteItems.length)];
+    const chosenUri = chosen.media_source_uri || chosen.path;
+
+    if (this.navigationQueue.some(q => (q.media_content_id || '') === chosenUri)) {
+      this._log('🌟 Burst favorite already in queue - not injecting duplicate');
+      return;
+    }
+
+    const favoriteNavItem = {
+      media_content_id: chosenUri,
+      media_content_type: MediaUtils.detectFileType(chosen.path || chosenUri) || 'image',
+      title: chosen.filename,
+      metadata: {
+        ...chosen,
+        path: chosen.path,
+        filename: chosen.filename,
+        date_taken: chosen.date_taken,
+        is_favorited: chosen.is_favorited,
+        latitude: chosen.latitude,
+        longitude: chosen.longitude,
+        location_city: chosen.location_city,
+        location_state: chosen.location_state,
+        location_country: chosen.location_country,
+        burst_count: chosen.burst_count || skippedItem.metadata?.burst_count || null,
+        burst_favorites: chosen.burst_favorites || skippedItem.metadata?.burst_favorites || null
+      }
+    };
+
+    // Inject immediately after current position so it's the next item the slideshow shows.
+    this.navigationQueue.splice(this.navigationIndex + 1, 0, favoriteNavItem);
+    this._log(`🌟 Injected burst favorite into queue at position ${this.navigationIndex + 1}: ${chosen.filename}`);
+  }
+
+  /**
+   * Returns a stable key for a burst group based on the list of favorited filenames.
+   * All members of the same burst group share identical burst_favorites data (written by
+   * update_burst_metadata), so this key is the same regardless of which member is the
+   * reference. Returns null if the metadata has no usable burst_favorites.
+   */
+  _getBurstGroupKey(metadata) {
+    if (!metadata?.burst_favorites) return null;
+    try {
+      const favs = typeof metadata.burst_favorites === 'string'
+        ? JSON.parse(metadata.burst_favorites)
+        : metadata.burst_favorites;
+      if (!Array.isArray(favs) || favs.length === 0) return null;
+      return [...favs].sort().join('|');
+    } catch {
+      return null;
     }
   }
 
@@ -2710,6 +2910,8 @@ export class MediaCard extends LitElement {
       const activeNow = this._currentMediaPath || this._pendingMediaPath;
       if (activeNow !== currentPath || this._panelOpen || this._navigatingAway) {
         this._log('🌟 Burst favorite auto-select cancelled - navigated away');
+        // Reset the guard so if the user navigates back to this image, it retries
+        this._burstFavoriteSwappedPath = null;
         return;
       }
 
@@ -2754,6 +2956,18 @@ export class MediaCard extends LitElement {
         const chosen = favoriteItems[Math.floor(Math.random() * favoriteItems.length)];
         const chosenUri = chosen.media_source_uri || chosen.path;
 
+        // Guard: if the chosen item is already present anywhere in the navigation queue,
+        // splicing it in would cause the same image to appear twice in quick succession
+        // (once from the splice, once from its existing queue position). Skip the splice —
+        // the item will appear naturally when the slideshow reaches its existing position.
+        const alreadyInQueue = this.navigationQueue.some(
+          q => (q.media_content_id || '') === chosenUri
+        );
+        if (alreadyInQueue) {
+          this._log(`🌟 Burst favorite already in navigation queue - skipping splice to avoid duplicate`);
+          return;
+        }
+
         this._log(`🌟 Auto-selecting burst favorite: ${chosen.filename || chosenUri}`);
 
         // Build a navigation-queue-compatible item for the chosen favorite
@@ -2771,7 +2985,12 @@ export class MediaCard extends LitElement {
             longitude: chosen.longitude,
             location_city: chosen.location_city,
             location_state: chosen.location_state,
-            location_country: chosen.location_country
+            location_country: chosen.location_country,
+            // Carry burst fields from the triggering image's freshMetadata so the
+            // swapped-in favorite immediately shows the burst count/favorites indicator
+            // (get_related_files doesn't return these; _refreshMetadata will update later)
+            burst_count: chosen.burst_count || freshMetadata?.burst_count || null,
+            burst_favorites: chosen.burst_favorites || freshMetadata?.burst_favorites || null
           }
         };
 
@@ -4261,8 +4480,19 @@ export class MediaCard extends LitElement {
     }
 
     // Show burst group size if available (from media_index)
+    // 📸 N★ = group has reviewed favorites (no action needed)
+    // 📸 N  = group reviewed but no favorites picked yet (consider burst panel)
     if (this.config.metadata.show_burst_info && metadata.burst_count > 1) {
-      parts.push(`📸 ${metadata.burst_count}`);
+      let hasFavorites = false;
+      if (metadata.burst_favorites) {
+        try {
+          const favs = typeof metadata.burst_favorites === 'string'
+            ? JSON.parse(metadata.burst_favorites)
+            : metadata.burst_favorites;
+          hasFavorites = Array.isArray(favs) && favs.length > 0;
+        } catch { /* ignore parse errors */ }
+      }
+      parts.push(`📸 ${metadata.burst_count}${hasFavorites ? '★' : ''}`);
     }
     
     // Show geocoded location if available (from media_index)
@@ -6942,6 +7172,10 @@ export class MediaCard extends LitElement {
           await this._resolveMediaUrl();
           
           this._log(`↩️ Restored main queue position ${this.navigationIndex + 1}/${this.navigationQueue.length}`);
+
+          // Refresh metadata in background so header picks up any burst_count/burst_favorites
+          // written by update_burst_metadata during the panel session just closed
+          this._refreshMetadata().catch(err => this._log('⚠️ Post-panel metadata refresh failed:', err));
         }
       }
       

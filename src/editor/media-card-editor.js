@@ -3618,14 +3618,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
 
           <div class="config-row">
-            <label>Auto-Select Burst Favorite</label>
+            <label>Prefer Burst Favorites</label>
             <div>
               <input
                 type="checkbox"
                 .checked=${this._config.auto_select_burst_favorite === true}
                 @change=${this._autoSelectBurstFavoriteChanged}
               />
-              <div class="help-text">After 2 s, automatically advance to a favorited image when the current item belongs to a burst group with reviewed favorites (requires media_index integration)</div>
+              <div class="help-text">Show only favorited images from reviewed burst groups — non-favorites are silently skipped. When a burst group has no favorites yet, the original image is shown and replaced with a favorite after 2 s once one is found. Requires media_index integration.</div>
             </div>
           </div>
 
