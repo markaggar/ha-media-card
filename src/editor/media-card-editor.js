@@ -3625,7 +3625,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 .checked=${this._config.auto_select_burst_favorite === true}
                 @change=${this._autoSelectBurstFavoriteChanged}
               />
-              <div class="help-text">Only show favorited images from burst groups — non-favorites are excluded at query time by the media_index backend. Requires media_index v1.5.10+ with index_burst_groups run on the library.</div>
+              <div class="help-text">Only show favorited images from burst groups — non-favorites are excluded at query time by the media_index backend. Requires media_index v1.6.0+ with index_burst_groups run on the library.</div>
             </div>
           </div>
 

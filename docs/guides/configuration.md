@@ -536,7 +536,7 @@ When enabled, the card passes `auto_select_burst_favorite: true` to `get_random_
 
 **Requirements:**
 - `media_source_type: media_index` or `folder` with `use_media_index_for_discovery: true`
-- `media_index.index_burst_groups` must have been run (ha-media-index v1.5.10+)
+- `media_index.index_burst_groups` must have been run (ha-media-index v1.6.0+)
 - Burst favorites must be set via the burst review panel before filtering takes effect for a group
 
 > **Setup:** Run `media_index.index_burst_groups` from Developer Tools → Services after your initial library scan. Re-run after bulk imports.

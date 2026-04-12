@@ -5366,7 +5366,7 @@ export class MediaCard extends LitElement {
   }
   
   // V4: Action Button Handlers
-  async _handleFavoriteClick(e) {
+  async _handleFavoriteClick(e, currentStateOverride = undefined) {
     e.stopPropagation();
     
     // Restart timer on touch (gives user full time to choose next action)
@@ -5376,11 +5376,16 @@ export class MediaCard extends LitElement {
     
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
-    // CRITICAL: Capture current state NOW before async operations
+    // CRITICAL: Capture current state NOW before async operations.
+    // currentStateOverride lets callers (e.g. thumbnail click) pass the already-computed
+    // isFavorited value so we use the same multi-source check as the ♥ badge display
+    // rather than re-detecting from metadata alone (which misses rating===5 as a source).
     const targetUri = this._currentMediaPath;
-    const isFavorite = this._currentMetadata?.is_favorited || 
-                       (this._burstFavoritedFiles && this._burstFavoritedFiles.includes(targetUri)) ||
-                       false;
+    const isFavorite = currentStateOverride !== undefined
+      ? currentStateOverride
+      : (this._currentMetadata?.is_favorited || 
+         (this._burstFavoritedFiles && this._burstFavoritedFiles.includes(targetUri)) ||
+         false);
     const newState = !isFavorite;
     
     this._log(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
@@ -5411,11 +5416,20 @@ export class MediaCard extends LitElement {
       // Update current metadata
       if (this._currentMetadata) {
         this._currentMetadata.is_favorited = newState;
+        // When un-favoriting, clear any residual rating so the metadata header doesn't
+        // fall through to the stars branch (rating > 0) instead of showing nothing.
+        // This is in-memory only — it does not write rating=0 to the database.
+        if (!newState && this._currentMetadata.rating >= 4) {
+          this._currentMetadata.rating = null;
+        }
       }
       
       // Update panel queue item if in panel mode
       if (this._panelOpen && this._panelQueue[this._panelQueueIndex]) {
         this._panelQueue[this._panelQueueIndex].is_favorited = newState;
+        if (!newState && this._panelQueue[this._panelQueueIndex].rating >= 4) {
+          this._panelQueue[this._panelQueueIndex].rating = null;
+        }
       }
       
       // If in burst mode AND favoriting (not unfavoriting), track for burst metadata
@@ -10514,10 +10528,12 @@ export class MediaCard extends LitElement {
             value === 1 ||
             value === 'true' ||
             value === '1';
+          // Note: rating===5 is intentionally excluded here. _burstFavoritedFiles is
+          // initialised from rating>=4 at panel open, so it is already the canonical
+          // session truth. Keeping rating as a separate path prevented the ♥ badge from
+          // clearing when a user unfavourited an item mid-session (rating never changed).
           const isFavorited = isFavoriteFlag(item.is_favorited) ||
-                              item.rating === 5 ||
                               isFavoriteFlag(item.metadata?.is_favorited) ||
-                              item.metadata?.rating === 5 ||
                               this._burstFavoritedFiles.includes(itemUri) ||
                               (this.currentMedia?.media_content_id === itemUri &&
                                 isFavoriteFlag(this.currentMedia?.metadata?.is_favorited));
@@ -10555,7 +10571,18 @@ export class MediaCard extends LitElement {
             <div 
               class="thumbnail ${isFavorited ? 'favorited' : ''}"
               data-item-index="${actualIndex}"
-              @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
+              @click=${(e) => {
+                if (this._panelMode === 'queue') {
+                  this._jumpToQueuePosition(actualIndex);
+                } else if (this._panelMode === 'burst' && actualIndex === this._panelQueueIndex) {
+                  // Already viewing this image — toggle its favorite status.
+                  // Pass isFavorited so the toggle uses the same multi-source truth as the ♥ badge
+                  // (which includes rating===5), not just is_favorited + _burstFavoritedFiles.
+                  this._handleFavoriteClick({ stopPropagation: () => {} }, isFavorited);
+                } else {
+                  this._loadPanelItem(actualIndex);
+                }
+              }}
               title="${item.title || item.filename || item.path}"
               data-cache-key="${cacheKey}"
             >

@@ -8,38 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.9.0 - 2026-04-10
 
 ### Added
+- **Toggle favorite by clicking the active thumbnail in the burst panel**: In the burst panel, clicking the currently-highlighted thumbnail toggles its heart on or off. Previously a second click on the active thumbnail just reloaded the same image. Makes it easy to favorite or unfavorite the current image without reaching for the action button.
+
 - **Burst Count in Metadata Header** (`metadata.show_burst_info`): New toggle in the visual editor (and `metadata.show_burst_info: true` in YAML) that displays a 📸 N indicator in the metadata header when the current image belongs to a burst group of more than one shot. Uses `burst_count` already fetched by the existing metadata refresh — no extra service calls. Disabled by default; requires media_index integration.
 
-- **Burst Favorite Auto-Select in Visual Editor** (`auto_select_burst_favorite`): The opt-in burst auto-select flag is now configurable directly from the card's visual editor (under the Metadata section), in addition to the existing YAML option.
-
-- **Burst Favorite Auto-Select** (`auto_select_burst_favorite`) *promoted from v5.8.1 beta*: Automatically advances to a favorited image when the current item belongs to a burst group with previously favorited members. See [YAML-only features guide](docs/guides/yaml-only-features.md#burst-favorite-auto-select).
-
-### Changed
-- **Burst filtering moved to backend** (`auto_select_burst_favorite`): Non-favorite burst members are now excluded by the `get_random_items` SQL query before results are ever sent to the card. Previously the card performed this filtering at display time via queue splicing, direction tracking, and a 2-second swap timer. The new approach is transparent: the card simply passes `auto_select_burst_favorite: true` to the service and never receives non-favorites to begin with. Requires `index_burst_groups` to have been run on the library (ha-media-index v1.5.10+). Files without an indexed burst group are returned normally.
+- **Burst Favorite Auto-Select** (`auto_select_burst_favorite`): Only show favorited images from burst groups — non-favorites in burst groups that have favorites are excluded at query time by the media_index backend. Configurable via the visual editor (Metadata section) or YAML. Requires media_index v1.6.0+. Use the `index_burst_groups` service to automatically create burst groups across your entire library. Files without an indexed burst group, or in a burst group without any favorites, are returned normally.
 
 ### Fixed
-- **Burst favorite back-navigation trap**: Once a burst favorite was displayed, pressing Back would loop between the non-favorite (at the previous queue index) and the favorite indefinitely. The root cause was that the card's display-time splice left the non-favorite in the queue and always called `_loadNext()` to skip it, regardless of navigation direction. Resolved as a side-effect of the backend-filter architecture above (no more display-time splicing).
 
-- **Burst favorite auto-select cancelled immediately on every attempt**: The path-capture logic used `_currentMediaPath || _pendingMediaPath`, but `_maybeSwapForBurstFavorite` is called from `_refreshMetadata` while the new image is still loading — at that point `_currentMediaPath` still holds the *previous* item's path. The 2-second timer would then see a path mismatch and cancel the swap every time. Fixed by flipping priority to `_pendingMediaPath || _currentMediaPath` so the snapshot is always taken from the incoming item.
+- **Burst panel ♥ badge not updating immediately when toggling favorite**: Clicking the active thumbnail to toggle its favorite state correctly updated the database and `_burstFavoritedFiles`, but the ♥ badge on the thumbnail did not disappear until the panel was closed and reopened. Root cause: the thumbnail `isFavorited` check included `item.rating === 5` as a parallel path alongside `_burstFavoritedFiles`. Since `rating` is never modified by the favorite toggle, an image rated 5 stars kept showing the badge even after `is_favorited` was cleared. Fix: removed `item.rating` from the thumbnail badge check — `_burstFavoritedFiles` (seeded from `rating >= 4` at panel open) is the sole session truth.
+
+- **Metadata header shows 5-star rating after un-hearting a burst image**: After toggling a favorite off in the burst panel, the metadata header switched from showing ❤️ to showing ⭐⭐⭐⭐⭐ instead of nothing. Root cause: the header displays ❤️ when `is_favorited` is true, otherwise falls through to stars when `rating > 0`. Un-favoriting cleared `is_favorited` but left `rating` at 5 in memory. Fix: when un-favoriting, `rating` is cleared to `null` on both `_currentMetadata` and the panel queue item in-memory (no DB write). Re-opening the panel re-fetches authoritative state from the backend.
 
 - **Slideshow loops the same items forever when `excluded_paths` reduces results below `slideshow_window`**: `_preloadSmallCollection` measured the post-exclusion queue count to decide whether to pre-load the full collection. If local path exclusions filtered a batch of results down to fewer items than `slideshow_window` (e.g. DB returned 5 of 5 requested but 3 were excluded), the card incorrectly treated those 2 remaining items as a "small collection", pre-loaded them into the navigation queue, and looped them indefinitely without ever calling `getNext()`. Fixed: `_queryMediaIndex` now stores `this._lastRawQueryCount` (pre-exclusion DB count); `_preloadSmallCollection` uses that value for the small-collection check so genuinely large collections are not mis-classified.
 
 ## v5.8.1 - 2026-04-06
-
-### Added
-- **Burst Favorite Auto-Select** (`auto_select_burst_favorite`): New opt-in config option that automatically advances to a favorited image when the current item belongs to a burst group that has one or more previously favorited members
-  - After 2 seconds the original image is replaced (with crossfade) by a randomly selected favorited image from the burst group
-  - The original image is preserved in the navigation queue so users can click Back to see it and delete it if desired
-  - Requires the burst group to have been reviewed in the burst panel at least once (favorites are stored on panel exit via `update_burst_metadata`)
-  - Skipped if the currently displayed image is itself already a burst favorite
-  - Uses the existing `get_related_files` burst service to fetch the group
-  - Disabled by default — add `auto_select_burst_favorite: true` to your card YAML to enable
-  - Example config:
-    ```yaml
-    type: custom:media-card
-    media_source_type: media_index
-    auto_select_burst_favorite: true
-    ```
 
 ### Changed
 - **HACS integration renamed to "Media Card"**: The card name in HACS has been simplified from "Home Assistant Media Card" to "Media Card" for better discoverability in the HACS UI panel.
