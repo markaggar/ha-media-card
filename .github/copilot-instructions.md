@@ -160,6 +160,13 @@ The card is now developed under `src/` as ES modules and bundled into a single d
 
 **Process**: Edit `src/` files → `npm run build:concat` → Deploy to test server → Hard refresh → Test → Deploy to production
 
+## CHANGELOG Guidelines
+
+- Only document changes relative to the **last released version**
+- **Do NOT add CHANGELOG entries for bug fixes to code introduced in the same unreleased version** — if a feature was never shipped, fixing its bugs is not noteworthy
+- Entries belong under the current in-progress version section (Added / Changed / Fixed)
+- Do not create a new version section — version bumps require explicit permission
+
 ## Git Workflow
 
 **CRITICAL**: ALL development work on `dev` branch only. **NEVER push directly to `master`**.
