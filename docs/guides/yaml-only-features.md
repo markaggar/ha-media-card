@@ -160,6 +160,9 @@ excluded_paths:
   - "Burst/**"
   - "**/Thumbnails/**"
   - "**/.thumbnails/**"
+auto_select_burst_favorite: false
 slideshow_window: 100
 debug_mode: false
 ```
+
+> **Tip:** `auto_select_burst_favorite` and `metadata.show_burst_info` are also configurable from the visual editor under the **Metadata** section.

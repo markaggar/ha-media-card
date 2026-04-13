@@ -521,6 +521,27 @@ Enhanced metadata with Media Index backend:
 | `media_index.show_delete_button` | boolean | `false` | Show delete media button |
 | `media_index.show_location` | boolean | `false` | Show location data (city, country) |
 | `media_index.show_date_taken` | boolean | `false` | Show EXIF date taken |
+| `metadata.show_burst_info` | boolean | `false` | Show 📸 N burst indicator in the metadata header when the current image belongs to a burst group; requires media_index v1.6.0+ |
+| `auto_select_burst_favorite` | boolean | `false` | Only show favorited images from burst groups; non-favorites are excluded in the database query before results reach the card |
+| `action_buttons.burst_time_window_seconds` | integer | `15` | Maximum time gap (seconds) between consecutive photos when opening the burst panel; set to match `time_window_seconds` used in `media_index.index_burst_groups` |
+
+### Prefer Burst Favorites (`auto_select_burst_favorite`)
+
+When enabled, the card passes `auto_select_burst_favorite: true` to `get_random_items` and the backend excludes non-favorite burst members in the SQL query before results are sent to the card. No client-side splicing or timers — items that would not be shown simply never arrive.
+
+**How it works:**
+
+1. Run `media_index.index_burst_groups` once on your library (or after each bulk import). This groups photos by time/GPS proximity and records which files belong to which burst group.
+2. Enable `auto_select_burst_favorite: true` on the card (YAML or visual editor under Metadata).
+3. The backend automatically excludes any non-favorite whose burst group contains at least one favorited file.
+4. Files with no burst group (not yet indexed, or genuinely solo shots) are returned normally — nothing is hidden.
+
+**Requirements:**
+- `media_source_type: media_index` or `folder` with `use_media_index_for_discovery: true`
+- `media_index.index_burst_groups` must have been run (ha-media-index v1.6.0+)
+- Burst favorites must be set via the burst review panel before filtering takes effect for a group
+
+> **Setup:** Run `media_index.index_burst_groups` from Developer Tools → Services after your initial library scan. Re-run after bulk imports.
 
 ### Requirements
 

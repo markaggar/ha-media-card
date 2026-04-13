@@ -1182,6 +1182,25 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _metadataShowBurstInfoChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_burst_info: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _autoSelectBurstFavoriteChanged(ev) {
+    this._config = {
+      ...this._config,
+      auto_select_burst_favorite: ev.target.checked
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataScaleChanged(ev) {
     // Accept empty to clear (use default = 1)
     const raw = ev.target.value;
@@ -1284,6 +1303,28 @@ export class MediaCardEditor extends LitElement {
         enable_burst_review: ev.target.checked
       }
     };
+    this._fireConfigChanged();
+  }
+
+  _burstTimeWindowChanged(ev) {
+    const raw = ev.target.value;
+    if (raw === '' || raw === null || raw === undefined) {
+      const newConfig = { ...this._config };
+      newConfig.action_buttons = { ...(newConfig.action_buttons || {}) };
+      delete newConfig.action_buttons.burst_time_window_seconds;
+      this._config = newConfig;
+    } else {
+      const val = parseInt(raw, 10);
+      if (!isNaN(val) && val >= 1) {
+        this._config = {
+          ...this._config,
+          action_buttons: {
+            ...this._config.action_buttons,
+            burst_time_window_seconds: val
+          }
+        };
+      }
+    }
     this._fireConfigChanged();
   }
 
@@ -3587,6 +3628,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
 
           <div class="config-row">
+            <label>Show Burst Count</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_burst_info === true}
+                @change=${this._metadataShowBurstInfoChanged}
+              />
+              <div class="help-text">Display 📸 N burst group size in the metadata header (requires media_index integration)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Prefer Burst Favorites</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.auto_select_burst_favorite === true}
+                @change=${this._autoSelectBurstFavoriteChanged}
+              />
+              <div class="help-text">Only show favorited images from burst groups — non-favorites are excluded at query time by the media_index backend. Requires media_index v1.6.0+ with index_burst_groups run on the library.</div>
+            </div>
+          </div>
+
+          <div class="config-row">
             <label>Overlay Opacity</label>
             <div>
               <input
@@ -3952,6 +4017,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsEnableBurstReviewChanged}
                 />
                 <div class="help-text">Review rapid-fire photos taken at the same time as current media item (requires media_index)</div>
+              </div>
+            </div>
+
+            <div class="config-row">
+              <label>Burst Time Window (seconds)</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  .value=${this._config.action_buttons?.burst_time_window_seconds ?? ''}
+                  @change=${this._burstTimeWindowChanged}
+                  placeholder="15"
+                />
+                <div class="help-text">Maximum gap between consecutive burst photos when opening the burst panel. Set this to match the time_window_seconds used in media_index index_burst_groups (default: 15).</div>
               </div>
             </div>
             
