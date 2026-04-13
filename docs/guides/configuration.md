@@ -521,7 +521,9 @@ Enhanced metadata with Media Index backend:
 | `media_index.show_delete_button` | boolean | `false` | Show delete media button |
 | `media_index.show_location` | boolean | `false` | Show location data (city, country) |
 | `media_index.show_date_taken` | boolean | `false` | Show EXIF date taken |
+| `metadata.show_burst_info` | boolean | `false` | Show 📸 N burst indicator in the metadata header when the current image belongs to a burst group; requires media_index v1.6.0+ |
 | `auto_select_burst_favorite` | boolean | `false` | Only show favorited images from burst groups; non-favorites are excluded in the database query before results reach the card |
+| `action_buttons.burst_time_window_seconds` | integer | `15` | Maximum time gap (seconds) between consecutive photos when opening the burst panel; set to match `time_window_seconds` used in `media_index.index_burst_groups` |
 
 ### Prefer Burst Favorites (`auto_select_burst_favorite`)
 

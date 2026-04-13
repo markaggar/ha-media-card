@@ -1238,11 +1238,12 @@ export class MediaCard extends LitElement {
       // MediaIndexProvider (random mode): Small if initial query returned less than requested
       estimatedSize = actualProvider.queue.length;
       const requestedSize = actualProvider.queueSize || 100;
-      // V5.8.2: Use raw DB count (before local path exclusions) to determine if collection is small.
-      // If exclude_paths filtered some results locally, the post-filter count may be falsely low
-      // (e.g., DB returned 5 of 5 requested but 3 were excluded → only 2 remain, NOT a small collection).
-      const rawCount = actualProvider._lastRawQueryCount !== undefined
-        ? actualProvider._lastRawQueryCount
+      // Use a public provider property for the raw DB count (before local path exclusions)
+      // when available. Fall back to the visible queue size if the provider does not expose it.
+      // This avoids coupling the UI to provider internals while preserving current behavior
+      // for providers that surface the raw count as part of their public contract.
+      const rawCount = actualProvider.lastRawQueryCount !== undefined
+        ? actualProvider.lastRawQueryCount
         : estimatedSize;
       isSmallCollection = rawCount < requestedSize;
     }
@@ -5379,7 +5380,7 @@ export class MediaCard extends LitElement {
     // CRITICAL: Capture current state NOW before async operations.
     // currentStateOverride lets callers (e.g. thumbnail click) pass the already-computed
     // isFavorited value so we use the same multi-source check as the ♥ badge display
-    // rather than re-detecting from metadata alone (which misses rating===5 as a source).
+    // rather than falling back to the local metadata/burst-file checks used below.
     const targetUri = this._currentMediaPath;
     const isFavorite = currentStateOverride !== undefined
       ? currentStateOverride
@@ -10521,7 +10522,7 @@ export class MediaCard extends LitElement {
             ? actualIndex === this.navigationIndex 
             : actualIndex === this._panelQueueIndex;
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
-          // Check multiple sources for favorite status (check rating too - 5 stars = favorite)
+          // Check multiple sources for favorite status.
           // Queue items store metadata inside item.metadata object
           const isFavoriteFlag = (value) =>
             value === true ||
@@ -10576,8 +10577,8 @@ export class MediaCard extends LitElement {
                   this._jumpToQueuePosition(actualIndex);
                 } else if (this._panelMode === 'burst' && actualIndex === this._panelQueueIndex) {
                   // Already viewing this image — toggle its favorite status.
-                  // Pass isFavorited so the toggle uses the same multi-source truth as the ♥ badge
-                  // (which includes rating===5), not just is_favorited + _burstFavoritedFiles.
+                  // Pass isFavorited so the toggle uses the same current source of truth as
+                  // the ♥ badge, rather than recomputing from is_favorited + _burstFavoritedFiles.
                   this._handleFavoriteClick({ stopPropagation: () => {} }, isFavorited);
                 } else {
                   this._loadPanelItem(actualIndex);

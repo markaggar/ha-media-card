@@ -14,12 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Burst Favorite Auto-Select** (`auto_select_burst_favorite`): Only show favorited images from burst groups — non-favorites in burst groups that have favorites are excluded at query time by the media_index backend. Configurable via the visual editor (Metadata section). Requires media_index v1.6.0+. Use the `index_burst_groups` service to automatically create burst groups across your entire library. Files without an indexed burst group, or in a burst group without any favorites, are returned normally.
 
-### Added
 - **Burst Time Window Config** (`action_buttons.burst_time_window_seconds`): New numeric field in the visual editor (Action Buttons section, below the Burst Review Button toggle) that controls the maximum gap between consecutive photos when the burst panel is opened. Set this to match the `time_window_seconds` used in `media_index.index_burst_groups`. Default: 15 seconds.
 
 ### Fixed
 
-- **Slideshow loops the same items forever when `excluded_paths` reduces results below `slideshow_window`**: `_preloadSmallCollection` measured the post-exclusion queue count to decide whether to pre-load the full collection. If local path exclusions filtered a batch of results down to fewer items than `slideshow_window` (e.g. DB returned 5 of 5 requested but 3 were excluded), the card incorrectly treated those 2 remaining items as a "small collection", pre-loaded them into the navigation queue, and looped them indefinitely without ever calling `getNext()`. Fixed: `_queryMediaIndex` now stores `this._lastRawQueryCount` (pre-exclusion DB count); `_preloadSmallCollection` uses that value for the small-collection check so genuinely large collections are not mis-classified.
+- **Slideshow loops the same items forever when `excluded_paths` reduces results below `slideshow_window`**: `_preloadSmallCollection` measured the post-exclusion queue count to decide whether to pre-load the full collection. If local path exclusions filtered a batch of results down to fewer items than `slideshow_window` (e.g. DB returned 5 of 5 requested but 3 were excluded), the card incorrectly treated those 2 remaining items as a "small collection", pre-loaded them into the navigation queue, and looped them indefinitely without ever calling `getNext()`. Fixed: `_queryMediaIndex` now stores `lastRawQueryCount` (pre-exclusion DB count); `_preloadSmallCollection` uses that value for the small-collection check so genuinely large collections are not mis-classified.
 
 ## v5.8.1 - 2026-04-06
 
