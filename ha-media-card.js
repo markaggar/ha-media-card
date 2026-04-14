@@ -11035,9 +11035,6 @@ class MediaCard extends LitElement {
         service_data: {
           mode: 'burst',
           media_source_uri: mediaPathSnapshot, // Use SNAPSHOT not current state
-          time_window_seconds: this.config.action_buttons?.burst_time_window_seconds || 15,
-          prefer_same_location: true,
-          location_tolerance_meters: 20, // ~20m walking distance in 30 seconds
           sort_order: 'time_asc'
         },
         return_response: true
@@ -16598,28 +16595,6 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
-  _burstTimeWindowChanged(ev) {
-    const raw = ev.target.value;
-    if (raw === '' || raw === null || raw === undefined) {
-      const newConfig = { ...this._config };
-      newConfig.action_buttons = { ...(newConfig.action_buttons || {}) };
-      delete newConfig.action_buttons.burst_time_window_seconds;
-      this._config = newConfig;
-    } else {
-      const val = parseInt(raw, 10);
-      if (!isNaN(val) && val >= 1) {
-        this._config = {
-          ...this._config,
-          action_buttons: {
-            ...this._config.action_buttons,
-            burst_time_window_seconds: val
-          }
-        };
-      }
-    }
-    this._fireConfigChanged();
-  }
-
   _actionButtonsEnableRelatedPhotosChanged(ev) {
     this._config = {
       ...this._config,
@@ -19312,21 +19287,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
 
-            <div class="config-row">
-              <label>Burst Time Window (seconds)</label>
-              <div>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  .value=${this._config.action_buttons?.burst_time_window_seconds ?? ''}
-                  @change=${this._burstTimeWindowChanged}
-                  placeholder="15"
-                />
-                <div class="help-text">Maximum gap between consecutive burst photos when opening the burst panel. Set this to match the time_window_seconds used in media_index index_burst_groups (default: 15).</div>
-              </div>
-            </div>
-            
             <div class="config-row">
               <label>Same Date Button</label>
               <div>

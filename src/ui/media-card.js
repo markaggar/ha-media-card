@@ -6399,9 +6399,6 @@ export class MediaCard extends LitElement {
         service_data: {
           mode: 'burst',
           media_source_uri: mediaPathSnapshot, // Use SNAPSHOT not current state
-          time_window_seconds: this.config.action_buttons?.burst_time_window_seconds || 15,
-          prefer_same_location: true,
-          location_tolerance_meters: 20, // ~20m walking distance in 30 seconds
           sort_order: 'time_asc'
         },
         return_response: true
