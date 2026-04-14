@@ -76,6 +76,12 @@ export class MediaIndexHelper {
           is_favorited: exif.is_favorited === 1 || response.is_favorited === 1,
           marked_for_edit: false, // Not in get_file_metadata response
           
+          // Burst group metadata (written by update_burst_metadata on burst panel exit)
+          // burst_favorites: JSON array of filesystem paths of favorited items in the burst group
+          // burst_count: total number of items in the burst group
+          burst_favorites: exif.burst_favorites || null,
+          burst_count: exif.burst_count || null,
+          
           // File info from top level
           filename: response.filename,
           folder: response.folder

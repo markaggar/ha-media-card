@@ -512,7 +512,9 @@ export class MediaIndexProvider extends MediaProvider {
           is_geocoded: item.is_geocoded || false,
           latitude: item.latitude,
           longitude: item.longitude,
-          is_favorited: item.is_favorited || false
+          is_favorited: item.is_favorited || false,
+          burst_count: item.burst_count || null,
+          burst_favorites: item.burst_favorites || null
         }
       };
     }
@@ -593,7 +595,10 @@ export class MediaIndexProvider extends MediaProvider {
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: priorityNewFiles,
-          new_files_threshold_seconds: thresholdSeconds
+          new_files_threshold_seconds: thresholdSeconds,
+          // V5.9: Backend-side burst filtering — excludes non-favorite burst members
+          // when index_burst_groups has been run. Items with no burst data pass through unchanged.
+          auto_select_burst_favorite: this.config.auto_select_burst_favorite || false
         },
         return_response: true
       };
@@ -662,6 +667,10 @@ export class MediaIndexProvider extends MediaProvider {
         if (filteredItems.length < response.items.length) {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
         }
+        
+        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
+        // can use the unfiltered count to determine if the collection is genuinely small
+        this.lastRawQueryCount = response.items.length;
         
         // V4 CODE: Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {

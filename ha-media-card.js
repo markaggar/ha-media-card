@@ -1,5 +1,5 @@
 /** 
- * Media Card v5.8.1
+ * Media Card v5.9.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -817,6 +817,12 @@ class MediaIndexHelper {
           // User flags (from nested exif object, convert 0/1 to boolean)
           is_favorited: exif.is_favorited === 1 || response.is_favorited === 1,
           marked_for_edit: false, // Not in get_file_metadata response
+          
+          // Burst group metadata (written by update_burst_metadata on burst panel exit)
+          // burst_favorites: JSON array of filesystem paths of favorited items in the burst group
+          // burst_count: total number of items in the burst group
+          burst_favorites: exif.burst_favorites || null,
+          burst_count: exif.burst_count || null,
           
           // File info from top level
           filename: response.filename,
@@ -3549,7 +3555,9 @@ class MediaIndexProvider extends MediaProvider {
           is_geocoded: item.is_geocoded || false,
           latitude: item.latitude,
           longitude: item.longitude,
-          is_favorited: item.is_favorited || false
+          is_favorited: item.is_favorited || false,
+          burst_count: item.burst_count || null,
+          burst_favorites: item.burst_favorites || null
         }
       };
     }
@@ -3630,7 +3638,10 @@ class MediaIndexProvider extends MediaProvider {
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: priorityNewFiles,
-          new_files_threshold_seconds: thresholdSeconds
+          new_files_threshold_seconds: thresholdSeconds,
+          // V5.9: Backend-side burst filtering — excludes non-favorite burst members
+          // when index_burst_groups has been run. Items with no burst data pass through unchanged.
+          auto_select_burst_favorite: this.config.auto_select_burst_favorite || false
         },
         return_response: true
       };
@@ -3699,6 +3710,10 @@ class MediaIndexProvider extends MediaProvider {
         if (filteredItems.length < response.items.length) {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
         }
+        
+        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
+        // can use the unfiltered count to determine if the collection is genuinely small
+        this.lastRawQueryCount = response.items.length;
         
         // V4 CODE: Transform items to include resolved URLs
         const items = await Promise.all(filteredItems.map(async (item) => {
@@ -4858,7 +4873,7 @@ class MediaCard extends LitElement {
     this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
     this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
-    
+
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
 
@@ -5415,6 +5430,7 @@ class MediaCard extends LitElement {
         show_time: false,
         show_location: true,
         show_rating: false,
+        show_burst_info: false,
         show_root_folder: true,
         position: 'bottom-left',
         ...config.metadata
@@ -5858,7 +5874,14 @@ class MediaCard extends LitElement {
       // MediaIndexProvider (random mode): Small if initial query returned less than requested
       estimatedSize = actualProvider.queue.length;
       const requestedSize = actualProvider.queueSize || 100;
-      isSmallCollection = estimatedSize < requestedSize;
+      // Use a public provider property for the raw DB count (before local path exclusions)
+      // when available. Fall back to the visible queue size if the provider does not expose it.
+      // This avoids coupling the UI to provider internals while preserving current behavior
+      // for providers that surface the raw count as part of their public contract.
+      const rawCount = actualProvider.lastRawQueryCount !== undefined
+        ? actualProvider.lastRawQueryCount
+        : estimatedSize;
+      isSmallCollection = rawCount < requestedSize;
     }
     
     if (!isSmallCollection) {
@@ -5912,7 +5935,9 @@ class MediaCard extends LitElement {
             is_geocoded: rawItem.is_geocoded || false,
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,
-            is_favorited: rawItem.is_favorited || false
+            is_favorited: rawItem.is_favorited || false,
+            burst_count: rawItem.burst_count || null,
+            burst_favorites: rawItem.burst_favorites || null
           }
         };
         
@@ -6083,7 +6108,7 @@ class MediaCard extends LitElement {
         this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
       }
-      
+
       // V5.6.8: Increment periodic refresh counter and check if refresh needed
       // Works for both sequential and random modes - provider handles mode-specific logic
       this._itemsSinceRefresh++;
@@ -6258,6 +6283,10 @@ class MediaCard extends LitElement {
 
       // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
       // Timer only restarts on manual button clicks
+
+    // Refresh metadata from media_index in background after backward navigation
+    // Ensures overlay (burst count, location, favorites) reflects latest data
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
       console.error('[MediaCard] Error loading previous media:', error);
     } finally {
@@ -7208,6 +7237,15 @@ class MediaCard extends LitElement {
       );
       
       if (freshMetadata) {
+        // TOCTOU guard: by the time the async fetch returns the card may have navigated
+        // to a different item. Only apply if targetPath still matches the active path.
+        const stillActive = this._pendingMediaPath === targetPath ||
+                            this._currentMediaPath === targetPath;
+        if (!stillActive) {
+          this._log('📊 Metadata refresh discarded - card navigated away before result returned');
+          return;
+        }
+
         // V5.6.5: If we have pending metadata, update that instead of current
         // This prevents refreshed metadata from being applied before media loads
         if (this._pendingMetadata !== null) {
@@ -7233,6 +7271,11 @@ class MediaCard extends LitElement {
         }
         
         this.requestUpdate();
+
+        // V5.9: Burst group resolution tracking (only when auto_select_burst_favorite is on).
+        // When a favorite from a burst group is confirmed by the DB, there is nothing
+        // further to do on the card side — the backend already filtered out non-favorites
+        // before they reached the queue (auto_select_burst_favorite param to get_random_items).
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
@@ -8710,6 +8753,22 @@ class MediaCard extends LitElement {
         parts.push('⭐'.repeat(Math.min(5, Math.max(0, metadata.rating))));
       }
     }
+
+    // Show burst group size if available (from media_index)
+    // 📸 N★ = group has reviewed favorites (no action needed)
+    // 📸 N  = group reviewed but no favorites picked yet (consider burst panel)
+    if (this.config.metadata.show_burst_info && metadata.burst_count > 1) {
+      let hasFavorites = false;
+      if (metadata.burst_favorites) {
+        try {
+          const favs = typeof metadata.burst_favorites === 'string'
+            ? JSON.parse(metadata.burst_favorites)
+            : metadata.burst_favorites;
+          hasFavorites = Array.isArray(favs) && favs.length > 0;
+        } catch { /* ignore parse errors */ }
+      }
+      parts.push(`📸 ${metadata.burst_count}${hasFavorites ? '★' : ''}`);
+    }
     
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
@@ -9944,7 +10003,7 @@ class MediaCard extends LitElement {
   }
   
   // V4: Action Button Handlers
-  async _handleFavoriteClick(e) {
+  async _handleFavoriteClick(e, currentStateOverride = undefined) {
     e.stopPropagation();
     
     // Restart timer on touch (gives user full time to choose next action)
@@ -9954,11 +10013,16 @@ class MediaCard extends LitElement {
     
     if (!this._currentMediaPath || !MediaProvider.isMediaIndexActive(this.config)) return;
     
-    // CRITICAL: Capture current state NOW before async operations
+    // CRITICAL: Capture current state NOW before async operations.
+    // currentStateOverride lets callers (e.g. thumbnail click) pass the already-computed
+    // isFavorited value so we use the same multi-source check as the ♥ badge display
+    // rather than falling back to the local metadata/burst-file checks used below.
     const targetUri = this._currentMediaPath;
-    const isFavorite = this._currentMetadata?.is_favorited || 
-                       (this._burstFavoritedFiles && this._burstFavoritedFiles.includes(targetUri)) ||
-                       false;
+    const isFavorite = currentStateOverride !== undefined
+      ? currentStateOverride
+      : (this._currentMetadata?.is_favorited || 
+         (this._burstFavoritedFiles && this._burstFavoritedFiles.includes(targetUri)) ||
+         false);
     const newState = !isFavorite;
     
     this._log(`💗 FAVORITE CAPTURE: uri="${targetUri}", current_is_favorited=${isFavorite}, new_state=${newState}`);
@@ -9989,11 +10053,20 @@ class MediaCard extends LitElement {
       // Update current metadata
       if (this._currentMetadata) {
         this._currentMetadata.is_favorited = newState;
+        // When un-favoriting, clear any residual rating so the metadata header doesn't
+        // fall through to the stars branch (rating > 0) instead of showing nothing.
+        // This is in-memory only — it does not write rating=0 to the database.
+        if (!newState && this._currentMetadata.rating >= 4) {
+          this._currentMetadata.rating = null;
+        }
       }
       
       // Update panel queue item if in panel mode
       if (this._panelOpen && this._panelQueue[this._panelQueueIndex]) {
         this._panelQueue[this._panelQueueIndex].is_favorited = newState;
+        if (!newState && this._panelQueue[this._panelQueueIndex].rating >= 4) {
+          this._panelQueue[this._panelQueueIndex].rating = null;
+        }
       }
       
       // If in burst mode AND favoriting (not unfavoriting), track for burst metadata
@@ -10962,7 +11035,7 @@ class MediaCard extends LitElement {
         service_data: {
           mode: 'burst',
           media_source_uri: mediaPathSnapshot, // Use SNAPSHOT not current state
-          time_window_seconds: 15, // ±15 seconds for tighter burst grouping
+          time_window_seconds: this.config.action_buttons?.burst_time_window_seconds || 15,
           prefer_same_location: true,
           location_tolerance_meters: 20, // ~20m walking distance in 30 seconds
           sort_order: 'time_asc'
@@ -11388,6 +11461,10 @@ class MediaCard extends LitElement {
           await this._resolveMediaUrl();
           
           this._log(`↩️ Restored main queue position ${this.navigationIndex + 1}/${this.navigationQueue.length}`);
+
+          // Refresh metadata in background so header picks up any burst_count/burst_favorites
+          // written by update_burst_metadata during the panel session just closed
+          this._refreshMetadata().catch(err => this._log('⚠️ Post-panel metadata refresh failed:', err));
         }
       }
       
@@ -15081,17 +15158,19 @@ class MediaCard extends LitElement {
             ? actualIndex === this.navigationIndex 
             : actualIndex === this._panelQueueIndex;
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
-          // Check multiple sources for favorite status (check rating too - 5 stars = favorite)
+          // Check multiple sources for favorite status.
           // Queue items store metadata inside item.metadata object
           const isFavoriteFlag = (value) =>
             value === true ||
             value === 1 ||
             value === 'true' ||
             value === '1';
+          // Note: rating===5 is intentionally excluded here. _burstFavoritedFiles is
+          // initialised from rating>=4 at panel open, so it is already the canonical
+          // session truth. Keeping rating as a separate path prevented the ♥ badge from
+          // clearing when a user unfavourited an item mid-session (rating never changed).
           const isFavorited = isFavoriteFlag(item.is_favorited) ||
-                              item.rating === 5 ||
                               isFavoriteFlag(item.metadata?.is_favorited) ||
-                              item.metadata?.rating === 5 ||
                               this._burstFavoritedFiles.includes(itemUri) ||
                               (this.currentMedia?.media_content_id === itemUri &&
                                 isFavoriteFlag(this.currentMedia?.metadata?.is_favorited));
@@ -15129,7 +15208,18 @@ class MediaCard extends LitElement {
             <div 
               class="thumbnail ${isFavorited ? 'favorited' : ''}"
               data-item-index="${actualIndex}"
-              @click=${() => this._panelMode === 'queue' ? this._jumpToQueuePosition(actualIndex) : this._loadPanelItem(actualIndex)}
+              @click=${(e) => {
+                if (this._panelMode === 'queue') {
+                  this._jumpToQueuePosition(actualIndex);
+                } else if (this._panelMode === 'burst' && actualIndex === this._panelQueueIndex) {
+                  // Already viewing this image — toggle its favorite status.
+                  // Pass isFavorited so the toggle uses the same current source of truth as
+                  // the ♥ badge, rather than recomputing from is_favorited + _burstFavoritedFiles.
+                  this._handleFavoriteClick({ stopPropagation: () => {} }, isFavorited);
+                } else {
+                  this._loadPanelItem(actualIndex);
+                }
+              }}
               title="${item.title || item.filename || item.path}"
               data-cache-key="${cacheKey}"
             >
@@ -16384,6 +16474,25 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _metadataShowBurstInfoChanged(ev) {
+    this._config = {
+      ...this._config,
+      metadata: {
+        ...this._config.metadata,
+        show_burst_info: ev.target.checked
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _autoSelectBurstFavoriteChanged(ev) {
+    this._config = {
+      ...this._config,
+      auto_select_burst_favorite: ev.target.checked
+    };
+    this._fireConfigChanged();
+  }
+
   _metadataScaleChanged(ev) {
     // Accept empty to clear (use default = 1)
     const raw = ev.target.value;
@@ -16486,6 +16595,28 @@ class MediaCardEditor extends LitElement {
         enable_burst_review: ev.target.checked
       }
     };
+    this._fireConfigChanged();
+  }
+
+  _burstTimeWindowChanged(ev) {
+    const raw = ev.target.value;
+    if (raw === '' || raw === null || raw === undefined) {
+      const newConfig = { ...this._config };
+      newConfig.action_buttons = { ...(newConfig.action_buttons || {}) };
+      delete newConfig.action_buttons.burst_time_window_seconds;
+      this._config = newConfig;
+    } else {
+      const val = parseInt(raw, 10);
+      if (!isNaN(val) && val >= 1) {
+        this._config = {
+          ...this._config,
+          action_buttons: {
+            ...this._config.action_buttons,
+            burst_time_window_seconds: val
+          }
+        };
+      }
+    }
     this._fireConfigChanged();
   }
 
@@ -18789,6 +18920,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
 
           <div class="config-row">
+            <label>Show Burst Count</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.metadata?.show_burst_info === true}
+                @change=${this._metadataShowBurstInfoChanged}
+              />
+              <div class="help-text">Display 📸 N burst group size in the metadata header (requires media_index integration)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Prefer Burst Favorites</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.auto_select_burst_favorite === true}
+                @change=${this._autoSelectBurstFavoriteChanged}
+              />
+              <div class="help-text">Only show favorited images from burst groups — non-favorites are excluded at query time by the media_index backend. Requires media_index v1.6.0+ with index_burst_groups run on the library.</div>
+            </div>
+          </div>
+
+          <div class="config-row">
             <label>Overlay Opacity</label>
             <div>
               <input
@@ -19156,6 +19311,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Review rapid-fire photos taken at the same time as current media item (requires media_index)</div>
               </div>
             </div>
+
+            <div class="config-row">
+              <label>Burst Time Window (seconds)</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  .value=${this._config.action_buttons?.burst_time_window_seconds ?? ''}
+                  @change=${this._burstTimeWindowChanged}
+                  placeholder="15"
+                />
+                <div class="help-text">Maximum gap between consecutive burst photos when opening the burst panel. Set this to match the time_window_seconds used in media_index index_burst_groups (default: 15).</div>
+              </div>
+            </div>
             
             <div class="config-row">
               <label>Same Date Button</label>
@@ -19379,7 +19549,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.8.1 Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.9.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
