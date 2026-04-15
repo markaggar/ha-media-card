@@ -4123,13 +4123,19 @@ export class MediaCard extends LitElement {
     // 📸 N  = group reviewed but no favorites picked yet (consider burst panel)
     if (this.config.metadata.show_burst_info && metadata.burst_count > 1) {
       let hasFavorites = false;
-      if (metadata.burst_favorites) {
+      if (typeof metadata.burst_has_favorites === 'boolean') {
+        hasFavorites = metadata.burst_has_favorites;
+      } else if (metadata.burst_favorites) {
         try {
           const favs = typeof metadata.burst_favorites === 'string'
             ? JSON.parse(metadata.burst_favorites)
             : metadata.burst_favorites;
           hasFavorites = Array.isArray(favs) && favs.length > 0;
-        } catch { /* ignore parse errors */ }
+        } catch {
+          hasFavorites = false;
+        }
+        // Cache the normalized boolean so repeated renders skip re-parsing.
+        metadata.burst_has_favorites = hasFavorites;
       }
       parts.push(`📸 ${metadata.burst_count}${hasFavorites ? '★' : ''}`);
     }
@@ -6399,9 +6405,6 @@ export class MediaCard extends LitElement {
         service_data: {
           mode: 'burst',
           media_source_uri: mediaPathSnapshot, // Use SNAPSHOT not current state
-          time_window_seconds: this.config.action_buttons?.burst_time_window_seconds || 15,
-          prefer_same_location: true,
-          location_tolerance_meters: 20, // ~20m walking distance in 30 seconds
           sort_order: 'time_asc'
         },
         return_response: true
@@ -10579,7 +10582,7 @@ export class MediaCard extends LitElement {
                   // Already viewing this image — toggle its favorite status.
                   // Pass isFavorited so the toggle uses the same current source of truth as
                   // the ♥ badge, rather than recomputing from is_favorited + _burstFavoritedFiles.
-                  this._handleFavoriteClick({ stopPropagation: () => {} }, isFavorited);
+                  this._handleFavoriteClick(e, isFavorited);
                 } else {
                   this._loadPanelItem(actualIndex);
                 }

@@ -523,7 +523,17 @@ Enhanced metadata with Media Index backend:
 | `media_index.show_date_taken` | boolean | `false` | Show EXIF date taken |
 | `metadata.show_burst_info` | boolean | `false` | Show 📸 N burst indicator in the metadata header when the current image belongs to a burst group; requires media_index v1.6.0+ |
 | `auto_select_burst_favorite` | boolean | `false` | Only show favorited images from burst groups; non-favorites are excluded in the database query before results reach the card |
-| `action_buttons.burst_time_window_seconds` | integer | `15` | Maximum time gap (seconds) between consecutive photos when opening the burst panel; set to match `time_window_seconds` used in `media_index.index_burst_groups` |
+
+### Burst Panel Grouping
+
+When you open the burst review panel for a photo, the card calls `media_index.get_related_files` with no time or location parameters. The service determines grouping using this priority order:
+
+1. **Fast path (pre-indexed)**: If the photo has already been assigned a `burst_id` by `index_burst_groups`, the service returns all members of that pre-computed group instantly via a single indexed lookup.
+2. **Fallback (not yet indexed)**: If the photo has no `burst_id`, the service performs at-query-time proximity detection using the `burst_time_window_seconds` and `burst_location_tolerance_meters` values from the media_index integration options (configured under Settings → Devices & Services → Media Index → Configure).
+
+This means burst grouping thresholds are controlled entirely in the media_index integration — there is no matching setting needed in the card.
+
+**Per-folder burst settings**: `index_burst_groups` accepts an optional `folder` parameter. You can run it multiple times with different `time_window_seconds` or `location_tolerance_meters` for different folders — each folder's groups are stored with their own `burst_id` and the card will always see the correct groupings regardless of what the global integration defaults are set to.
 
 ### Prefer Burst Favorites (`auto_select_burst_favorite`)
 
