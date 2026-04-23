@@ -274,6 +274,20 @@ export class MediaCard extends LitElement {
       this._log('🔄 Reconnected - restarting auto-refresh timer');
       this._setupAutoRefresh();
     }
+
+    // Shared queue: listen for navigation events from other card instances
+    if (this.config?.shared_queue_id) {
+      this._storageEventHandler = this._onStorageEvent.bind(this);
+      window.addEventListener('storage', this._storageEventHandler);
+      this._queueSyncEventHandler = this._onQueueSyncEvent.bind(this);
+      window.addEventListener('ha-media-card-sync', this._queueSyncEventHandler);
+    }
+
+    // Shared queue: if reconnecting (provider already exists), sync from localStorage
+    // to pick up everything the other card navigated while this card was hidden
+    if (this.provider && this.config?.shared_queue_id) {
+      this._syncFromSharedQueueOnReconnect();
+    }
   }
 
   disconnectedCallback() {
@@ -283,6 +297,16 @@ export class MediaCard extends LitElement {
     
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
+    
+    // Shared queue: remove storage event listener
+    if (this._storageEventHandler) {
+      window.removeEventListener('storage', this._storageEventHandler);
+      this._storageEventHandler = null;
+    }
+    if (this._queueSyncEventHandler) {
+      window.removeEventListener('ha-media-card-sync', this._queueSyncEventHandler);
+      this._queueSyncEventHandler = null;
+    }
     
     // V5.6: Cleanup viewport height observer
     this._cleanupDynamicViewportHeight();
@@ -1096,8 +1120,24 @@ export class MediaCard extends LitElement {
       this._log('Provider initialized:', success);
       
       if (success) {
-        // V5 FIX: If we reconnected with history, restore current media from history
-        if (this.history.length > 0 && this.historyPosition >= 0) {
+        // Shared queue takes priority over local history when configured — it holds the
+        // freshest cross-card state (what the other card was showing when this view was hidden).
+        const restoredFromShared = this._tryRestoreFromSharedQueue();
+
+        if (restoredFromShared) {
+          // Queue and index already set — jump directly to the saved item
+          const item = this.navigationQueue[this.navigationIndex];
+          if (item) {
+            this.currentMedia = item;
+            this._pendingNavigationIndex = this.navigationIndex;
+            this._pendingMediaPath = item.media_content_id;
+            this._pendingMetadata = null;
+            await this._resolveMediaUrl();
+          } else {
+            await this._loadNext();
+          }
+        } else if (this.history.length > 0 && this.historyPosition >= 0) {
+          // V5 FIX: If we reconnected with history, restore current media from history
           this._log('🔄 Reconnected with history - loading media at position', this.historyPosition);
           const historyItem = this.history[this.historyPosition];
           if (historyItem) {
@@ -1109,10 +1149,8 @@ export class MediaCard extends LitElement {
           }
         } else {
           this._log('Loading first media');
-          
           // V5.3: Smart pre-load - only for small collections
           await this._smartPreloadNavigationQueue();
-          
           await this._loadNext();
         }
         
@@ -3355,6 +3393,9 @@ export class MediaCard extends LitElement {
       this._pendingMediaPath = null;
     }
     
+    // Shared queue: broadcast navigation to other cards with same shared_queue_id
+    this._writeSharedQueueState();
+    
     this.requestUpdate();
   }
 
@@ -3778,6 +3819,135 @@ export class MediaCard extends LitElement {
     }
   }
 
+  // Shared Queue: write current queue state to localStorage and broadcast to same-window instances
+  _writeSharedQueueState() {
+    const id = this.config?.shared_queue_id;
+    if (!id || !this.navigationQueue?.length) return;
+    try {
+      const data = {
+        queue: this.navigationQueue.map(item => item.media_content_id),
+        currentIndex: this.navigationIndex,
+        updatedAt: Date.now(),
+        sourceCardId: this._cardId  // so listeners can ignore their own writes
+      };
+      localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
+      // Also broadcast within same window (storage event doesn't fire for same-window writes)
+      window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
+    } catch (_e) {
+      // localStorage may be unavailable in some environments
+    }
+  }
+
+  // Shared Queue: called on reconnect (provider already exists) to sync queue state
+  // from localStorage so this card picks up where the other card left off
+  _syncFromSharedQueueOnReconnect() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+    try {
+      const raw = localStorage.getItem(`ha-media-card:${id}`);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data.queue) || !data.queue.length) return;
+      const newIndex = Math.min(
+        typeof data.currentIndex === 'number' ? data.currentIndex : 0,
+        data.queue.length - 1
+      );
+      const newPath = data.queue[newIndex];
+      // Always restore the full queue so back-navigation history is preserved
+      this.navigationQueue = data.queue.map(mediaId => ({
+        media_content_id: mediaId,
+        media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+        title: mediaId.split('/').pop() || mediaId,
+        metadata: null
+      }));
+      this.navigationIndex = newIndex;
+      this._log(`🔗 Shared queue synced on reconnect: ${this.navigationQueue.length} items, index ${newIndex}`);
+      // Navigate to the current image if it differs from what we were last showing
+      if (newPath !== this._currentMediaPath) {
+        const item = this.navigationQueue[newIndex];
+        this.currentMedia = item;
+        this._pendingNavigationIndex = newIndex;
+        this._pendingMediaPath = newPath;
+        this._pendingMetadata = null;
+        this._resolveMediaUrl();
+        this.requestUpdate();
+      }
+    } catch (_e) {}
+  }
+
+  // Shared Queue: restore queue from localStorage on load
+  // Returns true if queue was restored (caller should skip normal provider init)
+  _tryRestoreFromSharedQueue() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return false;
+    try {
+      const raw = localStorage.getItem(`ha-media-card:${id}`);
+      if (!raw) return false;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data.queue) || !data.queue.length) return false;
+      this.navigationQueue = data.queue.map(mediaId => ({
+        media_content_id: mediaId,
+        media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+        title: mediaId.split('/').pop() || mediaId,
+        metadata: null
+      }));
+      this.navigationIndex = Math.min(
+        typeof data.currentIndex === 'number' ? data.currentIndex : 0,
+        this.navigationQueue.length - 1
+      );
+      this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  // Shared Queue: handle storage events from OTHER browser tabs/windows
+  _onStorageEvent(event) {
+    const id = this.config?.shared_queue_id;
+    if (!id || event.key !== `ha-media-card:${id}` || !event.newValue) return;
+    try {
+      const data = JSON.parse(event.newValue);
+      this._applySharedQueueUpdate(data);
+    } catch (_e) {
+      // ignore malformed data
+    }
+  }
+
+  // Shared Queue: handle CustomEvents from other card instances in the same window
+  _onQueueSyncEvent(event) {
+    const id = this.config?.shared_queue_id;
+    if (!id || event.detail?.sharedQueueId !== id) return;
+    if (event.detail?.sourceCardId === this._cardId) return; // ignore own writes
+    this._applySharedQueueUpdate(event.detail);
+  }
+
+  // Shared Queue: shared logic for applying an incoming queue update
+  _applySharedQueueUpdate(data) {
+    if (!Array.isArray(data.queue) || !data.queue.length) return;
+    const newIndex = Math.min(
+      typeof data.currentIndex === 'number' ? data.currentIndex : 0,
+      data.queue.length - 1
+    );
+    const newPath = data.queue[newIndex];
+    if (newPath === this._currentMediaPath) return; // already showing this
+    this._log(`🔗 Shared queue sync: navigating to index ${newIndex}`);
+    this.navigationQueue = data.queue.map(mediaId => ({
+      media_content_id: mediaId,
+      media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+      title: mediaId.split('/').pop() || mediaId,
+      metadata: null
+    }));
+    this.navigationIndex = newIndex;
+    const item = this.navigationQueue[newIndex];
+    this.currentMedia = item;
+    this._pendingNavigationIndex = newIndex;
+    this._pendingMediaPath = newPath;
+    this._pendingMetadata = null;
+    this._resolveMediaUrl();
+    this.requestUpdate();
+  }
+
   // V4: Keyboard navigation handler
   _handleKeyDown(e) {
     // Handle keyboard navigation
@@ -3995,6 +4165,9 @@ export class MediaCard extends LitElement {
       this._pendingNavigationIndex = null;
       this._log('✅ Applied pending navigation index on image load');
     }
+    
+    // Shared queue: broadcast navigation to other cards with same shared_queue_id
+    this._writeSharedQueueState();
     
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
@@ -8741,8 +8914,8 @@ export class MediaCard extends LitElement {
     }
 
     .action-btn {
-      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.8);
-      border: 1px solid rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.2);
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.3);
       border-radius: 50%;
       width: 40px;
       height: 40px;
@@ -8751,70 +8924,86 @@ export class MediaCard extends LitElement {
       justify-content: center;
       cursor: pointer;
       transition: all 0.2s ease;
-      color: var(--primary-text-color);
+      color: #ffffff;
       backdrop-filter: blur(10px);
     }
 
     .action-btn:hover {
-      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.95);
+      background: rgba(0, 0, 0, 0.75);
       transform: scale(1.15);
-      border-color: rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.4);
+      border-color: rgba(255, 255, 255, 0.5);
     }
 
     .action-btn ha-icon {
       --mdc-icon-size: 24px;
+      color: #ffffff;
     }
 
     /* V4: Highlight pause button when paused */
     .pause-btn.paused {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .pause-btn.paused:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .pause-btn.paused ha-icon {
+      color: #03a9f4;
     }
 
     /* V5.6.12: Mute button - highlight when muted */
     .mute-btn.muted {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.15);
+      background: rgba(255, 152, 0, 0.3);
     }
 
     .mute-btn.muted:hover {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.25);
+      background: rgba(255, 152, 0, 0.45);
+    }
+
+    .mute-btn.muted ha-icon {
+      color: #ff9800;
     }
 
     /* Debug button active state - warning color when enabled */
     .debug-btn.active {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.15);
+      background: rgba(255, 152, 0, 0.3);
     }
 
     .debug-btn.active:hover {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.25);
+      background: rgba(255, 152, 0, 0.45);
+    }
+
+    .debug-btn.active ha-icon {
+      color: #ff9800;
     }
 
     .favorite-btn.favorited {
-      color: var(--error-color, #ff5252);
-    }
-
-    .favorite-btn.favorited:hover {
-      color: var(--error-color, #ff5252);
       background: rgba(255, 82, 82, 0.1);
     }
 
+    .favorite-btn.favorited:hover {
+      background: rgba(255, 82, 82, 0.25);
+    }
+
+    .favorite-btn.favorited ha-icon {
+      color: #ff5252;
+    }
+
     .edit-btn:hover {
-      color: var(--warning-color, #ff9800);
       transform: scale(1.15);
     }
 
+    .edit-btn:hover ha-icon {
+      color: #ff9800;
+    }
+
     .delete-btn:hover {
-      color: var(--error-color, #ff5252);
       transform: scale(1.15);
+    }
+
+    .delete-btn:hover ha-icon {
+      color: #ff5252;
     }
 
     /* V4: Delete/Edit Confirmation Dialog */
@@ -9271,33 +9460,39 @@ export class MediaCard extends LitElement {
     }
 
     .info-btn.active {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .info-btn.active:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .info-btn.active ha-icon {
+      color: #03a9f4;
     }
     
     .burst-btn.active {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .burst-btn.active:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .burst-btn.active ha-icon {
+      color: #03a9f4;
     }
     
     .queue-btn.active {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .queue-btn.active:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .queue-btn.active ha-icon {
+      color: #03a9f4;
     }
     
     .placeholder {

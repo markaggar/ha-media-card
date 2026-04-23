@@ -3414,6 +3414,25 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Check for new files every N seconds (0 = disabled). Single media: reloads image URL. Folder mode: checks for new files and refreshes queue if at newest position.</div>
             </div>
           </div>
+
+          <div class="config-row">
+            <label>Shared Queue ID</label>
+            <div>
+              <input
+                type="text"
+                .value=${this._config.shared_queue_id || ''}
+                @input=${(e) => {
+                  const val = e.target.value.trim();
+                  this._config = val
+                    ? { ...this._config, shared_queue_id: val }
+                    : (() => { const c = { ...this._config }; delete c.shared_queue_id; return c; })();
+                  this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config } }));
+                }}
+                placeholder="e.g. main-slideshow"
+              />
+              <div class="help-text">Optional. Cards with the same ID share their queue and position across views on the same device. Leave empty to disable.</div>
+            </div>
+          </div>
         </div>
 
         ${mediaSourceType === 'folder' ? html`

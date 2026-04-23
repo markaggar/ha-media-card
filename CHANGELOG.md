@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.10.0 - 2026-04-22
+
+### Added
+- **Shared Queue** (`shared_queue_id`): Two cards on different dashboard views can share a single navigation queue. Set the same `shared_queue_id` string on both cards and they will stay in sync — switching from one view to the other shows the same image and preserves the full navigation history so back/forward work across both cards. Uses `localStorage` for persistence across view switches and a `CustomEvent` for immediate same-window sync. Configure via the visual editor ("Shared Queue ID" in the Image Options section) or in YAML as `shared_queue_id: "my_queue"`.
+
+### Fixed
+- **Action button colors washed out on light and frosted-glass themes**: Button backgrounds were derived from `--rgb-card-background-color`, which resolves to near-white on many light themes, making icons invisible. Fixed by using hardcoded dark semi-transparent backgrounds (`rgba(0,0,0,0.55)`) and explicit white icon colors. Active-state colors (mute, pause, info, burst, queue, favorite) are now set directly on the `ha-icon` element so they work correctly on all themes.
+
 ## v5.9.0 - 2026-04-10
 
 ### Added
