@@ -40,7 +40,8 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 ### **Intelligent Navigation**
 - ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
-- 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
+- � **Cross-Device Shared Queue** (`shared_queue_id`): Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
+- �📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
 ### **Media Discovery Features** (requires Media Index)

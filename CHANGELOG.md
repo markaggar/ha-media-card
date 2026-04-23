@@ -8,7 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.10.0 - 2026-04-22
 
 ### Added
-- **Shared Queue** (`shared_queue_id`): Two cards on different dashboard views can share a single navigation queue. Set the same `shared_queue_id` string on both cards and they will stay in sync — switching from one view to the other shows the same image and preserves the full navigation history so back/forward work across both cards. Uses `localStorage` for persistence across view switches and a `CustomEvent` for immediate same-window sync. Configure via the visual editor ("Shared Queue ID" in the Image Options section) or in YAML as `shared_queue_id: "my_queue"`.
+- **Shared Queue** (`shared_queue_id`): Multiple cards across any number of views — or across different devices and browsers — share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` string on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
+  - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab
+  - **Cross-view persistence**: `localStorage` so switching to a different dashboard view immediately shows the current image
+  - **Cross-device**: When the `media_index` source is active, the card writes sync state through the `media_index.update_sync_state` service and listens for the resulting `media_index_sync_state` HA event — keeping wall tablets, mobile phones, and any other device in sync in real time
+  - Pause/resume syncs reliably across all devices: only explicit user pause actions propagate; automatic navigation advances never accidentally override a peer's pause state
+  - The current image's metadata (date, location, camera) is included in every sync payload so receiving cards display the correct information without making their own service calls
+  - Configure via the visual editor ("Shared Queue ID" in the Image Options section) or in YAML as `shared_queue_id: "my_queue"`
 
 ### Fixed
 - **Action button colors washed out on light and frosted-glass themes**: Button backgrounds were derived from `--rgb-card-background-color`, which resolves to near-white on many light themes, making icons invisible. Fixed by using hardcoded dark semi-transparent backgrounds (`rgba(0,0,0,0.55)`) and explicit white icon colors. Active-state colors (mute, pause, info, burst, queue, favorite) are now set directly on the `ha-icon` element so they work correctly on all themes.

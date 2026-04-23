@@ -275,16 +275,11 @@ export class MediaCard extends LitElement {
       this._setupAutoRefresh();
     }
 
-    // Shared queue: listen for navigation events from other card instances
-    if (this.config?.shared_queue_id) {
-      this._storageEventHandler = this._onStorageEvent.bind(this);
-      window.addEventListener('storage', this._storageEventHandler);
-      this._queueSyncEventHandler = this._onQueueSyncEvent.bind(this);
-      window.addEventListener('ha-media-card-sync', this._queueSyncEventHandler);
-    }
+    // Shared queue: register event listeners (cross-device HA events + same-device)
+    this._subscribeToSyncEvents();
 
-    // Shared queue: if reconnecting (provider already exists), sync from localStorage
-    // to pick up everything the other card navigated while this card was hidden
+    // Shared queue: if reconnecting (provider already exists), sync state from
+    // media-index or localStorage to pick up where the other card left off
     if (this.provider && this.config?.shared_queue_id) {
       this._syncFromSharedQueueOnReconnect();
     }
@@ -298,15 +293,8 @@ export class MediaCard extends LitElement {
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
     
-    // Shared queue: remove storage event listener
-    if (this._storageEventHandler) {
-      window.removeEventListener('storage', this._storageEventHandler);
-      this._storageEventHandler = null;
-    }
-    if (this._queueSyncEventHandler) {
-      window.removeEventListener('ha-media-card-sync', this._queueSyncEventHandler);
-      this._queueSyncEventHandler = null;
-    }
+    // Shared queue: remove all event listeners and cancel pending debounced write
+    this._unsubscribeFromSyncEvents();
     
     // V5.6: Cleanup viewport height observer
     this._cleanupDynamicViewportHeight();
@@ -578,7 +566,11 @@ export class MediaCard extends LitElement {
     if (this._debugMode || window.location.hostname === 'localhost') {
       // Prefix all logs with card ID for debugging
       const prefix = `[${this._cardId}]`;
-      const message = args.join(' ');
+      // Strip auth tokens (e.g. Synology authSig) so logs stay readable when pasting
+      const sanitizedArgs = args.map(a =>
+        typeof a === 'string' ? a.replace(/([?&])authSig=[^&\s]*/gi, '$1authSig=[…]') : a
+      );
+      const message = sanitizedArgs.join(' ');
       
       // Throttle certain frequent messages to avoid spam
       const throttlePatterns = [
@@ -603,7 +595,7 @@ export class MediaCard extends LitElement {
         this._lastLogTime[message] = now;
       }
       
-      console.log(prefix, ...args);
+      console.log(prefix, ...sanitizedArgs);
     }
   }
 
@@ -1122,7 +1114,7 @@ export class MediaCard extends LitElement {
       if (success) {
         // Shared queue takes priority over local history when configured — it holds the
         // freshest cross-card state (what the other card was showing when this view was hidden).
-        const restoredFromShared = this._tryRestoreFromSharedQueue();
+        const restoredFromShared = await this._tryRestoreFromSharedQueue();
 
         if (restoredFromShared) {
           // Queue and index already set — jump directly to the saved item
@@ -1416,6 +1408,9 @@ export class MediaCard extends LitElement {
           this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
+          // Capture generation before any awaits so we can detect if a sync event
+          // arrived from another card while we were waiting for the provider.
+          const _syncGenBefore = this._syncNavGeneration || 0;
           let item = await this.provider.getNext();
         
           if (item) {
@@ -1485,6 +1480,16 @@ export class MediaCard extends LitElement {
                 // forward to the new item, not staying at the current position
                 nextIndex = this.navigationQueue.length - 1;
               }
+
+              // Sync mode: if another card already broadcast a new item while we were awaiting
+              // the provider (same-window CustomEvent fires mid-await), follow that card instead.
+              if ((this._syncNavGeneration || 0) > _syncGenBefore) {
+                this._log('🔗 Another synced card broadcast first — following sync navigation, discarding locally-fetched item');
+                return;
+              }
+              // We are the "first" card — broadcast our new item immediately so other
+              // same-window cards adopt it synchronously before they exit their own awaits.
+              this._earlyBroadcastSyncState(nextIndex);
             }
           } else {
             // No more items available from provider, wrap to beginning with fresh query
@@ -3819,102 +3824,296 @@ export class MediaCard extends LitElement {
     }
   }
 
-  // Shared Queue: write current queue state to localStorage and broadcast to same-window instances
-  _writeSharedQueueState() {
+  // ─── Shared Queue ──────────────────────────────────────────────────────────
+  // Two transport layers, selected automatically:
+  //   • Cross-device (media-index configured): service calls + HA websocket events
+  //   • Single-device fallback: localStorage + window CustomEvent
+
+  // Return the media_index entity_id configured on this card, or null.
+  _getMediaIndexEntityId() {
+    return this.config?.media_index?.entity_id || null;
+  }
+
+  // Is cross-device sync available?
+  _hasCrossDeviceSync() {
+    return !!(this.config?.shared_queue_id && this._getMediaIndexEntityId() && this.hass);
+  }
+
+  // ── Write path ──────────────────────────────────────────────────────────────
+  // Called after every navigation commit. Debounced to avoid hammering the service.
+  // pauseIntent=true ONLY for user-initiated pause/resume actions — navigation writes
+  // must NOT set it, otherwise Device B's navigation will overwrite Device A's local
+  // pause state.
+  _writeSharedQueueState(pauseIntent = false) {
     const id = this.config?.shared_queue_id;
     if (!id || !this.navigationQueue?.length) return;
+
+    // Echo-prevention: skip the write that would bounce an incoming navigation sync
+    // back to the sender. BUT always allow explicit pause/resume writes through so
+    // that a pause arriving simultaneously with a navigation doesn't get swallowed.
+    if (this._suppressSyncWrite && !pauseIntent) {
+      this._suppressSyncWrite = false;
+      return;
+    }
+    this._suppressSyncWrite = false;
+
+    // Always write localStorage for instant same-device sync
     try {
       const data = {
         queue: this.navigationQueue.map(item => item.media_content_id),
         currentIndex: this.navigationIndex,
+        // Include metadata for the current item so receiving cards can display it
+        // immediately without needing a separate media-index fetch.
+        currentMetadata: this._currentMetadata || this._pendingMetadata || null,
+        isPaused: this._isPaused,
+        pauseIntent,
         updatedAt: Date.now(),
-        sourceCardId: this._cardId  // so listeners can ignore their own writes
+        sourceCardId: this._cardId,
       };
       localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
-      // Also broadcast within same window (storage event doesn't fire for same-window writes)
+      // Broadcast within same window (storage event doesn't fire for same-window writes)
       window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
-    } catch (_e) {
-      // localStorage may be unavailable in some environments
+    } catch (_e) {}
+
+    // Cross-device: debounced service call.
+    // Accumulate pauseIntent across debounce resets so that a pause write that arrives
+    // just before a navigation write doesn't silently lose the intent.
+    if (this._hasCrossDeviceSync()) {
+      this._pendingSyncPauseIntent = (this._pendingSyncPauseIntent || false) || pauseIntent;
+      if (this._syncWriteTimer) clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = setTimeout(() => {
+        this._syncWriteTimer = null;
+        const intent = this._pendingSyncPauseIntent || false;
+        this._pendingSyncPauseIntent = false;
+        this._writeSharedQueueStateToMediaIndex(intent);
+      }, 500);
     }
   }
 
-  // Shared Queue: called on reconnect (provider already exists) to sync queue state
-  // from localStorage so this card picks up where the other card left off
-  _syncFromSharedQueueOnReconnect() {
+  async _writeSharedQueueStateToMediaIndex(pauseIntent = false) {
     const id = this.config?.shared_queue_id;
-    if (!id) return;
+    if (!id || !this.navigationQueue?.length) return;
     try {
-      const raw = localStorage.getItem(`ha-media-card:${id}`);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (!Array.isArray(data.queue) || !data.queue.length) return;
-      const newIndex = Math.min(
-        typeof data.currentIndex === 'number' ? data.currentIndex : 0,
-        data.queue.length - 1
-      );
-      const newPath = data.queue[newIndex];
-      // Always restore the full queue so back-navigation history is preserved
-      this.navigationQueue = data.queue.map(mediaId => ({
-        media_content_id: mediaId,
-        media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
-        title: mediaId.split('/').pop() || mediaId,
-        metadata: null
-      }));
-      this.navigationIndex = newIndex;
-      this._log(`🔗 Shared queue synced on reconnect: ${this.navigationQueue.length} items, index ${newIndex}`);
-      // Navigate to the current image if it differs from what we were last showing
-      if (newPath !== this._currentMediaPath) {
-        const item = this.navigationQueue[newIndex];
-        this.currentMedia = item;
-        this._pendingNavigationIndex = newIndex;
-        this._pendingMediaPath = newPath;
-        this._pendingMetadata = null;
-        this._resolveMediaUrl();
-        this.requestUpdate();
-      }
-    } catch (_e) {}
+      const entityId = this._getMediaIndexEntityId();
+      const queue = this.navigationQueue.map(item => item.media_content_id);
+      await this.hass.connection.sendMessagePromise({
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'update_sync_state',
+        service_data: {
+          sync_group: id,
+          queue,
+          current_index: this.navigationIndex,
+          is_paused: this._isPaused,
+          pause_intent: pauseIntent,
+          source_card_id: this._cardId,
+          current_metadata: JSON.stringify(this._currentMetadata || this._pendingMetadata || null),
+        },
+        target: { entity_id: entityId },
+      });
+      this._log(`🔗 Sync state written to media_index for group '${id}'`);
+    } catch (e) {
+      this._log('⚠️ Failed to write shared queue to media_index:', e);
+    }
   }
 
-  // Shared Queue: restore queue from localStorage on load
-  // Returns true if queue was restored (caller should skip normal provider init)
-  _tryRestoreFromSharedQueue() {
+  // ── Read path (first load) ──────────────────────────────────────────────────
+  // Returns true and populates navigationQueue/navigationIndex if state was found.
+  async _tryRestoreFromSharedQueue() {
     const id = this.config?.shared_queue_id;
     if (!id) return false;
+
+    // Cross-device: fetch from media-index (authoritative, any device may have written it)
+    if (this._hasCrossDeviceSync()) {
+      try {
+        const entityId = this._getMediaIndexEntityId();
+        const resp = await this.hass.connection.sendMessagePromise({
+          type: 'call_service',
+          domain: 'media_index',
+          service: 'get_sync_state',
+          service_data: { sync_group: id },
+          target: { entity_id: entityId },
+          return_response: true,
+        });
+        const data = resp?.response;
+        if (data?.found && Array.isArray(data.queue) && data.queue.length) {
+          return this._applyRestoredState(data.queue, data.current_index);
+        }
+      } catch (e) {
+        this._log('⚠️ Could not fetch sync state from media_index, falling back to localStorage:', e);
+      }
+    }
+
+    // Single-device fallback: localStorage
     try {
       const raw = localStorage.getItem(`ha-media-card:${id}`);
       if (!raw) return false;
       const data = JSON.parse(raw);
       if (!Array.isArray(data.queue) || !data.queue.length) return false;
-      this.navigationQueue = data.queue.map(mediaId => ({
-        media_content_id: mediaId,
-        media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
-        title: mediaId.split('/').pop() || mediaId,
-        metadata: null
-      }));
-      this.navigationIndex = Math.min(
-        typeof data.currentIndex === 'number' ? data.currentIndex : 0,
-        this.navigationQueue.length - 1
-      );
-      this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
-      return true;
+      return this._applyRestoredState(data.queue, data.currentIndex);
     } catch (_e) {
       return false;
     }
   }
 
-  // Shared Queue: handle storage events from OTHER browser tabs/windows
+  // ── Read path (reconnect) ───────────────────────────────────────────────────
+  async _syncFromSharedQueueOnReconnect() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+
+    let queue = null, currentIndex = 0;
+
+    // Cross-device: fetch from media-index
+    if (this._hasCrossDeviceSync()) {
+      try {
+        const entityId = this._getMediaIndexEntityId();
+        const resp = await this.hass.connection.sendMessagePromise({
+          type: 'call_service',
+          domain: 'media_index',
+          service: 'get_sync_state',
+          service_data: { sync_group: id },
+          target: { entity_id: entityId },
+          return_response: true,
+        });
+        const data = resp?.response;
+        if (data?.found && Array.isArray(data.queue) && data.queue.length) {
+          queue = data.queue;
+          currentIndex = typeof data.current_index === 'number' ? data.current_index : 0;
+        }
+      } catch (e) {
+        this._log('⚠️ Could not fetch sync state from media_index for reconnect:', e);
+      }
+    }
+
+    // Fallback: localStorage
+    if (!queue) {
+      try {
+        const raw = localStorage.getItem(`ha-media-card:${id}`);
+        if (raw) {
+          const data = JSON.parse(raw);
+          if (Array.isArray(data.queue) && data.queue.length) {
+            queue = data.queue;
+            currentIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
+          }
+        }
+      } catch (_e) {}
+    }
+
+    if (!queue) return;
+    const newIndex = Math.min(currentIndex, queue.length - 1);
+    const newPath = queue[newIndex];
+    this.navigationQueue = queue.map(mediaId => ({
+      media_content_id: mediaId,
+      media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+      title: mediaId.split('/').pop() || mediaId,
+      metadata: null,
+    }));
+    this.navigationIndex = newIndex;
+    this._log(`🔗 Shared queue synced on reconnect: ${this.navigationQueue.length} items, index ${newIndex}`);
+    if (newPath !== this._currentMediaPath) {
+      const item = this.navigationQueue[newIndex];
+      this.currentMedia = item;
+      this._pendingNavigationIndex = newIndex;
+      this._pendingMediaPath = newPath;
+      this._pendingMetadata = null;
+      this._resolveMediaUrl();
+      this.requestUpdate();
+    }
+  }
+
+  // ── Shared helper ───────────────────────────────────────────────────────────
+  _applyRestoredState(queue, rawIndex) {
+    this.navigationQueue = queue.map(mediaId => ({
+      media_content_id: mediaId,
+      media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+      title: mediaId.split('/').pop() || mediaId,
+      metadata: null,
+    }));
+    this.navigationIndex = Math.min(
+      typeof rawIndex === 'number' ? rawIndex : 0,
+      this.navigationQueue.length - 1
+    );
+    this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
+    return true;
+  }
+
+  // ── Event listeners ─────────────────────────────────────────────────────────
+  // Subscribe to HA websocket events (cross-device) and window CustomEvent (same-device).
+  _subscribeToSyncEvents() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+
+    // Same-window CustomEvent (instant, no round-trip)
+    this._queueSyncEventHandler = this._onQueueSyncEvent.bind(this);
+    window.addEventListener('ha-media-card-sync', this._queueSyncEventHandler);
+
+    // Same-device cross-tab via storage event
+    this._storageEventHandler = this._onStorageEvent.bind(this);
+    window.addEventListener('storage', this._storageEventHandler);
+
+    // Cross-device: subscribe to HA bus event fired by media_index.update_sync_state
+    if (this._hasCrossDeviceSync()) {
+      this._haSyncUnsubscribe = this.hass.connection.subscribeEvents(
+        (event) => this._onHaSyncEvent(event),
+        'media_index.sync_updated'
+      ).catch(e => {
+        this._log('⚠️ Failed to subscribe to media_index.sync_updated:', e);
+        this._haSyncUnsubscribe = null;
+      });
+    }
+  }
+
+  _unsubscribeFromSyncEvents() {
+    if (this._storageEventHandler) {
+      window.removeEventListener('storage', this._storageEventHandler);
+      this._storageEventHandler = null;
+    }
+    if (this._queueSyncEventHandler) {
+      window.removeEventListener('ha-media-card-sync', this._queueSyncEventHandler);
+      this._queueSyncEventHandler = null;
+    }
+    if (this._haSyncUnsubscribe) {
+      // subscribeEvents returns a Promise<unsubscribe fn>; handle both cases
+      Promise.resolve(this._haSyncUnsubscribe).then(unsub => { if (unsub) unsub(); }).catch(() => {});
+      this._haSyncUnsubscribe = null;
+    }
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
+  }
+
+  // HA websocket event from media_index (cross-device)
+  _onHaSyncEvent(event) {
+    const id = this.config?.shared_queue_id;
+    const data = event.data;
+    if (!id || data?.sync_group !== id) return;
+    // Ignore events we ourselves wrote (media_index echoes back to all subscribers)
+    if (data?.source_card_id === this._cardId) return;
+    let currentMetadata = null;
+    if (data.current_metadata) {
+      try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
+    }
+    this._applySharedQueueUpdate({
+      queue: data.queue,
+      currentIndex: data.current_index,
+      currentMetadata,
+      isPaused: data.is_paused,
+      pauseIntent: data.pause_intent,
+    });
+  }
+
+  // storage event (cross-tab, same device)
   _onStorageEvent(event) {
     const id = this.config?.shared_queue_id;
     if (!id || event.key !== `ha-media-card:${id}` || !event.newValue) return;
     try {
       const data = JSON.parse(event.newValue);
       this._applySharedQueueUpdate(data);
-    } catch (_e) {
-      // ignore malformed data
-    }
+    } catch (_e) {}
   }
 
-  // Shared Queue: handle CustomEvents from other card instances in the same window
+  // window CustomEvent (same window, instant)
   _onQueueSyncEvent(event) {
     const id = this.config?.shared_queue_id;
     if (!id || event.detail?.sharedQueueId !== id) return;
@@ -3922,7 +4121,26 @@ export class MediaCard extends LitElement {
     this._applySharedQueueUpdate(event.detail);
   }
 
-  // Shared Queue: shared logic for applying an incoming queue update
+  // Broadcast the new queue state (with a specific index) without waiting for image load.
+  // Used when the local provider returns a new item so that same-window cards receive
+  // it synchronously (before their own provider awaits complete) and follow along.
+  _earlyBroadcastSyncState(nextIndex) {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+    try {
+      const data = {
+        queue: this.navigationQueue.map(qi => qi.media_content_id),
+        currentIndex: nextIndex,
+        isPaused: this._isPaused,
+        updatedAt: Date.now(),
+        sourceCardId: this._cardId,
+      };
+      localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
+      window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
+    } catch (_e) {}
+  }
+
+  // Apply an incoming queue update from any transport
   _applySharedQueueUpdate(data) {
     if (!Array.isArray(data.queue) || !data.queue.length) return;
     const newIndex = Math.min(
@@ -3930,23 +4148,74 @@ export class MediaCard extends LitElement {
       data.queue.length - 1
     );
     const newPath = data.queue[newIndex];
-    if (newPath === this._currentMediaPath) return; // already showing this
+
+    // Increment generation counter so any _loadNext() suspended in an await will
+    // see that a sync event took priority and should not overwrite our navigation.
+    this._syncNavGeneration = (this._syncNavGeneration || 0) + 1;
+
+    // Apply pause state ONLY when the sender explicitly toggled it (pauseIntent).
+    // Navigation syncs carry the sender's current isPaused as context (for new devices
+    // joining the group) but must NOT overwrite the local pause state — otherwise
+    // Device B playing and Device A paused leads to Device B's navigation writes
+    // continuously unpausing Device A.
+    if (data.pauseIntent === true && typeof data.isPaused === 'boolean' && data.isPaused !== this._isPaused) {
+      this._setPauseState(data.isPaused);
+      if (data.isPaused) { this._pauseTimer(); } else { this._resumeTimer(); }
+    }
+
+    // Skip navigation if we are already showing this path OR already navigating to it.
+    // The _pendingMediaPath check prevents duplicate navigation when the same update
+    // arrives via multiple transports (CustomEvent then HA event ~500ms later) before
+    // the image has fully loaded and _currentMediaPath has been committed.
+    // HOWEVER: a second broadcast for the same path may carry metadata that the first
+    // (early) broadcast lacked — apply it even if we skip navigation.
+    if (newPath === this._currentMediaPath || newPath === this._pendingMediaPath) {
+      if (data.currentMetadata) {
+        if (this._pendingMediaPath !== null) {
+          // Still loading — merge into pending so it applies when image loads
+          this._pendingMetadata = { ...(this._pendingMetadata || {}), ...data.currentMetadata };
+        } else {
+          // Already showing — apply directly and re-render
+          this._currentMetadata = { ...(this._currentMetadata || {}), ...data.currentMetadata };
+          this.requestUpdate();
+        }
+      }
+      return;
+    }
     this._log(`🔗 Shared queue sync: navigating to index ${newIndex}`);
+
+    // Reset the auto-advance timer immediately. Without this, the old timer (which may
+    // be only seconds from expiring) would fire before the incoming image loads, call
+    // _loadNext(), exhaust the queue, fetch a DIFFERENT item and broadcast it — causing
+    // a cascade where each of the N cards adds a new item in rapid succession.
+    // _setupAutoRefresh clears the old interval and starts a fresh full-duration one.
+    if (!this._isPaused) {
+      this._setupAutoRefresh();
+    }
     this.navigationQueue = data.queue.map(mediaId => ({
       media_content_id: mediaId,
       media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
       title: mediaId.split('/').pop() || mediaId,
-      metadata: null
+      metadata: null,
     }));
     this.navigationIndex = newIndex;
     const item = this.navigationQueue[newIndex];
     this.currentMedia = item;
     this._pendingNavigationIndex = newIndex;
     this._pendingMediaPath = newPath;
-    this._pendingMetadata = null;
+    // Use metadata from the sender if provided — avoids a round-trip fetch and
+    // works even when this card has no media-index configured.
+    this._pendingMetadata = data.currentMetadata || null;
+    // Suppress the outgoing write that would otherwise echo this event back
+    this._suppressSyncWrite = true;
     this._resolveMediaUrl();
     this.requestUpdate();
+    // For media-index cards: kick off a background fetch to get fresher/fuller
+    // metadata (sender may have had stale data too). No-op for non-media-index cards.
+    this._refreshMetadata().catch(err => this._log('⚠️ Sync metadata refresh failed:', err));
   }
+
+  // ── End Shared Queue ────────────────────────────────────────────────────────
 
   // V4: Keyboard navigation handler
   _handleKeyDown(e) {
@@ -3984,7 +4253,8 @@ export class MediaCard extends LitElement {
       } else {
         this._setupAutoRefresh();
       }
-      
+      // Broadcast pause state to all synced cards
+      this._writeSharedQueueState(true);
       this.requestUpdate();
     }
   }
@@ -4005,6 +4275,8 @@ export class MediaCard extends LitElement {
     } else {
       this._resumeTimer();
     }
+    // Broadcast pause state to all synced cards
+    this._writeSharedQueueState(true);
   }
   
   // V4: Pause state management (copied from ha-media-card.js)
@@ -4267,7 +4539,7 @@ export class MediaCard extends LitElement {
       
       // Priority 3: Filesystem date as last fallback
       if (!date && metadata.date) {
-        date = metadata.date;
+        date = (metadata.date instanceof Date) ? metadata.date : new Date(metadata.date);
       }
       
       if (date && !isNaN(date.getTime())) {
@@ -5681,6 +5953,8 @@ export class MediaCard extends LitElement {
       this._resumeTimer();
       this._log('▶️ RESUMED slideshow - timer restarted');
     }
+    // Broadcast pause state to all synced cards
+    this._writeSharedQueueState(true);
   }
   
   // Handle debug button click - toggle debug mode dynamically
