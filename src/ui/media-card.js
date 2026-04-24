@@ -3908,6 +3908,7 @@ export class MediaCard extends LitElement {
           pause_intent: pauseIntent,
           source_card_id: this._cardId,
           current_metadata: JSON.stringify(this._currentMetadata || this._pendingMetadata || null),
+          written_at: Date.now(),
         },
         target: { entity_id: entityId },
       });
@@ -4100,6 +4101,7 @@ export class MediaCard extends LitElement {
       currentMetadata,
       isPaused: data.is_paused,
       pauseIntent: data.pause_intent,
+      updatedAt: data.written_at || 0,
     });
   }
 
@@ -4143,6 +4145,18 @@ export class MediaCard extends LitElement {
   // Apply an incoming queue update from any transport
   _applySharedQueueUpdate(data) {
     if (!Array.isArray(data.queue) || !data.queue.length) return;
+
+    // Reject stale events that arrive out of order. Each write includes a
+    // written_at/updatedAt timestamp (ms epoch). If this event is older than the
+    // most recent one already applied, discard it — it is a delayed HA event from
+    // a previous navigation that arrived after a newer write already advanced us.
+    const eventTs = data.updatedAt || 0;
+    if (eventTs && eventTs < (this._lastAppliedSyncAt || 0)) {
+      this._log(`⏩ Discarding stale sync event (ts=${eventTs}, last=${this._lastAppliedSyncAt})`);
+      return;
+    }
+    if (eventTs) this._lastAppliedSyncAt = eventTs;
+
     const newIndex = Math.min(
       typeof data.currentIndex === 'number' ? data.currentIndex : 0,
       data.queue.length - 1
