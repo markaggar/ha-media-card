@@ -8813,6 +8813,12 @@ class MediaCard extends LitElement {
       if (data.isPaused) { this._pauseTimer(); } else { this._resumeTimer(); }
     }
 
+    // If this card is still paused after processing the intent, do not follow navigation
+    // from peers. The user intentionally paused this card; auto-advance from other running
+    // cards should not override that. A resume (pauseIntent=true, isPaused=false) will have
+    // already cleared _isPaused above, so the card resumes and still navigates.
+    if (this._isPaused) return;
+
     // Skip navigation if we are already showing this path OR already navigating to it.
     // The _pendingMediaPath check prevents duplicate navigation when the same update
     // arrives via multiple transports (CustomEvent then HA event ~500ms later) before
