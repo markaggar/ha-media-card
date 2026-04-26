@@ -8688,13 +8688,17 @@ class MediaCard extends LitElement {
     this._storageEventHandler = this._onStorageEvent.bind(this);
     window.addEventListener('storage', this._storageEventHandler);
 
-    // Cross-device: subscribe to HA bus event fired by media_index.update_sync_state
+    // Cross-device: subscribe to HA bus event fired by media_index.update_sync_state.
+    // We use a custom WebSocket command (media_index/subscribe_sync) registered by the
+    // integration rather than the generic subscribe_events command, because subscribe_events
+    // requires admin for custom integration events — non-admin dashboard users would be
+    // refused. The custom command has its own handler that allows any authenticated user.
     if (this._hasCrossDeviceSync()) {
-      this._haSyncUnsubscribe = this.hass.connection.subscribeEvents(
-        (event) => this._onHaSyncEvent(event),
-        'media_index.sync_updated'
+      this._haSyncUnsubscribe = this.hass.connection.subscribeMessage(
+        (msg) => this._onHaSyncEvent({ data: msg }),
+        { type: 'media_index/subscribe_sync', sync_group: id }
       ).catch(e => {
-        this._log('⚠️ Failed to subscribe to media_index.sync_updated:', e);
+        this._log('⚠️ Failed to subscribe to media_index sync events:', e);
         this._haSyncUnsubscribe = null;
       });
     }
