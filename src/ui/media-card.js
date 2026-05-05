@@ -2718,6 +2718,12 @@ export class MediaCard extends LitElement {
     // If expectedNavigationIndex is provided and doesn't match current pending index, abort
     if (expectedNavigationIndex !== undefined && this._pendingNavigationIndex !== expectedNavigationIndex) {
       this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
+      // Clear the navigation-in-progress flag when nothing else has claimed a pending
+      // path (i.e. no sync nav or newer _loadNext() is in flight). Without this,
+      // a stale return from a _loadNext() call that was superseded by a rapid sync
+      // burst can leave _navigatingAway=true permanently, causing the slideshow
+      // timer to log "Timer skipped" indefinitely.
+      if (!this._pendingMediaPath) this._navigatingAway = false;
       return;
     }
     
@@ -4232,6 +4238,10 @@ export class MediaCard extends LitElement {
     this._pendingMetadata = data.currentMetadata || null;
     // Suppress the outgoing write that would otherwise echo this event back
     this._suppressSyncWrite = true;
+    // Mark navigation in progress so the local slideshow timer doesn't fire a
+    // competing _loadNext() while the sync-driven URL resolution is in flight.
+    // _navigatingAway is cleared by _onMediaLoaded / _onVideoCanPlay as normal.
+    this._navigatingAway = true;
     this._resolveMediaUrl();
     this.requestUpdate();
     // For media-index cards: kick off a background fetch to get fresher/fuller
