@@ -1385,7 +1385,8 @@ export class MediaCard extends LitElement {
 
       // Leader election: if the user tapped/swiped on this card, it becomes the
       // new timer driver for the sync group, displacing any existing leader.
-      if (this._isManualNavigation && this.config?.shared_queue_id) {
+      // Exception: locally paused (short press) — navigate silently without affecting group.
+      if (this._isManualNavigation && this.config?.shared_queue_id && !this._isLocallyPaused()) {
         this._forceClaimLeadership();
       }
 
@@ -1519,7 +1520,10 @@ export class MediaCard extends LitElement {
               }
               // We are the "first" card — broadcast our new item immediately so other
               // same-window cards adopt it synchronously before they exit their own awaits.
-              this._earlyBroadcastSyncState(nextIndex);
+              // Suppress if locally paused (short press) — don't affect the group.
+              if (!this._isLocallyPaused()) {
+                this._earlyBroadcastSyncState(nextIndex);
+              }
             }
           } else {
             // No more items available from provider, wrap to beginning with fresh query
@@ -1642,7 +1646,8 @@ export class MediaCard extends LitElement {
 
       // Leader election: if the user tapped/swiped on this card, it becomes the
       // new timer driver for the sync group, displacing any existing leader.
-      if (this._isManualNavigation && this.config?.shared_queue_id) {
+      // Exception: locally paused (short press) — navigate silently without affecting group.
+      if (this._isManualNavigation && this.config?.shared_queue_id && !this._isLocallyPaused()) {
         this._forceClaimLeadership();
       }
 
@@ -3447,8 +3452,10 @@ export class MediaCard extends LitElement {
       this._pendingMediaPath = null;
     }
     
-    // Shared queue: broadcast navigation to other cards with same shared_queue_id
-    this._writeSharedQueueState();
+    // Shared queue: broadcast navigation — suppress if locally paused (short press)
+    if (!this._isLocallyPaused()) {
+      this._writeSharedQueueState();
+    }
     
     this.requestUpdate();
   }
@@ -4139,6 +4146,16 @@ export class MediaCard extends LitElement {
 
   // Same-window leader election for shared_queue_id groups.
   // Only the leader card runs the auto-advance timer; followers suppress theirs.
+
+  /**
+   * Returns true when this card is paused locally (short press) as opposed to
+   * a group pause (long press).  Locally paused cards navigate silently and
+   * ignore incoming sync navigation events.
+   */
+  _isLocallyPaused() {
+    return this._isPaused && !this._groupPaused;
+  }
+
   // This prevents two card instances (e.g. on different views of the same dashboard)
   // from both firing timers and competing over which index to broadcast.
 
@@ -4290,14 +4307,20 @@ export class MediaCard extends LitElement {
     // continuously unpausing Device A.
     if (data.pauseIntent === true && typeof data.isPaused === 'boolean' && data.isPaused !== this._isPaused) {
       this._setPauseState(data.isPaused);
-      if (data.isPaused) { this._pauseTimer(); } else { this._resumeTimer(); }
+      if (data.isPaused) {
+        // Incoming group-pause: mark as group-paused so we know to broadcast on resume
+        this._groupPaused = true;
+        this._pauseTimer();
+      } else {
+        // Incoming group-resume: clear group-paused flag
+        this._groupPaused = false;
+        this._resumeTimer();
+      }
     }
 
-    // If this card is still paused after processing the intent, do not follow navigation
-    // from peers. The user intentionally paused this card; auto-advance from other running
-    // cards should not override that. A resume (pauseIntent=true, isPaused=false) will have
-    // already cleared _isPaused above, so the card resumes and still navigates.
-    if (this._isPaused) return;
+    // Locally paused (short press, not a group pause) — ignore sync navigation.
+    // Group-paused cards still follow navigation from the active card.
+    if (this._isPaused && !this._groupPaused) return;
 
     // Skip navigation if we are already showing this path OR already navigating to it.
     // The _pendingMediaPath check prevents duplicate navigation when the same update
@@ -4578,8 +4601,10 @@ export class MediaCard extends LitElement {
       this._log('✅ Applied pending navigation index on image load');
     }
     
-    // Shared queue: broadcast navigation to other cards with same shared_queue_id
-    this._writeSharedQueueState();
+    // Shared queue: broadcast navigation — suppress if locally paused (short press)
+    if (!this._isLocallyPaused()) {
+      this._writeSharedQueueState();
+    }
     
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
@@ -5110,9 +5135,12 @@ export class MediaCard extends LitElement {
       <div class="action-buttons action-buttons-${position} ${this._showButtonsExplicitly ? 'show-buttons' : ''}">
         ${enablePause ? html`
           <button
-            class="action-btn pause-btn ${isPaused ? 'paused' : ''}"
+            class="action-btn pause-btn ${isPaused ? 'paused' : ''} ${isPaused && this._groupPaused ? 'group-paused' : ''}"
             @click=${this._handlePauseClick}
-            title="${isPaused ? 'Resume' : 'Pause'}">
+            @pointerdown=${this._handlePausePointerDown}
+            @pointerup=${this._handlePausePointerUp}
+            @pointercancel=${this._handlePausePointerUp}
+            title="${isPaused ? (this._groupPaused ? 'Resume Group' : 'Resume') : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
           </button>
         ` : ''}
@@ -6075,26 +6103,81 @@ export class MediaCard extends LitElement {
   }
 
   // V4: Handle pause button click
+  // Short press = local pause/resume only (no broadcast to sync group).
+  // Long press (via _handlePausePointerDown) = group pause/resume (broadcasts).
   _handlePauseClick(e) {
     e.stopPropagation();
-    
+
     // Restart timer on touch (gives user full time to choose next action)
     if (this._showButtonsExplicitly) {
       this._startActionButtonsHideTimer();
     }
-    
-    this._setPauseState(!this._isPaused);
-    
-    // Stop timer when pausing, restart when resuming
-    if (this._isPaused) {
+
+    // Long press already handled group pause — absorb the click that follows
+    if (this._pauseLongPressed) {
+      this._pauseLongPressed = false;
+      return;
+    }
+
+    const wasPaused = this._isPaused;
+    this._setPauseState(!wasPaused);
+
+    if (!wasPaused) {
+      // Short press PAUSE — local only, no broadcast
+      this._groupPaused = false;
       this._pauseTimer();
-      this._log('🎮 PAUSED slideshow - timer stopped');
+      this._log('🎮 PAUSED locally - timer stopped (short press, no broadcast)');
+    } else {
+      // RESUME
+      if (this._groupPaused) {
+        // Was group-paused: broadcast resume so all cards resume
+        this._groupPaused = false;
+        this._resumeTimer();
+        this._log('▶️ RESUMED slideshow — broadcasting group resume');
+        this._writeSharedQueueState(true);
+      } else {
+        // Was locally paused: resume locally, no broadcast
+        // Timer restart will naturally resync with the leader on next advance
+        this._resumeTimer();
+        this._log('▶️ RESUMED locally - resyncing to group state');
+      }
+    }
+  }
+
+  // Pointer handlers for the pause button to detect long press (group pause)
+  _handlePausePointerDown(e) {
+    e.stopPropagation(); // prevent card-level hold_action from firing
+    if (!this.config?.shared_queue_id) return; // group pause only relevant for sync groups
+    this._pauseLongPressed = false;
+    this._pauseHoldTimer = setTimeout(() => {
+      this._pauseHoldTimer = null;
+      this._pauseLongPressed = true;
+      this._handleGroupPause();
+    }, 600);
+  }
+
+  _handlePausePointerUp(e) {
+    e.stopPropagation();
+    if (this._pauseHoldTimer) {
+      clearTimeout(this._pauseHoldTimer);
+      this._pauseHoldTimer = null;
+    }
+  }
+
+  // Long press on pause button: toggle group pause state and broadcast to all cards
+  _handleGroupPause() {
+    const nowGroupPaused = !this._groupPaused;
+    this._groupPaused = nowGroupPaused;
+    this._setPauseState(nowGroupPaused);
+    if (nowGroupPaused) {
+      this._pauseTimer();
+      this._log('🔒 Group PAUSED — broadcasting to sync group');
     } else {
       this._resumeTimer();
-      this._log('▶️ RESUMED slideshow - timer restarted');
+      this._log('🔓 Group RESUMED — broadcasting to sync group');
     }
-    // Broadcast pause state to all synced cards
     this._writeSharedQueueState(true);
+    this.requestUpdate();
   }
   
   // Handle debug button click - toggle debug mode dynamically
