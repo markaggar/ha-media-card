@@ -4914,6 +4914,22 @@ class MediaCard extends LitElement {
     // Shared queue: register event listeners (cross-device HA events + same-device)
     this._subscribeToSyncEvents();
 
+    // Leader election: try to become the timer leader for this sync group.
+    // If the slot is empty this card claims it; otherwise it defers to the current leader.
+    this._tryClaimLeadership();
+
+    // Listen for the vacancy event fired when the leader disconnects, so a follower
+    // can step up and start its own timer.
+    this._leaderVacatedHandler = (e) => {
+      if (e.detail?.sharedQueueId !== this.config?.shared_queue_id) return;
+      const claimed = this._tryClaimLeadership();
+      if (claimed) {
+        this._log('👑 Stepping up as leader after vacancy — starting timer');
+        this._setupAutoRefresh();
+      }
+    };
+    window.addEventListener('ha-media-card-leader-vacated', this._leaderVacatedHandler);
+
     // Shared queue: if reconnecting (provider already exists), sync state from
     // media-index or localStorage to pick up where the other card left off
     if (this.provider && this.config?.shared_queue_id) {
@@ -4931,7 +4947,15 @@ class MediaCard extends LitElement {
     
     // Shared queue: remove all event listeners and cancel pending debounced write
     this._unsubscribeFromSyncEvents();
-    
+
+    // Leader election: remove the vacancy listener and release leadership.
+    // _relinquishLeadership fires ha-media-card-leader-vacated so a follower steps up.
+    if (this._leaderVacatedHandler) {
+      window.removeEventListener('ha-media-card-leader-vacated', this._leaderVacatedHandler);
+      this._leaderVacatedHandler = null;
+    }
+    this._relinquishLeadership();
+
     // V5.6: Cleanup viewport height observer
     this._cleanupDynamicViewportHeight();
     
@@ -5995,6 +6019,12 @@ class MediaCard extends LitElement {
       // The browser auto-pauses videos when they're removed from DOM
       this._navigatingAway = true;
 
+      // Leader election: if the user tapped/swiped on this card, it becomes the
+      // new timer driver for the sync group, displacing any existing leader.
+      if (this._isManualNavigation && this.config?.shared_queue_id) {
+        this._forceClaimLeadership();
+      }
+
     // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
     // Queue preview mode uses navigationQueue directly, so skip panel navigation
     if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
@@ -6245,6 +6275,12 @@ class MediaCard extends LitElement {
     try {
       // V5.6: Set flag FIRST to ignore video pause events during navigation
       this._navigatingAway = true;
+
+      // Leader election: if the user tapped/swiped on this card, it becomes the
+      // new timer driver for the sync group, displacing any existing leader.
+      if (this._isManualNavigation && this.config?.shared_queue_id) {
+        this._forceClaimLeadership();
+      }
 
       // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
       // Queue preview mode uses navigationQueue directly, so skip panel navigation
@@ -6608,6 +6644,13 @@ class MediaCard extends LitElement {
     
     if (this._backgroundPaused) {
       this._log('🔄 Auto-refresh setup skipped - background paused (not visible)');
+      return;
+    }
+
+    // Leader election: followers in a sync group must not run their own timer.
+    // The leader broadcasts navigation events; followers apply them via _applySharedQueueUpdate.
+    if (this.config?.shared_queue_id && !this._isSyncLeader()) {
+      this._log('👥 Sync follower — timer suppressed (leader handles advance)');
       return;
     }
 
@@ -8728,6 +8771,69 @@ class MediaCard extends LitElement {
       clearTimeout(this._syncWriteTimer);
       this._syncWriteTimer = null;
     }
+  }
+
+  // Same-window leader election for shared_queue_id groups.
+  // Only the leader card runs the auto-advance timer; followers suppress theirs.
+  // This prevents two card instances (e.g. on different views of the same dashboard)
+  // from both firing timers and competing over which index to broadcast.
+
+  /** Returns true if this card is (or should act as) the timer leader. */
+  _isSyncLeader() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return true; // No sync group — always act as leader
+    if (!window._mediaCardLeaders) return false;
+    return window._mediaCardLeaders.get(id) === this._cardId;
+  }
+
+  /**
+   * Attempt to register this card as the leader for its sync group.
+   * Succeeds only if the slot is empty.  Returns true if leadership was
+   * claimed (or was already held), false if another card holds the slot.
+   */
+  _tryClaimLeadership() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return true;
+    if (!window._mediaCardLeaders) window._mediaCardLeaders = new Map();
+    const current = window._mediaCardLeaders.get(id);
+    if (!current) {
+      window._mediaCardLeaders.set(id, this._cardId);
+      this._log(`👑 Claimed sync leadership for group '${id}'`);
+      return true;
+    }
+    if (current === this._cardId) return true; // Already the leader
+    this._log(`👥 Sync follower for group '${id}' (leader: ${current})`);
+    return false;
+  }
+
+  /**
+   * Force-claim leadership, displacing any current leader.
+   * Used when the user manually navigates on a follower card — the active
+   * device should become the driver to avoid the old leader overriding it.
+   */
+  _forceClaimLeadership() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+    if (!window._mediaCardLeaders) window._mediaCardLeaders = new Map();
+    const prev = window._mediaCardLeaders.get(id);
+    if (prev === this._cardId) return; // Already leader
+    window._mediaCardLeaders.set(id, this._cardId);
+    this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
+  }
+
+  /**
+   * Release leadership and notify followers so one can step up.
+   * Called from disconnectedCallback.
+   */
+  _relinquishLeadership() {
+    const id = this.config?.shared_queue_id;
+    if (!id || !window._mediaCardLeaders) return;
+    if (window._mediaCardLeaders.get(id) !== this._cardId) return;
+    window._mediaCardLeaders.delete(id);
+    this._log(`👋 Relinquished sync leadership for group '${id}'`);
+    window.dispatchEvent(new CustomEvent('ha-media-card-leader-vacated', {
+      detail: { sharedQueueId: id }
+    }));
   }
 
   // HA websocket event from media_index (cross-device)
