@@ -9730,7 +9730,9 @@ class MediaCard extends LitElement {
     
     // Check individual button enable flags (default: true)
     const config = this.config.action_buttons || {};
-    const enablePause = config.enable_pause !== false;
+    // In single-media mode there is no auto-advance slideshow, so pause is irrelevant.
+    const isSingleMedia = this.config.media_source_type === 'single_media';
+    const enablePause = !isSingleMedia && config.enable_pause !== false;
     const enableFavorite = config.enable_favorite !== false;
     const enableDelete = config.enable_delete !== false;
     const enableEdit = config.enable_edit !== false;
@@ -9754,9 +9756,14 @@ class MediaCard extends LitElement {
     // Show button if enabled and queue has items (or still loading)
     const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length >= 1;
     
-    // V5.6.12: Mute button - show unless slideshow is configured for images only
+    // Mute button: hide when media is image-only.
+    // For single-media mode, use the actual file extension of the current item so the
+    // button is hidden when showing an image even if media_type was not explicitly set.
+    // For slideshow modes, fall back to the config media_type filter.
     const mediaType = this.config.media_type || 'all';
-    const showMuteButton = mediaType !== 'image';  // Show for 'all' or 'video'
+    const showMuteButton = isSingleMedia
+      ? MediaUtils.detectFileType(this._currentMediaPath || '') === 'video'
+      : mediaType !== 'image';
     
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || showMuteButton || enableDebugButton || enableRefresh || enableFullscreen || 
