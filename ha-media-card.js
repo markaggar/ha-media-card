@@ -8543,20 +8543,19 @@ class MediaCard extends LitElement {
     // Echo-prevention: skip the write that would bounce an incoming navigation sync
     // back to the sender. BUT always allow explicit pause/resume writes through so
     // that a pause arriving simultaneously with a navigation doesn't get swallowed.
-    if (this._suppressSyncWrite && !pauseIntent) {
-      this._suppressSyncWrite = false;
-      // Also cancel any pending debounced DB write — it was queued before the sync
-      // event arrived and would still fire (bypassing _suppressSyncWrite) if not
-      // explicitly cancelled here.  Without this, a stale echo of the sender's own
-      // trimmed queue reaches the sender with a clamped index, corrupting the driver's
-      // navigation queue when the driver has since advanced to a different item.
+    // Uses a timestamp window instead of a one-shot boolean so that double-load events
+    // (e.g. rapid-navigation clearing both layers fires two onload events for the same
+    // URL) don't consume the flag on the first load and then write on the second.
+    if (!pauseIntent && this._suppressSyncWriteUntil && Date.now() < this._suppressSyncWriteUntil) {
+      // Don't clear _suppressSyncWriteUntil — let it expire naturally so subsequent
+      // loads within the same sync event window are also suppressed.
       if (this._syncWriteTimer) {
         clearTimeout(this._syncWriteTimer);
         this._syncWriteTimer = null;
       }
       return;
     }
-    this._suppressSyncWrite = false;
+    this._suppressSyncWriteUntil = 0;
 
     // Always write localStorage for instant same-device sync
     try {
@@ -8579,7 +8578,10 @@ class MediaCard extends LitElement {
     // Cross-device: debounced service call.
     // Accumulate pauseIntent across debounce resets so that a pause write that arrives
     // just before a navigation write doesn't silently lose the intent.
-    if (this._hasCrossDeviceSync()) {
+    // Cross-device write: only if we are acting as the driver (not a follower that
+    // recently received a sync event from another device).  Pause/resume intent always
+    // passes through so the user can group-pause from any device.
+    if (this._hasCrossDeviceSync() && (pauseIntent || Date.now() >= (this._crossDeviceFollowerUntil || 0))) {
       this._pendingSyncPauseIntent = (this._pendingSyncPauseIntent || false) || pauseIntent;
       if (this._syncWriteTimer) clearTimeout(this._syncWriteTimer);
       this._syncWriteTimer = setTimeout(() => {
@@ -8844,6 +8846,9 @@ class MediaCard extends LitElement {
     const prev = window._mediaCardLeaders.get(id);
     if (prev === this._cardId) return; // Already leader
     window._mediaCardLeaders.set(id, this._cardId);
+    // Also clear the cross-device follower deferral — the user is actively driving
+    // from this device so it should immediately write to the shared DB state.
+    this._crossDeviceFollowerUntil = 0;
     this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
   }
 
@@ -8869,6 +8874,12 @@ class MediaCard extends LitElement {
     if (!id || data?.sync_group !== id) return;
     // Ignore events we ourselves wrote (media_index echoes back to all subscribers)
     if (data?.source_card_id === this._cardId) return;
+    // Mark this card as a cross-device follower for 30 s.  While in follower mode,
+    // auto-advance writes are suppressed so this card doesn't overwrite the driver's
+    // DB state with its own independently-fetched queue items.  The window is generous
+    // enough to cover normal slideshow intervals; if the driver goes away, this card
+    // will naturally take over writing once the window expires.
+    this._crossDeviceFollowerUntil = Date.now() + 30000;
     let currentMetadata = null;
     if (data.current_metadata) {
       try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
@@ -9011,9 +9022,10 @@ class MediaCard extends LitElement {
     // works even when this card has no media-index configured.
     this._pendingMetadata = data.currentMetadata || null;
     // Suppress the outgoing write that would otherwise echo this event back.
-    // Also cancel any in-flight debounced write immediately — defence-in-depth so
-    // the timer can't fire between now and when _writeSharedQueueState is next called.
-    this._suppressSyncWrite = true;
+    // Use a 1-second window (timestamp) rather than a one-shot boolean so that the
+    // double-load race (rapid-navigation fires two onload events for the same URL)
+    // doesn't consume the flag prematurely on the first load.
+    this._suppressSyncWriteUntil = Date.now() + 1000;
     if (this._syncWriteTimer) {
       clearTimeout(this._syncWriteTimer);
       this._syncWriteTimer = null;
