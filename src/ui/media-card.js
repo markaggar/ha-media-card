@@ -1439,6 +1439,18 @@ export class MediaCard extends LitElement {
           this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
+          // Cross-device reconnect grace: when restoring at the last queue slot the
+          // driving device may be about to broadcast its next item.  Defer our own
+          // provider fetch so we follow the driver rather than racing it with a
+          // different item that would briefly flash on-screen before the sync corrects.
+          if (this._crossDeviceProviderFetchUntil && Date.now() < this._crossDeviceProviderFetchUntil) {
+            const remaining = this._crossDeviceProviderFetchUntil - Date.now();
+            this._log(`⏳ Cross-device grace: deferring provider fetch ${remaining}ms`);
+            // Retry when the window expires; a sync event clears the flag early.
+            setTimeout(() => { if (!this._isLocallyPaused()) this._loadNext(); }, remaining + 50);
+            return;
+          }
+          this._crossDeviceProviderFetchUntil = 0;
           // Capture generation before any awaits so we can detect if a sync event
           // arrived from another card while we were waiting for the provider.
           const _syncGenBefore = this._syncNavGeneration || 0;
@@ -4102,6 +4114,15 @@ export class MediaCard extends LitElement {
       this.navigationQueue.length - 1
     );
     this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
+    // Cross-device reconnect grace period: when we restore at the last (or only) slot
+    // the driver may be about to extend the queue and broadcast the next item.  Enter a
+    // short deferral window so the HA sync event arrives before we independently fetch a
+    // (potentially different) item from our own provider.  The window is cleared as soon
+    // as a sync event is received (in _applySharedQueueUpdate).
+    if (this._hasCrossDeviceSync() && this.navigationIndex >= this.navigationQueue.length - 1) {
+      this._crossDeviceProviderFetchUntil = Date.now() + 3000;
+      this._log('⏳ Cross-device grace period started (3s) — restored at end of shared queue');
+    }
     return true;
   }
 
@@ -4213,6 +4234,9 @@ export class MediaCard extends LitElement {
     // Also clear the cross-device follower deferral — the user is actively driving
     // from this device so it should immediately write to the shared DB state.
     this._crossDeviceFollowerUntil = 0;
+    // And clear the reconnect grace — user took control so local provider fetches
+    // are welcome immediately.
+    this._crossDeviceProviderFetchUntil = 0;
     this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
   }
 
@@ -4309,6 +4333,10 @@ export class MediaCard extends LitElement {
       return;
     }
     if (eventTs) this._lastAppliedSyncAt = eventTs;
+
+    // Clear reconnect grace period — the driver has broadcast its next item so
+    // we no longer need to defer provider fetches.
+    this._crossDeviceProviderFetchUntil = 0;
 
     const newIndex = Math.min(
       typeof data.currentIndex === 'number' ? data.currentIndex : 0,
