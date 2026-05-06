@@ -6078,12 +6078,19 @@ class MediaCard extends LitElement {
           // Cross-device reconnect grace: when restoring at the last queue slot the
           // driving device may be about to broadcast its next item.  Defer our own
           // provider fetch so we follow the driver rather than racing it with a
-          // different item that would briefly flash on-screen before the sync corrects.
+          // different item.  The grace window equals the slide interval + 3s buffer.
           if (this._crossDeviceProviderFetchUntil && Date.now() < this._crossDeviceProviderFetchUntil) {
             const remaining = this._crossDeviceProviderFetchUntil - Date.now();
             this._log(`⏳ Cross-device grace: deferring provider fetch ${remaining}ms`);
-            // Retry when the window expires; a sync event clears the flag early.
-            setTimeout(() => { if (!this._isLocallyPaused()) this._loadNext(); }, remaining + 50);
+            // Store the retry timer so it can be cancelled if a sync event arrives first.
+            if (this._crossDeviceGraceRetryTimer) clearTimeout(this._crossDeviceGraceRetryTimer);
+            this._crossDeviceGraceRetryTimer = setTimeout(() => {
+              this._crossDeviceGraceRetryTimer = null;
+              // Only retry if still at the end of the queue and no sync has advanced us.
+              if (!this._isLocallyPaused() && this.navigationIndex >= this.navigationQueue.length - 1) {
+                this._loadNext();
+              }
+            }, remaining + 50);
             return;
           }
           this._crossDeviceProviderFetchUntil = 0;
@@ -8752,12 +8759,17 @@ class MediaCard extends LitElement {
     this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
     // Cross-device reconnect grace period: when we restore at the last (or only) slot
     // the driver may be about to extend the queue and broadcast the next item.  Enter a
-    // short deferral window so the HA sync event arrives before we independently fetch a
-    // (potentially different) item from our own provider.  The window is cleared as soon
-    // as a sync event is received (in _applySharedQueueUpdate).
+    // deferral window equal to the configured advance interval + 3s safety buffer so
+    // that the driver's HA sync event arrives BEFORE we independently fetch a (potentially
+    // different) item from our own provider.  The window is cancelled as soon as a
+    // sync event is received (in _applySharedQueueUpdate).
     if (this._hasCrossDeviceSync() && this.navigationIndex >= this.navigationQueue.length - 1) {
-      this._crossDeviceProviderFetchUntil = Date.now() + 3000;
-      this._log('⏳ Cross-device grace period started (3s) — restored at end of shared queue');
+      const advanceSecs = this.config?.auto_advance_seconds ||
+                          this.config?.auto_advance_interval ||
+                          this.config?.auto_advance_duration || 10;
+      const graceMs = advanceSecs * 1000 + 3000;
+      this._crossDeviceProviderFetchUntil = Date.now() + graceMs;
+      this._log(`⏳ Cross-device grace period started (${(graceMs/1000).toFixed(0)}s) — restored at end of shared queue`);
     }
     return true;
   }
@@ -8873,6 +8885,10 @@ class MediaCard extends LitElement {
     // And clear the reconnect grace — user took control so local provider fetches
     // are welcome immediately.
     this._crossDeviceProviderFetchUntil = 0;
+    if (this._crossDeviceGraceRetryTimer) {
+      clearTimeout(this._crossDeviceGraceRetryTimer);
+      this._crossDeviceGraceRetryTimer = null;
+    }
     this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
   }
 
@@ -8971,8 +8987,13 @@ class MediaCard extends LitElement {
     if (eventTs) this._lastAppliedSyncAt = eventTs;
 
     // Clear reconnect grace period — the driver has broadcast its next item so
-    // we no longer need to defer provider fetches.
+    // we no longer need to defer provider fetches.  Also cancel any pending retry
+    // setTimeout so it doesn't fire and independently advance after the sync.
     this._crossDeviceProviderFetchUntil = 0;
+    if (this._crossDeviceGraceRetryTimer) {
+      clearTimeout(this._crossDeviceGraceRetryTimer);
+      this._crossDeviceGraceRetryTimer = null;
+    }
 
     const newIndex = Math.min(
       typeof data.currentIndex === 'number' ? data.currentIndex : 0,
