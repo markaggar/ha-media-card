@@ -3909,6 +3909,15 @@ export class MediaCard extends LitElement {
     // that a pause arriving simultaneously with a navigation doesn't get swallowed.
     if (this._suppressSyncWrite && !pauseIntent) {
       this._suppressSyncWrite = false;
+      // Also cancel any pending debounced DB write — it was queued before the sync
+      // event arrived and would still fire (bypassing _suppressSyncWrite) if not
+      // explicitly cancelled here.  Without this, a stale echo of the sender's own
+      // trimmed queue reaches the sender with a clamped index, corrupting the driver's
+      // navigation queue when the driver has since advanced to a different item.
+      if (this._syncWriteTimer) {
+        clearTimeout(this._syncWriteTimer);
+        this._syncWriteTimer = null;
+      }
       return;
     }
     this._suppressSyncWrite = false;
@@ -4365,8 +4374,14 @@ export class MediaCard extends LitElement {
     // Use metadata from the sender if provided — avoids a round-trip fetch and
     // works even when this card has no media-index configured.
     this._pendingMetadata = data.currentMetadata || null;
-    // Suppress the outgoing write that would otherwise echo this event back
+    // Suppress the outgoing write that would otherwise echo this event back.
+    // Also cancel any in-flight debounced write immediately — defence-in-depth so
+    // the timer can't fire between now and when _writeSharedQueueState is next called.
     this._suppressSyncWrite = true;
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
     // Mark navigation in progress so the local slideshow timer doesn't fire a
     // competing _loadNext() while the sync-driven URL resolution is in flight.
     // _navigatingAway is cleared by _onMediaLoaded / _onVideoCanPlay as normal.
