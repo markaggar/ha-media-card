@@ -6075,13 +6075,23 @@ class MediaCard extends LitElement {
           this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
-          // Cross-device reconnect grace: when restoring at the last queue slot the
-          // driving device may be about to broadcast its next item.  Defer our own
-          // provider fetch so we follow the driver rather than racing it with a
-          // different item.  The grace window equals the slide interval + 3s buffer.
-          if (this._crossDeviceProviderFetchUntil && Date.now() < this._crossDeviceProviderFetchUntil) {
-            const remaining = this._crossDeviceProviderFetchUntil - Date.now();
-            this._log(`⏳ Cross-device grace: deferring provider fetch ${remaining}ms`);
+          // Cross-device follower mode: if this card received an HA sync event recently
+          // it means another device is the active driver.  Defer provider fetches and wait
+          // for the driver to broadcast the next item.  This cleanly prevents both devices
+          // independently fetching different items and causing flashes during normal running
+          // — not just at reconnect.  After _crossDeviceFollowerUntil expires (30s with no
+          // sync events) the card is free to fetch on its own (driver has gone away).
+          const _nowMs = Date.now();
+          const _followerDefer = this._crossDeviceFollowerUntil && _nowMs < this._crossDeviceFollowerUntil;
+          const _reconnectDefer = this._crossDeviceProviderFetchUntil && _nowMs < this._crossDeviceProviderFetchUntil;
+          if (_followerDefer || _reconnectDefer) {
+            // Use the longer of the two windows as the remaining deferral time.
+            const remaining = Math.max(
+              _followerDefer ? this._crossDeviceFollowerUntil - _nowMs : 0,
+              _reconnectDefer ? this._crossDeviceProviderFetchUntil - _nowMs : 0
+            );
+            const reason = _followerDefer ? 'follower mode (driver active)' : 'reconnect grace';
+            this._log(`⏳ Cross-device defer (${reason}): waiting ${remaining}ms for driver broadcast`);
             // Store the retry timer so it can be cancelled if a sync event arrives first.
             if (this._crossDeviceGraceRetryTimer) clearTimeout(this._crossDeviceGraceRetryTimer);
             this._crossDeviceGraceRetryTimer = setTimeout(() => {
