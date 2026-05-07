@@ -6185,6 +6185,12 @@ class MediaCard extends LitElement {
               // the provider (same-window CustomEvent fires mid-await), follow that card instead.
               if ((this._syncNavGeneration || 0) > _syncGenBefore) {
                 this._log('🔗 Another synced card broadcast first — following sync navigation, discarding locally-fetched item');
+                // IMPORTANT: also remove the item we just pushed from navigationQueue.
+                // _applySharedQueueUpdate replaced navigationQueue with the driver's queue,
+                // then our push added this item on top.  If we don't remove it, the next
+                // auto-advance will find the queue non-exhausted and navigate to this item
+                // directly — bypassing the follower defer check entirely.
+                this.navigationQueue.pop();
                 return;
               }
               // We are the "first" card — broadcast our new item immediately so other
