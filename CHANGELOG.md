@@ -8,25 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.10.0 - 2026-04-22
 
 ### Added
-- **Local vs Group Pause** (`shared_queue_id` feature): Pause behavior now distinguishes between pausing just the current card and pausing an entire sync group
-  - **Short press** on the pause button: **local pause only** — the card stops advancing but does not broadcast to peers. Locally paused cards silently ignore incoming sync navigation events; manual back/forward still works but does not broadcast or steal sync leadership
-  - **Long press** (hold 600 ms) on the pause button: **group pause** — broadcasts a pause event to all cards sharing the same `shared_queue_id`. All cards in the group stop advancing simultaneously
-  - **Resuming from a group pause**: broadcasts a resume event to all peers, re-synchronizing the group
-  - Long-pressing the pause button no longer accidentally triggers the card-level `hold_action`
-  - Replaces the previous behavior where any pause was globally broadcast to all sync group members
-
-- **Same-Window Leader Election** (`shared_queue_id` feature): When two or more cards on the same browser tab share a `shared_queue_id`, exactly one card drives the slideshow timer at a time. The others suppress their timers and follow the leader via the local `CustomEvent` bus. Manually navigating on any card immediately promotes it to leader. When a leader is destroyed (card removed or navigated away), the next card claims leadership automatically via a vacancy event.
-
-- **Shared Queue** (`shared_queue_id`): Multiple cards across any number of views — or across different devices and browsers — share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` string on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
-  - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab
+- **Cross-Device Slideshow Sync** (`shared_queue_id`): Multiple cards across any number of views, devices, and browsers share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
+  - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab. Exactly one card drives the slideshow timer — others suppress theirs and follow the leader. Manual navigation instantly promotes that card to leader; when a leader is destroyed the next card claims leadership automatically via a vacancy event
   - **Cross-view persistence**: `localStorage` so switching to a different dashboard view immediately shows the current image
-  - **Cross-device**: When the `media_index` source is active, the card writes sync state through the `media_index.update_sync_state` service and listens for the resulting `media_index_sync_state` HA event — keeping wall tablets, mobile phones, and any other device in sync in real time
-  - Pause/resume syncs reliably across all devices: only explicit user pause actions propagate; automatic navigation advances never accidentally override a peer's pause state
-  - The current image's metadata (date, location, camera) is included in every sync payload so receiving cards display the correct information without making their own service calls
-  - Configure via the visual editor ("Shared Queue ID" in the Image Options section) or in YAML as `shared_queue_id: "my_queue"`
+  - **Cross-device**: When the `media_index` source is active, sync state is written through `media_index.update_sync_state` and delivered via the `media_index.sync_updated` HA event, keeping wall tablets, phones, and any other browser in sync in real time
+  - **Pause sync**: Short-press pause stops only the local card; long-press (600 ms) broadcasts a group pause or resume to all peers. Locally paused cards silently ignore incoming navigation events. Only explicit user pause actions propagate — automatic advances never override a peer's pause state
+  - Current image metadata (date, location, camera) is included in every sync payload so receiving cards display the correct information without extra service calls
+  - Configure via the visual editor ("Shared Queue ID" in Image Options) or YAML: `shared_queue_id: "my_queue"`
 
 ### Fixed
-- **Cross-device sync: manual navigation on the leader card did not update other browsers** (`shared_queue_id` feature): When Card A received any HA sync event from Card B, `_crossDeviceFollowerUntil` was set to `now + 30s` on Card A, blocking the HA debounce write for 30 seconds. `_forceClaimLeadership()` only cleared this flag when displacing a *different* local leader — when Card A was already the window-local leader it returned early, leaving the follower flag active. Any manual navigation on Card A wrote to `localStorage`/`CustomEvent` (same-browser) but the HA service call was suppressed, so Card B on the other browser never received it. Fixed by moving all follower-state resets (`_crossDeviceFollowerUntil`, `_crossDeviceProviderFetchUntil`, `_suppressSyncWriteUntil`, and pending timer cancellation) before the early-return guard so they always execute on any manual navigation regardless of whether local window leadership changes.
+- **Action buttons in single-media mode**: The action button strip is now context-aware when `media_source_type: single_media` is configured
+  - **Pause button hidden**: There is no auto-advance slideshow timer in single-media mode, so the pause button is no longer shown
+  - **Mute button follows actual file type**: The mute button now shows or hides based on the file extension of the currently displayed item rather than the configured `media_type` filter — so it correctly appears for videos and is hidden for images even when `media_type` is not explicitly set
 
 - **Action button colors washed out on light and frosted-glass themes**: Button backgrounds were derived from `--rgb-card-background-color`, which resolves to near-white on many light themes, making icons invisible. Fixed by using hardcoded dark semi-transparent backgrounds (`rgba(0,0,0,0.55)`) and explicit white icon colors. Active-state colors (mute, pause, info, burst, queue, favorite) are now set directly on the `ha-icon` element so they work correctly on all themes.
 
