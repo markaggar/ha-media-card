@@ -1441,34 +1441,36 @@ export class MediaCard extends LitElement {
           this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
-          // Cross-device follower mode: if this card received an HA sync event recently
-          // it means another device is the active driver.  Defer provider fetches and wait
-          // for the driver to broadcast the next item.  This cleanly prevents both devices
-          // independently fetching different items and causing flashes during normal running
-          // — not just at reconnect.  After _crossDeviceFollowerUntil expires (30s with no
-          // sync events) the card is free to fetch on its own (driver has gone away).
           const _nowMs = Date.now();
-          const _followerDefer = this._crossDeviceFollowerUntil && _nowMs < this._crossDeviceFollowerUntil;
-          const _reconnectDefer = this._crossDeviceProviderFetchUntil && _nowMs < this._crossDeviceProviderFetchUntil;
-          if (_followerDefer || _reconnectDefer) {
-            // Use the longer of the two windows as the remaining deferral time.
-            const remaining = Math.max(
-              _followerDefer ? this._crossDeviceFollowerUntil - _nowMs : 0,
-              _reconnectDefer ? this._crossDeviceProviderFetchUntil - _nowMs : 0
-            );
-            const reason = _followerDefer ? 'follower mode (driver active)' : 'reconnect grace';
-            this._log(`⏳ Cross-device defer (${reason}): waiting ${remaining}ms for driver broadcast`);
-            // Store the retry timer so it can be cancelled if a sync event arrives first.
+          const _followerDefer = !this._isManualNavigation &&
+              this._crossDeviceFollowerUntil && _nowMs < this._crossDeviceFollowerUntil;
+          const _reconnectDefer = !this._isManualNavigation &&
+              this._crossDeviceProviderFetchUntil && _nowMs < this._crossDeviceProviderFetchUntil;
+
+          if (_followerDefer) {
+            // Driver is active — it will broadcast when ready.  Return silently
+            // without queuing a retry; the retry was the source of endless noise.
+            // _applySharedQueueUpdate will navigate us when the broadcast arrives.
+            const waitSecs = Math.round((this._crossDeviceFollowerUntil - _nowMs) / 1000);
+            this._log(`⏳ Follower mode: waiting for driver broadcast (${waitSecs}s remaining)`);
+            return;
+          }
+
+          if (_reconnectDefer) {
+            // Reconnect grace: driver may still be active but HA event hasn't arrived yet.
+            // Set a one-shot retry; _applySharedQueueUpdate cancels it if broadcast arrives.
+            const remaining = this._crossDeviceProviderFetchUntil - _nowMs;
+            this._log(`⏳ Cross-device reconnect grace: deferring provider fetch ${remaining}ms`);
             if (this._crossDeviceGraceRetryTimer) clearTimeout(this._crossDeviceGraceRetryTimer);
             this._crossDeviceGraceRetryTimer = setTimeout(() => {
               this._crossDeviceGraceRetryTimer = null;
-              // Only retry if still at the end of the queue and no sync has advanced us.
               if (!this._isLocallyPaused() && this.navigationIndex >= this.navigationQueue.length - 1) {
                 this._loadNext();
               }
             }, remaining + 50);
             return;
           }
+
           this._crossDeviceProviderFetchUntil = 0;
           // Capture generation before any awaits so we can detect if a sync event
           // arrived from another card while we were waiting for the provider.
@@ -4291,6 +4293,13 @@ export class MediaCard extends LitElement {
     if (!id || data?.sync_group !== id) return;
     // Ignore events we ourselves wrote (media_index echoes back to all subscribers)
     if (data?.source_card_id === this._cardId) return;
+    // If the user is actively pressing a button on this card, let the manual
+    // navigation complete first.  We do NOT extend the follower window because
+    // this card is in the middle of taking over as driver.
+    if (this._isManualNavigation) {
+      this._log('🔗 Manual nav in progress — not entering follower mode for this sync event');
+      return;
+    }
     // Mark this card as a cross-device follower for 30 s.  While in follower mode,
     // auto-advance writes are suppressed so this card doesn't overwrite the driver's
     // DB state with its own independently-fetched queue items.  The window is generous
@@ -4370,6 +4379,17 @@ export class MediaCard extends LitElement {
     if (this._crossDeviceGraceRetryTimer) {
       clearTimeout(this._crossDeviceGraceRetryTimer);
       this._crossDeviceGraceRetryTimer = null;
+    }
+
+    // If the user pressed a button on THIS device while the sync arrived, let the
+    // manual navigation win.  The manual _loadNext/_loadPrevious already called
+    // _forceClaimLeadership() which cleared _crossDeviceFollowerUntil; and
+    // _onHaSyncEvent already returned early so _crossDeviceFollowerUntil was not
+    // re-set.  Nothing further to do here — the manual fetch will complete and
+    // broadcast its own sync event to the driver.
+    if (this._isManualNavigation) {
+      this._log('\ud83d\uddb1\ufe0f Manual navigation in progress — ignoring incoming sync navigation');
+      return;
     }
 
     const newIndex = Math.min(

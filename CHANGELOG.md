@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.10.0 - 2026-04-22
 
 ### Added
+- **Local vs Group Pause** (`shared_queue_id` feature): Pause behavior now distinguishes between pausing just the current card and pausing an entire sync group
+  - **Short press** on the pause button: **local pause only** — the card stops advancing but does not broadcast to peers. Locally paused cards silently ignore incoming sync navigation events; manual back/forward still works but does not broadcast or steal sync leadership
+  - **Long press** (hold 600 ms) on the pause button: **group pause** — broadcasts a pause event to all cards sharing the same `shared_queue_id`. All cards in the group stop advancing simultaneously
+  - **Resuming from a group pause**: broadcasts a resume event to all peers, re-synchronizing the group
+  - Long-pressing the pause button no longer accidentally triggers the card-level `hold_action`
+  - Replaces the previous behavior where any pause was globally broadcast to all sync group members
+
+- **Same-Window Leader Election** (`shared_queue_id` feature): When two or more cards on the same browser tab share a `shared_queue_id`, exactly one card drives the slideshow timer at a time. The others suppress their timers and follow the leader via the local `CustomEvent` bus. Manually navigating on any card immediately promotes it to leader. When a leader is destroyed (card removed or navigated away), the next card claims leadership automatically via a vacancy event.
+
 - **Shared Queue** (`shared_queue_id`): Multiple cards across any number of views — or across different devices and browsers — share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` string on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
   - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab
   - **Cross-view persistence**: `localStorage` so switching to a different dashboard view immediately shows the current image
