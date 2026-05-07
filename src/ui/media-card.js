@@ -185,6 +185,7 @@ export class MediaCard extends LitElement {
     this._previousNavigationIndex = null;  // Saved navigation index before navigation
     this._isLoadingNext = false;  // Re-entrance guard for _loadNext()
     this._isManualNavigation = false; // V5.6.7: Track if navigation is user-initiated vs timer-driven
+    this._manualNavLoading = false;    // True from navigation commit until _onMediaLoaded/_onVideoCanPlay fires
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -1648,6 +1649,12 @@ export class MediaCard extends LitElement {
       this._fullMetadata = null;
       this._folderDisplayCache = null;
       
+      // Mark that a manual navigation is pending load — keeps _isManualNavigation
+      // semantics alive through the async image/video load phase so that any HA
+      // sync event arriving before _onMediaLoaded fires does not re-enter follower
+      // mode and suppress this card's own HA write.
+      if (this._isManualNavigation) this._manualNavLoading = true;
+
       await this._resolveMediaUrl();
       this.requestUpdate();
 
@@ -1663,10 +1670,11 @@ export class MediaCard extends LitElement {
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
   } catch (error) {
     console.error('[MediaCard] Error loading next media:', error);
+    this._manualNavLoading = false; // Safety: clear on exception
   } finally {
     // V5.6.7: Always clear re-entrance guard
     this._isLoadingNext = false;
-    // V5.6.7: Always clear manual navigation flag after navigation completes
+    // Clear the in-flight flag. _manualNavLoading covers the remaining async load phase.
     this._isManualNavigation = false;
   }
 }
@@ -1749,7 +1757,11 @@ export class MediaCard extends LitElement {
     // V5: Clear cached full metadata when media changes
     this._fullMetadata = null;
     this._folderDisplayCache = null;
-    
+
+    // Mark that a manual navigation is pending load — keeps _isManualNavigation
+    // semantics alive through the async image/video load phase.
+    if (this._isManualNavigation) this._manualNavLoading = true;
+
     await this._resolveMediaUrl();
     this.requestUpdate();
     
@@ -1777,10 +1789,11 @@ export class MediaCard extends LitElement {
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
       console.error('[MediaCard] Error loading previous media:', error);
+      this._manualNavLoading = false; // Safety: clear on exception
     } finally {
       // V5.6.7: Always clear re-entrance guard
       this._isLoadingNext = false;
-      // V5.6.7: Always clear manual navigation flag after navigation completes
+      // Clear the in-flight flag. _manualNavLoading covers the remaining async load phase.
       this._isManualNavigation = false;
     }
   }
@@ -3467,6 +3480,8 @@ export class MediaCard extends LitElement {
   _onVideoCanPlay() {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
+    // Clear the manual-nav load-phase flag now that the media has committed to the DOM.
+    this._manualNavLoading = false;;
     
     // V5.8: Clear transient failure counter – video loaded successfully this time
     const itemId = this.currentMedia?.media_content_id;
@@ -4332,8 +4347,8 @@ export class MediaCard extends LitElement {
     // If the user is actively pressing a button on this card, let the manual
     // navigation complete first.  We do NOT extend the follower window because
     // this card is in the middle of taking over as driver.
-    if (this._isManualNavigation) {
-      this._log('🔗 Manual nav in progress — not entering follower mode for this sync event');
+    if (this._isManualNavigation || this._manualNavLoading) {
+      this._log('🔗 Manual nav in progress (or pending load) — not entering follower mode for this sync event');
       return;
     }
     // Mark this card as a cross-device follower for 30 s.  While in follower mode,
@@ -4431,8 +4446,8 @@ export class MediaCard extends LitElement {
     // _onHaSyncEvent already returned early so _crossDeviceFollowerUntil was not
     // re-set.  Nothing further to do here — the manual fetch will complete and
     // broadcast its own sync event to the driver.
-    if (this._isManualNavigation) {
-      this._log('\ud83d\uddb1\ufe0f Manual navigation in progress — ignoring incoming sync navigation');
+    if (this._isManualNavigation || this._manualNavLoading) {
+      this._log('\ud83d\uddb1\ufe0f Manual navigation in progress (or pending load) — ignoring incoming sync navigation');
       return;
     }
 
@@ -4611,10 +4626,14 @@ export class MediaCard extends LitElement {
   }
 
   _onMediaLoaded(e) {
+    // Clear the manual-nav load-phase flag now that the media has committed to the DOM.
+    // This must happen before any early returns below so the flag is never left set.
+    this._manualNavLoading = false;
+
     // Log media loaded for images (videos log in _onVideoLoadStart)
     if (!this._isVideoFile(this.mediaUrl)) {
       this._log('Media loaded successfully:', this.mediaUrl);
-      
+
       // V5.6.7: Clear navigation flag now that image is loaded
       // This prevents timer from firing prematurely during transitions
       this._navigatingAway = false;
