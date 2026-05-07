@@ -8910,6 +8910,15 @@ class MediaCard extends LitElement {
       clearTimeout(this._crossDeviceGraceRetryTimer);
       this._crossDeviceGraceRetryTimer = null;
     }
+    // Clear the echo-suppression window set by _applySharedQueueUpdate.
+    // Without this, the first _writeSharedQueueState() call after taking control
+    // is silently dropped (and the pending debounce timer is also cancelled), so
+    // the other device never receives the HA sync event for the manual navigation.
+    this._suppressSyncWriteUntil = 0;
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
     this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
   }
 
