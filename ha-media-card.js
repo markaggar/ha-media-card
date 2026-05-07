@@ -8898,7 +8898,19 @@ class MediaCard extends LitElement {
     if (!id) return;
     if (!window._mediaCardLeaders) window._mediaCardLeaders = new Map();
     const prev = window._mediaCardLeaders.get(id);
-    if (prev === this._cardId) return; // Already leader
+
+    // Always clear the echo-suppression window regardless of whether leadership
+    // changes. A sync event from the follower may have set _suppressSyncWriteUntil
+    // on this card just before the user manually navigated – if we don't clear it
+    // here, the post-load _writeSharedQueueState() call is silently dropped even
+    // when this card is (and remains) the leader.
+    this._suppressSyncWriteUntil = 0;
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
+
+    if (prev === this._cardId) return; // Already leader — suppression cleared above ✓
     window._mediaCardLeaders.set(id, this._cardId);
     // Also clear the cross-device follower deferral — the user is actively driving
     // from this device so it should immediately write to the shared DB state.
@@ -8909,15 +8921,6 @@ class MediaCard extends LitElement {
     if (this._crossDeviceGraceRetryTimer) {
       clearTimeout(this._crossDeviceGraceRetryTimer);
       this._crossDeviceGraceRetryTimer = null;
-    }
-    // Clear the echo-suppression window set by _applySharedQueueUpdate.
-    // Without this, the first _writeSharedQueueState() call after taking control
-    // is silently dropped (and the pending debounce timer is also cancelled), so
-    // the other device never receives the HA sync event for the manual navigation.
-    this._suppressSyncWriteUntil = 0;
-    if (this._syncWriteTimer) {
-      clearTimeout(this._syncWriteTimer);
-      this._syncWriteTimer = null;
     }
     this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
   }
