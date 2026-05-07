@@ -1389,7 +1389,7 @@ export class MediaCard extends LitElement {
       // user wants to control THIS card and it should fetch from its own provider,
       // not wait for a cross-device broadcast.
       if (this._isManualNavigation && this.config?.shared_queue_id) {
-        this._forceClaimLeadership();
+        this._claimDriverRole();
       }
 
     // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
@@ -1688,7 +1688,7 @@ export class MediaCard extends LitElement {
       // This applies even when locally paused — an explicit button press means the
       // user wants to control THIS card.
       if (this._isManualNavigation && this.config?.shared_queue_id) {
-        this._forceClaimLeadership();
+        this._claimDriverRole();
       }
 
       // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
@@ -4257,37 +4257,54 @@ export class MediaCard extends LitElement {
    * Used when the user manually navigates on a follower card — the active
    * device should become the driver to avoid the old leader overriding it.
    */
-  _forceClaimLeadership() {
+  /**
+   * Called on every manual navigation.  Handles TWO distinct but related concepts:
+   *
+   * Tier 1 — Same-window timer leadership (window._mediaCardLeaders):
+   *   Only one card per browser tab runs the auto-advance timer.  Manually
+   *   navigating on any card promotes it to timer leader, displacing any other
+   *   card that held the slot.  This prevents two timers competing on the same tab.
+   *
+   * Tier 2 — Cross-device HA write driver (_crossDeviceFollowerUntil):
+   *   Whichever browser/device the user is actively navigating on should write to
+   *   the HA media_index sync state.  Receiving a sync event from another device
+   *   sets _crossDeviceFollowerUntil = now+30s on this card, which blocks the HA
+   *   debounce write.  Manual navigation must clear that deferral unconditionally —
+   *   even if same-window leadership didn't change — so the HA write goes through
+   *   and the other browser receives the navigation update.
+   *
+   * Both tiers' state is reset BEFORE the early-return guard.  That guard only
+   * skips the window._mediaCardLeaders map update and log line; it must never
+   * skip the state resets.
+   */
+  _claimDriverRole() {
     const id = this.config?.shared_queue_id;
     if (!id) return;
     if (!window._mediaCardLeaders) window._mediaCardLeaders = new Map();
     const prev = window._mediaCardLeaders.get(id);
 
-    // Always clear ALL follower-mode state regardless of whether local window
-    // leadership changes.  A sync event from another device sets both
-    // _suppressSyncWriteUntil (echo guard) and _crossDeviceFollowerUntil (HA write
-    // gate) on this card.  If we only clear these when displacing a different local
-    // leader, manual navigation on the already-local-leader card still gets blocked
-    // from writing to HA — the other browser never receives the navigation.
-    this._suppressSyncWriteUntil = 0;
-    if (this._syncWriteTimer) {
-      clearTimeout(this._syncWriteTimer);
-      this._syncWriteTimer = null;
-    }
-    // Clear the cross-device follower deferral — the user is actively driving
-    // from this device so it should immediately write to the shared HA state.
+    // ── Tier 2: cross-device driver mode ──────────────────────────────────────
+    // Clear ALL cross-device follower/deferral state so the HA write goes through
+    // immediately, regardless of whether same-window leadership is changing.
     this._crossDeviceFollowerUntil = 0;
-    // And clear the reconnect grace — user took control so local provider fetches
-    // are welcome immediately.
     this._crossDeviceProviderFetchUntil = 0;
     if (this._crossDeviceGraceRetryTimer) {
       clearTimeout(this._crossDeviceGraceRetryTimer);
       this._crossDeviceGraceRetryTimer = null;
     }
+    // Clear the echo-suppression window.  A sync event from the other device may
+    // have set _suppressSyncWriteUntil just before the user navigated — without
+    // this reset the post-load _writeSharedQueueState() call would be dropped.
+    this._suppressSyncWriteUntil = 0;
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
 
-    if (prev === this._cardId) return; // Already local leader — state cleared above ✓
+    // ── Tier 1: same-window timer leadership ──────────────────────────────────
+    if (prev === this._cardId) return; // Already this tab's timer leader — Tier 2 reset above is sufficient ✓
     window._mediaCardLeaders.set(id, this._cardId);
-    this._log(`👑 Force-claimed sync leadership for group '${id}' (displaced: ${prev})`);
+    this._log(`👑 Claimed driver role for group '${id}' (displaced same-window leader: ${prev})`);
   }
 
   /**
@@ -4402,7 +4419,7 @@ export class MediaCard extends LitElement {
 
     // If the user pressed a button on THIS device while the sync arrived, let the
     // manual navigation win.  The manual _loadNext/_loadPrevious already called
-    // _forceClaimLeadership() which cleared _crossDeviceFollowerUntil; and
+    // _claimDriverRole() which cleared _crossDeviceFollowerUntil; and
     // _onHaSyncEvent already returned early so _crossDeviceFollowerUntil was not
     // re-set.  Nothing further to do here — the manual fetch will complete and
     // broadcast its own sync event to the driver.
