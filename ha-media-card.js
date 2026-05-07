@@ -6021,8 +6021,10 @@ class MediaCard extends LitElement {
 
       // Leader election: if the user tapped/swiped on this card, it becomes the
       // new timer driver for the sync group, displacing any existing leader.
-      // Exception: locally paused (short press) — navigate silently without affecting group.
-      if (this._isManualNavigation && this.config?.shared_queue_id && !this._isLocallyPaused()) {
+      // This applies even when locally paused — an explicit button press means the
+      // user wants to control THIS card and it should fetch from its own provider,
+      // not wait for a cross-device broadcast.
+      if (this._isManualNavigation && this.config?.shared_queue_id) {
         this._forceClaimLeadership();
       }
 
@@ -6311,8 +6313,9 @@ class MediaCard extends LitElement {
 
       // Leader election: if the user tapped/swiped on this card, it becomes the
       // new timer driver for the sync group, displacing any existing leader.
-      // Exception: locally paused (short press) — navigate silently without affecting group.
-      if (this._isManualNavigation && this.config?.shared_queue_id && !this._isLocallyPaused()) {
+      // This applies even when locally paused — an explicit button press means the
+      // user wants to control THIS card.
+      if (this._isManualNavigation && this.config?.shared_queue_id) {
         this._forceClaimLeadership();
       }
 
