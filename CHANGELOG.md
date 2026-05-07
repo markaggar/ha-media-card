@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configure via the visual editor ("Shared Queue ID" in the Image Options section) or in YAML as `shared_queue_id: "my_queue"`
 
 ### Fixed
+- **Cross-device sync: manual navigation on the leader card did not update other browsers** (`shared_queue_id` feature): When Card A received any HA sync event from Card B, `_crossDeviceFollowerUntil` was set to `now + 30s` on Card A, blocking the HA debounce write for 30 seconds. `_forceClaimLeadership()` only cleared this flag when displacing a *different* local leader — when Card A was already the window-local leader it returned early, leaving the follower flag active. Any manual navigation on Card A wrote to `localStorage`/`CustomEvent` (same-browser) but the HA service call was suppressed, so Card B on the other browser never received it. Fixed by moving all follower-state resets (`_crossDeviceFollowerUntil`, `_crossDeviceProviderFetchUntil`, `_suppressSyncWriteUntil`, and pending timer cancellation) before the early-return guard so they always execute on any manual navigation regardless of whether local window leadership changes.
+
 - **Action button colors washed out on light and frosted-glass themes**: Button backgrounds were derived from `--rgb-card-background-color`, which resolves to near-white on many light themes, making icons invisible. Fixed by using hardcoded dark semi-transparent backgrounds (`rgba(0,0,0,0.55)`) and explicit white icon colors. Active-state colors (mute, pause, info, burst, queue, favorite) are now set directly on the `ha-icon` element so they work correctly on all themes.
 
 ## v5.9.0 - 2026-04-10
