@@ -4362,6 +4362,10 @@ export class MediaCard extends LitElement {
     if (!id || event.key !== `ha-media-card:${id}` || !event.newValue) return;
     try {
       const data = JSON.parse(event.newValue);
+      // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
+      // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
+      // writes its (identical) state to HA — wasted service calls and log noise.
+      this._crossDeviceFollowerUntil = Date.now() + 30000;
       this._applySharedQueueUpdate(data);
     } catch (_e) {}
   }
@@ -4371,6 +4375,10 @@ export class MediaCard extends LitElement {
     const id = this.config?.shared_queue_id;
     if (!id || event.detail?.sharedQueueId !== id) return;
     if (event.detail?.sourceCardId === this._cardId) return; // ignore own writes
+    // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
+    // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
+    // writes its (identical) state to HA — wasted service calls and log noise.
+    this._crossDeviceFollowerUntil = Date.now() + 30000;
     this._applySharedQueueUpdate(event.detail);
   }
 
