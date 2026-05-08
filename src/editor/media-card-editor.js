@@ -3430,7 +3430,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 }}
                 placeholder="e.g. main-slideshow"
               />
-              <div class="help-text">Optional. Cards with the same ID share their queue and position across views on the same device. Leave empty to disable.</div>
+              <div class="help-text">Optional. Cards with the same ID share their queue and position — across views, tabs, and devices. Same-device sync uses browser events; cross-device sync (phones, tablets, other browsers) requires Media Index. Leave empty to disable.</div>
             </div>
           </div>
         </div>

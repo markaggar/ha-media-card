@@ -269,14 +269,8 @@ export class MediaCard extends LitElement {
       this._startClockTimer();
     }
     
-    // V5: Restart auto-refresh if it was running before disconnect
-    // Only restart if we have a provider, currentMedia, and auto_advance is configured
-    if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
-      this._log('🔄 Reconnected - restarting auto-refresh timer');
-      this._setupAutoRefresh();
-    }
-
-    // Shared queue: register event listeners (cross-device HA events + same-device)
+    // Shared queue: register event listeners and claim leadership BEFORE the reconnect
+    // auto-refresh below, so _setupAutoRefresh() correctly sees this card as leader.
     this._subscribeToSyncEvents();
 
     // Leader election: try to become the timer leader for this sync group.
@@ -284,16 +278,25 @@ export class MediaCard extends LitElement {
     this._tryClaimLeadership();
 
     // Listen for the vacancy event fired when the leader disconnects, so a follower
-    // can step up and start its own timer.
-    this._leaderVacatedHandler = (e) => {
-      if (e.detail?.sharedQueueId !== this.config?.shared_queue_id) return;
-      const claimed = this._tryClaimLeadership();
-      if (claimed) {
-        this._log('👑 Stepping up as leader after vacancy — starting timer');
-        this._setupAutoRefresh();
-      }
-    };
-    window.addEventListener('ha-media-card-leader-vacated', this._leaderVacatedHandler);
+    // can step up and start its own timer. Only registered when shared_queue_id is set.
+    if (this.config?.shared_queue_id) {
+      this._leaderVacatedHandler = (e) => {
+        if (e.detail?.sharedQueueId !== this.config?.shared_queue_id) return;
+        const claimed = this._tryClaimLeadership();
+        if (claimed) {
+          this._log('👑 Stepping up as leader after vacancy — starting timer');
+          this._setupAutoRefresh();
+        }
+      };
+      window.addEventListener('ha-media-card-leader-vacated', this._leaderVacatedHandler);
+    }
+
+    // V5: Restart auto-refresh if it was running before disconnect
+    // Only restart if we have a provider, currentMedia, and auto_advance is configured
+    if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
+      this._log('🔄 Reconnected - restarting auto-refresh timer');
+      this._setupAutoRefresh();
+    }
 
     // Shared queue: if reconnecting (provider already exists), sync state from
     // media-index or localStorage to pick up where the other card left off
@@ -3481,7 +3484,7 @@ export class MediaCard extends LitElement {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
     // Clear the manual-nav load-phase flag now that the media has committed to the DOM.
-    this._manualNavLoading = false;;
+    this._manualNavLoading = false;
     
     // V5.8: Clear transient failure counter – video loaded successfully this time
     const itemId = this.currentMedia?.media_content_id;
