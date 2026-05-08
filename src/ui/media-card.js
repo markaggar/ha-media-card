@@ -185,6 +185,7 @@ export class MediaCard extends LitElement {
     this._previousNavigationIndex = null;  // Saved navigation index before navigation
     this._isLoadingNext = false;  // Re-entrance guard for _loadNext()
     this._isManualNavigation = false; // V5.6.7: Track if navigation is user-initiated vs timer-driven
+    this._manualNavLoading = false;    // True from navigation commit until _onMediaLoaded/_onVideoCanPlay fires
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -268,11 +269,39 @@ export class MediaCard extends LitElement {
       this._startClockTimer();
     }
     
+    // Shared queue: register event listeners and claim leadership BEFORE the reconnect
+    // auto-refresh below, so _setupAutoRefresh() correctly sees this card as leader.
+    this._subscribeToSyncEvents();
+
+    // Leader election: try to become the timer leader for this sync group.
+    // If the slot is empty this card claims it; otherwise it defers to the current leader.
+    this._tryClaimLeadership();
+
+    // Listen for the vacancy event fired when the leader disconnects, so a follower
+    // can step up and start its own timer. Only registered when shared_queue_id is set.
+    if (this.config?.shared_queue_id) {
+      this._leaderVacatedHandler = (e) => {
+        if (e.detail?.sharedQueueId !== this.config?.shared_queue_id) return;
+        const claimed = this._tryClaimLeadership();
+        if (claimed) {
+          this._log('👑 Stepping up as leader after vacancy — starting timer');
+          this._setupAutoRefresh();
+        }
+      };
+      window.addEventListener('ha-media-card-leader-vacated', this._leaderVacatedHandler);
+    }
+
     // V5: Restart auto-refresh if it was running before disconnect
     // Only restart if we have a provider, currentMedia, and auto_advance is configured
     if (this.provider && this.currentMedia && this.config.auto_advance_seconds > 0) {
       this._log('🔄 Reconnected - restarting auto-refresh timer');
       this._setupAutoRefresh();
+    }
+
+    // Shared queue: if reconnecting (provider already exists), sync state from
+    // media-index or localStorage to pick up where the other card left off
+    if (this.provider && this.config?.shared_queue_id) {
+      this._syncFromSharedQueueOnReconnect();
     }
   }
 
@@ -284,6 +313,17 @@ export class MediaCard extends LitElement {
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
     
+    // Shared queue: remove all event listeners and cancel pending debounced write
+    this._unsubscribeFromSyncEvents();
+
+    // Leader election: remove the vacancy listener and release leadership.
+    // _relinquishLeadership fires ha-media-card-leader-vacated so a follower steps up.
+    if (this._leaderVacatedHandler) {
+      window.removeEventListener('ha-media-card-leader-vacated', this._leaderVacatedHandler);
+      this._leaderVacatedHandler = null;
+    }
+    this._relinquishLeadership();
+
     // V5.6: Cleanup viewport height observer
     this._cleanupDynamicViewportHeight();
     
@@ -554,7 +594,11 @@ export class MediaCard extends LitElement {
     if (this._debugMode || window.location.hostname === 'localhost') {
       // Prefix all logs with card ID for debugging
       const prefix = `[${this._cardId}]`;
-      const message = args.join(' ');
+      // Strip auth tokens (e.g. Synology authSig) so logs stay readable when pasting
+      const sanitizedArgs = args.map(a =>
+        typeof a === 'string' ? a.replace(/([?&])authSig=[^&\s]*/gi, '$1authSig=[…]') : a
+      );
+      const message = sanitizedArgs.join(' ');
       
       // Throttle certain frequent messages to avoid spam
       const throttlePatterns = [
@@ -579,7 +623,7 @@ export class MediaCard extends LitElement {
         this._lastLogTime[message] = now;
       }
       
-      console.log(prefix, ...args);
+      console.log(prefix, ...sanitizedArgs);
     }
   }
 
@@ -1096,8 +1140,24 @@ export class MediaCard extends LitElement {
       this._log('Provider initialized:', success);
       
       if (success) {
-        // V5 FIX: If we reconnected with history, restore current media from history
-        if (this.history.length > 0 && this.historyPosition >= 0) {
+        // Shared queue takes priority over local history when configured — it holds the
+        // freshest cross-card state (what the other card was showing when this view was hidden).
+        const restoredFromShared = await this._tryRestoreFromSharedQueue();
+
+        if (restoredFromShared) {
+          // Queue and index already set — jump directly to the saved item
+          const item = this.navigationQueue[this.navigationIndex];
+          if (item) {
+            this.currentMedia = item;
+            this._pendingNavigationIndex = this.navigationIndex;
+            this._pendingMediaPath = item.media_content_id;
+            this._pendingMetadata = null;
+            await this._resolveMediaUrl();
+          } else {
+            await this._loadNext();
+          }
+        } else if (this.history.length > 0 && this.historyPosition >= 0) {
+          // V5 FIX: If we reconnected with history, restore current media from history
           this._log('🔄 Reconnected with history - loading media at position', this.historyPosition);
           const historyItem = this.history[this.historyPosition];
           if (historyItem) {
@@ -1109,10 +1169,8 @@ export class MediaCard extends LitElement {
           }
         } else {
           this._log('Loading first media');
-          
           // V5.3: Smart pre-load - only for small collections
           await this._smartPreloadNavigationQueue();
-          
           await this._loadNext();
         }
         
@@ -1329,6 +1387,15 @@ export class MediaCard extends LitElement {
       // The browser auto-pauses videos when they're removed from DOM
       this._navigatingAway = true;
 
+      // Leader election: if the user tapped/swiped on this card, it becomes the
+      // new timer driver for the sync group, displacing any existing leader.
+      // This applies even when locally paused — an explicit button press means the
+      // user wants to control THIS card and it should fetch from its own provider,
+      // not wait for a cross-device broadcast.
+      if (this._isManualNavigation && this.config?.shared_queue_id) {
+        this._claimDriverRole();
+      }
+
     // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
     // Queue preview mode uses navigationQueue directly, so skip panel navigation
     if (this._panelOpen && this._panelQueue.length > 0 && this._panelMode !== 'queue') {
@@ -1378,6 +1445,40 @@ export class MediaCard extends LitElement {
           this._pendingNavigationIndex = 0;
         } else {
           this._log('Navigation queue exhausted, loading from provider');
+          const _nowMs = Date.now();
+          const _followerDefer = !this._isManualNavigation &&
+              this._crossDeviceFollowerUntil && _nowMs < this._crossDeviceFollowerUntil;
+          const _reconnectDefer = !this._isManualNavigation &&
+              this._crossDeviceProviderFetchUntil && _nowMs < this._crossDeviceProviderFetchUntil;
+
+          if (_followerDefer) {
+            // Driver is active — it will broadcast when ready.  Return silently
+            // without queuing a retry; the retry was the source of endless noise.
+            // _applySharedQueueUpdate will navigate us when the broadcast arrives.
+            const waitSecs = Math.round((this._crossDeviceFollowerUntil - _nowMs) / 1000);
+            this._log(`⏳ Follower mode: waiting for driver broadcast (${waitSecs}s remaining)`);
+            return;
+          }
+
+          if (_reconnectDefer) {
+            // Reconnect grace: driver may still be active but HA event hasn't arrived yet.
+            // Set a one-shot retry; _applySharedQueueUpdate cancels it if broadcast arrives.
+            const remaining = this._crossDeviceProviderFetchUntil - _nowMs;
+            this._log(`⏳ Cross-device reconnect grace: deferring provider fetch ${remaining}ms`);
+            if (this._crossDeviceGraceRetryTimer) clearTimeout(this._crossDeviceGraceRetryTimer);
+            this._crossDeviceGraceRetryTimer = setTimeout(() => {
+              this._crossDeviceGraceRetryTimer = null;
+              if (!this._isLocallyPaused() && this.navigationIndex >= this.navigationQueue.length - 1) {
+                this._loadNext();
+              }
+            }, remaining + 50);
+            return;
+          }
+
+          this._crossDeviceProviderFetchUntil = 0;
+          // Capture generation before any awaits so we can detect if a sync event
+          // arrived from another card while we were waiting for the provider.
+          const _syncGenBefore = this._syncNavGeneration || 0;
           let item = await this.provider.getNext();
         
           if (item) {
@@ -1446,6 +1547,25 @@ export class MediaCard extends LitElement {
                 // We DON'T decrement navigationIndex here because we're intentionally moving
                 // forward to the new item, not staying at the current position
                 nextIndex = this.navigationQueue.length - 1;
+              }
+
+              // Sync mode: if another card already broadcast a new item while we were awaiting
+              // the provider (same-window CustomEvent fires mid-await), follow that card instead.
+              if ((this._syncNavGeneration || 0) > _syncGenBefore) {
+                this._log('🔗 Another synced card broadcast first — following sync navigation, discarding locally-fetched item');
+                // IMPORTANT: also remove the item we just pushed from navigationQueue.
+                // _applySharedQueueUpdate replaced navigationQueue with the driver's queue,
+                // then our push added this item on top.  If we don't remove it, the next
+                // auto-advance will find the queue non-exhausted and navigate to this item
+                // directly — bypassing the follower defer check entirely.
+                this.navigationQueue.pop();
+                return;
+              }
+              // We are the "first" card — broadcast our new item immediately so other
+              // same-window cards adopt it synchronously before they exit their own awaits.
+              // Suppress if locally paused (short press) — don't affect the group.
+              if (!this._isLocallyPaused()) {
+                this._earlyBroadcastSyncState(nextIndex);
               }
             }
           } else {
@@ -1532,6 +1652,12 @@ export class MediaCard extends LitElement {
       this._fullMetadata = null;
       this._folderDisplayCache = null;
       
+      // Mark that a manual navigation is pending load — keeps _isManualNavigation
+      // semantics alive through the async image/video load phase so that any HA
+      // sync event arriving before _onMediaLoaded fires does not re-enter follower
+      // mode and suppress this card's own HA write.
+      if (this._isManualNavigation) this._manualNavLoading = true;
+
       await this._resolveMediaUrl();
       this.requestUpdate();
 
@@ -1547,10 +1673,11 @@ export class MediaCard extends LitElement {
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
   } catch (error) {
     console.error('[MediaCard] Error loading next media:', error);
+    this._manualNavLoading = false; // Safety: clear on exception
   } finally {
     // V5.6.7: Always clear re-entrance guard
     this._isLoadingNext = false;
-    // V5.6.7: Always clear manual navigation flag after navigation completes
+    // Clear the in-flight flag. _manualNavLoading covers the remaining async load phase.
     this._isManualNavigation = false;
   }
 }
@@ -1566,6 +1693,14 @@ export class MediaCard extends LitElement {
     try {
       // V5.6: Set flag FIRST to ignore video pause events during navigation
       this._navigatingAway = true;
+
+      // Leader election: if the user tapped/swiped on this card, it becomes the
+      // new timer driver for the sync group, displacing any existing leader.
+      // This applies even when locally paused — an explicit button press means the
+      // user wants to control THIS card.
+      if (this._isManualNavigation && this.config?.shared_queue_id) {
+        this._claimDriverRole();
+      }
 
       // V5.5: Panel Navigation Override (burst/related/on_this_day use _panelQueue)
       // Queue preview mode uses navigationQueue directly, so skip panel navigation
@@ -1625,7 +1760,11 @@ export class MediaCard extends LitElement {
     // V5: Clear cached full metadata when media changes
     this._fullMetadata = null;
     this._folderDisplayCache = null;
-    
+
+    // Mark that a manual navigation is pending load — keeps _isManualNavigation
+    // semantics alive through the async image/video load phase.
+    if (this._isManualNavigation) this._manualNavLoading = true;
+
     await this._resolveMediaUrl();
     this.requestUpdate();
     
@@ -1653,10 +1792,11 @@ export class MediaCard extends LitElement {
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
       console.error('[MediaCard] Error loading previous media:', error);
+      this._manualNavLoading = false; // Safety: clear on exception
     } finally {
       // V5.6.7: Always clear re-entrance guard
       this._isLoadingNext = false;
-      // V5.6.7: Always clear manual navigation flag after navigation completes
+      // Clear the in-flight flag. _manualNavLoading covers the remaining async load phase.
       this._isManualNavigation = false;
     }
   }
@@ -1929,6 +2069,13 @@ export class MediaCard extends LitElement {
     
     if (this._backgroundPaused) {
       this._log('🔄 Auto-refresh setup skipped - background paused (not visible)');
+      return;
+    }
+
+    // Leader election: followers in a sync group must not run their own timer.
+    // The leader broadcasts navigation events; followers apply them via _applySharedQueueUpdate.
+    if (this.config?.shared_queue_id && !this._isSyncLeader()) {
+      this._log('👥 Sync follower — timer suppressed (leader handles advance)');
       return;
     }
 
@@ -2675,6 +2822,12 @@ export class MediaCard extends LitElement {
     // If expectedNavigationIndex is provided and doesn't match current pending index, abort
     if (expectedNavigationIndex !== undefined && this._pendingNavigationIndex !== expectedNavigationIndex) {
       this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
+      // Clear the navigation-in-progress flag when nothing else has claimed a pending
+      // path (i.e. no sync nav or newer _loadNext() is in flight). Without this,
+      // a stale return from a _loadNext() call that was superseded by a rapid sync
+      // burst can leave _navigatingAway=true permanently, causing the slideshow
+      // timer to log "Timer skipped" indefinitely.
+      if (!this._pendingMediaPath) this._navigatingAway = false;
       return;
     }
     
@@ -3330,6 +3483,8 @@ export class MediaCard extends LitElement {
   _onVideoCanPlay() {
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
+    // Clear the manual-nav load-phase flag now that the media has committed to the DOM.
+    this._manualNavLoading = false;
     
     // V5.8: Clear transient failure counter – video loaded successfully this time
     const itemId = this.currentMedia?.media_content_id;
@@ -3353,6 +3508,11 @@ export class MediaCard extends LitElement {
     if (this._pendingMediaPath !== null) {
       this._currentMediaPath = this._pendingMediaPath;
       this._pendingMediaPath = null;
+    }
+    
+    // Shared queue: broadcast navigation — suppress if locally paused (short press)
+    if (!this._isLocallyPaused()) {
+      this._writeSharedQueueState();
     }
     
     this.requestUpdate();
@@ -3778,6 +3938,619 @@ export class MediaCard extends LitElement {
     }
   }
 
+  // ─── Shared Queue ──────────────────────────────────────────────────────────
+  // Two transport layers, selected automatically:
+  //   • Cross-device (media-index configured): service calls + HA websocket events
+  //   • Single-device fallback: localStorage + window CustomEvent
+
+  // Return the media_index entity_id configured on this card, or null.
+  _getMediaIndexEntityId() {
+    return this.config?.media_index?.entity_id || null;
+  }
+
+  // Is cross-device sync available?
+  _hasCrossDeviceSync() {
+    return !!(this.config?.shared_queue_id && this._getMediaIndexEntityId() && this.hass);
+  }
+
+  // ── Write path ──────────────────────────────────────────────────────────────
+  // Called after every navigation commit. Debounced to avoid hammering the service.
+  // pauseIntent=true ONLY for user-initiated pause/resume actions — navigation writes
+  // must NOT set it, otherwise Device B's navigation will overwrite Device A's local
+  // pause state.
+  _writeSharedQueueState(pauseIntent = false) {
+    const id = this.config?.shared_queue_id;
+    if (!id || !this.navigationQueue?.length) return;
+
+    // Echo-prevention: skip the write that would bounce an incoming navigation sync
+    // back to the sender. BUT always allow explicit pause/resume writes through so
+    // that a pause arriving simultaneously with a navigation doesn't get swallowed.
+    // Uses a timestamp window instead of a one-shot boolean so that double-load events
+    // (e.g. rapid-navigation clearing both layers fires two onload events for the same
+    // URL) don't consume the flag on the first load and then write on the second.
+    if (!pauseIntent && this._suppressSyncWriteUntil && Date.now() < this._suppressSyncWriteUntil) {
+      // Don't clear _suppressSyncWriteUntil — let it expire naturally so subsequent
+      // loads within the same sync event window are also suppressed.
+      if (this._syncWriteTimer) {
+        clearTimeout(this._syncWriteTimer);
+        this._syncWriteTimer = null;
+      }
+      return;
+    }
+    this._suppressSyncWriteUntil = 0;
+
+    // Always write localStorage for instant same-device sync
+    try {
+      const data = {
+        queue: this.navigationQueue.map(item => item.media_content_id),
+        currentIndex: this.navigationIndex,
+        // Include metadata for the current item so receiving cards can display it
+        // immediately without needing a separate media-index fetch.
+        currentMetadata: this._currentMetadata || this._pendingMetadata || null,
+        isPaused: this._isPaused,
+        pauseIntent,
+        updatedAt: Date.now(),
+        sourceCardId: this._cardId,
+      };
+      localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
+      // Broadcast within same window (storage event doesn't fire for same-window writes)
+      window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
+    } catch (_e) {}
+
+    // Cross-device: debounced service call.
+    // Accumulate pauseIntent across debounce resets so that a pause write that arrives
+    // just before a navigation write doesn't silently lose the intent.
+    // Cross-device write: only if we are acting as the driver (not a follower that
+    // recently received a sync event from another device).  Pause/resume intent always
+    // passes through so the user can group-pause from any device.
+    if (this._hasCrossDeviceSync() && (pauseIntent || Date.now() >= (this._crossDeviceFollowerUntil || 0))) {
+      this._pendingSyncPauseIntent = (this._pendingSyncPauseIntent || false) || pauseIntent;
+      if (this._syncWriteTimer) clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = setTimeout(() => {
+        this._syncWriteTimer = null;
+        const intent = this._pendingSyncPauseIntent || false;
+        this._pendingSyncPauseIntent = false;
+        this._writeSharedQueueStateToMediaIndex(intent);
+      }, 500);
+    }
+  }
+
+  async _writeSharedQueueStateToMediaIndex(pauseIntent = false) {
+    const id = this.config?.shared_queue_id;
+    if (!id || !this.navigationQueue?.length) return;
+    try {
+      const entityId = this._getMediaIndexEntityId();
+      const queue = this.navigationQueue.map(item => item.media_content_id);
+      await this.hass.connection.sendMessagePromise({
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'update_sync_state',
+        service_data: {
+          sync_group: id,
+          queue,
+          current_index: this.navigationIndex,
+          is_paused: this._isPaused,
+          pause_intent: pauseIntent,
+          source_card_id: this._cardId,
+          current_metadata: JSON.stringify(this._currentMetadata || this._pendingMetadata || null),
+          written_at: Date.now(),
+        },
+        target: { entity_id: entityId },
+      });
+      this._log(`🔗 Sync state written to media_index for group '${id}'`);
+    } catch (e) {
+      this._log('⚠️ Failed to write shared queue to media_index:', e);
+    }
+  }
+
+  // ── Read path (first load) ──────────────────────────────────────────────────
+  // Returns true and populates navigationQueue/navigationIndex if state was found.
+  async _tryRestoreFromSharedQueue() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return false;
+
+    // Cross-device: fetch from media-index (authoritative, any device may have written it)
+    if (this._hasCrossDeviceSync()) {
+      try {
+        const entityId = this._getMediaIndexEntityId();
+        const resp = await this.hass.connection.sendMessagePromise({
+          type: 'call_service',
+          domain: 'media_index',
+          service: 'get_sync_state',
+          service_data: { sync_group: id },
+          target: { entity_id: entityId },
+          return_response: true,
+        });
+        const data = resp?.response;
+        if (data?.found && Array.isArray(data.queue) && data.queue.length) {
+          return this._applyRestoredState(data.queue, data.current_index);
+        }
+      } catch (e) {
+        this._log('⚠️ Could not fetch sync state from media_index, falling back to localStorage:', e);
+      }
+    }
+
+    // Single-device fallback: localStorage
+    try {
+      const raw = localStorage.getItem(`ha-media-card:${id}`);
+      if (!raw) return false;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data.queue) || !data.queue.length) return false;
+      return this._applyRestoredState(data.queue, data.currentIndex);
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  // ── Read path (reconnect) ───────────────────────────────────────────────────
+  async _syncFromSharedQueueOnReconnect() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+
+    let queue = null, currentIndex = 0;
+
+    // Cross-device: fetch from media-index
+    if (this._hasCrossDeviceSync()) {
+      try {
+        const entityId = this._getMediaIndexEntityId();
+        const resp = await this.hass.connection.sendMessagePromise({
+          type: 'call_service',
+          domain: 'media_index',
+          service: 'get_sync_state',
+          service_data: { sync_group: id },
+          target: { entity_id: entityId },
+          return_response: true,
+        });
+        const data = resp?.response;
+        if (data?.found && Array.isArray(data.queue) && data.queue.length) {
+          queue = data.queue;
+          currentIndex = typeof data.current_index === 'number' ? data.current_index : 0;
+        }
+      } catch (e) {
+        this._log('⚠️ Could not fetch sync state from media_index for reconnect:', e);
+      }
+    }
+
+    // Fallback: localStorage
+    if (!queue) {
+      try {
+        const raw = localStorage.getItem(`ha-media-card:${id}`);
+        if (raw) {
+          const data = JSON.parse(raw);
+          if (Array.isArray(data.queue) && data.queue.length) {
+            queue = data.queue;
+            currentIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
+          }
+        }
+      } catch (_e) {}
+    }
+
+    if (!queue) return;
+    const newIndex = Math.min(currentIndex, queue.length - 1);
+    const newPath = queue[newIndex];
+    this.navigationQueue = queue.map(mediaId => ({
+      media_content_id: mediaId,
+      media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+      title: mediaId.split('/').pop() || mediaId,
+      metadata: null,
+    }));
+    this.navigationIndex = newIndex;
+    this._log(`🔗 Shared queue synced on reconnect: ${this.navigationQueue.length} items, index ${newIndex}`);
+    if (newPath !== this._currentMediaPath) {
+      const item = this.navigationQueue[newIndex];
+      this.currentMedia = item;
+      this._pendingNavigationIndex = newIndex;
+      this._pendingMediaPath = newPath;
+      this._pendingMetadata = null;
+      this._resolveMediaUrl();
+      this.requestUpdate();
+    }
+  }
+
+  // ── Shared helper ───────────────────────────────────────────────────────────
+  _applyRestoredState(queue, rawIndex) {
+    this.navigationQueue = queue.map(mediaId => ({
+      media_content_id: mediaId,
+      media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+      title: mediaId.split('/').pop() || mediaId,
+      metadata: null,
+    }));
+    this.navigationIndex = Math.min(
+      typeof rawIndex === 'number' ? rawIndex : 0,
+      this.navigationQueue.length - 1
+    );
+    this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
+    // Cross-device reconnect grace period: when we restore at the last (or only) slot
+    // the driver may be about to extend the queue and broadcast the next item.  Enter a
+    // deferral window equal to the configured advance interval + 3s safety buffer so
+    // that the driver's HA sync event arrives BEFORE we independently fetch a (potentially
+    // different) item from our own provider.  The window is cancelled as soon as a
+    // sync event is received (in _applySharedQueueUpdate).
+    if (this._hasCrossDeviceSync() && this.navigationIndex >= this.navigationQueue.length - 1) {
+      const advanceSecs = this.config?.auto_advance_seconds ||
+                          this.config?.auto_advance_interval ||
+                          this.config?.auto_advance_duration || 10;
+      const graceMs = advanceSecs * 1000 + 3000;
+      this._crossDeviceProviderFetchUntil = Date.now() + graceMs;
+      this._log(`⏳ Cross-device grace period started (${(graceMs/1000).toFixed(0)}s) — restored at end of shared queue`);
+    }
+    return true;
+  }
+
+  // ── Event listeners ─────────────────────────────────────────────────────────
+  // Subscribe to HA websocket events (cross-device) and window CustomEvent (same-device).
+  _subscribeToSyncEvents() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+
+    // Same-window CustomEvent (instant, no round-trip)
+    this._queueSyncEventHandler = this._onQueueSyncEvent.bind(this);
+    window.addEventListener('ha-media-card-sync', this._queueSyncEventHandler);
+
+    // Same-device cross-tab via storage event
+    this._storageEventHandler = this._onStorageEvent.bind(this);
+    window.addEventListener('storage', this._storageEventHandler);
+
+    // Cross-device: subscribe to HA bus event fired by media_index.update_sync_state.
+    // We use a custom WebSocket command (media_index/subscribe_sync) registered by the
+    // integration rather than the generic subscribe_events command, because subscribe_events
+    // requires admin for custom integration events — non-admin dashboard users would be
+    // refused. The custom command has its own handler that allows any authenticated user.
+    if (this._hasCrossDeviceSync()) {
+      this._haSyncUnsubscribe = this.hass.connection.subscribeMessage(
+        (msg) => this._onHaSyncEvent({ data: msg }),
+        { type: 'media_index/subscribe_sync', sync_group: id }
+      ).catch(e => {
+        this._log('⚠️ Failed to subscribe to media_index sync events:', e);
+        this._haSyncUnsubscribe = null;
+      });
+    }
+  }
+
+  _unsubscribeFromSyncEvents() {
+    if (this._storageEventHandler) {
+      window.removeEventListener('storage', this._storageEventHandler);
+      this._storageEventHandler = null;
+    }
+    if (this._queueSyncEventHandler) {
+      window.removeEventListener('ha-media-card-sync', this._queueSyncEventHandler);
+      this._queueSyncEventHandler = null;
+    }
+    if (this._haSyncUnsubscribe) {
+      // subscribeEvents returns a Promise<unsubscribe fn>; handle both cases
+      Promise.resolve(this._haSyncUnsubscribe).then(unsub => { if (unsub) unsub(); }).catch(() => {});
+      this._haSyncUnsubscribe = null;
+    }
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
+  }
+
+  // Same-window leader election for shared_queue_id groups.
+  // Only the leader card runs the auto-advance timer; followers suppress theirs.
+
+  /**
+   * Returns true when this card is paused locally (short press) as opposed to
+   * a group pause (long press).  Locally paused cards navigate silently and
+   * ignore incoming sync navigation events.
+   */
+  _isLocallyPaused() {
+    return this._isPaused && !this._groupPaused;
+  }
+
+  // This prevents two card instances (e.g. on different views of the same dashboard)
+  // from both firing timers and competing over which index to broadcast.
+
+  /** Returns true if this card is (or should act as) the timer leader. */
+  _isSyncLeader() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return true; // No sync group — always act as leader
+    if (!window._mediaCardLeaders) return false;
+    return window._mediaCardLeaders.get(id) === this._cardId;
+  }
+
+  /**
+   * Attempt to register this card as the leader for its sync group.
+   * Succeeds only if the slot is empty.  Returns true if leadership was
+   * claimed (or was already held), false if another card holds the slot.
+   */
+  _tryClaimLeadership() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return true;
+    if (!window._mediaCardLeaders) window._mediaCardLeaders = new Map();
+    const current = window._mediaCardLeaders.get(id);
+    if (!current) {
+      window._mediaCardLeaders.set(id, this._cardId);
+      this._log(`👑 Claimed sync leadership for group '${id}'`);
+      return true;
+    }
+    if (current === this._cardId) return true; // Already the leader
+    this._log(`👥 Sync follower for group '${id}' (leader: ${current})`);
+    return false;
+  }
+
+  /**
+   * Force-claim leadership, displacing any current leader.
+   * Used when the user manually navigates on a follower card — the active
+   * device should become the driver to avoid the old leader overriding it.
+   */
+  /**
+   * Called on every manual navigation.  Handles TWO distinct but related concepts:
+   *
+   * Tier 1 — Same-window timer leadership (window._mediaCardLeaders):
+   *   Only one card per browser tab runs the auto-advance timer.  Manually
+   *   navigating on any card promotes it to timer leader, displacing any other
+   *   card that held the slot.  This prevents two timers competing on the same tab.
+   *
+   * Tier 2 — Cross-device HA write driver (_crossDeviceFollowerUntil):
+   *   Whichever browser/device the user is actively navigating on should write to
+   *   the HA media_index sync state.  Receiving a sync event from another device
+   *   sets _crossDeviceFollowerUntil = now+30s on this card, which blocks the HA
+   *   debounce write.  Manual navigation must clear that deferral unconditionally —
+   *   even if same-window leadership didn't change — so the HA write goes through
+   *   and the other browser receives the navigation update.
+   *
+   * Both tiers' state is reset BEFORE the early-return guard.  That guard only
+   * skips the window._mediaCardLeaders map update and log line; it must never
+   * skip the state resets.
+   */
+  _claimDriverRole() {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+    if (!window._mediaCardLeaders) window._mediaCardLeaders = new Map();
+    const prev = window._mediaCardLeaders.get(id);
+
+    // ── Tier 2: cross-device driver mode ──────────────────────────────────────
+    // Clear ALL cross-device follower/deferral state so the HA write goes through
+    // immediately, regardless of whether same-window leadership is changing.
+    this._crossDeviceFollowerUntil = 0;
+    this._crossDeviceProviderFetchUntil = 0;
+    if (this._crossDeviceGraceRetryTimer) {
+      clearTimeout(this._crossDeviceGraceRetryTimer);
+      this._crossDeviceGraceRetryTimer = null;
+    }
+    // Clear the echo-suppression window.  A sync event from the other device may
+    // have set _suppressSyncWriteUntil just before the user navigated — without
+    // this reset the post-load _writeSharedQueueState() call would be dropped.
+    this._suppressSyncWriteUntil = 0;
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
+
+    // ── Tier 1: same-window timer leadership ──────────────────────────────────
+    if (prev === this._cardId) return; // Already this tab's timer leader — Tier 2 reset above is sufficient ✓
+    window._mediaCardLeaders.set(id, this._cardId);
+    this._log(`👑 Claimed driver role for group '${id}' (displaced same-window leader: ${prev})`);
+  }
+
+  /**
+   * Release leadership and notify followers so one can step up.
+   * Called from disconnectedCallback.
+   */
+  _relinquishLeadership() {
+    const id = this.config?.shared_queue_id;
+    if (!id || !window._mediaCardLeaders) return;
+    if (window._mediaCardLeaders.get(id) !== this._cardId) return;
+    window._mediaCardLeaders.delete(id);
+    this._log(`👋 Relinquished sync leadership for group '${id}'`);
+    window.dispatchEvent(new CustomEvent('ha-media-card-leader-vacated', {
+      detail: { sharedQueueId: id }
+    }));
+  }
+
+  // HA websocket event from media_index (cross-device)
+  _onHaSyncEvent(event) {
+    const id = this.config?.shared_queue_id;
+    const data = event.data;
+    if (!id || data?.sync_group !== id) return;
+    // Ignore events we ourselves wrote (media_index echoes back to all subscribers)
+    if (data?.source_card_id === this._cardId) return;
+    // If the user is actively pressing a button on this card, let the manual
+    // navigation complete first.  We do NOT extend the follower window because
+    // this card is in the middle of taking over as driver.
+    if (this._isManualNavigation || this._manualNavLoading) {
+      this._log('🔗 Manual nav in progress (or pending load) — not entering follower mode for this sync event');
+      return;
+    }
+    // Mark this card as a cross-device follower for 30 s.  While in follower mode,
+    // auto-advance writes are suppressed so this card doesn't overwrite the driver's
+    // DB state with its own independently-fetched queue items.  The window is generous
+    // enough to cover normal slideshow intervals; if the driver goes away, this card
+    // will naturally take over writing once the window expires.
+    this._crossDeviceFollowerUntil = Date.now() + 30000;
+    let currentMetadata = null;
+    if (data.current_metadata) {
+      try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
+    }
+    this._applySharedQueueUpdate({
+      queue: data.queue,
+      currentIndex: data.current_index,
+      currentMetadata,
+      isPaused: data.is_paused,
+      pauseIntent: data.pause_intent,
+      updatedAt: data.written_at || 0,
+    });
+  }
+
+  // storage event (cross-tab, same device)
+  _onStorageEvent(event) {
+    const id = this.config?.shared_queue_id;
+    if (!id || event.key !== `ha-media-card:${id}` || !event.newValue) return;
+    try {
+      const data = JSON.parse(event.newValue);
+      // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
+      // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
+      // writes its (identical) state to HA — wasted service calls and log noise.
+      this._crossDeviceFollowerUntil = Date.now() + 30000;
+      this._applySharedQueueUpdate(data);
+    } catch (_e) {}
+  }
+
+  // window CustomEvent (same window, instant)
+  _onQueueSyncEvent(event) {
+    const id = this.config?.shared_queue_id;
+    if (!id || event.detail?.sharedQueueId !== id) return;
+    if (event.detail?.sourceCardId === this._cardId) return; // ignore own writes
+    // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
+    // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
+    // writes its (identical) state to HA — wasted service calls and log noise.
+    this._crossDeviceFollowerUntil = Date.now() + 30000;
+    this._applySharedQueueUpdate(event.detail);
+  }
+
+  // Broadcast the new queue state (with a specific index) without waiting for image load.
+  // Used when the local provider returns a new item so that same-window cards receive
+  // it synchronously (before their own provider awaits complete) and follow along.
+  _earlyBroadcastSyncState(nextIndex) {
+    const id = this.config?.shared_queue_id;
+    if (!id) return;
+    try {
+      const data = {
+        queue: this.navigationQueue.map(qi => qi.media_content_id),
+        currentIndex: nextIndex,
+        isPaused: this._isPaused,
+        updatedAt: Date.now(),
+        sourceCardId: this._cardId,
+      };
+      localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
+      window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
+    } catch (_e) {}
+  }
+
+  // Apply an incoming queue update from any transport
+  _applySharedQueueUpdate(data) {
+    if (!Array.isArray(data.queue) || !data.queue.length) return;
+
+    // Reject stale events that arrive out of order. Each write includes a
+    // written_at/updatedAt timestamp (ms epoch). If this event is older than the
+    // most recent one already applied, discard it — it is a delayed HA event from
+    // a previous navigation that arrived after a newer write already advanced us.
+    const eventTs = data.updatedAt || 0;
+    if (eventTs && eventTs < (this._lastAppliedSyncAt || 0)) {
+      this._log(`⏩ Discarding stale sync event (ts=${eventTs}, last=${this._lastAppliedSyncAt})`);
+      return;
+    }
+    if (eventTs) this._lastAppliedSyncAt = eventTs;
+
+    // Clear reconnect grace period — the driver has broadcast its next item so
+    // we no longer need to defer provider fetches.  Also cancel any pending retry
+    // setTimeout so it doesn't fire and independently advance after the sync.
+    this._crossDeviceProviderFetchUntil = 0;
+    if (this._crossDeviceGraceRetryTimer) {
+      clearTimeout(this._crossDeviceGraceRetryTimer);
+      this._crossDeviceGraceRetryTimer = null;
+    }
+
+    // If the user pressed a button on THIS device while the sync arrived, let the
+    // manual navigation win.  The manual _loadNext/_loadPrevious already called
+    // _claimDriverRole() which cleared _crossDeviceFollowerUntil; and
+    // _onHaSyncEvent already returned early so _crossDeviceFollowerUntil was not
+    // re-set.  Nothing further to do here — the manual fetch will complete and
+    // broadcast its own sync event to the driver.
+    if (this._isManualNavigation || this._manualNavLoading) {
+      this._log('\ud83d\uddb1\ufe0f Manual navigation in progress (or pending load) — ignoring incoming sync navigation');
+      return;
+    }
+
+    const newIndex = Math.min(
+      typeof data.currentIndex === 'number' ? data.currentIndex : 0,
+      data.queue.length - 1
+    );
+    const newPath = data.queue[newIndex];
+
+    // Increment generation counter so any _loadNext() suspended in an await will
+    // see that a sync event took priority and should not overwrite our navigation.
+    this._syncNavGeneration = (this._syncNavGeneration || 0) + 1;
+
+    // Apply pause state ONLY when the sender explicitly toggled it (pauseIntent).
+    // Navigation syncs carry the sender's current isPaused as context (for new devices
+    // joining the group) but must NOT overwrite the local pause state — otherwise
+    // Device B playing and Device A paused leads to Device B's navigation writes
+    // continuously unpausing Device A.
+    if (data.pauseIntent === true && typeof data.isPaused === 'boolean' && data.isPaused !== this._isPaused) {
+      this._setPauseState(data.isPaused);
+      if (data.isPaused) {
+        // Incoming group-pause: mark as group-paused so we know to broadcast on resume
+        this._groupPaused = true;
+        this._pauseTimer();
+      } else {
+        // Incoming group-resume: clear group-paused flag
+        this._groupPaused = false;
+        this._resumeTimer();
+      }
+    }
+
+    // Locally paused (short press, not a group pause) — ignore sync navigation.
+    // Group-paused cards still follow navigation from the active card.
+    if (this._isPaused && !this._groupPaused) return;
+
+    // Skip navigation if we are already showing this path OR already navigating to it.
+    // The _pendingMediaPath check prevents duplicate navigation when the same update
+    // arrives via multiple transports (CustomEvent then HA event ~500ms later) before
+    // the image has fully loaded and _currentMediaPath has been committed.
+    // HOWEVER: a second broadcast for the same path may carry metadata that the first
+    // (early) broadcast lacked — apply it even if we skip navigation.
+    if (newPath === this._currentMediaPath || newPath === this._pendingMediaPath) {
+      if (data.currentMetadata) {
+        if (this._pendingMediaPath !== null) {
+          // Still loading — merge into pending so it applies when image loads
+          this._pendingMetadata = { ...(this._pendingMetadata || {}), ...data.currentMetadata };
+        } else {
+          // Already showing — apply directly and re-render
+          this._currentMetadata = { ...(this._currentMetadata || {}), ...data.currentMetadata };
+          this.requestUpdate();
+        }
+      }
+      return;
+    }
+    this._log(`🔗 Shared queue sync: navigating to index ${newIndex}`);
+
+    // Reset the auto-advance timer immediately. Without this, the old timer (which may
+    // be only seconds from expiring) would fire before the incoming image loads, call
+    // _loadNext(), exhaust the queue, fetch a DIFFERENT item and broadcast it — causing
+    // a cascade where each of the N cards adds a new item in rapid succession.
+    // _setupAutoRefresh clears the old interval and starts a fresh full-duration one.
+    if (!this._isPaused) {
+      this._setupAutoRefresh();
+    }
+    this.navigationQueue = data.queue.map(mediaId => ({
+      media_content_id: mediaId,
+      media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
+      title: mediaId.split('/').pop() || mediaId,
+      metadata: null,
+    }));
+    this.navigationIndex = newIndex;
+    const item = this.navigationQueue[newIndex];
+    this.currentMedia = item;
+    this._pendingNavigationIndex = newIndex;
+    this._pendingMediaPath = newPath;
+    // Use metadata from the sender if provided — avoids a round-trip fetch and
+    // works even when this card has no media-index configured.
+    this._pendingMetadata = data.currentMetadata || null;
+    // Suppress the outgoing write that would otherwise echo this event back.
+    // Use a 1-second window (timestamp) rather than a one-shot boolean so that the
+    // double-load race (rapid-navigation fires two onload events for the same URL)
+    // doesn't consume the flag prematurely on the first load.
+    this._suppressSyncWriteUntil = Date.now() + 1000;
+    if (this._syncWriteTimer) {
+      clearTimeout(this._syncWriteTimer);
+      this._syncWriteTimer = null;
+    }
+    // Mark navigation in progress so the local slideshow timer doesn't fire a
+    // competing _loadNext() while the sync-driven URL resolution is in flight.
+    // _navigatingAway is cleared by _onMediaLoaded / _onVideoCanPlay as normal.
+    this._navigatingAway = true;
+    this._resolveMediaUrl();
+    this.requestUpdate();
+    // For media-index cards: kick off a background fetch to get fresher/fuller
+    // metadata (sender may have had stale data too). No-op for non-media-index cards.
+    this._refreshMetadata().catch(err => this._log('⚠️ Sync metadata refresh failed:', err));
+  }
+
+  // ── End Shared Queue ────────────────────────────────────────────────────────
+
   // V4: Keyboard navigation handler
   _handleKeyDown(e) {
     // Handle keyboard navigation
@@ -3814,7 +4587,8 @@ export class MediaCard extends LitElement {
       } else {
         this._setupAutoRefresh();
       }
-      
+      // Broadcast pause state to all synced cards
+      this._writeSharedQueueState(true);
       this.requestUpdate();
     }
   }
@@ -3835,6 +4609,8 @@ export class MediaCard extends LitElement {
     } else {
       this._resumeTimer();
     }
+    // Broadcast pause state to all synced cards
+    this._writeSharedQueueState(true);
   }
   
   // V4: Pause state management (copied from ha-media-card.js)
@@ -3853,10 +4629,14 @@ export class MediaCard extends LitElement {
   }
 
   _onMediaLoaded(e) {
+    // Clear the manual-nav load-phase flag now that the media has committed to the DOM.
+    // This must happen before any early returns below so the flag is never left set.
+    this._manualNavLoading = false;
+
     // Log media loaded for images (videos log in _onVideoLoadStart)
     if (!this._isVideoFile(this.mediaUrl)) {
       this._log('Media loaded successfully:', this.mediaUrl);
-      
+
       // V5.6.7: Clear navigation flag now that image is loaded
       // This prevents timer from firing prematurely during transitions
       this._navigatingAway = false;
@@ -3996,6 +4776,11 @@ export class MediaCard extends LitElement {
       this._log('✅ Applied pending navigation index on image load');
     }
     
+    // Shared queue: broadcast navigation — suppress if locally paused (short press)
+    if (!this._isLocallyPaused()) {
+      this._writeSharedQueueState();
+    }
+    
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
   }
@@ -4094,7 +4879,7 @@ export class MediaCard extends LitElement {
       
       // Priority 3: Filesystem date as last fallback
       if (!date && metadata.date) {
-        date = metadata.date;
+        date = (metadata.date instanceof Date) ? metadata.date : new Date(metadata.date);
       }
       
       if (date && !isNaN(date.getTime())) {
@@ -4469,7 +5254,9 @@ export class MediaCard extends LitElement {
     
     // Check individual button enable flags (default: true)
     const config = this.config.action_buttons || {};
-    const enablePause = config.enable_pause !== false;
+    // In single-media mode there is no auto-advance slideshow, so pause is irrelevant.
+    const isSingleMedia = this.config.media_source_type === 'single_media';
+    const enablePause = !isSingleMedia && config.enable_pause !== false;
     const enableFavorite = config.enable_favorite !== false;
     const enableDelete = config.enable_delete !== false;
     const enableEdit = config.enable_edit !== false;
@@ -4493,9 +5280,14 @@ export class MediaCard extends LitElement {
     // Show button if enabled and queue has items (or still loading)
     const showQueueButton = enableQueuePreview && this.navigationQueue && this.navigationQueue.length >= 1;
     
-    // V5.6.12: Mute button - show unless slideshow is configured for images only
+    // Mute button: hide when media is image-only.
+    // For single-media mode, use the actual file extension of the current item so the
+    // button is hidden when showing an image even if media_type was not explicitly set.
+    // For slideshow modes, fall back to the config media_type filter.
     const mediaType = this.config.media_type || 'all';
-    const showMuteButton = mediaType !== 'image';  // Show for 'all' or 'video'
+    const showMuteButton = isSingleMedia
+      ? MediaUtils.detectFileType(this._currentMediaPath || '') === 'video'
+      : mediaType !== 'image';
     
     // Don't render anything if all buttons are disabled
     const anyButtonEnabled = enablePause || showMuteButton || enableDebugButton || enableRefresh || enableFullscreen || 
@@ -4525,9 +5317,12 @@ export class MediaCard extends LitElement {
       <div class="action-buttons action-buttons-${position} ${this._showButtonsExplicitly ? 'show-buttons' : ''}">
         ${enablePause ? html`
           <button
-            class="action-btn pause-btn ${isPaused ? 'paused' : ''}"
+            class="action-btn pause-btn ${isPaused ? 'paused' : ''} ${isPaused && this._groupPaused ? 'group-paused' : ''}"
             @click=${this._handlePauseClick}
-            title="${isPaused ? 'Resume' : 'Pause'}">
+            @pointerdown=${this._handlePausePointerDown}
+            @pointerup=${this._handlePausePointerUp}
+            @pointercancel=${this._handlePausePointerUp}
+            title="${isPaused ? (this._groupPaused ? 'Resume Group' : 'Resume') : 'Pause'}">
             <ha-icon icon="${isPaused ? 'mdi:play' : 'mdi:pause'}"></ha-icon>
           </button>
         ` : ''}
@@ -5490,24 +6285,81 @@ export class MediaCard extends LitElement {
   }
 
   // V4: Handle pause button click
+  // Short press = local pause/resume only (no broadcast to sync group).
+  // Long press (via _handlePausePointerDown) = group pause/resume (broadcasts).
   _handlePauseClick(e) {
     e.stopPropagation();
-    
+
     // Restart timer on touch (gives user full time to choose next action)
     if (this._showButtonsExplicitly) {
       this._startActionButtonsHideTimer();
     }
-    
-    this._setPauseState(!this._isPaused);
-    
-    // Stop timer when pausing, restart when resuming
-    if (this._isPaused) {
+
+    // Long press already handled group pause — absorb the click that follows
+    if (this._pauseLongPressed) {
+      this._pauseLongPressed = false;
+      return;
+    }
+
+    const wasPaused = this._isPaused;
+    this._setPauseState(!wasPaused);
+
+    if (!wasPaused) {
+      // Short press PAUSE — local only, no broadcast
+      this._groupPaused = false;
       this._pauseTimer();
-      this._log('🎮 PAUSED slideshow - timer stopped');
+      this._log('🎮 PAUSED locally - timer stopped (short press, no broadcast)');
+    } else {
+      // RESUME
+      if (this._groupPaused) {
+        // Was group-paused: broadcast resume so all cards resume
+        this._groupPaused = false;
+        this._resumeTimer();
+        this._log('▶️ RESUMED slideshow — broadcasting group resume');
+        this._writeSharedQueueState(true);
+      } else {
+        // Was locally paused: resume locally, no broadcast
+        // Timer restart will naturally resync with the leader on next advance
+        this._resumeTimer();
+        this._log('▶️ RESUMED locally - resyncing to group state');
+      }
+    }
+  }
+
+  // Pointer handlers for the pause button to detect long press (group pause)
+  _handlePausePointerDown(e) {
+    e.stopPropagation(); // prevent card-level hold_action from firing
+    if (!this.config?.shared_queue_id) return; // group pause only relevant for sync groups
+    this._pauseLongPressed = false;
+    this._pauseHoldTimer = setTimeout(() => {
+      this._pauseHoldTimer = null;
+      this._pauseLongPressed = true;
+      this._handleGroupPause();
+    }, 600);
+  }
+
+  _handlePausePointerUp(e) {
+    e.stopPropagation();
+    if (this._pauseHoldTimer) {
+      clearTimeout(this._pauseHoldTimer);
+      this._pauseHoldTimer = null;
+    }
+  }
+
+  // Long press on pause button: toggle group pause state and broadcast to all cards
+  _handleGroupPause() {
+    const nowGroupPaused = !this._groupPaused;
+    this._groupPaused = nowGroupPaused;
+    this._setPauseState(nowGroupPaused);
+    if (nowGroupPaused) {
+      this._pauseTimer();
+      this._log('🔒 Group PAUSED — broadcasting to sync group');
     } else {
       this._resumeTimer();
-      this._log('▶️ RESUMED slideshow - timer restarted');
+      this._log('🔓 Group RESUMED — broadcasting to sync group');
     }
+    this._writeSharedQueueState(true);
+    this.requestUpdate();
   }
   
   // Handle debug button click - toggle debug mode dynamically
@@ -8741,8 +9593,8 @@ export class MediaCard extends LitElement {
     }
 
     .action-btn {
-      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.8);
-      border: 1px solid rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.2);
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.3);
       border-radius: 50%;
       width: 40px;
       height: 40px;
@@ -8751,70 +9603,86 @@ export class MediaCard extends LitElement {
       justify-content: center;
       cursor: pointer;
       transition: all 0.2s ease;
-      color: var(--primary-text-color);
+      color: #ffffff;
       backdrop-filter: blur(10px);
     }
 
     .action-btn:hover {
-      background: rgba(var(--rgb-card-background-color, 33, 33, 33), 0.95);
+      background: rgba(0, 0, 0, 0.75);
       transform: scale(1.15);
-      border-color: rgba(var(--rgb-primary-text-color, 255, 255, 255), 0.4);
+      border-color: rgba(255, 255, 255, 0.5);
     }
 
     .action-btn ha-icon {
       --mdc-icon-size: 24px;
+      color: #ffffff;
     }
 
     /* V4: Highlight pause button when paused */
     .pause-btn.paused {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .pause-btn.paused:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .pause-btn.paused ha-icon {
+      color: #03a9f4;
     }
 
     /* V5.6.12: Mute button - highlight when muted */
     .mute-btn.muted {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.15);
+      background: rgba(255, 152, 0, 0.3);
     }
 
     .mute-btn.muted:hover {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.25);
+      background: rgba(255, 152, 0, 0.45);
+    }
+
+    .mute-btn.muted ha-icon {
+      color: #ff9800;
     }
 
     /* Debug button active state - warning color when enabled */
     .debug-btn.active {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.15);
+      background: rgba(255, 152, 0, 0.3);
     }
 
     .debug-btn.active:hover {
-      color: var(--warning-color, #ff9800);
-      background: rgba(255, 152, 0, 0.25);
+      background: rgba(255, 152, 0, 0.45);
+    }
+
+    .debug-btn.active ha-icon {
+      color: #ff9800;
     }
 
     .favorite-btn.favorited {
-      color: var(--error-color, #ff5252);
-    }
-
-    .favorite-btn.favorited:hover {
-      color: var(--error-color, #ff5252);
       background: rgba(255, 82, 82, 0.1);
     }
 
+    .favorite-btn.favorited:hover {
+      background: rgba(255, 82, 82, 0.25);
+    }
+
+    .favorite-btn.favorited ha-icon {
+      color: #ff5252;
+    }
+
     .edit-btn:hover {
-      color: var(--warning-color, #ff9800);
       transform: scale(1.15);
     }
 
+    .edit-btn:hover ha-icon {
+      color: #ff9800;
+    }
+
     .delete-btn:hover {
-      color: var(--error-color, #ff5252);
       transform: scale(1.15);
+    }
+
+    .delete-btn:hover ha-icon {
+      color: #ff5252;
     }
 
     /* V4: Delete/Edit Confirmation Dialog */
@@ -9271,33 +10139,39 @@ export class MediaCard extends LitElement {
     }
 
     .info-btn.active {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .info-btn.active:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .info-btn.active ha-icon {
+      color: #03a9f4;
     }
     
     .burst-btn.active {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .burst-btn.active:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .burst-btn.active ha-icon {
+      color: #03a9f4;
     }
     
     .queue-btn.active {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.15);
+      background: rgba(3, 169, 244, 0.3);
     }
 
     .queue-btn.active:hover {
-      color: var(--primary-color, #03a9f4);
-      background: rgba(3, 169, 244, 0.25);
+      background: rgba(3, 169, 244, 0.45);
+    }
+
+    .queue-btn.active ha-icon {
+      color: #03a9f4;
     }
     
     .placeholder {

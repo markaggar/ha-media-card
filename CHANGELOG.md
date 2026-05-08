@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.10.0 - 2026-04-22
+
+### Added
+- **Cross-Device Slideshow Sync** (`shared_queue_id`): Multiple cards across any number of views, devices, and browsers share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
+  - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab. Exactly one card drives the slideshow timer — others suppress theirs and follow the leader. Manual navigation instantly promotes that card to leader; when a leader is destroyed the next card claims leadership automatically via a vacancy event
+  - **Cross-view persistence**: `localStorage` so switching to a different dashboard view immediately shows the current image
+  - **Cross-device**: When the `media_index` source is active, sync state is written through `media_index.update_sync_state` and delivered via the `media_index.sync_updated` HA event, keeping wall tablets, phones, and any other browser in sync in real time
+  - **Pause sync**: Short-press pause stops only the local card; long-press (600 ms) broadcasts a group pause or resume to all peers. Locally paused cards silently ignore incoming navigation events. Only explicit user pause actions propagate — automatic advances never override a peer's pause state
+  - Current image metadata (date, location, camera) is included in every sync payload so receiving cards display the correct information without extra service calls
+  - Configure via the visual editor ("Shared Queue ID" in Image Options) or YAML: `shared_queue_id: "my_queue"`
+
+### Fixed
+- **Action buttons in single-media mode**: The action button strip is now context-aware when `media_source_type: single_media` is configured
+  - **Pause button hidden**: There is no auto-advance slideshow timer in single-media mode, so the pause button is no longer shown
+  - **Mute button follows actual file type**: The mute button now shows or hides based on the file extension of the currently displayed item rather than the configured `media_type` filter — so it correctly appears for videos and is hidden for images even when `media_type` is not explicitly set
+
+- **Action button colors washed out on light and frosted-glass themes**: Button backgrounds were derived from `--rgb-card-background-color`, which resolves to near-white on many light themes, making icons invisible. Fixed by using hardcoded dark semi-transparent backgrounds (`rgba(0,0,0,0.55)`) and explicit white icon colors. Active-state colors (mute, pause, info, burst, queue, favorite) are now set directly on the `ha-icon` element so they work correctly on all themes.
+
 ## v5.9.0 - 2026-04-10
 
 ### Added
