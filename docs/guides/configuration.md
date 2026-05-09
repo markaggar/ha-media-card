@@ -110,13 +110,14 @@ live_photo:
 | `icloud_photos.album` | string | `""` | Optional album folder below the sync root |
 | `icloud_photos.sync_backend` | string | `icloudpd` | Descriptive backend name for the server-side sync source |
 
-The card does not perform Apple authentication in the browser. Use a Home Assistant add-on or integration to sync iCloud Photos into `/media/icloud_photos`, then use this preset as the single card-level display configuration.
+The card does not perform Apple authentication in the browser. Use a Home Assistant add-on or integration to sync iCloud Photos into `/media/icloud_photos`, then use this preset as the single card-level display configuration. The card editor also shows an iCloud Photos Sync panel in folder mode with the recommended add-on link and media-source path.
 
 Recommended add-on install path:
 
 1. In Home Assistant, go to `Settings -> Add-ons -> Add-on Store`.
 2. Open the top-right menu, choose `Repositories`, and add `https://github.com/anciltech/ha-icloud-photo-sync`.
 3. Install `iCloud Photo Sync`, configure the album and `/media/icloud_photos` destination, then run the add-on's documented Apple initialise step from an HAOS shell.
+4. Use `media-source://media_source/local/icloud_photos` as the card folder path, or append the album folder created by the sync.
 
 This downloader is installed through the Home Assistant Add-on Store repository flow, not HACS. HACS remains the normal path for installing the frontend card itself.
 
