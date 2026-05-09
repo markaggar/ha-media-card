@@ -63,7 +63,7 @@ auto_advance_seconds: 60
 live_photo:
   enabled: true
   still_duration: 1
-  pause_duration: 10
+  repeat_delay: 10
   hide_companion_videos: true
 video_loop: false
 video_muted: true
@@ -97,7 +97,7 @@ media_type: all
 auto_advance_seconds: 60
 live_photo:
   still_duration: 1
-  pause_duration: 10
+  repeat_delay: 10
 ```
 
 | Option | Type | Default | Description |
@@ -467,13 +467,13 @@ When `auto_refresh_seconds > 0` and a video finishes playing:
 
 ## Live Photo Options
 
-Live Photos downloaded from iCloud are usually represented as a still image plus a companion video file. When enabled, the card treats the still image as the slideshow item, resolves the matching companion video, shows the still for a short moment, plays the video once, returns to the still, waits, and repeats while that slideshow item remains active.
+Live Photos downloaded from iCloud are usually represented as a still image plus a companion video file. When enabled, the card treats the still image as the slideshow item, resolves the matching companion video, keeps the still image visible, overlays the motion clip after a short delay, then returns to the still. This motion loop does not advance the slideshow; normal `auto_advance_seconds` timing still controls when the card moves to the next photo.
 
 ```yaml
 live_photo:
   enabled: true
   still_duration: 1
-  pause_duration: 10
+  repeat_delay: 10
   video_suffixes:
     - "_HEVC"
     - "-HEVC"
@@ -490,7 +490,8 @@ live_photo:
 |--------|------|---------|-------------|
 | `live_photo.enabled` | boolean | `false` | Enable still+video pairing and playback |
 | `live_photo.still_duration` | number | `1` | Seconds to show the still before playing the companion video |
-| `live_photo.pause_duration` | number | `10` | Seconds to wait on the still after the companion video ends |
+| `live_photo.repeat_delay` | number | `10` | Seconds to wait after the companion video ends before playing it again |
+| `live_photo.pause_duration` | number | `10` | Backward-compatible alias for `repeat_delay` |
 | `live_photo.video_suffixes` | list | `["_HEVC", "-HEVC", ""]` | Suffixes to try when finding companion videos |
 | `live_photo.video_extensions` | list | `["MOV", "mov", "mp4", "MP4", "m4v", "M4V"]` | Companion video extensions to try |
 | `live_photo.hide_companion_videos` | boolean | `true` | Hide obvious companion videos from the normal slideshow queue |

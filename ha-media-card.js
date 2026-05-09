@@ -4787,6 +4787,7 @@ class MediaCard extends LitElement {
       live_photo: {
         enabled: true,
         still_duration: 1,
+        repeat_delay: 10,
         pause_duration: 10,
         video_suffixes: ['_HEVC', '-HEVC', ''],
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
@@ -4948,6 +4949,7 @@ class MediaCard extends LitElement {
     // Live Photo playback state. Used for iCloud-style still + companion video pairs.
     this._livePhotoPhase = 'idle';        // idle | still | video | pause
     this._livePhotoVideoUrl = '';
+    this._livePhotoVideoReady = false;
     this._livePhotoTimer = null;
     this._livePhotoCompanionCache = new Map();
     this._livePhotoGeneration = 0;
@@ -5123,7 +5125,7 @@ class MediaCard extends LitElement {
     if (changedProperties.has('mediaUrl')) {
       // Wait for next frame to ensure video element is rendered
       requestAnimationFrame(() => {
-        const videoElement = this.shadowRoot?.querySelector('video');
+        const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
         
         if (videoElement && this.mediaUrl) {
           videoElement.load(); // Force browser to reload the video with new source
@@ -5581,6 +5583,7 @@ class MediaCard extends LitElement {
       live_photo: {
         enabled: false,
         still_duration: 1,
+        repeat_delay: 10,
         pause_duration: 10,
         video_suffixes: ['_HEVC', '-HEVC', ''],
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
@@ -6937,7 +6940,7 @@ class MediaCard extends LitElement {
           // - Short videos that loop: advance on FIRST timer fire after loop detected
           // - Long videos with max_duration: advance when timer count * interval >= max_duration
           // - Long videos without max_duration: never advance on timer (play to completion)
-          const videoElement = this.shadowRoot?.querySelector('video');
+          const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
           const maxDuration = this.config.video_max_duration;
           
           // Check if video is currently playing
@@ -7424,7 +7427,7 @@ class MediaCard extends LitElement {
           await this.updateComplete; // Wait for Lit to finish rendering
           
           // Check if it's a video or image and reload appropriately
-          const videoElement = this.shadowRoot?.querySelector('video');
+          const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
           const imgElement = this.shadowRoot?.querySelector('.media-container > img');
           
           if (videoElement) {
@@ -7733,7 +7736,7 @@ class MediaCard extends LitElement {
       // readyState > 0 means the OLD video has data, not that the NEW source is loading.
       // We MUST call load() to force browser to load the new source.
       await this.updateComplete;
-      const videoElement = this.shadowRoot?.querySelector('video');
+      const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
       if (videoElement) {
         this._log('🎬 Explicitly reloading video element for video→video transition');
         videoElement.load();
@@ -8248,6 +8251,7 @@ class MediaCard extends LitElement {
     this._livePhotoGeneration++;
     this._livePhotoPhase = 'idle';
     this._livePhotoVideoUrl = '';
+    this._livePhotoVideoReady = false;
   }
 
   _getLivePhotoItemId(item = this.currentMedia) {
@@ -8370,6 +8374,7 @@ class MediaCard extends LitElement {
 
     if (!this._isLivePhotoEnabled() ||
         this._livePhotoPhase === 'pause' ||
+        this._livePhotoPhase === 'video' ||
         !this._isImageItem(this.currentMedia) ||
         this._isPaused ||
         this._backgroundPaused ||
@@ -8404,23 +8409,56 @@ class MediaCard extends LitElement {
     }
 
     this._livePhotoVideoUrl = companion.url;
+    this._livePhotoVideoReady = false;
     this._livePhotoPhase = 'video';
-    this._videoHasEnded = false;
-    this._videoTimerCount = 0;
-    this._videoPlayStartTime = null;
     this.requestUpdate();
   }
 
-  _onLivePhotoVideoEnded() {
+  _getLivePhotoRepeatDelaySeconds() {
+    const repeatDelay = this.config.live_photo?.repeat_delay;
+    if (repeatDelay !== undefined && repeatDelay !== null) {
+      return Math.max(0, Number(repeatDelay) || 0);
+    }
+    return Math.max(0, Number(this.config.live_photo?.pause_duration) || 10);
+  }
+
+  _onLivePhotoVideoCanPlay(e) {
+    if (this._livePhotoPhase !== 'video') return;
+    this._livePhotoVideoReady = true;
+    const video = e?.target;
+    if (video && video.paused) {
+      video.play().catch(error => {
+        if (error?.name !== 'AbortError') {
+          this._log('🎞️ Live Photo autoplay failed:', error);
+        }
+      });
+    }
+    this.requestUpdate();
+  }
+
+  _onLivePhotoVideoError() {
+    if (this._livePhotoPhase !== 'video') return;
+    const itemId = this._getLivePhotoItemId(this.currentMedia);
+    if (itemId) this._livePhotoCompanionCache.set(itemId, null);
+    this._livePhotoPhase = 'still';
+    this._livePhotoVideoUrl = '';
+    this._livePhotoVideoReady = false;
+    this._log('🎞️ Live Photo companion video failed - keeping still image visible');
+    this.requestUpdate();
+  }
+
+  _onLivePhotoVideoEnded(e) {
+    e?.stopPropagation?.();
     if (this._livePhotoPhase !== 'video') return false;
 
     this._clearLivePhotoTimer();
     const generation = ++this._livePhotoGeneration;
     const itemId = this._getLivePhotoItemId(this.currentMedia);
-    const pauseMs = Math.max(0, Number(this.config.live_photo?.pause_duration) || 10) * 1000;
+    const pauseMs = this._getLivePhotoRepeatDelaySeconds() * 1000;
 
     this._livePhotoPhase = 'pause';
     this._livePhotoVideoUrl = '';
+    this._livePhotoVideoReady = false;
     this._hideBottomOverlaysForVideo = false;
     this.requestUpdate();
 
@@ -8526,7 +8564,7 @@ class MediaCard extends LitElement {
     
     // V5.6.4: Verify video element still exists in DOM before processing pause
     // Pause events can fire after navigation completes and video is removed
-    const videoElement = this.renderRoot?.querySelector('video');
+    const videoElement = this.renderRoot?.querySelector('video:not(.live-photo-video)');
     const isCurrentlyVideo = this._isVideoFile(this.currentMedia?.media_content_id || '');
     
     if (!videoElement || !isCurrentlyVideo) {
@@ -8614,7 +8652,7 @@ class MediaCard extends LitElement {
   // Based on V4 lines 3259-3302
   // V5 ENHANCEMENT: If user has interacted with video, ignore video_max_duration and play to end
   async _shouldWaitForVideoCompletion() {
-    const videoElement = this.renderRoot?.querySelector('video');
+    const videoElement = this.renderRoot?.querySelector('video:not(.live-photo-video)');
     
     // No video playing, don't wait
     if (!videoElement || !this.mediaUrl || this.currentMedia?.media_content_type?.startsWith('image')) {
@@ -8690,7 +8728,7 @@ class MediaCard extends LitElement {
       
       if (elapsedSeconds < autoAdvanceSeconds) {
         this._log(`🔁 Short video with loop enabled (${elapsedSeconds}s < ${autoAdvanceSeconds}s auto-advance) - restarting video`);
-        const videoElement = this.shadowRoot?.querySelector('video');
+        const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
         if (videoElement) {
           videoElement.currentTime = 0;
           videoElement.play().catch(err => this._log('Error restarting video:', err));
@@ -8807,7 +8845,7 @@ class MediaCard extends LitElement {
   }
 
   _onVideoLoadedMetadata() {
-    const video = this.shadowRoot?.querySelector('video');
+    const video = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
     if (video) {
       // V5.6.12: Apply user mute preference if valid, otherwise use config default
       const shouldBeMuted = this._getEffectiveMuteState();
@@ -8870,7 +8908,7 @@ class MediaCard extends LitElement {
     this._log(`🔊 Mute toggled: ${currentEffective} → ${this._userMutePreference}`);
     
     // Apply to current video if one is playing
-    const video = this.shadowRoot?.querySelector('video');
+    const video = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
     if (video) {
       video.muted = this._userMutePreference;
       
@@ -14094,6 +14132,24 @@ class MediaCard extends LitElement {
       opacity: 0;
       z-index: 1;
     }
+
+    .media-container .live-photo-video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center center;
+      opacity: 0;
+      z-index: 3;
+      pointer-events: none;
+      background: transparent;
+      transition: opacity 120ms ease-in-out;
+    }
+
+    .media-container .live-photo-video.ready {
+      opacity: 1;
+    }
     
     /* V5.7: Edge fade effect - smooth rectangular fade using intersecting gradients */
     :host([data-edge-fade]) img,
@@ -14198,6 +14254,10 @@ class MediaCard extends LitElement {
       max-height: none !important;
       object-fit: cover !important;
       object-position: center center;
+    }
+
+    :host([data-aspect-mode="viewport-fill"]) .media-container .live-photo-video {
+      object-fit: cover !important;
     }
     
     :host([data-aspect-mode="smart-scale"]) .media-container {
@@ -16194,9 +16254,7 @@ class MediaCard extends LitElement {
       `;
     }
     
-    const displayUrl = this._livePhotoPhase === 'video' && this._livePhotoVideoUrl
-      ? this._livePhotoVideoUrl
-      : this.mediaUrl;
+    const displayUrl = this.mediaUrl;
     const livePhotoVideoActive = this._livePhotoPhase === 'video' && !!this._livePhotoVideoUrl;
 
     if (!displayUrl) {
@@ -16212,8 +16270,7 @@ class MediaCard extends LitElement {
     // By using the resolved mediaUrl, the element type and src are always in sync.
     // Fallback: use media_content_type for extensionless URLs (e.g. Immich integration).
     const resolvedUrlType = displayUrl ? MediaUtils.detectFileType(displayUrl) : null;
-    const isVideo = livePhotoVideoActive ||
-                    resolvedUrlType === 'video' ||
+    const isVideo = resolvedUrlType === 'video' ||
                     (resolvedUrlType !== 'image' && this.currentMedia?.media_content_type?.startsWith('video'));
 
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
@@ -16248,8 +16305,8 @@ class MediaCard extends LitElement {
             preload="auto"
             playsinline
             crossorigin="anonymous"
-            ?loop=${!livePhotoVideoActive && (this.config.video_loop || false) && !(this.config.auto_advance_seconds > 0)}
-            ?autoplay=${livePhotoVideoActive || this.config.video_autoplay !== false}
+            ?loop=${(this.config.video_loop || false) && !(this.config.auto_advance_seconds > 0)}
+            ?autoplay=${this.config.video_autoplay !== false}
             ?muted=${this._getEffectiveMuteState()}
             @loadstart=${this._onVideoLoadStart}
             @error=${this._onMediaError}
@@ -16273,7 +16330,7 @@ class MediaCard extends LitElement {
             <source src="${displayUrl}" type="video/ogg" @error=${this._onSourceError}>
             <p>Your browser does not support the video tag. <a href="${displayUrl}" target="_blank">Download the video</a> instead.</p>
           </video>
-          ${livePhotoVideoActive ? html`` : this._renderVideoInfo()}
+          ${this._renderVideoInfo()}
         ` : (this.config?.transition?.duration ?? 300) === 0 ? html`
           <!-- V5.6: Instant mode - single image, no layers -->
           <img 
@@ -16302,6 +16359,21 @@ class MediaCard extends LitElement {
               @load=${this._onMediaLoaded}
             />
           ` : ''}
+        ` : ''}
+        ${livePhotoVideoActive ? html`
+          <video
+            class="live-photo-video ${this._livePhotoVideoReady ? 'ready' : ''}"
+            preload="auto"
+            playsinline
+            autoplay
+            muted
+            crossorigin="anonymous"
+            src="${this._livePhotoVideoUrl}"
+            @canplay=${this._onLivePhotoVideoCanPlay}
+            @playing=${this._onLivePhotoVideoCanPlay}
+            @ended=${this._onLivePhotoVideoEnded}
+            @error=${this._onLivePhotoVideoError}
+          ></video>
         ` : ''}
         ${this._renderNavigationZones()}
         ${this._renderMetadataOverlay()}
@@ -21138,7 +21210,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v5.10.0 Loaded  ',
+  '%c  MEDIA-CARD  %c  v__VERSION__ Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
