@@ -4116,9 +4116,66 @@ export class MediaCard extends LitElement {
     this._livePhotoPhase = 'still';
     const stillMs = Math.max(0.1, Number(this.config.live_photo?.still_duration) || 1) * 1000;
 
+    this._warmLivePhotoCompanion(generation, itemId);
+
     this._livePhotoTimer = setTimeout(() => {
       this._startLivePhotoVideo(generation, itemId);
     }, stillMs);
+  }
+
+  async _warmLivePhotoCompanion(generation, itemId) {
+    try {
+      const companion = await this._resolveLivePhotoCompanion(this.currentMedia);
+      if (!companion ||
+          generation !== this._livePhotoGeneration ||
+          itemId !== this._getLivePhotoItemId(this.currentMedia) ||
+          this.config?.live_photo?.preload_video === false) {
+        return;
+      }
+      await this._preloadLivePhotoVideo(companion.url, generation, itemId);
+    } catch (error) {
+      this._log('🎞️ Live Photo warmup skipped:', error?.message || error);
+    }
+  }
+
+  async _preloadLivePhotoVideo(url, generation, itemId) {
+    if (!url || typeof document === 'undefined') return;
+
+    await new Promise(resolve => {
+      const video = document.createElement('video');
+      let settled = false;
+      const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        video.removeEventListener('loadedmetadata', onReady);
+        video.removeEventListener('canplay', onReady);
+        video.removeEventListener('error', onDone);
+        video.removeAttribute('src');
+        video.load?.();
+        resolve();
+      };
+      const isCurrent = () =>
+        generation === this._livePhotoGeneration &&
+        itemId === this._getLivePhotoItemId(this.currentMedia);
+      const onReady = () => cleanup();
+      const onDone = () => cleanup();
+      const timeout = setTimeout(cleanup, 3000);
+
+      if (!isCurrent()) {
+        cleanup();
+        return;
+      }
+
+      video.preload = 'auto';
+      video.muted = true;
+      video.playsInline = true;
+      video.addEventListener('loadedmetadata', onReady, { once: true });
+      video.addEventListener('canplay', onReady, { once: true });
+      video.addEventListener('error', onDone, { once: true });
+      video.src = url;
+      video.load();
+    });
   }
 
   async _startLivePhotoVideo(generation, itemId) {
