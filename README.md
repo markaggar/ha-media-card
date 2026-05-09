@@ -18,6 +18,8 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 📂 **Multiple Folder Modes**: Sequential or Random selection of media from folders with optional file system recursion
 - 🔄 **Auto-Advance/Refresh**: Configurable intervals for dynamic content
 - 🎥 **Video Controls**: Autoplay, loop, mute and limit video length
+- 🎞️ **Live Photo Playback**: Pair still images with iCloud-style companion videos and play them as still → motion → pause loops
+- ☁️ **iCloud Photos Preset**: Point the card at a server-side iCloud sync folder with photo, video, and Live Photo display defaults in one config area
 - 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
 - **🎞️ Photo Transitions**: Configurable crossfade transitions between images (0-1000ms) for smooth slideshow experience

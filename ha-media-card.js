@@ -83,7 +83,6 @@ const MediaUtils = {
   }
 };
 
-
 /**
  * V5 Core Infrastructure Classes
  */
@@ -878,7 +877,6 @@ class MediaIndexHelper {
   }
 }
 
-
 /**
  * SingleMediaProvider - Provider for single image/video
  * Phase 2: Simplest provider to validate architecture
@@ -931,7 +929,6 @@ class SingleMediaProvider extends MediaProvider {
     this.currentItem = data.currentItem;
   }
 }
-
 
 /**
  * FOLDER PROVIDER - Wraps SubfolderQueue for folder slideshow
@@ -1473,8 +1470,6 @@ class FolderProvider extends MediaProvider {
   }
 
 }
-
-
 
 /**
  * SUBFOLDER QUEUE - Essential V4 code copied for v5
@@ -3043,7 +3038,6 @@ class SubfolderQueue {
  * Phase 2: Now uses provider pattern to display media
  */
 
-
 /**
  * MEDIA INDEX PROVIDER - Database-backed random media queries
  * V4 CODE REUSE: Copied from ha-media-card.js lines 2121-2250 (_queryMediaIndex)
@@ -3823,7 +3817,6 @@ class MediaIndexProvider extends MediaProvider {
     }
   }
 }
-
 
 /**
  * SEQUENTIAL MEDIA INDEX PROVIDER - Database-backed ordered queries
@@ -4674,8 +4667,6 @@ class SequentialMediaIndexProvider extends MediaProvider {
   }
 }
 
-
-
 /**
  * MediaCard - Main card component
  * Phase 2: Now uses provider pattern to display media
@@ -4767,6 +4758,41 @@ class MediaCard extends LitElement {
       show_metadata: true,
       enable_navigation_zones: true,
       title: 'Media Slideshow'
+    };
+  }
+
+  _applyICloudPhotosPreset(config) {
+    if (config?.icloud_photos?.enabled !== true) {
+      return config;
+    }
+
+    const icloudConfig = config.icloud_photos || {};
+    const basePath = icloudConfig.media_source_path || 'media-source://media_source/local/icloud_photos';
+    const album = icloudConfig.album || icloudConfig.photo_album || '';
+    const normalizedBasePath = basePath.replace(/\/$/, '');
+    const folderPath = album
+      ? `${normalizedBasePath}/${album}`
+      : normalizedBasePath;
+
+    return {
+      ...config,
+      media_source_type: 'folder',
+      media_type: config.media_type || 'all',
+      folder: {
+        mode: 'random',
+        recursive: true,
+        ...config.folder,
+        path: config.folder?.path || folderPath
+      },
+      live_photo: {
+        enabled: true,
+        still_duration: 1,
+        pause_duration: 10,
+        video_suffixes: ['_HEVC', '-HEVC', ''],
+        video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
+        hide_companion_videos: true,
+        ...config.live_photo
+      }
     };
   }
 
@@ -4918,6 +4944,13 @@ class MediaCard extends LitElement {
     this._userMutePreference = null;      // null=no preference, true=muted, false=unmuted
     this._mutePreferenceTimestamp = 0;    // When user last changed preference
     this._suppressVolumeChangeHandler = false; // V5.8: True during programmatic mute toggles (suppresses native-control detection)
+    
+    // Live Photo playback state. Used for iCloud-style still + companion video pairs.
+    this._livePhotoPhase = 'idle';        // idle | still | video | pause
+    this._livePhotoVideoUrl = '';
+    this._livePhotoTimer = null;
+    this._livePhotoCompanionCache = new Map();
+    this._livePhotoGeneration = 0;
 
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -5069,6 +5102,9 @@ class MediaCard extends LitElement {
     
     // V5.6: Cleanup clock timer
     this._stopClockTimer();
+    
+    // Cleanup Live Photo playback timers
+    this._clearLivePhotoPlayback();
   }
 
   // V4: Force video reload when URL changes
@@ -5442,6 +5478,8 @@ class MediaCard extends LitElement {
       config = this._migrateV4ConfigToV5a(config);
       this._log('✅ V4 config migrated:', config);
     }
+
+    config = this._applyICloudPhotosPreset(config);
     
     // V5: Clear auto-advance timer when reconfiguring (prevents duplicate timers)
     if (this._refreshInterval) {
@@ -5449,6 +5487,7 @@ class MediaCard extends LitElement {
       clearInterval(this._refreshInterval);
       this._refreshInterval = null;
     }
+    this._clearLivePhotoPlayback();
     
     // V5: Validate and clamp max_height_pixels if present
     if (config.max_height_pixels !== undefined) {
@@ -5538,6 +5577,16 @@ class MediaCard extends LitElement {
         recent_change_window: 60, // seconds
         ...config.display_entities
       },
+      // V5.11: Live Photo pairing/playback for still + companion video exports
+      live_photo: {
+        enabled: false,
+        still_duration: 1,
+        pause_duration: 10,
+        video_suffixes: ['_HEVC', '-HEVC', ''],
+        video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
+        hide_companion_videos: true,
+        ...config.live_photo
+      },
       // V5.6: Clock/Date Overlay defaults
       clock: {
         enabled: false,
@@ -5556,7 +5605,15 @@ class MediaCard extends LitElement {
       // V5.6.12: Mute preference timeout (seconds) - how long user's mute choice persists
       mute_preference_timeout: config.mute_preference_timeout ?? 300,
       // V5.6.7: Edge fade strength (0 = disabled, 1-100 = enabled with fade intensity)
-      edge_fade_strength: config.edge_fade_strength ?? 0
+      edge_fade_strength: config.edge_fade_strength ?? 0,
+      // V5.11: iCloud Photos preset. Sync is handled server-side; the card owns display defaults.
+      icloud_photos: {
+        enabled: false,
+        media_source_path: 'media-source://media_source/local/icloud_photos',
+        album: '',
+        sync_backend: 'icloudpd',
+        ...config.icloud_photos
+      }
     };
     
     // V4: Set debug mode from config
@@ -6164,6 +6221,12 @@ class MediaCard extends LitElement {
           // arrived from another card while we were waiting for the provider.
           const _syncGenBefore = this._syncNavGeneration || 0;
           let item = await this.provider.getNext();
+          let hiddenCompanionAttempts = 0;
+          while (item && this._shouldHideLivePhotoCompanionVideo(item) && hiddenCompanionAttempts < 25) {
+            this._log('🎞️ Skipping Live Photo companion video in slideshow queue:', item.media_content_id);
+            item = await this.provider.getNext();
+            hiddenCompanionAttempts++;
+          }
         
           if (item) {
             this._log('Got item from provider:', item.filename || item.media_content_id);
@@ -6176,6 +6239,12 @@ class MediaCard extends LitElement {
             while (alreadyInQueue && attempts < maxAttempts) {
               this._log(`⚠️ Item already in navigation queue (attempt ${attempts + 1}), getting next:`, item.media_content_id);
               item = await this.provider.getNext();
+              hiddenCompanionAttempts = 0;
+              while (item && this._shouldHideLivePhotoCompanionVideo(item) && hiddenCompanionAttempts < 25) {
+                this._log('🎞️ Skipping Live Photo companion video in slideshow queue:', item.media_content_id);
+                item = await this.provider.getNext();
+                hiddenCompanionAttempts++;
+              }
               if (!item) break;
               alreadyInQueue = this.navigationQueue.some(q => q.media_content_id === item.media_content_id);
               attempts++;
@@ -6276,6 +6345,14 @@ class MediaCard extends LitElement {
         this._log('ERROR: No item at navigationIndex', nextIndex);
         return;
       }
+      
+      if (this._shouldHideLivePhotoCompanionVideo(item)) {
+        this._log('🎞️ Removing Live Photo companion video from navigation queue:', item.media_content_id);
+        this._removeItemFromQueues(item);
+        this._isLoadingNext = false;
+        setTimeout(() => this._loadNext(), 0);
+        return;
+      }
 
       // V5.6.8: Increment periodic refresh counter and check if refresh needed
       // Works for both sequential and random modes - provider handles mode-specific logic
@@ -6326,6 +6403,7 @@ class MediaCard extends LitElement {
       }
       
       // Display the item
+      this._clearLivePhotoPlayback();
       this.currentMedia = item;
       
       // V5.6.7: Store in pending state - will apply when image/video loads (syncs all overlays)
@@ -7815,6 +7893,16 @@ class MediaCard extends LitElement {
   }
   
   _onMediaError(e) {
+    if (this._livePhotoPhase === 'video') {
+      const itemId = this._getLivePhotoItemId(this.currentMedia);
+      if (itemId) this._livePhotoCompanionCache.set(itemId, null);
+      this._livePhotoPhase = 'idle';
+      this._livePhotoVideoUrl = '';
+      this._log('🎞️ Live Photo companion video failed - keeping still image visible');
+      this.requestUpdate();
+      return;
+    }
+
     // V5.6.7: Clear navigation flag to prevent slideshow getting stuck on 404 errors
     this._navigatingAway = false;
     
@@ -8143,6 +8231,205 @@ class MediaCard extends LitElement {
     }
   }
 
+  // V5.11: Live Photo helpers
+  _isLivePhotoEnabled() {
+    return this.config?.live_photo?.enabled === true;
+  }
+
+  _clearLivePhotoTimer() {
+    if (this._livePhotoTimer) {
+      clearTimeout(this._livePhotoTimer);
+      this._livePhotoTimer = null;
+    }
+  }
+
+  _clearLivePhotoPlayback() {
+    this._clearLivePhotoTimer();
+    this._livePhotoGeneration++;
+    this._livePhotoPhase = 'idle';
+    this._livePhotoVideoUrl = '';
+  }
+
+  _getLivePhotoItemId(item = this.currentMedia) {
+    return item?.media_content_id || item?.media_source_uri || item?.path || item?.metadata?.path || '';
+  }
+
+  _getLivePhotoFileName(itemOrPath) {
+    const path = typeof itemOrPath === 'string' ? itemOrPath : this._getLivePhotoItemId(itemOrPath);
+    const cleanPath = (path || '').split('?')[0].split('|')[0];
+    return cleanPath.split('/').pop() || cleanPath;
+  }
+
+  _getLivePhotoBaseName(itemOrPath) {
+    const filename = this._getLivePhotoFileName(itemOrPath);
+    const dotIndex = filename.lastIndexOf('.');
+    return dotIndex > 0 ? filename.substring(0, dotIndex) : filename;
+  }
+
+  _isImageItem(item) {
+    if (!item) return false;
+    if (item.media_content_type?.startsWith('image')) return true;
+    return MediaUtils.detectFileType(this._getLivePhotoItemId(item)) === 'image' ||
+           MediaUtils.detectFileType(item.title || '') === 'image';
+  }
+
+  _shouldHideLivePhotoCompanionVideo(item) {
+    if (!this._isLivePhotoEnabled() || this.config?.live_photo?.hide_companion_videos === false) {
+      return false;
+    }
+    if (!this._isVideoItem(item)) return false;
+
+    const baseName = this._getLivePhotoBaseName(item).toLowerCase();
+    const suffixes = this.config?.live_photo?.video_suffixes || ['_HEVC', '-HEVC'];
+    return suffixes
+      .filter(suffix => suffix && String(suffix).length > 0)
+      .some(suffix => baseName.endsWith(String(suffix).toLowerCase()));
+  }
+
+  _removeItemFromQueues(item) {
+    if (!item) return;
+    const itemId = item.media_content_id || item.media_source_uri || item.path;
+    const matches = (candidate) => {
+      const candidateId = candidate?.media_content_id || candidate?.media_source_uri || candidate?.path;
+      return candidate === item || (!!itemId && candidateId === itemId);
+    };
+
+    this.navigationQueue = (this.navigationQueue || []).filter(candidate => !matches(candidate));
+    this.history = (this.history || []).filter(candidate => !matches(candidate));
+    if (this._panelQueue?.length) {
+      this._panelQueue = this._panelQueue.filter(candidate => !matches(candidate));
+    }
+    if (this.provider?.queue?.length) {
+      this.provider.queue = this.provider.queue.filter(candidate => !matches(candidate));
+    }
+  }
+
+  _buildLivePhotoCompanionCandidates(item = this.currentMedia) {
+    const mediaId = this._getLivePhotoItemId(item);
+    if (!mediaId) return [];
+
+    const cleanId = mediaId.split('?')[0];
+    const slashIndex = cleanId.lastIndexOf('/');
+    const dotIndex = cleanId.lastIndexOf('.');
+    if (dotIndex <= slashIndex) return [];
+
+    const basePath = cleanId.substring(0, dotIndex);
+    const suffixes = this.config?.live_photo?.video_suffixes || ['_HEVC', '-HEVC', ''];
+    const extensions = this.config?.live_photo?.video_extensions || ['MOV', 'mov', 'mp4', 'MP4'];
+    const candidates = [];
+    const seen = new Set();
+
+    for (const suffix of suffixes) {
+      for (const extension of extensions) {
+        const candidate = `${basePath}${suffix || ''}.${extension}`;
+        if (!seen.has(candidate)) {
+          candidates.push(candidate);
+          seen.add(candidate);
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  async _resolveLivePhotoCompanion(item = this.currentMedia) {
+    const itemId = this._getLivePhotoItemId(item);
+    if (!itemId || !this.hass) return null;
+
+    if (this._livePhotoCompanionCache.has(itemId)) {
+      return this._livePhotoCompanionCache.get(itemId);
+    }
+
+    for (const candidate of this._buildLivePhotoCompanionCandidates(item)) {
+      const mediaContentId = candidate.startsWith('/media/')
+        ? `media-source://media_source${candidate}`
+        : candidate;
+
+      try {
+        const resolved = await this.hass.callWS({
+          type: 'media_source/resolve_media',
+          media_content_id: mediaContentId,
+          expires: (60 * 60 * 3)
+        });
+        const url = this._addCacheBustingTimestamp(resolved.url);
+        const companion = { media_content_id: mediaContentId, url };
+        this._livePhotoCompanionCache.set(itemId, companion);
+        this._log('🎞️ Live Photo companion resolved:', mediaContentId);
+        return companion;
+      } catch (error) {
+        this._log('🎞️ Live Photo companion candidate not available:', mediaContentId);
+      }
+    }
+
+    this._livePhotoCompanionCache.set(itemId, null);
+    return null;
+  }
+
+  _scheduleLivePhotoPlayback() {
+    this._clearLivePhotoTimer();
+
+    if (!this._isLivePhotoEnabled() ||
+        this._livePhotoPhase === 'pause' ||
+        !this._isImageItem(this.currentMedia) ||
+        this._isPaused ||
+        this._backgroundPaused ||
+        !this.mediaUrl) {
+      return;
+    }
+
+    const generation = ++this._livePhotoGeneration;
+    const itemId = this._getLivePhotoItemId(this.currentMedia);
+    this._livePhotoPhase = 'still';
+    const stillMs = Math.max(0.1, Number(this.config.live_photo?.still_duration) || 1) * 1000;
+
+    this._livePhotoTimer = setTimeout(() => {
+      this._startLivePhotoVideo(generation, itemId);
+    }, stillMs);
+  }
+
+  async _startLivePhotoVideo(generation, itemId) {
+    if (generation !== this._livePhotoGeneration ||
+        itemId !== this._getLivePhotoItemId(this.currentMedia) ||
+        this._isPaused ||
+        this._backgroundPaused) {
+      return;
+    }
+
+    const companion = await this._resolveLivePhotoCompanion(this.currentMedia);
+    if (!companion ||
+        generation !== this._livePhotoGeneration ||
+        itemId !== this._getLivePhotoItemId(this.currentMedia)) {
+      this._livePhotoPhase = 'idle';
+      return;
+    }
+
+    this._livePhotoVideoUrl = companion.url;
+    this._livePhotoPhase = 'video';
+    this._videoHasEnded = false;
+    this._videoTimerCount = 0;
+    this._videoPlayStartTime = null;
+    this.requestUpdate();
+  }
+
+  _onLivePhotoVideoEnded() {
+    if (this._livePhotoPhase !== 'video') return false;
+
+    this._clearLivePhotoTimer();
+    const generation = ++this._livePhotoGeneration;
+    const itemId = this._getLivePhotoItemId(this.currentMedia);
+    const pauseMs = Math.max(0, Number(this.config.live_photo?.pause_duration) || 10) * 1000;
+
+    this._livePhotoPhase = 'pause';
+    this._livePhotoVideoUrl = '';
+    this._hideBottomOverlaysForVideo = false;
+    this.requestUpdate();
+
+    this._livePhotoTimer = setTimeout(() => {
+      this._startLivePhotoVideo(generation, itemId);
+    }, pauseMs);
+    return true;
+  }
+
   // V4: Video event handlers
   _onVideoLoadStart() {
     this._log('Video load initiated:', this.mediaUrl);
@@ -8375,6 +8662,11 @@ class MediaCard extends LitElement {
   }
 
   _onVideoEnded() {
+    if (this._onLivePhotoVideoEnded()) {
+      this._log('🎞️ Live Photo motion clip ended - returning to still frame');
+      return;
+    }
+
     const endTime = new Date();
     this._log(`🎬 Video ended at ${endTime.toLocaleTimeString()}:`, this.mediaUrl);
     
@@ -9471,9 +9763,10 @@ class MediaCard extends LitElement {
     if (!this._isLocallyPaused()) {
       this._writeSharedQueueState();
     }
-
     // Cast-to-TV: push current item to TV on every image load
     this._pushCurrentToCast();
+
+    this._scheduleLivePhotoPlayback();
 
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
@@ -15901,7 +16194,12 @@ class MediaCard extends LitElement {
       `;
     }
     
-    if (!this.mediaUrl) {
+    const displayUrl = this._livePhotoPhase === 'video' && this._livePhotoVideoUrl
+      ? this._livePhotoVideoUrl
+      : this.mediaUrl;
+    const livePhotoVideoActive = this._livePhotoPhase === 'video' && !!this._livePhotoVideoUrl;
+
+    if (!displayUrl) {
       return html`<div class="placeholder">Resolving media URL...</div>`;
     }
 
@@ -15913,8 +16211,9 @@ class MediaCard extends LitElement {
     // removed from the queue as a 404.
     // By using the resolved mediaUrl, the element type and src are always in sync.
     // Fallback: use media_content_type for extensionless URLs (e.g. Immich integration).
-    const resolvedUrlType = this.mediaUrl ? MediaUtils.detectFileType(this.mediaUrl) : null;
-    const isVideo = resolvedUrlType === 'video' ||
+    const resolvedUrlType = displayUrl ? MediaUtils.detectFileType(displayUrl) : null;
+    const isVideo = livePhotoVideoActive ||
+                    resolvedUrlType === 'video' ||
                     (resolvedUrlType !== 'image' && this.currentMedia?.media_content_type?.startsWith('video'));
 
     // Compute metadata overlay scale (defaults to 1.0; user configurable via metadata.scale)
@@ -15949,8 +16248,8 @@ class MediaCard extends LitElement {
             preload="auto"
             playsinline
             crossorigin="anonymous"
-            ?loop=${(this.config.video_loop || false) && !(this.config.auto_advance_seconds > 0)}
-            ?autoplay=${this.config.video_autoplay !== false}
+            ?loop=${!livePhotoVideoActive && (this.config.video_loop || false) && !(this.config.auto_advance_seconds > 0)}
+            ?autoplay=${livePhotoVideoActive || this.config.video_autoplay !== false}
             ?muted=${this._getEffectiveMuteState()}
             @loadstart=${this._onVideoLoadStart}
             @error=${this._onMediaError}
@@ -15969,16 +16268,16 @@ class MediaCard extends LitElement {
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
             @touchstart=${(e) => { this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
           >
-            <source src="${this.mediaUrl}" type="video/mp4" @error=${this._onSourceError}>
-            <source src="${this.mediaUrl}" type="video/webm" @error=${this._onSourceError}>
-            <source src="${this.mediaUrl}" type="video/ogg" @error=${this._onSourceError}>
-            <p>Your browser does not support the video tag. <a href="${this.mediaUrl}" target="_blank">Download the video</a> instead.</p>
+            <source src="${displayUrl}" type="video/mp4" @error=${this._onSourceError}>
+            <source src="${displayUrl}" type="video/webm" @error=${this._onSourceError}>
+            <source src="${displayUrl}" type="video/ogg" @error=${this._onSourceError}>
+            <p>Your browser does not support the video tag. <a href="${displayUrl}" target="_blank">Download the video</a> instead.</p>
           </video>
-          ${this._renderVideoInfo()}
+          ${livePhotoVideoActive ? html`` : this._renderVideoInfo()}
         ` : (this.config?.transition?.duration ?? 300) === 0 ? html`
           <!-- V5.6: Instant mode - single image, no layers -->
           <img 
-            src="${this.mediaUrl}" 
+            src="${displayUrl}" 
             alt="${this.currentMedia.title || 'Media'}"
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
@@ -16579,7 +16878,6 @@ class MediaCard extends LitElement {
  * MediaCardEditor - Card editor with full functionality
  * Will be adapted for v5 architecture in next phase
  */
-
 
 /**
  * MediaCardEditor - Card editor with full functionality
@@ -20818,6 +21116,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
   }
 }
+
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
   customElements.define('media-card', MediaCard);

@@ -52,6 +52,23 @@ media_type: all
 auto_advance_duration: 5
 ```
 
+**iCloud Photos with Live Photos**
+```yaml
+type: custom:media-card
+icloud_photos:
+  enabled: true
+  album: Favorites
+media_type: all
+auto_advance_seconds: 60
+live_photo:
+  enabled: true
+  still_duration: 1
+  pause_duration: 10
+  hide_companion_videos: true
+video_loop: false
+video_muted: true
+```
+
 ## Core Configuration
 
 ### Media Source Selection
@@ -65,6 +82,40 @@ auto_advance_duration: 5
 | `folder.path` | string | Required for folder | Path to folder (media-source:// URI) |
 | `folder.mode` | string | `random` | Display mode: `random`, `sequential` |
 | `folder.recursive` | boolean | `false` | Include subfolders in scan |
+
+### iCloud Photos Preset
+
+The card can own the display side of an iCloud Photos setup when a server-side sync backend is already writing files into Home Assistant media storage. The preset points the card at the synced folder, enables folder mode, allows photos and videos, and turns on Live Photo pairing.
+
+```yaml
+type: custom:media-card
+icloud_photos:
+  enabled: true
+  media_source_path: media-source://media_source/local/icloud_photos
+  album: Favorites
+media_type: all
+auto_advance_seconds: 60
+live_photo:
+  still_duration: 1
+  pause_duration: 10
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `icloud_photos.enabled` | boolean | `false` | Enable iCloud Photos display defaults |
+| `icloud_photos.media_source_path` | string | `media-source://media_source/local/icloud_photos` | Root folder populated by the sync backend |
+| `icloud_photos.album` | string | `""` | Optional album folder below the sync root |
+| `icloud_photos.sync_backend` | string | `icloudpd` | Descriptive backend name for the server-side sync source |
+
+The card does not perform Apple authentication in the browser. Use a Home Assistant add-on or integration to sync iCloud Photos into `/media/icloud_photos`, then use this preset as the single card-level display configuration.
+
+Recommended add-on install path:
+
+1. In Home Assistant, go to `Settings -> Add-ons -> Add-on Store`.
+2. Open the top-right menu, choose `Repositories`, and add `https://github.com/anciltech/ha-icloud-photo-sync`.
+3. Install `iCloud Photo Sync`, configure the album and `/media/icloud_photos` destination, then run the add-on's documented Apple initialise step from an HAOS shell.
+
+This downloader is installed through the Home Assistant Add-on Store repository flow, not HACS. HACS remains the normal path for installing the frontend card itself.
 
 ### Display Options
 
@@ -413,6 +464,36 @@ When `auto_refresh_seconds > 0` and a video finishes playing:
 - Slideshow automatically advances to next item
 - Respects manual pause - won't advance if user paused video
 - Works with all slideshow behaviors
+
+## Live Photo Options
+
+Live Photos downloaded from iCloud are usually represented as a still image plus a companion video file. When enabled, the card treats the still image as the slideshow item, resolves the matching companion video, shows the still for a short moment, plays the video once, returns to the still, waits, and repeats while that slideshow item remains active.
+
+```yaml
+live_photo:
+  enabled: true
+  still_duration: 1
+  pause_duration: 10
+  video_suffixes:
+    - "_HEVC"
+    - "-HEVC"
+    - ""
+  video_extensions:
+    - MOV
+    - mov
+    - mp4
+    - MP4
+  hide_companion_videos: true
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `live_photo.enabled` | boolean | `false` | Enable still+video pairing and playback |
+| `live_photo.still_duration` | number | `1` | Seconds to show the still before playing the companion video |
+| `live_photo.pause_duration` | number | `10` | Seconds to wait on the still after the companion video ends |
+| `live_photo.video_suffixes` | list | `["_HEVC", "-HEVC", ""]` | Suffixes to try when finding companion videos |
+| `live_photo.video_extensions` | list | `["MOV", "mov", "mp4", "MP4", "m4v", "M4V"]` | Companion video extensions to try |
+| `live_photo.hide_companion_videos` | boolean | `true` | Hide obvious companion videos from the normal slideshow queue |
 
 ## Interactive Actions
 
