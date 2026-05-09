@@ -4791,6 +4791,7 @@ class MediaCard extends LitElement {
         pause_duration: 10,
         video_suffixes: ['_HEVC', '-HEVC', ''],
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
+        still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
         ...config.live_photo
       }
@@ -4952,6 +4953,7 @@ class MediaCard extends LitElement {
     this._livePhotoVideoReady = false;
     this._livePhotoTimer = null;
     this._livePhotoCompanionCache = new Map();
+    this._livePhotoCompanionVideoCache = new Map();
     this._livePhotoGeneration = 0;
 
     this._log('💎 Constructor called, cardId:', this._cardId);
@@ -5587,6 +5589,7 @@ class MediaCard extends LitElement {
         pause_duration: 10,
         video_suffixes: ['_HEVC', '-HEVC', ''],
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
+        still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
         ...config.live_photo
       },
@@ -6225,7 +6228,7 @@ class MediaCard extends LitElement {
           const _syncGenBefore = this._syncNavGeneration || 0;
           let item = await this.provider.getNext();
           let hiddenCompanionAttempts = 0;
-          while (item && this._shouldHideLivePhotoCompanionVideo(item) && hiddenCompanionAttempts < 25) {
+          while (item && await this._shouldHideLivePhotoCompanionVideo(item) && hiddenCompanionAttempts < 25) {
             this._log('🎞️ Skipping Live Photo companion video in slideshow queue:', item.media_content_id);
             item = await this.provider.getNext();
             hiddenCompanionAttempts++;
@@ -6243,7 +6246,7 @@ class MediaCard extends LitElement {
               this._log(`⚠️ Item already in navigation queue (attempt ${attempts + 1}), getting next:`, item.media_content_id);
               item = await this.provider.getNext();
               hiddenCompanionAttempts = 0;
-              while (item && this._shouldHideLivePhotoCompanionVideo(item) && hiddenCompanionAttempts < 25) {
+              while (item && await this._shouldHideLivePhotoCompanionVideo(item) && hiddenCompanionAttempts < 25) {
                 this._log('🎞️ Skipping Live Photo companion video in slideshow queue:', item.media_content_id);
                 item = await this.provider.getNext();
                 hiddenCompanionAttempts++;
@@ -6349,7 +6352,7 @@ class MediaCard extends LitElement {
         return;
       }
       
-      if (this._shouldHideLivePhotoCompanionVideo(item)) {
+      if (await this._shouldHideLivePhotoCompanionVideo(item)) {
         this._log('🎞️ Removing Live Photo companion video from navigation queue:', item.media_content_id);
         this._removeItemFromQueues(item);
         this._isLoadingNext = false;
@@ -8277,7 +8280,71 @@ class MediaCard extends LitElement {
            MediaUtils.detectFileType(item.title || '') === 'image';
   }
 
-  _shouldHideLivePhotoCompanionVideo(item) {
+  _buildLivePhotoStillCandidatesForVideo(item) {
+    const mediaId = this._getLivePhotoItemId(item);
+    if (!mediaId) return [];
+
+    const cleanId = mediaId.split('?')[0];
+    const slashIndex = cleanId.lastIndexOf('/');
+    const dotIndex = cleanId.lastIndexOf('.');
+    if (dotIndex <= slashIndex) return [];
+
+    const basePath = cleanId.substring(0, dotIndex);
+    const basePaths = new Set([basePath]);
+    const suffixes = this.config?.live_photo?.video_suffixes || ['_HEVC', '-HEVC', ''];
+    for (const suffix of suffixes) {
+      if (suffix && basePath.toLowerCase().endsWith(String(suffix).toLowerCase())) {
+        basePaths.add(basePath.substring(0, basePath.length - String(suffix).length));
+      }
+    }
+
+    const stillExtensions = this.config?.live_photo?.still_extensions ||
+      ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'];
+    const candidates = [];
+    const seen = new Set();
+    for (const stillBasePath of basePaths) {
+      for (const extension of stillExtensions) {
+        const candidate = `${stillBasePath}.${extension}`;
+        if (!seen.has(candidate)) {
+          candidates.push(candidate);
+          seen.add(candidate);
+        }
+      }
+    }
+    return candidates;
+  }
+
+  async _hasLivePhotoStillForVideo(item) {
+    const itemId = this._getLivePhotoItemId(item);
+    if (!itemId || !this.hass) return false;
+
+    if (this._livePhotoCompanionVideoCache.has(itemId)) {
+      return this._livePhotoCompanionVideoCache.get(itemId);
+    }
+
+    for (const candidate of this._buildLivePhotoStillCandidatesForVideo(item)) {
+      const mediaContentId = candidate.startsWith('/media/')
+        ? `media-source://media_source${candidate}`
+        : candidate;
+      try {
+        await this.hass.callWS({
+          type: 'media_source/resolve_media',
+          media_content_id: mediaContentId,
+          expires: 60
+        });
+        this._livePhotoCompanionVideoCache.set(itemId, true);
+        this._log('🎞️ Live Photo still found for companion video:', mediaContentId);
+        return true;
+      } catch (error) {
+        // Candidate does not exist or is not resolvable; try the next still extension.
+      }
+    }
+
+    this._livePhotoCompanionVideoCache.set(itemId, false);
+    return false;
+  }
+
+  async _shouldHideLivePhotoCompanionVideo(item) {
     if (!this._isLivePhotoEnabled() || this.config?.live_photo?.hide_companion_videos === false) {
       return false;
     }
@@ -8285,9 +8352,10 @@ class MediaCard extends LitElement {
 
     const baseName = this._getLivePhotoBaseName(item).toLowerCase();
     const suffixes = this.config?.live_photo?.video_suffixes || ['_HEVC', '-HEVC'];
-    return suffixes
+    const hasCompanionSuffix = suffixes
       .filter(suffix => suffix && String(suffix).length > 0)
       .some(suffix => baseName.endsWith(String(suffix).toLowerCase()));
+    return hasCompanionSuffix || await this._hasLivePhotoStillForVideo(item);
   }
 
   _removeItemFromQueues(item) {

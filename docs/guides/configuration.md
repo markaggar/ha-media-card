@@ -483,6 +483,11 @@ live_photo:
     - mov
     - mp4
     - MP4
+  still_extensions:
+    - JPG
+    - jpg
+    - JPEG
+    - jpeg
   hide_companion_videos: true
 ```
 
@@ -494,6 +499,7 @@ live_photo:
 | `live_photo.pause_duration` | number | `10` | Backward-compatible alias for `repeat_delay` |
 | `live_photo.video_suffixes` | list | `["_HEVC", "-HEVC", ""]` | Suffixes to try when finding companion videos |
 | `live_photo.video_extensions` | list | `["MOV", "mov", "mp4", "MP4", "m4v", "M4V"]` | Companion video extensions to try |
+| `live_photo.still_extensions` | list | `["JPG", "jpg", "JPEG", "jpeg", "PNG", "png", "WEBP", "webp"]` | Still-image extensions used to identify plain same-basename companion videos |
 | `live_photo.hide_companion_videos` | boolean | `true` | Hide obvious companion videos from the normal slideshow queue |
 
 ## Interactive Actions
