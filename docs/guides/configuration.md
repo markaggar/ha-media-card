@@ -65,6 +65,9 @@ live_photo:
   still_duration: 1
   repeat_delay: 10
   hide_companion_videos: true
+heic:
+  enabled: true
+  quality: 0.92
 video_loop: false
 video_muted: true
 ```
@@ -116,6 +119,27 @@ Recommended add-on install path:
 3. Install `iCloud Photo Sync`, configure the album and `/media/icloud_photos` destination, then run the add-on's documented Apple initialise step from an HAOS shell.
 
 This downloader is installed through the Home Assistant Add-on Store repository flow, not HACS. HACS remains the normal path for installing the frontend card itself.
+
+### HEIC/HEIF Display Fallback
+
+Browsers do not consistently display Apple HEIC/HEIF files. The card can treat `.heic` and `.heif` files as images and convert them in the browser before rendering. This is intended as a fallback for synced iCloud photos that do not have a JPEG conversion available yet; server-side JPEG conversion is still faster for always-on dashboards.
+
+```yaml
+type: custom:media-card
+media_type: all
+heic:
+  enabled: true
+  library_url: https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js
+  output_type: image/jpeg
+  quality: 0.92
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `heic.enabled` | boolean | `true` | Convert HEIC/HEIF images in the browser before display |
+| `heic.library_url` | string | `https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js` | URL for the `heic2any` converter script; host a local copy if the dashboard must work offline |
+| `heic.output_type` | string | `image/jpeg` | Converted image MIME type |
+| `heic.quality` | number | `0.92` | JPEG output quality passed to the converter |
 
 ### Display Options
 

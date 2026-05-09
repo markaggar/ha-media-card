@@ -75,7 +75,7 @@ const MediaUtils = {
     
     if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic'].includes(extension)) {
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension)) {
       return 'image';
     }
     
@@ -4956,6 +4956,9 @@ class MediaCard extends LitElement {
     this._livePhotoCompanionVideoCache = new Map();
     this._livePhotoGeneration = 0;
 
+    this._heicObjectUrlCache = new Map();
+    this._heicConverterPromise = null;
+
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
 
@@ -5109,6 +5112,7 @@ class MediaCard extends LitElement {
     
     // Cleanup Live Photo playback timers
     this._clearLivePhotoPlayback();
+    this._revokeHeicObjectUrls();
   }
 
   // V4: Force video reload when URL changes
@@ -5592,6 +5596,13 @@ class MediaCard extends LitElement {
         still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
         ...config.live_photo
+      },
+      heic: {
+        enabled: true,
+        library_url: 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js',
+        output_type: 'image/jpeg',
+        quality: 0.92,
+        ...config.heic
       },
       // V5.6: Clock/Date Overlay defaults
       clock: {
@@ -7584,6 +7595,108 @@ class MediaCard extends LitElement {
     return null; // Provider doesn't support file existence checks
   }
 
+  _isHeicMedia(pathOrItem = this.currentMedia) {
+    const path = typeof pathOrItem === 'string'
+      ? pathOrItem
+      : (
+          pathOrItem?.media_content_id ||
+          pathOrItem?.media_source_uri ||
+          pathOrItem?.path ||
+          pathOrItem?.title ||
+          ''
+        );
+    const cleanPath = (path || '').split('?')[0].split('|')[0].toLowerCase();
+    return cleanPath.endsWith('.heic') || cleanPath.endsWith('.heif');
+  }
+
+  _revokeHeicObjectUrls() {
+    if (!this._heicObjectUrlCache) return;
+
+    for (const objectUrl of this._heicObjectUrlCache.values()) {
+      URL.revokeObjectURL(objectUrl);
+    }
+
+    this._heicObjectUrlCache.clear();
+  }
+
+  _loadHeicConverter() {
+    if (window.heic2any) {
+      return Promise.resolve(window.heic2any);
+    }
+
+    if (this._heicConverterPromise) {
+      return this._heicConverterPromise;
+    }
+
+    const libraryUrl = this.config?.heic?.library_url ||
+      'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+
+    this._heicConverterPromise = new Promise((resolve, reject) => {
+      const existingScript = document.querySelector(`script[data-ha-media-heic2any="${libraryUrl}"]`);
+      if (existingScript) {
+        existingScript.addEventListener('load', () => resolve(window.heic2any), { once: true });
+        existingScript.addEventListener('error', reject, { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = libraryUrl;
+      script.async = true;
+      script.dataset.haMediaHeic2any = libraryUrl;
+      script.onload = () => {
+        if (window.heic2any) {
+          resolve(window.heic2any);
+        } else {
+          reject(new Error('heic2any loaded without exposing window.heic2any'));
+        }
+      };
+      script.onerror = () => reject(new Error(`Failed to load HEIC converter: ${libraryUrl}`));
+      document.head.appendChild(script);
+    });
+
+    return this._heicConverterPromise;
+  }
+
+  async _prepareHeicDisplayUrl(url, expectedNavigationIndex) {
+    if (this.config?.heic?.enabled === false || (!this._isHeicMedia(this.currentMedia) && !this._isHeicMedia(url))) {
+      return url;
+    }
+
+    if (this._heicObjectUrlCache?.has(url)) {
+      return this._heicObjectUrlCache.get(url);
+    }
+
+    try {
+      this._log('🖼️ Converting HEIC image for browser display:', this.currentMedia?.media_content_id || url);
+      const converter = await this._loadHeicConverter();
+      const response = await fetch(url, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`HEIC fetch failed with ${response.status}`);
+      }
+
+      const inputBlob = await response.blob();
+      const outputBlob = await converter({
+        blob: inputBlob,
+        toType: this.config?.heic?.output_type || 'image/jpeg',
+        quality: Number(this.config?.heic?.quality) || 0.92
+      });
+      const finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
+      const objectUrl = URL.createObjectURL(finalBlob);
+
+      const currentNavIndex = this._pendingNavigationIndex ?? this.navigationIndex;
+      if (expectedNavigationIndex !== undefined && currentNavIndex !== expectedNavigationIndex) {
+        URL.revokeObjectURL(objectUrl);
+        return '';
+      }
+
+      this._heicObjectUrlCache.set(url, objectUrl);
+      return objectUrl;
+    } catch (error) {
+      console.warn('[MediaCard] HEIC conversion failed, falling back to native image support:', error);
+      return url;
+    }
+  }
+
   // V5.6: Helper to set mediaUrl with crossfade transition (validates first for images)
   async _setMediaUrl(url, expectedNavigationIndex) {
     // V5.6.7: Guard against stale async resolutions during rapid navigation
@@ -7617,6 +7730,7 @@ class MediaCard extends LitElement {
     // layers get cleared, _renderMedia renders nothing, _onMediaLoaded never fires, and
     // _navigatingAway stays true — freezing the slideshow timer permanently.
     const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo(url);
+    let displayUrl = url;
     
     // For images, validate they exist before displaying (MediaIndexProvider only)
     if (!isVideo) {
@@ -7636,9 +7750,14 @@ class MediaCard extends LitElement {
       }
       // If providerCheckResult is null, provider doesn't support checks (FolderProvider, SingleMediaProvider)
       // These providers discover files from disk, so 404s are unlikely - proceed without validation
+
+      displayUrl = await this._prepareHeicDisplayUrl(url, expectedNavigationIndex);
+      if (!displayUrl) {
+        return;
+      }
     }
     
-    this.mediaUrl = url;
+    this.mediaUrl = displayUrl;
     
     if (!isVideo) {
       const duration = this.config?.transition?.duration ?? 300;
@@ -7661,7 +7780,7 @@ class MediaCard extends LitElement {
         // This handles rapid navigation where the previous image hasn't loaded yet
         if (!this._frontLayerUrl && !this._backLayerUrl) {
           // Special case: Both layers empty (first load or after video), show immediately without crossfade
-          this._frontLayerUrl = url;
+          this._frontLayerUrl = displayUrl;
           this._frontLayerActive = true;
           this._pendingLayerSwap = false;
           this._frontLayerNavigationIndex = expectedNavigationIndex;
@@ -7669,7 +7788,7 @@ class MediaCard extends LitElement {
         } else if (this._pendingLayerSwap) {
           // Rapid navigation: Previous image hasn't loaded yet. Clear both and start fresh.
           this._log(`⏩ Rapid navigation detected - clearing both layers`);
-          this._frontLayerUrl = url;
+          this._frontLayerUrl = displayUrl;
           this._frontLayerGeneration++; // Invalidate any pending setTimeout for front layer
           this._backLayerUrl = '';
           this._backLayerGeneration++; // Invalidate any pending setTimeout for back layer
@@ -7681,11 +7800,11 @@ class MediaCard extends LitElement {
         } else {
           // Normal crossfade: load on hidden layer then swap
           if (this._frontLayerActive) {
-            this._backLayerUrl = url;
+            this._backLayerUrl = displayUrl;
             this._backLayerGeneration++; // Increment to invalidate any pending setTimeout for this layer
             this._backLayerNavigationIndex = expectedNavigationIndex;
           } else {
-            this._frontLayerUrl = url;
+            this._frontLayerUrl = displayUrl;
             this._frontLayerGeneration++; // Increment to invalidate any pending setTimeout for this layer
             this._frontLayerNavigationIndex = expectedNavigationIndex;
           }
@@ -21282,6 +21401,5 @@ console.info(
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
-
 
 })();
