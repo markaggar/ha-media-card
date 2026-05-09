@@ -4894,6 +4894,8 @@ class MediaCard extends LitElement {
     this._manualNavLoading = false;    // True from navigation commit until _onMediaLoaded/_onVideoCanPlay fires
     this._swipeTouchStartX = null;    // Touch start X for swipe gesture detection
     this._swipeTouchStartY = null;    // Touch start Y for swipe gesture detection
+    this._navigationGeneration = 0;    // Increments whenever newer navigation should obsolete async work
+    this._activeMediaPrepare = null;   // Current off-DOM image/video preparation task
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -5112,6 +5114,7 @@ class MediaCard extends LitElement {
     
     // Cleanup Live Photo playback timers
     this._clearLivePhotoPlayback();
+    this._cancelActiveMediaPrepare('card disconnect');
     this._revokeHeicObjectUrls();
   }
 
@@ -5603,6 +5606,13 @@ class MediaCard extends LitElement {
         output_type: 'image/jpeg',
         quality: 0.92,
         ...config.heic
+      },
+      preload: {
+        enabled: true,
+        image_decode: true,
+        video_mode: 'metadata',
+        video_timeout_ms: 3000,
+        ...config.preload
       },
       // V5.6: Clock/Date Overlay defaults
       clock: {
@@ -6135,9 +6145,16 @@ class MediaCard extends LitElement {
   async _loadNext() {
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadNext
     if (this._isLoadingNext) {
-      this._log('⏭️ Skipping _loadNext - already in progress');
-      return;
+      if (!this._isManualNavigation) {
+        this._log('⏭️ Skipping _loadNext - already in progress');
+        return;
+      }
+      this._log('⏭️ Manual next requested while load is in progress - canceling stale preparation');
+      this._cancelActiveMediaPrepare('manual next');
+      this._isLoadingNext = false;
     }
+    this._navigationGeneration++;
+    const navigationGeneration = this._navigationGeneration;
     this._isLoadingNext = true;
 
     try {
@@ -6243,6 +6260,11 @@ class MediaCard extends LitElement {
             this._log('🎞️ Skipping Live Photo companion video in slideshow queue:', item.media_content_id);
             item = await this.provider.getNext();
             hiddenCompanionAttempts++;
+          }
+
+          if (navigationGeneration !== this._navigationGeneration) {
+            this._log('⏭️ Discarding stale next-item provider result after newer navigation');
+            return;
           }
         
           if (item) {
@@ -6371,6 +6393,11 @@ class MediaCard extends LitElement {
         return;
       }
 
+      if (navigationGeneration !== this._navigationGeneration) {
+        this._log('⏭️ Discarding stale next navigation before display');
+        return;
+      }
+
       // V5.6.8: Increment periodic refresh counter and check if refresh needed
       // Works for both sequential and random modes - provider handles mode-specific logic
       this._itemsSinceRefresh++;
@@ -6464,9 +6491,16 @@ class MediaCard extends LitElement {
   async _loadPrevious() {
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadPrevious
     if (this._isLoadingNext) {
-      this._log('⏮️ Skipping _loadPrevious - already in progress');
-      return;
+      if (!this._isManualNavigation) {
+        this._log('⏮️ Skipping _loadPrevious - already in progress');
+        return;
+      }
+      this._log('⏮️ Manual previous requested while load is in progress - canceling stale preparation');
+      this._cancelActiveMediaPrepare('manual previous');
+      this._isLoadingNext = false;
     }
+    this._navigationGeneration++;
+    const navigationGeneration = this._navigationGeneration;
     this._isLoadingNext = true;
 
     try {
@@ -6527,6 +6561,11 @@ class MediaCard extends LitElement {
     }
     
     this._log('Going back to navigation queue item:', item.title, 'at index', this.navigationIndex);
+
+    if (navigationGeneration !== this._navigationGeneration) {
+      this._log('⏮️ Discarding stale previous navigation before display');
+      return;
+    }
     
     // Display the item
     this.currentMedia = item;
@@ -6634,6 +6673,8 @@ class MediaCard extends LitElement {
 
   async _loadPanelItem(index) {
     // V5.6: Set flag to ignore video pause events during thumbnail click
+    this._navigationGeneration++;
+    this._cancelActiveMediaPrepare('panel navigation');
     this._navigatingAway = true;
     
     const item = this._panelQueue[index];
@@ -6694,6 +6735,8 @@ class MediaCard extends LitElement {
 
   async _jumpToQueuePosition(queueIndex) {
     // V5.6: Set flag to ignore video pause events during thumbnail click
+    this._navigationGeneration++;
+    this._cancelActiveMediaPrepare('queue jump');
     this._navigatingAway = true;
     
     if (!this.navigationQueue || queueIndex < 0 || queueIndex >= this.navigationQueue.length) {
@@ -7609,6 +7652,39 @@ class MediaCard extends LitElement {
     return cleanPath.endsWith('.heic') || cleanPath.endsWith('.heif');
   }
 
+  _isNavigationCurrent(expectedNavigationIndex, expectedGeneration) {
+    if (expectedGeneration !== undefined && expectedGeneration !== this._navigationGeneration) {
+      return false;
+    }
+    if (expectedNavigationIndex !== undefined && this._pendingNavigationIndex !== expectedNavigationIndex) {
+      return false;
+    }
+    return true;
+  }
+
+  _cancelActiveMediaPrepare(reason = 'navigation') {
+    const active = this._activeMediaPrepare;
+    if (!active) return;
+
+    active.cancelled = true;
+    active.abortController?.abort?.();
+    if (active.element) {
+      try {
+        if (active.type === 'video') {
+          active.element.pause?.();
+          active.element.removeAttribute('src');
+          active.element.load?.();
+        } else {
+          active.element.src = '';
+        }
+      } catch (error) {
+        // Best-effort cleanup only; stale generation checks still protect the UI.
+      }
+    }
+    this._activeMediaPrepare = null;
+    this._log(`⏭️ Canceled media preparation (${reason})`);
+  }
+
   _revokeHeicObjectUrls() {
     if (!this._heicObjectUrlCache) return;
 
@@ -7657,7 +7733,7 @@ class MediaCard extends LitElement {
     return this._heicConverterPromise;
   }
 
-  async _prepareHeicDisplayUrl(url, expectedNavigationIndex) {
+  async _prepareHeicDisplayUrl(url, expectedNavigationIndex, expectedGeneration) {
     if (this.config?.heic?.enabled === false || (!this._isHeicMedia(this.currentMedia) && !this._isHeicMedia(url))) {
       return url;
     }
@@ -7669,10 +7745,13 @@ class MediaCard extends LitElement {
     try {
       this._log('🖼️ Converting HEIC image for browser display:', this.currentMedia?.media_content_id || url);
       const converter = await this._loadHeicConverter();
+      if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return '';
+
       const response = await fetch(url, { credentials: 'same-origin' });
       if (!response.ok) {
         throw new Error(`HEIC fetch failed with ${response.status}`);
       }
+      if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return '';
 
       const inputBlob = await response.blob();
       const outputBlob = await converter({
@@ -7683,8 +7762,7 @@ class MediaCard extends LitElement {
       const finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
       const objectUrl = URL.createObjectURL(finalBlob);
 
-      const currentNavIndex = this._pendingNavigationIndex ?? this.navigationIndex;
-      if (expectedNavigationIndex !== undefined && currentNavIndex !== expectedNavigationIndex) {
+      if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
         URL.revokeObjectURL(objectUrl);
         return '';
       }
@@ -7697,11 +7775,137 @@ class MediaCard extends LitElement {
     }
   }
 
+  async _prepareMediaForDisplay(url, isVideo, expectedNavigationIndex, expectedGeneration) {
+    if (!url || this.config?.preload?.enabled === false) return true;
+    if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return false;
+    this._cancelActiveMediaPrepare('new media prepare');
+
+    if (isVideo) {
+      return this._preloadVideoForDisplay(url, expectedNavigationIndex, expectedGeneration);
+    }
+
+    return this._preloadImageForDisplay(url, expectedNavigationIndex, expectedGeneration);
+  }
+
+  async _preloadImageForDisplay(url, expectedNavigationIndex, expectedGeneration) {
+    const image = new Image();
+    const abortController = new AbortController();
+    const active = { type: 'image', element: image, abortController, generation: expectedGeneration, cancelled: false };
+    this._activeMediaPrepare = active;
+
+    try {
+      await new Promise((resolve, reject) => {
+        const cleanup = () => {
+          image.onload = null;
+          image.onerror = null;
+          abortController.signal.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException('Image preload aborted', 'AbortError'));
+        };
+        image.onload = () => {
+          cleanup();
+          resolve();
+        };
+        image.onerror = () => {
+          cleanup();
+          reject(new Error('Image preload failed'));
+        };
+        abortController.signal.addEventListener('abort', onAbort, { once: true });
+        image.decoding = 'async';
+        image.loading = 'eager';
+        image.src = url;
+      });
+
+      if (this.config?.preload?.image_decode !== false && typeof image.decode === 'function') {
+        await image.decode().catch(() => {});
+      }
+
+      return this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration);
+    } catch (error) {
+      if (error?.name === 'AbortError' || !this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
+        return false;
+      }
+      this._log('⚠️ Image preload failed; falling back to normal image load:', error.message || error);
+      return true;
+    } finally {
+      if (this._activeMediaPrepare === active) {
+        this._activeMediaPrepare = null;
+      }
+    }
+  }
+
+  async _preloadVideoForDisplay(url, expectedNavigationIndex, expectedGeneration) {
+    const mode = this.config?.preload?.video_mode || 'metadata';
+    if (mode === 'none') return true;
+
+    const video = document.createElement('video');
+    const abortController = new AbortController();
+    const active = { type: 'video', element: video, abortController, generation: expectedGeneration, cancelled: false };
+    const eventName = mode === 'canplay' ? 'canplay' : 'loadedmetadata';
+    const timeoutMs = Math.max(250, Number(this.config?.preload?.video_timeout_ms) || 3000);
+    this._activeMediaPrepare = active;
+
+    try {
+      await new Promise((resolve, reject) => {
+        let timeoutId = null;
+        const cleanup = () => {
+          clearTimeout(timeoutId);
+          video.onloadedmetadata = null;
+          video.oncanplay = null;
+          video.onerror = null;
+          abortController.signal.removeEventListener('abort', onAbort);
+        };
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException('Video preload aborted', 'AbortError'));
+        };
+        timeoutId = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, timeoutMs);
+        video[eventName === 'canplay' ? 'oncanplay' : 'onloadedmetadata'] = onReady;
+        video.onerror = () => {
+          cleanup();
+          resolve();
+        };
+        abortController.signal.addEventListener('abort', onAbort, { once: true });
+        video.preload = mode === 'canplay' ? 'auto' : 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+        video.src = url;
+        video.load();
+      });
+
+      return this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration);
+    } catch (error) {
+      if (error?.name === 'AbortError' || !this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
+        return false;
+      }
+      return true;
+    } finally {
+      if (this._activeMediaPrepare === active) {
+        this._activeMediaPrepare = null;
+      }
+      try {
+        video.removeAttribute('src');
+        video.load();
+      } catch (error) {
+        // Best-effort cleanup.
+      }
+    }
+  }
+
   // V5.6: Helper to set mediaUrl with crossfade transition (validates first for images)
-  async _setMediaUrl(url, expectedNavigationIndex) {
+  async _setMediaUrl(url, expectedNavigationIndex, expectedGeneration = this._navigationGeneration) {
     // V5.6.7: Guard against stale async resolutions during rapid navigation
     // If expectedNavigationIndex is provided and doesn't match current pending index, abort
-    if (expectedNavigationIndex !== undefined && this._pendingNavigationIndex !== expectedNavigationIndex) {
+    if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
       this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
       // Clear the navigation-in-progress flag when nothing else has claimed a pending
       // path (i.e. no sync nav or newer _loadNext() is in flight). Without this,
@@ -7751,10 +7955,14 @@ class MediaCard extends LitElement {
       // If providerCheckResult is null, provider doesn't support checks (FolderProvider, SingleMediaProvider)
       // These providers discover files from disk, so 404s are unlikely - proceed without validation
 
-      displayUrl = await this._prepareHeicDisplayUrl(url, expectedNavigationIndex);
+      displayUrl = await this._prepareHeicDisplayUrl(url, expectedNavigationIndex, expectedGeneration);
       if (!displayUrl) {
         return;
       }
+    }
+
+    if (!await this._prepareMediaForDisplay(displayUrl, isVideo, expectedNavigationIndex, expectedGeneration)) {
+      return;
     }
     
     this.mediaUrl = displayUrl;
@@ -7876,6 +8084,7 @@ class MediaCard extends LitElement {
     
     // V5.6.7: Capture pending index for async resolution guard
     const expectedIndex = this._pendingNavigationIndex;
+    const expectedGeneration = this._navigationGeneration;
     
     // Validate mediaId exists
     if (!mediaId) {
@@ -7886,7 +8095,7 @@ class MediaCard extends LitElement {
     
     // If already a full URL, use it
     if (mediaId.startsWith('http')) {
-      await this._setMediaUrl(mediaId, expectedIndex);
+      await this._setMediaUrl(mediaId, expectedIndex, expectedGeneration);
       this.requestUpdate();
       return;
     }
@@ -7904,11 +8113,11 @@ class MediaCard extends LitElement {
         // Add timestamp for auto-refresh (camera snapshots, etc.)
         const finalUrl = this._addCacheBustingTimestamp(resolved.url);
         
-        await this._setMediaUrl(finalUrl, expectedIndex);
+        await this._setMediaUrl(finalUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCard] Failed to resolve media URL:', error);
-        await this._setMediaUrl('', expectedIndex);
+        await this._setMediaUrl('', expectedIndex, expectedGeneration);
         this._nextMediaUrl = '';
         this.requestUpdate();
       }
@@ -7933,7 +8142,7 @@ class MediaCard extends LitElement {
         });
         this._log('✅ File exists and resolved to:', resolved.url);
         this._validationDepth = 0; // Reset on success
-        await this._setMediaUrl(resolved.url, expectedIndex);
+        await this._setMediaUrl(resolved.url, expectedIndex, expectedGeneration);
         this.requestUpdate();
         return; // Success - don't fall through to fallback
       } catch (error) {
@@ -7960,7 +8169,7 @@ class MediaCard extends LitElement {
         }
         
         // Clear the current media to avoid showing broken state
-        await this._setMediaUrl('', expectedIndex);
+        await this._setMediaUrl('', expectedIndex, expectedGeneration);
         
         // Check recursion depth before recursive call
         this._validationDepth = (this._validationDepth || 0) + 1;
@@ -7979,7 +8188,7 @@ class MediaCard extends LitElement {
 
     // Fallback: use as-is
     this._log('Using media ID as-is (fallback)');
-    await this._setMediaUrl(mediaId, expectedIndex);
+    await this._setMediaUrl(mediaId, expectedIndex, expectedGeneration);
     this.requestUpdate();
   }
 
@@ -8020,7 +8229,7 @@ class MediaCard extends LitElement {
   _onMediaError(e) {
     if (this._livePhotoPhase === 'video') {
       const itemId = this._getLivePhotoItemId(this.currentMedia);
-      if (itemId) this._livePhotoCompanionCache.set(itemId, null);
+      if (itemId) this._livePhotoCompanionCache.delete(itemId);
       this._livePhotoPhase = 'idle';
       this._livePhotoVideoUrl = '';
       this._log('🎞️ Live Photo companion video failed - keeping still image visible');
@@ -8437,8 +8646,8 @@ class MediaCard extends LitElement {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return false;
 
-    if (this._livePhotoCompanionVideoCache.has(itemId)) {
-      return this._livePhotoCompanionVideoCache.get(itemId);
+    if (this._livePhotoCompanionVideoCache.get(itemId) === true) {
+      return true;
     }
 
     for (const candidate of this._buildLivePhotoStillCandidatesForVideo(item)) {
@@ -8459,7 +8668,6 @@ class MediaCard extends LitElement {
       }
     }
 
-    this._livePhotoCompanionVideoCache.set(itemId, false);
     return false;
   }
 
@@ -8527,7 +8735,7 @@ class MediaCard extends LitElement {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return null;
 
-    if (this._livePhotoCompanionCache.has(itemId)) {
+    if (this._livePhotoCompanionCache.get(itemId)) {
       return this._livePhotoCompanionCache.get(itemId);
     }
 
@@ -8552,7 +8760,6 @@ class MediaCard extends LitElement {
       }
     }
 
-    this._livePhotoCompanionCache.set(itemId, null);
     return null;
   }
 
@@ -8626,7 +8833,7 @@ class MediaCard extends LitElement {
   _onLivePhotoVideoError() {
     if (this._livePhotoPhase !== 'video') return;
     const itemId = this._getLivePhotoItemId(this.currentMedia);
-    if (itemId) this._livePhotoCompanionCache.set(itemId, null);
+    if (itemId) this._livePhotoCompanionCache.delete(itemId);
     this._livePhotoPhase = 'still';
     this._livePhotoVideoUrl = '';
     this._livePhotoVideoReady = false;
@@ -9750,6 +9957,8 @@ class MediaCard extends LitElement {
     // competing _loadNext() while the sync-driven URL resolution is in flight.
     // _navigatingAway is cleared by _onMediaLoaded / _onVideoCanPlay as normal.
     this._navigatingAway = true;
+    this._navigationGeneration++;
+    this._cancelActiveMediaPrepare('shared queue navigation');
     this._resolveMediaUrl();
     this.requestUpdate();
     // For media-index cards: kick off a background fetch to get fresher/fuller

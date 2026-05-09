@@ -141,6 +141,26 @@ heic:
 | `heic.output_type` | string | `image/jpeg` | Converted image MIME type |
 | `heic.quality` | number | `0.92` | JPEG output quality passed to the converter |
 
+### Preload Options
+
+The card can prepare the selected photo or video before switching the visible layer. This helps limited hardware avoid partially painted large images and lets manual navigation obsolete stale work when a new button press arrives.
+
+```yaml
+type: custom:media-card
+preload:
+  enabled: true
+  image_decode: true
+  video_mode: metadata
+  video_timeout_ms: 3000
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `preload.enabled` | boolean | `true` | Prepare media before assigning it to the visible image/video layer |
+| `preload.image_decode` | boolean | `true` | Ask the browser to decode images off-DOM before display |
+| `preload.video_mode` | string | `metadata` | Video preparation mode: `metadata`, `canplay`, or `none` |
+| `preload.video_timeout_ms` | number | `3000` | Maximum time to wait for video preparation before displaying normally |
+
 ### Display Options
 
 | Option | Type | Default | Description |
