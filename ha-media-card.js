@@ -3849,6 +3849,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
     // Prevents further navigation attempts and unnecessary service calls
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
+    this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
   }
 
   _log(...args) {
@@ -3965,7 +3966,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
       this.lastSeenValue = null;
       this.reachedEnd = false;
       this.hasMore = true;
-      this.excludedFiles.clear(); // Clear excluded files when looping back
+      // Don't clear 404 exclusions on loop-back — files missing from disk stay missing.
+      // Keeping them in excludedFiles lets _queryOrderedFiles() skip past them efficiently
+      // on the next pass instead of re-fetching the same stale DB entries.
       
       const items = await this._queryOrderedFiles();
       if (items && items.length > 0) {
@@ -3986,6 +3989,18 @@ class SequentialMediaIndexProvider extends MediaProvider {
       while (item && this._isExcluded(item.path)) {
         this._log(`⏭️ Skipping excluded file in getNext: ${item.path}`);
         if (this.queue.length === 0) {
+          if (this.hasMore && !this.reachedEnd) {
+            // Queue drained by 404-skipping before the top-of-function low-water refill fired.
+            // Fetch the next batch now rather than returning null and triggering a cursor reset.
+            this._log('⚠️ Queue empty while skipping excluded files — fetching next batch...');
+            const moreItems = await this._queryOrderedFiles();
+            if (moreItems && moreItems.length > 0) {
+              this.queue.push(...moreItems);
+              item = this.queue.shift();
+              if (!item) break;
+              continue;
+            }
+          }
           this._log('⚠️ Queue exhausted while skipping excluded files');
           return null;
         }
@@ -4082,6 +4097,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
+      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches (1250+ missing files)
       // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
       // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
       // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
@@ -4241,6 +4257,13 @@ class SequentialMediaIndexProvider extends MediaProvider {
         const validFromThisBatch = filteredItems.length;
         if (validFromThisBatch === 0 && response.items.length > 0) {
           consecutiveAllExcludedBatches++;
+          if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
+            this._dbCleanupWarningShown = true;
+            const missingCount = consecutiveAllExcludedBatches * this.queueSize;
+            const warningMsg = `⚠️ Media Index: ${missingCount}+ missing files detected in database. Run the cleanup_database service to remove stale entries.`;
+            console.warn(`[SequentialMediaIndexProvider] ${warningMsg}`);
+            this.card?._showToast(warningMsg, 7000);
+          }
           if (consecutiveAllExcludedBatches >= MAX_CONSECUTIVE_EXCLUDED) {
             this._log(`⚠️ Stopping after ${MAX_CONSECUTIVE_EXCLUDED} consecutive fully-excluded batches - excluded_paths may be too broad`);
             break;
@@ -13276,7 +13299,7 @@ class MediaCard extends LitElement {
     }
   }
 
-  _showToast(message) {
+  _showToast(message, duration = 2000) {
     // V4 CODE: Simple toast notification (line 5470-5492)
     const toast = document.createElement('div');
     toast.textContent = message;
@@ -13298,7 +13321,7 @@ class MediaCard extends LitElement {
     
     setTimeout(() => {
       toast.remove();
-    }, 2000);
+    }, duration);
   }
 
   // NEW: Auto-enable kiosk mode monitoring

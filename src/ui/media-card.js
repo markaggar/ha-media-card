@@ -8640,7 +8640,7 @@ export class MediaCard extends LitElement {
     }
   }
 
-  _showToast(message) {
+  _showToast(message, duration = 2000) {
     // V4 CODE: Simple toast notification (line 5470-5492)
     const toast = document.createElement('div');
     toast.textContent = message;
@@ -8662,7 +8662,7 @@ export class MediaCard extends LitElement {
     
     setTimeout(() => {
       toast.remove();
-    }, 2000);
+    }, duration);
   }
 
   // NEW: Auto-enable kiosk mode monitoring
