@@ -4786,6 +4786,10 @@ class MediaCard extends LitElement {
     this._editorPreview = false; // V5.5: Flag to indicate card is in config editor preview
     this._cachedHeaderElement = null; // V5.6: Cached HA header element for viewport height calculation
     this._cachedHeaderSelector = null; // V5.6: Selector that found the cached header
+
+    // Cast-to-TV state
+    this._castEntityId = null;     // media_player entity currently mirroring this card
+    this._castPauseTimer = null;   // setTimeout handle for pre-end pause
     
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -4943,7 +4947,11 @@ class MediaCard extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    
+
+    // Stop any active cast so the TV doesn't show a frozen image after the
+    // card is removed or the user navigates away.
+    if (this._castEntityId) this._stopCast();
+
     this._log('🔌 Component disconnected - cleaning up resources');
     
     // NEW: Cleanup kiosk mode monitoring
@@ -8150,7 +8158,10 @@ class MediaCard extends LitElement {
     if (!this._isLocallyPaused()) {
       this._writeSharedQueueState();
     }
-    
+
+    // Cast-to-TV: push current item to TV on every video ready
+    this._pushCurrentToCast();
+
     this.requestUpdate();
   }
 
@@ -8585,8 +8596,12 @@ class MediaCard extends LitElement {
   }
 
   // Is cross-device sync available?
+  _getEffectiveSyncGroupId() {
+    return this.config?.shared_queue_id || null;
+  }
+
   _hasCrossDeviceSync() {
-    return !!(this.config?.shared_queue_id && this._getMediaIndexEntityId() && this.hass);
+    return !!(this._getEffectiveSyncGroupId() && this._getMediaIndexEntityId() && this.hass);
   }
 
   // ── Write path ──────────────────────────────────────────────────────────────
@@ -8595,7 +8610,7 @@ class MediaCard extends LitElement {
   // must NOT set it, otherwise Device B's navigation will overwrite Device A's local
   // pause state.
   _writeSharedQueueState(pauseIntent = false) {
-    const id = this.config?.shared_queue_id;
+    const id = this._getEffectiveSyncGroupId();
     if (!id || !this.navigationQueue?.length) return;
 
     // Echo-prevention: skip the write that would bounce an incoming navigation sync
@@ -8652,7 +8667,7 @@ class MediaCard extends LitElement {
   }
 
   async _writeSharedQueueStateToMediaIndex(pauseIntent = false) {
-    const id = this.config?.shared_queue_id;
+    const id = this._getEffectiveSyncGroupId();
     if (!id || !this.navigationQueue?.length) return;
     try {
       const entityId = this._getMediaIndexEntityId();
@@ -9416,7 +9431,10 @@ class MediaCard extends LitElement {
     if (!this._isLocallyPaused()) {
       this._writeSharedQueueState();
     }
-    
+
+    // Cast-to-TV: push current item to TV on every image load
+    this._pushCurrentToCast();
+
     // Trigger re-render to show updated metadata/counters
     this.requestUpdate();
   }
@@ -9926,8 +9944,9 @@ class MediaCard extends LitElement {
       : mediaType !== 'image';
     
     // Don't render anything if all buttons are disabled
+    const enableCast = this.config?.show_cast_button === true;
     const anyButtonEnabled = enablePause || showMuteButton || enableDebugButton || enableRefresh || enableFullscreen || 
-                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos || enableOnThisDay)) ||
+                            (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos || enableOnThisDay || enableCast)) ||
                             showQueueButton;
     if (!anyButtonEnabled) {
       return html``;
@@ -10056,6 +10075,14 @@ class MediaCard extends LitElement {
             @click=${this._handleDeleteClick}
             title="Delete">
             <ha-icon icon="mdi:delete-outline"></ha-icon>
+          </button>
+        ` : ''}
+        ${showMediaIndexButtons && this.config?.show_cast_button === true ? html`
+          <button
+            class="action-btn cast-btn ${this._castEntityId ? 'active' : ''}"
+            @click=${this._handleCastButtonClick}
+            title="${this._castEntityId ? `Casting to ${this._castEntityId} (tap to stop)` : 'Cast to TV'}">
+            <ha-icon icon="${this._castEntityId ? 'mdi:cast-connected' : 'mdi:cast'}"></ha-icon>
           </button>
         ` : ''}
       </div>
@@ -11315,6 +11342,209 @@ class MediaCard extends LitElement {
     const thumbnailUrl = await this._getMediaThumbnail(targetPath);
     
     this._showDeleteConfirmation(targetPath, thumbnailUrl, filename);
+  }
+
+  // ── Cast-to-TV handlers ────────────────────────────────────────────────────
+
+  async _handleCastButtonClick(e) {
+    e.stopPropagation();
+    if (this._castEntityId) {
+      this._stopCast();
+    } else {
+      await this._showCastPicker();
+    }
+  }
+
+  _showCastPicker() {
+    if (!this.hass) return;
+
+    const players = Object.entries(this.hass.states)
+      .filter(([id]) => id.startsWith('media_player.'))
+      .map(([id, state]) => ({
+        entity_id: id,
+        friendly_name: state.attributes?.friendly_name || id,
+        state: state.state,
+        is_roku: 'app_id' in (state.attributes || {}),
+      }))
+      .sort((a, b) => {
+        // Roku devices first, then alphabetical
+        if (a.is_roku !== b.is_roku) return a.is_roku ? -1 : 1;
+        return a.friendly_name.localeCompare(b.friendly_name);
+      });
+
+    if (!players.length) return;
+
+    const dialog = document.createElement('div');
+    dialog.className = 'cast-picker-overlay';
+    dialog.innerHTML = `
+      <div class="cast-picker-content">
+        <h3 class="cast-picker-title">Cast to…</h3>
+        <div class="cast-picker-list">
+          ${players.map(p => `
+            <button class="cast-picker-item${p.is_roku ? ' cast-picker-item--roku' : ''}" data-entity="${p.entity_id}">
+              <span class="cast-picker-name">${p.friendly_name}</span>
+              <span class="cast-picker-status">${p.state}${p.is_roku ? ' · Roku' : ''}</span>
+            </button>
+          `).join('')}
+        </div>
+        <button class="cast-picker-cancel">Cancel</button>
+      </div>
+    `;
+
+    const card = this.shadowRoot.querySelector('.card');
+    card.appendChild(dialog);
+
+    const cleanup = () => dialog.remove();
+    dialog.querySelector('.cast-picker-cancel').addEventListener('click', cleanup);
+    // Tap outside the content panel to dismiss
+    dialog.addEventListener('click', e => { if (e.target === dialog) cleanup(); });
+
+    dialog.querySelectorAll('.cast-picker-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        cleanup();
+        this._castEntityId = btn.dataset.entity;
+        this.requestUpdate();
+        // Send immediately to launch xcast (or update if already running).
+        // Then retry after 2.5 s — if xcast was cold-starting the first send
+        // wakes it up and the retry arrives once it's ready to display content.
+        this._pushCurrentToCast();
+        setTimeout(() => this._pushCurrentToCast(), 2500);
+      });
+    });
+  }
+
+  _stopCast() {
+    const entityId = this._castEntityId;
+    const isRoku = entityId && 'app_id' in (this.hass?.states[entityId]?.attributes || {});
+
+    this._castEntityId = null;
+    // Cancel any pending pre-end pause
+    if (this._castPauseTimer) {
+      clearTimeout(this._castPauseTimer);
+      this._castPauseTimer = null;
+    }
+    this.requestUpdate();
+
+    // Tell the Roku to stop via ECP keypress/Home — this sends it back to the
+    // home screen so the last cast image doesn't appear frozen on the TV.
+    // We use our own backend service because the Roku HA entity does not
+    // support the generic media_player.media_stop action.
+    if (isRoku && this.hass) {
+      this.hass.callService('media_index', 'stop_cast', { roku_entity_id: entityId }).catch(() => {});
+    }
+  }
+
+  async _pushCurrentToCast() {
+    if (!this._castEntityId || !this.hass || !this._currentMediaPath) return;
+
+    // Cancel any pre-end pause from the previous item
+    if (this._castPauseTimer) {
+      clearTimeout(this._castPauseTimer);
+      this._castPauseTimer = null;
+    }
+
+    const uri = this._currentMediaPath;
+    const entityId = this._castEntityId;
+    const fileType = MediaUtils.detectFileType(uri);
+    const ext = (uri.split('?')[0].split('.').pop() || '').toLowerCase();
+    const filename = uri.split('/').pop().split('?')[0];
+
+    // Resolve media-source:// URIs to a signed HTTP URL
+    let url = uri;
+    if (uri.startsWith('media-source://')) {
+      try {
+        const resp = await this.hass.callWS({
+          type: 'media_source/resolve_media',
+          media_content_id: uri,
+          expires: 3600,
+        });
+        if (resp?.url) url = resp.url;
+      } catch (err) {
+        this._log('⚠️ Cast: could not resolve media URL:', err);
+      }
+    }
+
+    // Detect Roku: Roku media_player entities have an app_id attribute
+    const playerAttrs = this.hass.states[entityId]?.attributes || {};
+    const isRoku = 'app_id' in playerAttrs;
+
+    if (isRoku) {
+      // Roku: use media_index.roku_ecp_cast which runs the xcast ECP call server-side.
+      // Direct browser→Roku ECP is blocked by CORS; this service bypasses that.
+      // xcast (app 687485) supports both video and images with automatic orientation.
+      const castData = {
+        roku_entity_id: entityId,
+      };
+      // Identify the file — prefer media_source_uri (exact match), then fs path, then filename substring
+      if (this._currentMetadata?.media_source_uri) {
+        castData.media_source_uri = this._currentMetadata.media_source_uri;
+      } else if (this._currentMetadata?.path) {
+        castData.file_path = this._currentMetadata.path;
+      } else {
+        castData.path_contains = filename;
+      }
+
+      // Route to the correct media_index instance (same pattern as get_random_items)
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'roku_ecp_cast',
+        service_data: castData,
+        return_response: true,
+      };
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+
+      this._log(`🎬 Cast (Roku xcast) → ${entityId}: type=${fileType}, ${uri}`);
+      try {
+        const castResp = await this.hass.callWS(wsCall);
+        const r = castResp?.response ?? castResp;
+        this._log(`🎬 Cast (Roku xcast) cmd: ${r?.ecp_url_sent} → HTTP ${r?.ecp_status}`);
+      } catch (err) {
+        this._log('⚠️ Cast: roku_ecp_cast failed:', err);
+        return;
+      }
+    } else {
+      // DLNA / DMR / LG WebOS etc: proper MIME type required
+      const mimeMap = {
+        mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v',
+        avi: 'video/x-msvideo', mkv: 'video/x-matroska', wmv: 'video/x-ms-wmv',
+        webm: 'video/webm', ogv: 'video/ogg', '3gp': 'video/3gpp',
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+        bmp: 'image/bmp', tiff: 'image/tiff', tif: 'image/tiff',
+      };
+      const mimeType = mimeMap[ext] || (fileType === 'video' ? 'video/mp4' : 'image/jpeg');
+      const serviceData = {
+        entity_id: entityId,
+        media_content_id: url,
+        media_content_type: mimeType,
+      };
+      this._log(`🎬 Cast (DMR) → ${entityId}: ${mimeType} ${uri}`);
+      try {
+        await this.hass.callService('media_player', 'play_media', serviceData);
+      } catch (err) {
+        this._log('⚠️ Cast: play_media failed:', err);
+        return;
+      }
+    }
+
+    // Schedule a pre-end pause for videos so the TV doesn't snap to home screen
+    if (fileType === 'video') {
+      const duration = this._currentMetadata?.duration;
+      if (duration && parseFloat(duration) > 2) {
+        const pauseAfterMs = Math.max(1000, (parseFloat(duration) - 2) * 1000);
+        this._castPauseTimer = setTimeout(async () => {
+          this._castPauseTimer = null;
+          if (this._castEntityId !== entityId) return;
+          try {
+            await this.hass.callService('media_player', 'media_pause', { entity_id: entityId });
+            this._log(`🎬 Cast: pre-end pause sent to ${entityId}`);
+          } catch (_) {}
+        }, pauseAfterMs);
+      }
+    }
   }
 
   // V5.2: _convertToFilesystemPath removed - Media Index v1.1.0+ accepts media_source_uri directly
@@ -14618,7 +14848,112 @@ class MediaCard extends LitElement {
     .confirm-btn:hover {
       background: var(--error-color-dark, #d32f2f);
     }
-    
+
+    /* ── Cast Picker Dialog ─────────────────────────────────────────────────── */
+    .cast-picker-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .cast-picker-content {
+      background: rgba(30, 30, 30, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+      min-width: 280px;
+      max-width: 420px;
+      width: 90%;
+      padding: 20px 16px 16px;
+      animation: dialogSlideIn 0.25s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .cast-picker-title {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      text-align: center;
+      letter-spacing: 0.3px;
+    }
+
+    .cast-picker-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+
+    .cast-picker-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.06);
+      color: white;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.15s ease;
+    }
+
+    .cast-picker-item:hover {
+      background: rgba(255, 255, 255, 0.14);
+      border-color: rgba(255, 255, 255, 0.22);
+    }
+
+    .cast-picker-item--roku {
+      border-color: rgba(100, 200, 100, 0.35);
+      background: rgba(100, 200, 100, 0.08);
+    }
+
+    .cast-picker-item--roku:hover {
+      background: rgba(100, 200, 100, 0.18);
+    }
+
+    .cast-picker-name {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .cast-picker-status {
+      font-size: 11px;
+      opacity: 0.55;
+      margin-top: 1px;
+    }
+
+    .cast-picker-cancel {
+      margin-top: 4px;
+      padding: 9px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.15s ease;
+    }
+
+    .cast-picker-cancel:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.9);
+    }
+
     /* Info Overlay Styles - Modern dropdown design */
     .info-overlay {
       position: absolute;
@@ -17508,6 +17843,13 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _showCastButtonChanged(ev) {
+    this._config = ev.target.checked
+      ? { ...this._config, show_cast_button: true }
+      : (() => { const c = { ...this._config }; delete c.show_cast_button; return c; })();
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -20219,6 +20561,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsHideOnThisDayButtonChanged}
                 />
                 <div class="help-text">Hide the Through the Years action button; the feature remains accessible via the clock/date overlay</div>
+              </div>
+            </div>
+
+            <div class="config-row">
+              <label>Cast to TV Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_cast_button === true}
+                  @change=${this._showCastButtonChanged}
+                />
+                <div class="help-text">Show a cast icon to mirror this card to any media_player entity (LG, Chromecast, etc.) in real time (requires media_index)</div>
               </div>
             </div>
           </div>

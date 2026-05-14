@@ -1339,6 +1339,13 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _showCastButtonChanged(ev) {
+    this._config = ev.target.checked
+      ? { ...this._config, show_cast_button: true }
+      : (() => { const c = { ...this._config }; delete c.show_cast_button; return c; })();
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -4050,6 +4057,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._actionButtonsHideOnThisDayButtonChanged}
                 />
                 <div class="help-text">Hide the Through the Years action button; the feature remains accessible via the clock/date overlay</div>
+              </div>
+            </div>
+
+            <div class="config-row">
+              <label>Cast to TV Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_cast_button === true}
+                  @change=${this._showCastButtonChanged}
+                />
+                <div class="help-text">Show a cast icon to mirror this card to any media_player entity (LG, Chromecast, etc.) in real time (requires media_index)</div>
               </div>
             </div>
           </div>

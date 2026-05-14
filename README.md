@@ -57,6 +57,14 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
 - ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
 
+### **📺 Cast to TV** (requires Media Index)
+- 📺 **Cast Button** (`show_cast_button: true`): Tap the cast icon to open a native picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
+- **Roku xcast**: Roku TV entities are automatically detected and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) for native image display without transcoding by the TV — no DLNA/DMR required.
+  - **Requirements for Roku**: Roku HA integration configured, [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku device, and Media Index v1.7.1+
+  - The xcast channel acts as a Digital Media Renderer (DMR) receiving content pushed from HA. It must be installed from the Roku Channel Store before first use. On a cold-start the card sends the image immediately to wake xcast, then retries 2.5 s later once it has fully launched.
+- **Generic media players** (LG WebOS, Chromecast, etc.): Cast via `media_player.play_media` — requires the player to support DMR/HTTP URLs.
+- **Stop cast**: Tap the cast button again or navigate away to stop. For Roku, this sends a `keypress/Home` ECP command so the TV returns to its home screen instead of showing a frozen image.
+
 ## Installation 
 
 ### Install via HACS

@@ -5,9 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Roku xcast Cast Support**: The cast button now supports direct Roku TV casting via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) in addition to the existing `media_player.play_media` mirror
+  - Roku `media_player` entities are identified automatically by the presence of an `app_id` attribute and routed via `media_index.roku_ecp_cast` (server-side ECP call) instead of `media_player.play_media`
+  - Roku devices appear first in the cast picker with a green left-border accent
+  - **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.7.1+, Roku HA integration, and the [xcast](https://channelstore.roku.com/details/687485) channel installed on the Roku
+
+### Changed
+
+- **Cast picker replaced browser `prompt()` with a card-native frosted-glass dialog**: Clickable device list replaces the numbered text prompt; matches the card's existing design language (same frosted-glass style as the delete confirmation). Each item shows device name and current state. Tap outside the panel or Cancel to dismiss.
+
+- **Cast stop now clears the Roku display**: When a cast session is stopped (button tap or card disconnect), `media_index.stop_cast` (ECP `keypress/Home`) is called, returning the Roku to its home screen instead of leaving the last image frozen on the TV
+
+- **Cast stop fires on card disconnect**: Navigating away from a dashboard containing the card now automatically stops any active Roku cast session
+
+- **Improved first-cast reliability for cold-start xcast**: The current image is pushed immediately on cast activation (waking xcast if not running) and again after 2.5 s. If xcast was cold-starting, the retry arrives once it is fully launched; if it was already running, the first push shows the image instantly.
+
+---
+
 ## v5.10.0 - 2026-04-22
 
 ### Added
+- **Cast to TV** (`show_cast_button: true`): Cast button (opt-in) in the action toolbar lets users mirror the card's current media to any HA `media_player` entity (LG WebOS, Chromecast, etc.) in real time.
+  - Tap the cast icon to open a picker showing all `media_player` entities. Select one to start mirroring — every time the card advances, the same item is pushed to the TV via `media_player.play_media`.
+  - While a cast session is active the button shows `mdi:cast-connected` and a stop-cast tooltip. Tap again to stop.
+  - Uses the card's existing `shared_queue_id` if configured; otherwise generates a transient sync group for the session.
+  - Powered by new ha-media-index services: `mirror_to_cast`, `start_cast_slideshow`, `stop_cast_slideshow` (see ha-media-index CHANGELOG).
+  - Opt-in via config: `show_cast_button: true`
 - **Cross-Device Slideshow Sync** (`shared_queue_id`): Multiple cards across any number of views, devices, and browsers share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
   - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab. Exactly one card drives the slideshow timer — others suppress theirs and follow the leader. Manual navigation instantly promotes that card to leader; when a leader is destroyed the next card claims leadership automatically via a vacancy event
   - **Cross-view persistence**: `localStorage` so switching to a different dashboard view immediately shows the current image
