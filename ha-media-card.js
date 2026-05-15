@@ -15964,9 +15964,10 @@ class MediaCard extends LitElement {
             @seeked=${this._onVideoSeeked}
             @volumechange=${this._onVideoVolumeChange}
             @click=${this._onVideoClickToggle}
-            @pointerdown=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
+            @dblclick=${this._handleDoubleTap}
+            @pointerdown=${(e) => { this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
-            @touchstart=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
+            @touchstart=${(e) => { this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
           >
             <source src="${this.mediaUrl}" type="video/mp4" @error=${this._onSourceError}>
             <source src="${this.mediaUrl}" type="video/webm" @error=${this._onSourceError}>
