@@ -291,6 +291,7 @@ export class MediaCard extends LitElement {
     this._livePhotoTimer = null;
     this._livePhotoCompanionCache = new Map();
     this._livePhotoCompanionVideoCache = new Map();
+    this._livePhotoNegativeCacheMs = 5 * 60 * 1000;
     this._livePhotoGeneration = 0;
 
     this._heicObjectUrlCache = new Map();
@@ -834,6 +835,8 @@ export class MediaCard extends LitElement {
       this._refreshInterval = null;
     }
     this._clearLivePhotoPlayback();
+    this._livePhotoCompanionCache?.clear();
+    this._livePhotoCompanionVideoCache?.clear();
     
     // V5: Validate and clamp max_height_pixels if present
     if (config.max_height_pixels !== undefined) {
@@ -1251,6 +1254,7 @@ export class MediaCard extends LitElement {
           // Queue and index already set — jump directly to the saved item
           const item = this.navigationQueue[this.navigationIndex];
           if (item) {
+            this._clearLivePhotoPlayback();
             this.currentMedia = item;
             this._pendingNavigationIndex = this.navigationIndex;
             this._pendingMediaPath = item.media_content_id;
@@ -1264,6 +1268,7 @@ export class MediaCard extends LitElement {
           this._log('🔄 Reconnected with history - loading media at position', this.historyPosition);
           const historyItem = this.history[this.historyPosition];
           if (historyItem) {
+            this._clearLivePhotoPlayback();
             this.currentMedia = historyItem;
             await this._resolveMediaUrl();
           } else {
@@ -1903,6 +1908,7 @@ export class MediaCard extends LitElement {
     }
     
     // Display the item
+    this._clearLivePhotoPlayback();
     this.currentMedia = item;
     
     // V5.6.7: Store in pending state - will apply when image/video loads (syncs all overlays)
@@ -2037,6 +2043,7 @@ export class MediaCard extends LitElement {
     
     // Update current media - THIS IS CRITICAL for main image display
     const mediaUri = item.media_source_uri || item.path;
+    this._clearLivePhotoPlayback();
     this.currentMedia = {
       media_content_id: mediaUri,
       media_content_type: item.filename?.toLowerCase().endsWith('.mp4') ? 'video' : 'image',
@@ -2092,6 +2099,7 @@ export class MediaCard extends LitElement {
 
     // Load the item from the queue
     const item = this.navigationQueue[queueIndex];
+    this._clearLivePhotoPlayback();
     this.currentMedia = item;
     
     // V5.6.7: Store in pending state - will apply when image/video loads  
@@ -2491,6 +2499,7 @@ export class MediaCard extends LitElement {
     }
     
     // Display the media (same pattern as _loadNext)
+    this._clearLivePhotoPlayback();
     this.currentMedia = currentItem;
     this._pendingMediaPath = currentItem.media_content_id;
     this._pendingMetadata = currentItem.metadata || null;
@@ -2802,6 +2811,7 @@ export class MediaCard extends LitElement {
         // Check if we should display this new first item
         const shouldUpdate = !currentMediaId || firstItem.media_content_id !== currentMediaId;
         
+        this._clearLivePhotoPlayback();
         this.currentMedia = firstItem;
         
         // CRITICAL: Update _currentMetadata and _currentMediaPath for overlay display
@@ -3976,13 +3986,22 @@ export class MediaCard extends LitElement {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return false;
 
-    if (this._livePhotoCompanionVideoCache.has(itemId)) {
-      return this._livePhotoCompanionVideoCache.get(itemId) === true;
+    const cached = this._livePhotoCompanionVideoCache.get(itemId);
+    if (cached === true) {
+      return true;
+    }
+    if (cached && cached.value === false) {
+      if (Date.now() - cached.checkedAt < this._livePhotoNegativeCacheMs) {
+        return false;
+      }
+      this._livePhotoCompanionVideoCache.delete(itemId);
+    } else if (cached === false) {
+      return false;
     }
 
     const candidates = this._buildLivePhotoStillCandidatesForVideo(item);
     if (!candidates.length) {
-      this._livePhotoCompanionVideoCache.set(itemId, false);
+      this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
       return false;
     }
 
@@ -4004,7 +4023,7 @@ export class MediaCard extends LitElement {
       }
     }
 
-    this._livePhotoCompanionVideoCache.set(itemId, false);
+    this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
     return false;
   }
 
@@ -4947,6 +4966,7 @@ export class MediaCard extends LitElement {
     this._log(`🔗 Shared queue synced on reconnect: ${this.navigationQueue.length} items, index ${newIndex}`);
     if (newPath !== this._currentMediaPath) {
       const item = this.navigationQueue[newIndex];
+      this._clearLivePhotoPlayback();
       this.currentMedia = item;
       this._pendingNavigationIndex = newIndex;
       this._pendingMediaPath = newPath;
@@ -5332,6 +5352,7 @@ export class MediaCard extends LitElement {
     }));
     this.navigationIndex = newIndex;
     const item = this.navigationQueue[newIndex];
+    this._clearLivePhotoPlayback();
     this.currentMedia = item;
     this._pendingNavigationIndex = newIndex;
     this._pendingMediaPath = newPath;
@@ -8695,6 +8716,7 @@ export class MediaCard extends LitElement {
         const restoredItem = this.navigationQueue[this.navigationIndex];
         if (restoredItem) {
           // Properly restore display state (same as _loadNext)
+          this._clearLivePhotoPlayback();
           this.currentMedia = restoredItem;
           this._currentMediaPath = restoredItem.media_content_id;
           this._currentMetadata = restoredItem.metadata || null;
