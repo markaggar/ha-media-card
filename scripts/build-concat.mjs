@@ -69,7 +69,7 @@ const litLoader = `// Async wrapper for dynamic Lit loading (supports offline mo
 
 function transformSource(file) {
   return readFileSync(join(root, file), 'utf8')
-    .replace(/^import\s+[^;]+;\n/gm, '')
+    .replace(/^import\s+[^;]+;\r?\n/gm, '')
     .replace(/^export\s+class\s+/gm, 'class ')
     .replace(/^export\s+const\s+/gm, 'const ')
     .replaceAll('__VERSION__', version)
