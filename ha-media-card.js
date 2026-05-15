@@ -4092,6 +4092,19 @@ class SequentialMediaIndexProvider extends MediaProvider {
       let allFilteredItems = [];
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
       let iteration = 0;
+
+      // Resolve date range filters from config (supports static dates or HA entity IDs)
+      const _resolveDateFilter = (configValue) => {
+        if (!configValue) return null;
+        if (typeof configValue === 'string' && configValue.includes('.')) {
+          // Entity ID — look up current state
+          const state = this.hass?.states[configValue];
+          return state?.state?.split(' ')[0] || null;
+        }
+        return configValue;
+      };
+      const dateFrom = _resolveDateFilter(this.config.filters?.date_range?.start);
+      const dateTo = _resolveDateFilter(this.config.filters?.date_range?.end);
       // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
       // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
@@ -4118,7 +4131,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: this.config.folder?.priority_new_files || false,
-          new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
+          new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600,
+          ...(dateFrom ? { date_from: dateFrom } : {}),
+          ...(dateTo ? { date_to: dateTo } : {}),
         };
         
         // Add compound cursor for pagination (if we've seen items before)
