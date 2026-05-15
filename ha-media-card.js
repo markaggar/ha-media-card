@@ -8128,74 +8128,39 @@ class MediaCard extends LitElement {
         await this._setMediaUrl(finalUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
-        console.error('[MediaCard] Failed to resolve media URL:', error);
-        await this._setMediaUrl('', expectedIndex, expectedGeneration);
-        this._nextMediaUrl = '';
-        this.requestUpdate();
+        console.error('[MediaCard] Failed to resolve media URL:', mediaId, error);
+        // Advance past this item — do NOT set mediaUrl to '' which leaves navigationIndex
+        // stuck and causes the same item to be retried on every subsequent _loadNext call.
+        // Set navigationIndex now so the next call skips this item, then schedule a new
+        // _loadNext (fires after the outer _loadNext's finally block clears _isLoadingNext).
+        if (this._pendingNavigationIndex !== null && this._pendingNavigationIndex !== undefined) {
+          this.navigationIndex = this._pendingNavigationIndex;
+        }
+        setTimeout(() => this._loadNext(), 100);
       }
       return;
     }
 
-    // Track recursion depth to prevent infinite loops
-    if (!this._validationDepth) this._validationDepth = 0;
-    const MAX_VALIDATION_ATTEMPTS = 10;
-    
-    // If /media/ path, convert to media-source:// and validate existence
+    // If /media/ path, convert to media-source:// and resolve (auth token required)
     if (mediaId.startsWith('/media/')) {
       const mediaSourceId = 'media-source://media_source' + mediaId;
       this._log('Converting /media/ to media-source://', mediaSourceId);
-      
       try {
-        // Validate file exists by attempting to resolve it
         const resolved = await this.hass.callWS({
           type: "media_source/resolve_media",
           media_content_id: mediaSourceId,
           expires: (60 * 60 * 3)
         });
-        this._log('✅ File exists and resolved to:', resolved.url);
-        this._validationDepth = 0; // Reset on success
         await this._setMediaUrl(resolved.url, expectedIndex, expectedGeneration);
         this.requestUpdate();
-        return; // Success - don't fall through to fallback
       } catch (error) {
-        // File doesn't exist or can't be accessed - skip to next
-        console.warn('[MediaCard] File not found or inaccessible, skipping to next:', mediaId, error.message);
-        
-        // Track file as missing to avoid re-querying from media_index
-        if (this.provider?.mediaIndexProvider) {
-          this.provider.mediaIndexProvider.excludedFiles.add(mediaId);
-          this._log('Added to excluded files set:', mediaId);
+        console.warn('[MediaCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
+        if (this._pendingNavigationIndex !== null && this._pendingNavigationIndex !== undefined) {
+          this.navigationIndex = this._pendingNavigationIndex;
         }
-        
-        // Remove the bad item from history at the current position
-        if (this.history.length > 0) {
-          const idx = this.historyIndex === -1 ? this.history.length - 1 : this.historyIndex;
-          if (this.history[idx]?.media_content_id === mediaId) {
-            this._log('Removing invalid item from history at index', idx);
-            this.history.splice(idx, 1);
-            // Adjust historyIndex if needed
-            if (this.historyIndex > idx || this.historyIndex === this.history.length) {
-              this.historyIndex = this.history.length - 1;
-            }
-          }
-        }
-        
-        // Clear the current media to avoid showing broken state
-        await this._setMediaUrl('', expectedIndex, expectedGeneration);
-        
-        // Check recursion depth before recursive call
-        this._validationDepth = (this._validationDepth || 0) + 1;
-        if (this._validationDepth >= MAX_VALIDATION_ATTEMPTS) {
-          console.error('[MediaCard] Too many consecutive missing files, stopping validation');
-          this._validationDepth = 0;
-          return;
-        }
-        
-        // Recursively skip to next item without adding to history
-        this._log('⏭️ Skipping to next item due to missing file (depth:', this._validationDepth, ')');
-        await this.next(); // Get next item (will validate recursively)
-        return;
+        setTimeout(() => this._loadNext(), 100);
       }
+      return;
     }
 
     // Fallback: use as-is
