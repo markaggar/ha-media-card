@@ -6,9 +6,9 @@
 (async () => {
   // Default CDN URL for Lit
   const LIT_CDN_URL = 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
-  
+
   let LitElement, html, css;
-  
+
   // Check if Lit was preloaded globally (for offline support)
   if (window.LitElement && window.html && window.css) {
     console.log('[Media Card] Using preloaded Lit from window');
@@ -47,7 +47,6 @@
       return; // Can't continue without Lit
     }
   }
-
 // Shared utility functions for media detection
 const MediaUtils = {
   detectFileType(filePath) {
@@ -738,7 +737,6 @@ class MediaProvider {
     this.isPaused = data.isPaused || false;
   }
 }
-
 /**
  * MediaIndexHelper - Shared utility for media_index integration
  * V5: Provides unified metadata fetching for all providers
@@ -7906,7 +7904,7 @@ class MediaCard extends LitElement {
     // V5.6.7: Guard against stale async resolutions during rapid navigation
     // If expectedNavigationIndex is provided and doesn't match current pending index, abort
     if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
-      this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
+      this._log(`⏭️ Skipping stale media resolution (expected index: ${expectedNavigationIndex}, current index: ${this._pendingNavigationIndex}, expected generation: ${expectedGeneration}, current generation: ${this._navigationGeneration})`);
       // Clear the navigation-in-progress flag when nothing else has claimed a pending
       // path (i.e. no sync nav or newer _loadNext() is in flight). Without this,
       // a stale return from a _loadNext() call that was superseded by a rapid sync
@@ -8227,13 +8225,9 @@ class MediaCard extends LitElement {
   }
   
   _onMediaError(e) {
-    if (this._livePhotoPhase === 'video') {
-      const itemId = this._getLivePhotoItemId(this.currentMedia);
-      if (itemId) this._livePhotoCompanionCache.delete(itemId);
-      this._livePhotoPhase = 'idle';
-      this._livePhotoVideoUrl = '';
-      this._log('🎞️ Live Photo companion video failed - keeping still image visible');
-      this.requestUpdate();
+    const target = e?.target;
+    if (this._livePhotoPhase === 'video' && target?.classList?.contains('live-photo-video')) {
+      this._onLivePhotoVideoError(e);
       return;
     }
 
@@ -8241,7 +8235,6 @@ class MediaCard extends LitElement {
     this._navigatingAway = false;
     
     // V4 comprehensive error handling
-    const target = e.target;
     const error = target?.error;
     
     let errorMessage = 'Media file not found';
@@ -8646,11 +8639,17 @@ class MediaCard extends LitElement {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return false;
 
-    if (this._livePhotoCompanionVideoCache.get(itemId) === true) {
-      return true;
+    if (this._livePhotoCompanionVideoCache.has(itemId)) {
+      return this._livePhotoCompanionVideoCache.get(itemId) === true;
     }
 
-    for (const candidate of this._buildLivePhotoStillCandidatesForVideo(item)) {
+    const candidates = this._buildLivePhotoStillCandidatesForVideo(item);
+    if (!candidates.length) {
+      this._livePhotoCompanionVideoCache.set(itemId, false);
+      return false;
+    }
+
+    for (const candidate of candidates) {
       const mediaContentId = candidate.startsWith('/media/')
         ? `media-source://media_source${candidate}`
         : candidate;
@@ -8668,6 +8667,7 @@ class MediaCard extends LitElement {
       }
     }
 
+    this._livePhotoCompanionVideoCache.set(itemId, false);
     return false;
   }
 
@@ -21697,7 +21697,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     `;
   }
 }
-
 // Register the custom elements (guard against re-registration)
 if (!customElements.get('media-card')) {
   customElements.define('media-card', MediaCard);
@@ -21719,7 +21718,7 @@ if (!window.customCards.some(card => card.type === 'media-card')) {
 }
 
 console.info(
-  '%c  MEDIA-CARD  %c  v__VERSION__ Loaded  ',
+  '%c  MEDIA-CARD  %c  v5.10.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

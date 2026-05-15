@@ -3241,7 +3241,7 @@ export class MediaCard extends LitElement {
     // V5.6.7: Guard against stale async resolutions during rapid navigation
     // If expectedNavigationIndex is provided and doesn't match current pending index, abort
     if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
-      this._log(`⏭️ Skipping stale media resolution (expected: ${expectedNavigationIndex}, current: ${this._pendingNavigationIndex})`);
+      this._log(`⏭️ Skipping stale media resolution (expected index: ${expectedNavigationIndex}, current index: ${this._pendingNavigationIndex}, expected generation: ${expectedGeneration}, current generation: ${this._navigationGeneration})`);
       // Clear the navigation-in-progress flag when nothing else has claimed a pending
       // path (i.e. no sync nav or newer _loadNext() is in flight). Without this,
       // a stale return from a _loadNext() call that was superseded by a rapid sync
@@ -3562,13 +3562,9 @@ export class MediaCard extends LitElement {
   }
   
   _onMediaError(e) {
-    if (this._livePhotoPhase === 'video') {
-      const itemId = this._getLivePhotoItemId(this.currentMedia);
-      if (itemId) this._livePhotoCompanionCache.delete(itemId);
-      this._livePhotoPhase = 'idle';
-      this._livePhotoVideoUrl = '';
-      this._log('🎞️ Live Photo companion video failed - keeping still image visible');
-      this.requestUpdate();
+    const target = e?.target;
+    if (this._livePhotoPhase === 'video' && target?.classList?.contains('live-photo-video')) {
+      this._onLivePhotoVideoError(e);
       return;
     }
 
@@ -3576,7 +3572,6 @@ export class MediaCard extends LitElement {
     this._navigatingAway = false;
     
     // V4 comprehensive error handling
-    const target = e.target;
     const error = target?.error;
     
     let errorMessage = 'Media file not found';
@@ -3981,11 +3976,17 @@ export class MediaCard extends LitElement {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return false;
 
-    if (this._livePhotoCompanionVideoCache.get(itemId) === true) {
-      return true;
+    if (this._livePhotoCompanionVideoCache.has(itemId)) {
+      return this._livePhotoCompanionVideoCache.get(itemId) === true;
     }
 
-    for (const candidate of this._buildLivePhotoStillCandidatesForVideo(item)) {
+    const candidates = this._buildLivePhotoStillCandidatesForVideo(item);
+    if (!candidates.length) {
+      this._livePhotoCompanionVideoCache.set(itemId, false);
+      return false;
+    }
+
+    for (const candidate of candidates) {
       const mediaContentId = candidate.startsWith('/media/')
         ? `media-source://media_source${candidate}`
         : candidate;
@@ -4003,6 +4004,7 @@ export class MediaCard extends LitElement {
       }
     }
 
+    this._livePhotoCompanionVideoCache.set(itemId, false);
     return false;
   }
 
