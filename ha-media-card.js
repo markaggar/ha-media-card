@@ -4857,6 +4857,7 @@ class MediaCard extends LitElement {
     this._castSyncPoller = null;   // setInterval handle for Roku startup sync polling
     this._castDriftPoller = null;  // setInterval handle for ongoing drift correction
     this._castSyncTimeout = null;  // setTimeout handle for 10s sync safety fallback
+    this._castSyncPausing = false; // guard: suppress _onVideoPause during cast-sync pause
 
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -9021,6 +9022,13 @@ class MediaCard extends LitElement {
   }
 
   _onVideoPause() {
+    // Ignore pauses triggered internally by cast sync (would pollute sync group state
+    // and set _videoUserInteracted which prevents slideshow auto-advance).
+    if (this._castSyncPausing) {
+      this._castSyncPausing = false;
+      return;
+    }
+
     // CRITICAL: Ignore pause events when card is disconnected
     // Browser fires pause AFTER disconnectedCallback when navigating away
     if (!this.isConnected) {
@@ -12298,9 +12306,14 @@ class MediaCard extends LitElement {
 
     const getVideo = () => this.shadowRoot?.querySelector('video:not(.live-photo-video)');
 
-    // Pause local video immediately while Roku buffers the pushed content
+    // Pause local video immediately while Roku buffers the pushed content.
+    // Set guard flag first so _onVideoPause ignores this programmatic pause
+    // and does not set _videoUserInteracted or broadcast to sync group peers.
     const video = getVideo();
-    if (video) video.pause();
+    if (video) {
+      this._castSyncPausing = true;
+      video.pause();
+    }
 
     // Build a roku_ecp_query WS call payload (same routing pattern as roku_ecp_cast)
     const makeQueryCall = () => {
@@ -12346,19 +12359,33 @@ class MediaCard extends LitElement {
         // Snap local position to Roku if off by more than 1 second
         const rokuPosSec = (r.position_ms ?? 0) / 1000;
         if (Math.abs(v.currentTime - rokuPosSec) > 1) v.currentTime = rokuPosSec;
+        // Clear user-interaction flag so slideshow auto-advance still works after video ends
+        this._videoUserInteracted = false;
         v.play().catch(() => {});
         this._log(`🎬 Cast sync: Roku playing at ${rokuPosSec.toFixed(1)}s — local resumed`);
 
-        // Schedule pre-end pause so Roku doesn't snap to home screen when video ends
+        // Schedule pre-end pause so Roku doesn't snap to home screen when video ends.
+        // Use ECP keypress/Play directly (instant) instead of media_player.media_pause
+        // which has an ~8s HA polling lag and arrives too late to prevent the gap.
         if (duration > 2) {
           const remaining = Math.max(1, duration - rokuPosSec);
-          const pauseAfterMs = Math.max(1000, (remaining - 2) * 1000);
+          const pauseAfterMs = Math.max(1000, (remaining - 3) * 1000);
           this._castPauseTimer = setTimeout(async () => {
             this._castPauseTimer = null;
             if (this._castEntityId !== entityId) return;
             try {
-              await this.hass.callService('media_player', 'media_pause', { entity_id: entityId });
-              this._log(`🎬 Cast: pre-end pause sent to ${entityId}`);
+              const kcall = {
+                type: 'call_service',
+                domain: 'media_index',
+                service: 'roku_ecp_keypress',
+                service_data: { roku_entity_id: entityId, keyname: 'Play' },
+                return_response: false,
+              };
+              if (this.config.media_index?.entity_id) {
+                kcall.target = { entity_id: this.config.media_index.entity_id };
+              }
+              await this.hass.callWS(kcall);
+              this._log(`🎬 Cast: ECP keypress/Play (pause) sent to ${entityId}`);
             } catch (_) {}
           }, pauseAfterMs);
         }
