@@ -4864,6 +4864,8 @@ class MediaCard extends LitElement {
     this._isLoadingNext = false;  // Re-entrance guard for _loadNext()
     this._isManualNavigation = false; // V5.6.7: Track if navigation is user-initiated vs timer-driven
     this._manualNavLoading = false;    // True from navigation commit until _onMediaLoaded/_onVideoCanPlay fires
+    this._swipeTouchStartX = null;    // Touch start X for swipe gesture detection
+    this._swipeTouchStartY = null;    // Touch start Y for swipe gesture detection
     
     // V5.6.0: Play randomized option for panels
     this._playRandomized = false;      // Toggle for randomizing panel playback order
@@ -13257,6 +13259,40 @@ class MediaCard extends LitElement {
     
     this._holdTriggered = false;
   }
+
+  _handleSwipeTouchStart(e) {
+    if (e.touches.length !== 1) return;
+    this._swipeTouchStartX = e.touches[0].clientX;
+    this._swipeTouchStartY = e.touches[0].clientY;
+  }
+
+  _handleSwipeTouchEnd(e) {
+    if (this._swipeTouchStartX === null) return;
+    const deltaX = e.changedTouches[0].clientX - this._swipeTouchStartX;
+    const deltaY = e.changedTouches[0].clientY - this._swipeTouchStartY;
+    this._swipeTouchStartX = null;
+    this._swipeTouchStartY = null;
+
+    // Require min horizontal distance and horizontal must dominate vertical
+    const SWIPE_THRESHOLD = 50;
+    if (Math.abs(deltaX) < SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+
+    // Horizontal swipe confirmed — suppress the synthetic click and hold action
+    e.preventDefault();
+    if (this._holdTimeout) {
+      clearTimeout(this._holdTimeout);
+      this._holdTimeout = null;
+    }
+
+    this._isManualNavigation = true;
+    if (deltaX > 0) {
+      // Swipe right → go back
+      this._loadPrevious();
+    } else {
+      // Swipe left → go forward
+      this._loadNext();
+    }
+  }
   
   _handlePointerUp(e) {
     if (this._holdTimeout) {
@@ -15903,6 +15939,8 @@ class MediaCard extends LitElement {
         @pointerdown=${this._handlePointerDown}
         @pointerup=${this._handlePointerUp}
         @pointercancel=${this._handlePointerCancel}
+        @touchstart=${this._handleSwipeTouchStart}
+        @touchend=${this._handleSwipeTouchEnd}
       >
         ${isVideo ? html`
           <video
