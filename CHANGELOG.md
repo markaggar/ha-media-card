@@ -7,12 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [v5.11.0] - 2026-05-14
+
 ### Added
 
 - **Roku xcast Cast Support**: The cast button now supports direct Roku TV casting via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) in addition to the existing `media_player.play_media` mirror
   - Roku `media_player` entities are identified automatically by the presence of an `app_id` attribute and routed via `media_index.roku_ecp_cast` (server-side ECP call) instead of `media_player.play_media`
   - Roku devices appear first in the cast picker with a green left-border accent
-  - **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.7.1+, Roku HA integration, and the [xcast](https://channelstore.roku.com/details/687485) channel installed on the Roku
+  - **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.8.0+, Roku HA integration, and the [xcast](https://channelstore.roku.com/details/687485) channel installed on the Roku
+
+- **Swipe Gesture Navigation**: Swipe left to advance and swipe right to go back on touch screens
+  - Works on both images and video — the `touchstart` on the video element no longer blocks swipe detection in the parent container
+  - Minimum 50 px horizontal travel required; gesture is cancelled if vertical movement exceeds horizontal so intentional scroll is not intercepted
+
+- **Date Range Filters for Sequential Mode**: `get_ordered_files` (sequential/ordered provider) now accepts `filters.date_range.start` and `filters.date_range.end`
+  - Values can be `YYYY-MM-DD` strings or HA entity IDs (the card reads the entity state and strips any time component)
+  - Passed to the backend as `date_from` / `date_to` on every page fetch, including cursor-based continuation pages
 
 ### Changed
 
@@ -23,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cast stop fires on card disconnect**: Navigating away from a dashboard containing the card now automatically stops any active Roku cast session
 
 - **Improved first-cast reliability for cold-start xcast**: The current image is pushed immediately on cast activation (waking xcast if not running) and again after 2.5 s. If xcast was cold-starting, the retry arrives once it is fully launched; if it was already running, the first push shows the image instantly.
+
+- **Cast button help text clarifies Roku-only media_index dependency**: The visual editor now accurately states that Roku uses `media_index.roku_ecp_cast` (requires media_index), while other players (LG, Chromecast, etc.) use `media_player.play_media` directly and do not require media_index.
+
+### Fixed
+
+- **Touch interactions on video not working (swipe, hold, double-tap)**: All three gestures were broken when the user's finger landed on the `<video>` element
+  - Swipe: `touchstart` on the video called `stopPropagation()`, so the `.media-container` swipe handler never recorded a start position
+  - Hold (long-press): `pointerdown` on the video called `stopPropagation()`, so the hold timer in the parent container was never started
+  - Double-tap: the video's `click` handler called `stopPropagation()`, so a `dblclick` on the container never fired — fixed by binding `@dblclick` directly on the `<video>` element
+
+- **Sequential mode DESC order returning oldest files first**: The `get_ordered_files` sort expression incorrectly wrapped an already-integer `date_taken` Unix timestamp in SQLite's `unixepoch()`, which treats the integer as a Julian Day Number and produces large negative values — causing 2018 photos to rank above 2026 photos in descending order.
 
 ---
 
