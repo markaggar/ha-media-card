@@ -4854,7 +4854,10 @@ class MediaCard extends LitElement {
     // Cast-to-TV state
     this._castEntityId = null;     // media_player entity currently mirroring this card
     this._castPauseTimer = null;   // setTimeout handle for pre-end pause
-    
+    this._castSyncPoller = null;   // setInterval handle for Roku startup sync polling
+    this._castDriftPoller = null;  // setInterval handle for ongoing drift correction
+    this._castSyncTimeout = null;  // setTimeout handle for 10s sync safety fallback
+
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
     this._panelMode = null;            // null | 'burst' | 'queue' | 'history'
@@ -12262,6 +12265,7 @@ class MediaCard extends LitElement {
     const entityId = this._castEntityId;
     const isRoku = entityId && 'app_id' in (this.hass?.states[entityId]?.attributes || {});
 
+    this._stopCastSync();
     this._castEntityId = null;
     // Cancel any pending pre-end pause
     if (this._castPauseTimer) {
@@ -12277,6 +12281,110 @@ class MediaCard extends LitElement {
     if (isRoku && this.hass) {
       this.hass.callService('media_index', 'stop_cast', { roku_entity_id: entityId }).catch(() => {});
     }
+  }
+
+  _stopCastSync() {
+    if (this._castSyncPoller) { clearInterval(this._castSyncPoller); this._castSyncPoller = null; }
+    if (this._castDriftPoller) { clearInterval(this._castDriftPoller); this._castDriftPoller = null; }
+    if (this._castSyncTimeout) { clearTimeout(this._castSyncTimeout); this._castSyncTimeout = null; }
+  }
+
+  _startCastSync(entityId, duration) {
+    this._stopCastSync();
+    const POLL_MS = 500;
+    const TIMEOUT_MS = 10000;
+    const DRIFT_POLL_MS = 3000;
+    const DRIFT_THRESHOLD_S = 5;
+
+    const getVideo = () => this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+
+    // Pause local video immediately while Roku buffers the pushed content
+    const video = getVideo();
+    if (video) video.pause();
+
+    // Build a roku_ecp_query WS call payload (same routing pattern as roku_ecp_cast)
+    const makeQueryCall = () => {
+      const wsCall = {
+        type: 'call_service',
+        domain: 'media_index',
+        service: 'roku_ecp_query',
+        service_data: { roku_entity_id: entityId },
+        return_response: true,
+      };
+      if (this.config.media_index?.entity_id) {
+        wsCall.target = { entity_id: this.config.media_index.entity_id };
+      }
+      return wsCall;
+    };
+
+    // Safety fallback: resume local after 10s if Roku never reports 'play'
+    this._castSyncTimeout = setTimeout(() => {
+      this._log('⚠️ Cast sync: timeout — Roku did not report play within 10s, resuming local');
+      if (this._castSyncPoller) { clearInterval(this._castSyncPoller); this._castSyncPoller = null; }
+      this._castSyncTimeout = null;
+      if (this._castEntityId !== entityId) return;
+      const v = getVideo();
+      if (v) v.play().catch(() => {});
+    }, TIMEOUT_MS);
+
+    // Poll every 500ms until Roku reports state = 'play'
+    this._castSyncPoller = setInterval(async () => {
+      if (this._castEntityId !== entityId) { this._stopCastSync(); return; }
+      try {
+        const resp = await this.hass.callWS(makeQueryCall());
+        const r = resp?.response ?? resp;
+        if (r?.state !== 'play') return;
+
+        // Roku is playing — stop the startup poller and safety timeout
+        clearInterval(this._castSyncPoller); this._castSyncPoller = null;
+        clearTimeout(this._castSyncTimeout); this._castSyncTimeout = null;
+        if (this._castEntityId !== entityId) return;
+
+        const v = getVideo();
+        if (!v) return;
+
+        // Snap local position to Roku if off by more than 1 second
+        const rokuPosSec = (r.position_ms ?? 0) / 1000;
+        if (Math.abs(v.currentTime - rokuPosSec) > 1) v.currentTime = rokuPosSec;
+        v.play().catch(() => {});
+        this._log(`🎬 Cast sync: Roku playing at ${rokuPosSec.toFixed(1)}s — local resumed`);
+
+        // Schedule pre-end pause so Roku doesn't snap to home screen when video ends
+        if (duration > 2) {
+          const remaining = Math.max(1, duration - rokuPosSec);
+          const pauseAfterMs = Math.max(1000, (remaining - 2) * 1000);
+          this._castPauseTimer = setTimeout(async () => {
+            this._castPauseTimer = null;
+            if (this._castEntityId !== entityId) return;
+            try {
+              await this.hass.callService('media_player', 'media_pause', { entity_id: entityId });
+              this._log(`🎬 Cast: pre-end pause sent to ${entityId}`);
+            } catch (_) {}
+          }, pauseAfterMs);
+        }
+
+        // Ongoing drift correction: poll every 3s, snap if drift > 5s
+        this._castDriftPoller = setInterval(async () => {
+          if (this._castEntityId !== entityId) {
+            clearInterval(this._castDriftPoller); this._castDriftPoller = null; return;
+          }
+          const vid = getVideo();
+          if (!vid || vid.paused) return;
+          try {
+            const driftResp = await this.hass.callWS(makeQueryCall());
+            const dr = driftResp?.response ?? driftResp;
+            if (dr?.state !== 'play') return;
+            const drift = Math.abs(vid.currentTime - (dr.position_ms / 1000));
+            if (drift > DRIFT_THRESHOLD_S) {
+              vid.currentTime = dr.position_ms / 1000;
+              this._log(`🎬 Cast drift: corrected ${drift.toFixed(1)}s`);
+            }
+          } catch (_) {}
+        }, DRIFT_POLL_MS);
+      } catch (err) {
+        this._log('⚠️ Cast sync poll error:', err);
+      }
+    }, POLL_MS);
   }
 
   async _pushCurrentToCast() {
@@ -12375,7 +12483,14 @@ class MediaCard extends LitElement {
       }
     }
 
-    // Schedule a pre-end pause for videos so the TV doesn't snap to home screen
+    // Roku video: use ECP sync to align local clock with Roku playback
+    if (isRoku && fileType === 'video') {
+      const duration = this._currentMetadata?.duration;
+      this._startCastSync(entityId, duration ? parseFloat(duration) : 0);
+      return;
+    }
+
+    // Non-Roku: schedule a pre-end pause so the TV doesn't snap to home screen
     if (fileType === 'video') {
       const duration = this._currentMetadata?.duration;
       if (duration && parseFloat(duration) > 2) {
