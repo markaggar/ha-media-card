@@ -4,9 +4,9 @@
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange?logo=buy-me-a-coffee)](https://buymeacoffee.com/markaggar)
 
 # HA Media Card 🎬
-A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, and **intelligent content prioritization**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed with VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, **intelligent content prioritization** and **TV casting support**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed with VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
-It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, favoriting, editing and deleting photos and related photos support.
+It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, Roku Casting, favoriting, editing and deleting photos and related photos support.
 
 <img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
 
@@ -43,6 +43,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🔗 **Cross-Device Shared Queue** (`shared_queue_id`): Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
 - 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
+- 📲 **Touch Screen Support**: Swipe left/right, pause etc.
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
 ### **Media Discovery Features** (requires Media Index)
 - 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot
@@ -55,8 +56,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
 - 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently with near immediate display of images
 - 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
-- ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return.
-
+- ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return
 ### **📺 Cast to TV** (requires Media Index)
 - 📺 **Cast Button** (`show_cast_button: true`): Tap the cast icon to open a native picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
 - **Roku xcast**: Roku TV entities are automatically detected and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) for native image display without transcoding by the TV — no DLNA/DMR required.
