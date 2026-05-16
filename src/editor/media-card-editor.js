@@ -866,6 +866,61 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
     this._fireConfigChanged();
   }
+
+  _updateNestedConfig(section, updates) {
+    this._config = {
+      ...this._config,
+      [section]: {
+        ...this._config[section],
+        ...updates
+      }
+    };
+    this._fireConfigChanged();
+  }
+
+  _livePhotoEnabledChanged(ev) {
+    this._updateNestedConfig('live_photo', { enabled: ev.target.checked });
+  }
+
+  _livePhotoStillDurationChanged(ev) {
+    const value = Math.max(0.1, parseFloat(ev.target.value) || 1);
+    this._updateNestedConfig('live_photo', { still_duration: value });
+  }
+
+  _livePhotoRepeatDelayChanged(ev) {
+    const value = Math.max(0, parseFloat(ev.target.value) || 0);
+    this._updateNestedConfig('live_photo', { repeat_delay: value });
+  }
+
+  _livePhotoHideCompanionsChanged(ev) {
+    this._updateNestedConfig('live_photo', { hide_companion_videos: ev.target.checked });
+  }
+
+  _heicEnabledChanged(ev) {
+    this._updateNestedConfig('heic', { enabled: ev.target.checked });
+  }
+
+  _heicQualityChanged(ev) {
+    const value = Math.max(0.1, Math.min(1, parseFloat(ev.target.value) || 0.92));
+    this._updateNestedConfig('heic', { quality: value });
+  }
+
+  _preloadEnabledChanged(ev) {
+    this._updateNestedConfig('preload', { enabled: ev.target.checked });
+  }
+
+  _preloadImageDecodeChanged(ev) {
+    this._updateNestedConfig('preload', { image_decode: ev.target.checked });
+  }
+
+  _preloadVideoModeChanged(ev) {
+    this._updateNestedConfig('preload', { video_mode: ev.target.value });
+  }
+
+  _preloadVideoTimeoutChanged(ev) {
+    const value = Math.max(250, parseInt(ev.target.value, 10) || 3000);
+    this._updateNestedConfig('preload', { video_timeout_ms: value });
+  }
   
   _blendWithBackgroundChanged(ev) {
     this._config = { ...this._config, blend_with_background: ev.target.checked };
@@ -2966,6 +3021,156 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </p>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">Live Photos & iCloud Media</div>
+
+          <div class="config-row">
+            <label>Live Photos</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.live_photo?.enabled === true}
+                @change=${this._livePhotoEnabledChanged}
+              />
+              <div class="help-text">Pair still images with same-basename companion videos and play them like iPhone Live Photos</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Still Duration</label>
+            <div>
+              <input
+                type="number"
+                min="0.1"
+                max="60"
+                step="0.1"
+                .value=${this._config.live_photo?.still_duration ?? 1}
+                @input=${this._livePhotoStillDurationChanged}
+                ?disabled=${this._config.live_photo?.enabled !== true}
+              />
+              <div class="help-text">Seconds to show the still image before the companion video starts</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Repeat Delay</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="3600"
+                step="1"
+                .value=${this._config.live_photo?.repeat_delay ?? this._config.live_photo?.pause_duration ?? 10}
+                @input=${this._livePhotoRepeatDelayChanged}
+                ?disabled=${this._config.live_photo?.enabled !== true}
+              />
+              <div class="help-text">Seconds to wait after the Live Photo video ends before replaying it</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Hide Companion Videos</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.live_photo?.hide_companion_videos !== false}
+                @change=${this._livePhotoHideCompanionsChanged}
+                ?disabled=${this._config.live_photo?.enabled !== true}
+              />
+              <div class="help-text">Keep Live Photo companion videos out of the normal slideshow/video queue</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>HEIC Conversion</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.heic?.enabled !== false}
+                @change=${this._heicEnabledChanged}
+              />
+              <div class="help-text">Convert HEIC/HEIF images in the browser when a JPEG version is not available</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>HEIC Quality</label>
+            <div>
+              <input
+                type="number"
+                min="0.1"
+                max="1"
+                step="0.01"
+                .value=${this._config.heic?.quality ?? 0.92}
+                @input=${this._heicQualityChanged}
+                ?disabled=${this._config.heic?.enabled === false}
+              />
+              <div class="help-text">JPEG quality for browser-side HEIC conversion</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Preload Media</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.preload?.enabled !== false}
+                @change=${this._preloadEnabledChanged}
+              />
+              <div class="help-text">Prepare images and video metadata before swapping the visible media element</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Image Decode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.preload?.image_decode !== false}
+                @change=${this._preloadImageDecodeChanged}
+                ?disabled=${this._config.preload?.enabled === false}
+              />
+              <div class="help-text">Decode images before display to reduce visible loading flashes</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Video Preload Mode</label>
+            <div>
+              <select
+                @change=${this._preloadVideoModeChanged}
+                .value=${this._config.preload?.video_mode || 'metadata'}
+                ?disabled=${this._config.preload?.enabled === false}
+              >
+                <option value="metadata">Metadata</option>
+                <option value="canplay">Can Play</option>
+                <option value="none">None</option>
+              </select>
+              <div class="help-text">How much video data to prepare before display</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Video Preload Timeout</label>
+            <div>
+              <input
+                type="number"
+                min="250"
+                max="30000"
+                step="250"
+                .value=${this._config.preload?.video_timeout_ms ?? 3000}
+                @input=${this._preloadVideoTimeoutChanged}
+                ?disabled=${this._config.preload?.enabled === false}
+              />
+              <div class="help-text">Maximum milliseconds to wait for video preparation before displaying normally</div>
+            </div>
+          </div>
+
+          <div class="help-text" style="grid-column: 1 / -1;">
+            Advanced Live Photo suffix and extension lists remain available in YAML.
+          </div>
+        </div>
 
         <!-- Filters Section (available when Media Index is enabled) -->
         ${hasMediaIndex && isFolderMode && folderConfig.use_media_index_for_discovery !== false ? html`
