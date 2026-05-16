@@ -4274,10 +4274,19 @@ export class MediaCard extends LitElement {
     // Return immediately to avoid clearing _navigatingAway (which would unblock the
     // slideshow timer while a forward-navigation is still in flight) and to avoid a
     // spurious _writeSharedQueueState broadcast that triggers a navigation loop.
-    if (this._suppressCastPushOnCanplay) {
+    //
+    // IMPORTANT: only honour the suppress flag when we are NOT navigating.
+    // If _navigatingAway is true, we are on a NEW video and the suppress flag is
+    // stale — left over from the previous video's _startCastSync startup poller
+    // (which sets suppress then calls v.play(); if no seek occurred, no canplay
+    // fired to clear it, so it persists into the next video's canplay).
+    // In that case we must fall through so _navigatingAway is cleared and the
+    // new video is pushed to Roku.
+    if (this._suppressCastPushOnCanplay && !this._navigatingAway) {
       this._suppressCastPushOnCanplay = false;
       return;
     }
+    this._suppressCastPushOnCanplay = false; // always clear on any real canplay
 
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
