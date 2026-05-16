@@ -4863,6 +4863,7 @@ class MediaCard extends LitElement {
     this._castSyncPausing = false;   // guard: suppress _onVideoPause during cast-sync pause
     this._castPreEndPauseSent = false; // guard: true after pre-end pause sent to Roku (prevents double-send)
     this._castSeekSuppressUntil = 0;  // timestamp: suppress drift correction until this time after a seek
+    this._castEndWatcher = null;         // setInterval handle: polls Roku ECP after local video ends (auto-advance with cast)
 
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -9211,6 +9212,21 @@ class MediaCard extends LitElement {
         return;
       }
       
+      if (this._castEntityId) {
+        // Cast is active: don't advance yet — poll Roku via ECP until it finishes.
+        // This keeps the card and the TV in sync; the TV is the source of truth for
+        // when to move on.  The end-watcher also sends the pre-end pause to Roku
+        // when it's within 1.5s of its end, preventing the xcast banner from
+        // appearing between videos.
+        const videoEl = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+        const dur = (videoEl?.duration && isFinite(videoEl.duration))
+          ? videoEl.duration
+          : parseFloat(this._currentMetadata?.duration || '0');
+        this._log(`🎬 Video completed — cast active, waiting for Roku to finish (dur=${dur.toFixed(1)}s)`);
+        this._startCastEndWatch(this._castEntityId, dur);
+        return;
+      }
+
       this._log('🎬 Video completed naturally - advancing to next media');
       setTimeout(async () => {
         // Check for new files first (at position 1 in sequential mode)
@@ -12320,6 +12336,75 @@ class MediaCard extends LitElement {
     if (this._castSyncPoller) { clearInterval(this._castSyncPoller); this._castSyncPoller = null; }
     if (this._castDriftPoller) { clearInterval(this._castDriftPoller); this._castDriftPoller = null; }
     if (this._castSyncTimeout) { clearTimeout(this._castSyncTimeout); this._castSyncTimeout = null; }
+    this._stopCastEndWatch();
+  }
+
+  _stopCastEndWatch() {
+    if (this._castEndWatcher) { clearInterval(this._castEndWatcher); this._castEndWatcher = null; }
+  }
+
+  // Poll Roku via direct ECP query every second after local video ends.
+  // Advances the card when Roku finishes (or is paused by the pre-end pause).
+  // Also sends the pre-end pause itself when Roku is within 1.5s of its end,
+  // ensuring no xcast banner gap even for post-seek scenarios where the
+  // normal pre-end timer was not scheduled.
+  _startCastEndWatch(entityId, videoDuration) {
+    this._stopCastEndWatch();
+    if (!entityId || !this.hass) return;
+
+    this._log(`🎬 Cast end-watch: polling Roku via ECP until it finishes (dur=${videoDuration?.toFixed(1)}s)`);
+
+    const makeQueryCall = () => {
+      const wsCall = {
+        type: 'call_service', domain: 'media_index', service: 'roku_ecp_query',
+        service_data: { roku_entity_id: entityId }, return_response: true,
+      };
+      if (this.config.media_index?.entity_id) wsCall.target = { entity_id: this.config.media_index.entity_id };
+      return wsCall;
+    };
+
+    let consecutiveErrors = 0;
+    const doAdvance = async () => {
+      this._stopCastEndWatch();
+      this._log('🎬 Cast end-watch: Roku done — advancing to next item');
+      const queueRefreshed = await this._checkForNewFiles();
+      if (!queueRefreshed) this._loadNext().catch(() => {});
+    };
+
+    this._castEndWatcher = setInterval(async () => {
+      // Bail if cast was disconnected — advance the card immediately so it isn't stuck
+      if (!this._castEntityId || this._castEntityId !== entityId) {
+        await doAdvance();
+        return;
+      }
+      // User paused the slideshow or manual navigation already started — just stop
+      if (this._isPaused || this._navigatingAway) {
+        this._stopCastEndWatch();
+        return;
+      }
+      try {
+        const resp = await this.hass.callWS(makeQueryCall());
+        const r = resp?.response ?? resp;
+        consecutiveErrors = 0;
+
+        if (r?.state === 'play') {
+          // Roku still playing — send pre-end pause if it's close to the end so the
+          // xcast banner never appears between videos (handles post-seek case where
+          // no _castPauseTimer was scheduled).
+          if (!this._castPreEndPauseSent && videoDuration > 2) {
+            const rokuRemaining = videoDuration - ((r.position_ms ?? 0) / 1000);
+            if (rokuRemaining <= 1.5) this._sendCastPreEndPause(entityId);
+          }
+          return; // still playing, keep waiting
+        }
+
+        // state is 'pause' (pre-end pause fired) or 'idle'/'stop' (natural end) — done
+        await doAdvance();
+      } catch (_) {
+        // ECP unavailable — give up after 5 consecutive failures to avoid stalling forever
+        if (++consecutiveErrors >= 5) await doAdvance();
+      }
+    }, 1000);
   }
 
   _sendCastPreEndPause(entityId) {
