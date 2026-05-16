@@ -4267,6 +4267,17 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoCanPlay() {
+    // _suppressCastPushOnCanplay is set when _startCastSync resumes via v.play() or
+    // when _seekVideo changes currentTime.  These are not genuine "new video ready"
+    // events — all pending state has already been applied on the real canplay.
+    // Return immediately to avoid clearing _navigatingAway (which would unblock the
+    // slideshow timer while a forward-navigation is still in flight) and to avoid a
+    // spurious _writeSharedQueueState broadcast that triggers a navigation loop.
+    if (this._suppressCastPushOnCanplay) {
+      this._suppressCastPushOnCanplay = false;
+      return;
+    }
+
     // V5.6.4: Timer uses simple counter, no timestamp needed
     this._log('🎬 Video ready - can play');
     // Clear the manual-nav load-phase flag now that the media has committed to the DOM.
@@ -4301,15 +4312,7 @@ export class MediaCard extends LitElement {
       this._writeSharedQueueState();
     }
 
-    // Cast-to-TV: push current item to TV on every video ready.
-    // Skip if flagged: a programmatic currentTime snap (from _startCastSync) or a seek
-    // re-push (_seekVideo) already fired _pushCurrentToCast; a duplicate push would reset
-    // Roku's position to 0.
-    if (this._suppressCastPushOnCanplay) {
-      this._suppressCastPushOnCanplay = false;
-    } else {
-      this._pushCurrentToCast();
-    }
+    this._pushCurrentToCast();
 
     this.requestUpdate();
   }
