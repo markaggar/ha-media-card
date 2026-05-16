@@ -7803,6 +7803,20 @@ export class MediaCard extends LitElement {
     const ext = (uri.split('?')[0].split('.').pop() || '').toLowerCase();
     const filename = uri.split('/').pop().split('?')[0];
 
+    // For Roku video on a fresh load (not a seek), pause local immediately — before the
+    // async ECP call — so there's no brief visible play during the ~300ms roundtrip.
+    // _startCastSync will resume once Roku reports it's playing.
+    // On seek re-push we skip this: the video is already playing at the right time.
+    const playerAttrsEarly = this.hass.states[entityId]?.attributes || {};
+    const isRokuEarly = 'app_id' in playerAttrsEarly;
+    if (isRokuEarly && fileType === 'video' && seekPositionSec === null) {
+      const vidEarly = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+      if (vidEarly && !vidEarly.paused) {
+        this._castSyncPausing = true;
+        vidEarly.pause();
+      }
+    }
+
     // Resolve media-source:// URIs to a signed HTTP URL
     let url = uri;
     if (uri.startsWith('media-source://')) {
@@ -7893,7 +7907,16 @@ export class MediaCard extends LitElement {
     // Roku video: use ECP sync to align local clock with Roku playback
     if (isRoku && fileType === 'video') {
       const duration = this._currentMetadata?.duration;
-      this._startCastSync(entityId, duration ? parseFloat(duration) : 0);
+      if (seekPositionSec !== null) {
+        // Seek re-push: do NOT call _startCastSync. It would stop the drift poller,
+        // re-pause local, poll until Roku reports play (~0s after rebuffer), and snap
+        // local position back to 0. Instead, widen the drift-suppress window so the
+        // existing drift poller doesn't correct back to Roku's initial 0s position
+        // while it buffers up to the seeked point.
+        this._castSeekSuppressUntil = Date.now() + 8000;
+      } else {
+        this._startCastSync(entityId, duration ? parseFloat(duration) : 0);
+      }
       return;
     }
 
