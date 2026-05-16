@@ -1512,6 +1512,10 @@ export class MediaCard extends LitElement {
       // The browser auto-pauses videos when they're removed from DOM
       this._navigatingAway = true;
 
+      // Freeze Roku immediately on manual navigation so the old video doesn't
+      // keep playing (and show the xcast banner) while the new one loads.
+      if (this._isManualNavigation) this._pauseCastForNavigation();
+
       // Leader election: if the user tapped/swiped on this card, it becomes the
       // new timer driver for the sync group, displacing any existing leader.
       // This applies even when locally paused — an explicit button press means the
@@ -1857,6 +1861,10 @@ export class MediaCard extends LitElement {
       // V5.6: Set flag FIRST to ignore video pause events during navigation
       this._navigatingAway = true;
 
+      // Freeze Roku immediately on manual navigation so the old video doesn't
+      // keep playing (and show the xcast banner) while the new one loads.
+      if (this._isManualNavigation) this._pauseCastForNavigation();
+
       // Leader election: if the user tapped/swiped on this card, it becomes the
       // new timer driver for the sync group, displacing any existing leader.
       // This applies even when locally paused — an explicit button press means the
@@ -2097,6 +2105,7 @@ export class MediaCard extends LitElement {
     this._navigationGeneration++;
     this._cancelActiveMediaPrepare('queue jump');
     this._navigatingAway = true;
+    this._pauseCastForNavigation(); // always manual — freeze Roku before new video loads
     
     if (!this.navigationQueue || queueIndex < 0 || queueIndex >= this.navigationQueue.length) {
       console.error('[MediaCard] Invalid queue position:', queueIndex);
@@ -7696,6 +7705,25 @@ export class MediaCard extends LitElement {
 
   _stopCastEndWatch() {
     if (this._castEndWatcher) { clearInterval(this._castEndWatcher); this._castEndWatcher = null; }
+  }
+
+  // Immediately freeze the Roku at the current frame when the user manually navigates.
+  // Without this, the old video keeps playing on the TV while the new video loads
+  // (up to ~2s), then reaches its end and shows the xcast banner before the new
+  // push arrives.  A synchronous ECP Play keypress pauses Roku instantly; the new
+  // video's push (from _onVideoCanPlay → _pushCurrentToCast) replaces it moments later.
+  _pauseCastForNavigation() {
+    if (!this._castEntityId || !this.hass) return;
+    if (this._castPauseTimer) { clearTimeout(this._castPauseTimer); this._castPauseTimer = null; }
+    this._stopCastEndWatch();
+    const wsCall = {
+      type: 'call_service', domain: 'media_index', service: 'roku_ecp_keypress',
+      service_data: { roku_entity_id: this._castEntityId, keyname: 'Play' },
+      return_response: false,
+    };
+    if (this.config.media_index?.entity_id) wsCall.target = { entity_id: this.config.media_index.entity_id };
+    this.hass.callWS(wsCall).catch(() => {});
+    this._log(`🎬 Cast: paused for manual navigation (will resume when new video pushes)`);
   }
 
   // Poll Roku via direct ECP query every second after local video ends.
