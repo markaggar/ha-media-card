@@ -7886,8 +7886,11 @@ export class MediaCard extends LitElement {
 
         <div class="filter-picker-section">
           <span class="filter-picker-label">Folder</span>
-          <input type="text" class="filter-picker-input" id="fp-folder"
-            placeholder="${baseCfg.folder?.path ? baseCfg.folder.path : 'Use config folder'}">
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="text" class="filter-picker-input" id="fp-folder" style="flex:1"
+              placeholder="${baseCfg.folder?.path ? baseCfg.folder.path : 'Use config folder'}">
+            <button id="fp-browse-btn" class="filter-picker-browse-btn">Browse</button>
+          </div>
         </div>
 
         <div class="filter-picker-section">
@@ -7969,6 +7972,13 @@ export class MediaCard extends LitElement {
     const card = this.shadowRoot.querySelector('.card');
     card.appendChild(dialog);
 
+    // Browse button — opens folder picker overlay on top of this dialog
+    dialog.querySelector('#fp-browse-btn').addEventListener('click', () => {
+      this._openFolderPickerOverlay(card, (picked) => {
+        dialog.querySelector('#fp-folder').value = picked;
+      });
+    });
+
     const cleanup = () => dialog.remove();
     dialog.querySelector('.filter-picker-cancel').addEventListener('click', cleanup);
     dialog.addEventListener('click', ev => { if (ev.target === dialog) cleanup(); });
@@ -8000,6 +8010,133 @@ export class MediaCard extends LitElement {
         video_unmuted:     unmuted,
       });
     });
+  }
+
+  /**
+   * Open a folder-only browser on top of the filter picker.
+   * Uses the same media_source/browse_media WS call as the config editor.
+   * @param {HTMLElement} card  - the .card element to append the overlay to
+   * @param {Function}    onSelect - called with the chosen media_content_id string
+   */
+  async _openFolderPickerOverlay(card, onSelect) {
+    if (!this.hass) return;
+
+    // Determine a sensible start path
+    let startPath = '';
+    if (this.config.media_index?.entity_id) {
+      const entity = this.hass.states[this.config.media_index.entity_id];
+      if (entity?.attributes?.media_source_uri) startPath = entity.attributes.media_source_uri;
+      else if (entity?.attributes?.media_folder) startPath = entity.attributes.media_folder;
+    }
+    if (!startPath) startPath = (this._baseConfig || this.config).folder?.path || '';
+
+    // Build overlay (z-index 1001 to sit above the filter picker at 1000)
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(6px);z-index:1001;display:flex;align-items:center;justify-content:center;';
+
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:rgba(20,20,20,0.96);border:1px solid rgba(255,255,255,0.14);border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.9);width:92%;max-width:460px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;animation:dialogSlideIn 0.2s ease;';
+
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:10px">
+        <span id="fp-br-title" style="flex:1;font-size:14px;font-weight:600;color:rgba(255,255,255,0.9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Loading…</span>
+        <button id="fp-br-x" style="background:none;border:none;color:rgba(255,255,255,0.45);font-size:18px;line-height:1;padding:0 2px;cursor:pointer">✕</button>
+      </div>
+      <div id="fp-br-list" style="flex:1;overflow-y:auto;padding:8px;min-height:80px"></div>
+      <div style="padding:12px 14px;border-top:1px solid rgba(255,255,255,0.1);display:flex;gap:8px">
+        <button id="fp-br-use" style="flex:1;padding:10px;border-radius:10px;border:none;background:var(--primary-color,#03a9f4);color:white;font-size:13px;font-weight:600;cursor:pointer">Use This Folder</button>
+        <button id="fp-br-cancel" style="padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.6);font-size:13px;cursor:pointer">Cancel</button>
+      </div>
+    `;
+
+    overlay.appendChild(panel);
+    card.appendChild(overlay);
+
+    const titleEl  = panel.querySelector('#fp-br-title');
+    const listEl   = panel.querySelector('#fp-br-list');
+    const useBtn   = panel.querySelector('#fp-br-use');
+    const closeBtn = panel.querySelector('#fp-br-x');
+    const cancelBtn = panel.querySelector('#fp-br-cancel');
+
+    let currentPath = startPath;
+    const historyStack = []; // [{content, path, title}]
+
+    const close = () => overlay.remove();
+    closeBtn.addEventListener('click', close);
+    cancelBtn.addEventListener('click', close);
+    overlay.addEventListener('click', ev => { if (ev.target === overlay) close(); });
+
+    useBtn.addEventListener('click', () => {
+      close();
+      onSelect(currentPath);
+    });
+
+    const fetchBrowse = (path) =>
+      this.hass.callWS({ type: 'media_source/browse_media', media_content_id: path });
+
+    const renderContent = (content, path) => {
+      currentPath = path;
+      const displayTitle = content.title || path.split('/').filter(Boolean).pop() || 'Media';
+      titleEl.textContent = displayTitle;
+      listEl.innerHTML = '';
+
+      // Back button when there is history
+      if (historyStack.length > 0) {
+        const back = document.createElement('button');
+        back.textContent = '⬅ Back';
+        back.style.cssText = 'width:100%;text-align:left;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.75);font-size:13px;cursor:pointer;margin-bottom:6px;display:block';
+        back.addEventListener('click', () => {
+          const prev = historyStack.pop();
+          renderContent(prev.content, prev.path);
+        });
+        listEl.appendChild(back);
+      }
+
+      const folders = (content.children || []).filter(c => c.can_expand);
+
+      if (!folders.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:20px;text-align:center;color:rgba(255,255,255,0.35);font-size:13px';
+        empty.textContent = 'No subfolders here';
+        listEl.appendChild(empty);
+        return;
+      }
+
+      folders.forEach(item => {
+        const name = item.title || item.media_content_id.split('/').filter(Boolean).pop() || item.media_content_id;
+        const btn = document.createElement('button');
+        btn.textContent = '📁 ' + name;
+        btn.title = item.media_content_id;
+        btn.style.cssText = 'width:100%;text-align:left;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.85);font-size:13px;cursor:pointer;margin-bottom:4px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:background 0.12s';
+        btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,255,255,0.12)'; });
+        btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(255,255,255,0.04)'; });
+        btn.addEventListener('click', async () => {
+          historyStack.push({ content, path });
+          listEl.innerHTML = '<div style="padding:20px;text-align:center;color:rgba(255,255,255,0.35);font-size:13px">Loading…</div>';
+          try {
+            const sub = await fetchBrowse(item.media_content_id);
+            renderContent(sub, item.media_content_id);
+          } catch (_) {
+            // Still let user select even if sub-browse fails
+            renderContent({ children: [], title: name }, item.media_content_id);
+          }
+        });
+        listEl.appendChild(btn);
+      });
+    };
+
+    // Initial load
+    try {
+      const content = await fetchBrowse(startPath);
+      renderContent(content, startPath);
+    } catch (_) {
+      try {
+        const root = await fetchBrowse('');
+        renderContent(root, '');
+      } catch (_2) {
+        close();
+      }
+    }
   }
 
   // Poll Roku via direct ECP query every second after local video ends.
@@ -12118,6 +12255,25 @@ export class MediaCard extends LitElement {
     .filter-picker-cancel:hover {
       background: rgba(255, 255, 255, 0.12);
       color: rgba(255, 255, 255, 0.9);
+    }
+
+    .filter-picker-browse-btn {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s ease, border-color 0.15s ease;
+      flex-shrink: 0;
+    }
+
+    .filter-picker-browse-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.35);
+      color: rgba(255, 255, 255, 0.95);
     }
 
     /* Info Overlay Styles - Modern dropdown design */
