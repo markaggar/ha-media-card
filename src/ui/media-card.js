@@ -1948,10 +1948,15 @@ export class MediaCard extends LitElement {
     }
     // Images: Timer deferred to _onMediaLoaded() to prevent premature expiration
 
-      // V5.6: Clear navigation flag after render cycle completes
-      setTimeout(() => {
-        this._navigatingAway = false;
-      }, 0);
+      // V5.6: Clear navigation flag after render cycle completes.
+      // For videos, _onVideoCanPlay is the correct clearing point (it fires once the
+      // media has actually committed to the DOM). Clearing here for videos would race
+      // against the stale _suppressCastPushOnCanplay flag and silently skip the cast push.
+      if (!isVideo) {
+        setTimeout(() => {
+          this._navigatingAway = false;
+        }, 0);
+      }
 
       // NOTE: Do NOT restart timer here - let it expire naturally during slideshow
       // Timer only restarts on manual button clicks
@@ -2081,8 +2086,10 @@ export class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
-    // Clear navigation flag after display updates
-    this._navigatingAway = false;
+    // For videos, _onVideoCanPlay clears _navigatingAway once the media commits to the DOM.
+    // Clearing it here races against a stale _suppressCastPushOnCanplay flag and causes
+    // the cast push to be silently skipped.
+    if (!this._isVideoFile(mediaUri)) this._navigatingAway = false;
   }
 
   async _jumpToQueuePosition(queueIndex) {
@@ -2125,8 +2132,10 @@ export class MediaCard extends LitElement {
     await this._resolveMediaUrl();
     this.requestUpdate();
     
-    // Clear navigation flag after display updates
-    this._navigatingAway = false;
+    // For videos, _onVideoCanPlay clears _navigatingAway once the media commits to the DOM.
+    // Clearing it here races against a stale _suppressCastPushOnCanplay flag and causes
+    // the cast push to be silently skipped.
+    if (!this._isVideoFile(item.media_content_id)) this._navigatingAway = false;
     
     // V5: Setup auto-advance after jumping to position
     this._setupAutoRefresh();
