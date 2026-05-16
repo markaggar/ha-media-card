@@ -7873,6 +7873,9 @@ export class MediaCard extends LitElement {
           if (Date.now() < this._castSeekSuppressUntil) return;
           try {
             const driftResp = await this.hass.callWS(makeQueryCall());
+            // Re-check after the async WS call — navigation may have started
+            // during the 100-300ms round trip (async race condition).
+            if (this._navigatingAway) return;
             const dr = driftResp?.response ?? driftResp;
             if (dr?.state !== 'play') return;
             const rokuPos = dr.position_ms / 1000;
