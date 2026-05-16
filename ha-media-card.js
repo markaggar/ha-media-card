@@ -8647,7 +8647,7 @@ class MediaCard extends LitElement {
     if (!itemId || !this.hass) return false;
 
     const cached = this._livePhotoCompanionVideoCache.get(itemId);
-    if (cached === true) {
+    if (cached === true || cached?.value === true) {
       return true;
     }
     if (cached && cached.value === false) {
@@ -8675,7 +8675,11 @@ class MediaCard extends LitElement {
           media_content_id: mediaContentId,
           expires: 60
         });
-        this._livePhotoCompanionVideoCache.set(itemId, true);
+        this._livePhotoCompanionVideoCache.set(itemId, {
+          value: true,
+          media_content_id: mediaContentId,
+          checkedAt: Date.now()
+        });
         this._log('🎞️ Live Photo still found for companion video:', mediaContentId);
         return true;
       } catch (error) {
@@ -8685,6 +8689,151 @@ class MediaCard extends LitElement {
 
     this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
     return false;
+  }
+
+  async _resolveLivePhotoStillForVideo(item) {
+    const itemId = this._getLivePhotoItemId(item);
+    if (!itemId || !this.hass) return null;
+
+    const cached = this._livePhotoCompanionVideoCache.get(itemId);
+    if (cached?.value === true && cached.media_content_id) {
+      return { media_content_id: cached.media_content_id };
+    }
+    if (cached?.value === false && Date.now() - cached.checkedAt < this._livePhotoNegativeCacheMs) {
+      return null;
+    }
+
+    for (const candidate of this._buildLivePhotoStillCandidatesForVideo(item)) {
+      const mediaContentId = candidate.startsWith('/media/')
+        ? `media-source://media_source${candidate}`
+        : candidate;
+      try {
+        await this.hass.callWS({
+          type: 'media_source/resolve_media',
+          media_content_id: mediaContentId,
+          expires: 60
+        });
+        this._livePhotoCompanionVideoCache.set(itemId, {
+          value: true,
+          media_content_id: mediaContentId,
+          checkedAt: Date.now()
+        });
+        return { media_content_id: mediaContentId };
+      } catch (error) {
+        // Candidate does not exist or is not resolvable; try the next still extension.
+      }
+    }
+
+    this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
+    return null;
+  }
+
+  async _getLivePhotoActionTargets(targetUri = this._currentMediaPath) {
+    const targets = {
+      masterUri: targetUri,
+      companionUri: null,
+      targetWasCompanion: false
+    };
+
+    if (!targetUri || !this._isLivePhotoEnabled() || !this.hass) {
+      return targets;
+    }
+
+    const currentItemId = this._getLivePhotoItemId(this.currentMedia);
+    const item = currentItemId === targetUri
+      ? this.currentMedia
+      : {
+          media_content_id: targetUri,
+          media_content_type: MediaUtils.detectFileType(targetUri) === 'video' ? 'video' : 'image'
+        };
+    const isVideo = this._isVideoItem(item);
+
+    if (isVideo) {
+      const still = await this._resolveLivePhotoStillForVideo(item);
+      if (still?.media_content_id) {
+        targets.masterUri = still.media_content_id;
+        targets.companionUri = targetUri;
+        targets.targetWasCompanion = true;
+      }
+      return targets;
+    }
+
+    const companion = await this._resolveLivePhotoCompanion(item);
+    if (companion?.media_content_id && companion.media_content_id !== targetUri) {
+      targets.companionUri = companion.media_content_id;
+    }
+
+    return targets;
+  }
+
+  async _callMediaIndexAction(service, serviceData) {
+    const wsCall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service,
+      service_data: serviceData,
+      return_response: true
+    };
+
+    if (this.config.media_index?.entity_id) {
+      wsCall.target = { entity_id: this.config.media_index.entity_id };
+    }
+
+    return this.hass.callWS(wsCall);
+  }
+
+  _excludeMediaUriFromLocalState(uri, reason = 'media-index action') {
+    if (!uri) return;
+
+    if (this.provider?.excludedFiles) {
+      this.provider.excludedFiles.add(uri);
+      this._log(`📝 Added to provider exclusion list (${reason}): ${uri}`);
+    }
+
+    const matchesUri = (item) => {
+      const itemUri = item?.media_content_id || item?.media_source_uri || item?.path;
+      return itemUri === uri || (!!item?.path && `media-source://media_source${item.path}` === uri);
+    };
+
+    let removedBeforeCurrent = 0;
+    this.navigationQueue = (this.navigationQueue || []).filter((item, index) => {
+      const matches = matchesUri(item);
+      if (matches && index < this.navigationIndex) removedBeforeCurrent++;
+      return !matches;
+    });
+    if (removedBeforeCurrent > 0) {
+      this.navigationIndex = Math.max(0, this.navigationIndex - removedBeforeCurrent);
+    }
+
+    this.history = (this.history || []).filter(item => !matchesUri(item));
+
+    if (this._mainQueue?.length) {
+      let removedBeforeMain = 0;
+      this._mainQueue = this._mainQueue.filter((item, index) => {
+        const matches = matchesUri(item);
+        if (matches && index < this._mainQueueIndex) removedBeforeMain++;
+        return !matches;
+      });
+      if (removedBeforeMain > 0) {
+        this._mainQueueIndex = Math.max(0, this._mainQueueIndex - removedBeforeMain);
+      }
+    }
+
+    if (this._panelQueue?.length) {
+      let removedBeforePanel = 0;
+      this._panelQueue = this._panelQueue.filter((item, index) => {
+        const matches = matchesUri(item);
+        if (matches && index < this._panelQueueIndex) removedBeforePanel++;
+        return !matches;
+      });
+      if (removedBeforePanel > 0) {
+        this._panelQueueIndex = Math.max(0, this._panelQueueIndex - removedBeforePanel);
+      }
+    }
+
+    if (this.provider?.queue?.length) {
+      this.provider.queue = this.provider.queue.filter(item => !matchesUri(item));
+    }
   }
 
   async _shouldHideLivePhotoCompanionVideo(item) {
@@ -11764,7 +11913,8 @@ class MediaCard extends LitElement {
     // currentStateOverride lets callers (e.g. thumbnail click) pass the already-computed
     // isFavorited value so we use the same multi-source check as the ♥ badge display
     // rather than falling back to the local metadata/burst-file checks used below.
-    const targetUri = this._currentMediaPath;
+    const actionTargets = await this._getLivePhotoActionTargets(this._currentMediaPath);
+    const targetUri = actionTargets.masterUri;
     const isFavorite = currentStateOverride !== undefined
       ? currentStateOverride
       : (this._currentMetadata?.is_favorited || 
@@ -11776,24 +11926,10 @@ class MediaCard extends LitElement {
     this._log(`💗 CURRENT METADATA:`, this._currentMetadata);
     
     try {
-      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
-      const wsCall = {
-        type: 'call_service',
-        domain: 'media_index',
-        service: 'mark_favorite',
-        service_data: {
-          media_source_uri: targetUri,
-          is_favorite: newState
-        },
-        return_response: true
-      };
-      
-      // V4: If entity_id specified, add target object
-      if (this.config.media_index?.entity_id) {
-        wsCall.target = { entity_id: this.config.media_index.entity_id };
-      }
-      
-      const response = await this.hass.callWS(wsCall);
+      const response = await this._callMediaIndexAction('mark_favorite', {
+        media_source_uri: targetUri,
+        is_favorite: newState
+      });
       
       this._log(`✅ Favorite toggled for ${targetUri}: ${newState}`, response);
       
@@ -12278,8 +12414,11 @@ class MediaCard extends LitElement {
     
     // V4 PATTERN: Capture path at button click time to prevent wrong file deletion
     // if slideshow auto-advances while confirmation dialog is open
-    const targetPath = this._currentMediaPath;
-    const filename = this._currentMetadata?.filename || targetPath.split('/').pop();
+    const actionTargets = await this._getLivePhotoActionTargets(this._currentMediaPath);
+    const targetPath = actionTargets.masterUri;
+    const filename = actionTargets.targetWasCompanion
+      ? this._getLivePhotoFileName(targetPath)
+      : (this._currentMetadata?.filename || targetPath.split('/').pop());
     
     // Get actual thumbnail from media browser
     const thumbnailUrl = await this._getMediaThumbnail(targetPath);
@@ -13265,28 +13404,19 @@ class MediaCard extends LitElement {
     if (!targetUri || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
-      this._log('🗑️ Deleting file:', targetUri);
-      
-      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
-      const wsCall = {
-        type: 'call_service',
-        domain: 'media_index',
-        service: 'delete_media',
-        service_data: {
-          media_source_uri: targetUri
-        },
-        return_response: true
-      };
-      
-      // V4: Target specific entity if configured
-      if (this.config.media_index?.entity_id) {
-        wsCall.target = {
-          entity_id: this.config.media_index.entity_id
-        };
+      const actionTargets = await this._getLivePhotoActionTargets(targetUri);
+      const companionUri = actionTargets.companionUri;
+      targetUri = actionTargets.masterUri;
+      const deleteUris = [targetUri, companionUri].filter((uri, index, uris) => uri && uris.indexOf(uri) === index);
+
+      this._log('🗑️ Deleting media:', deleteUris);
+
+      for (const uri of deleteUris) {
+        await this._callMediaIndexAction('delete_media', {
+          media_source_uri: uri
+        });
       }
-      
-      await this.hass.callWS(wsCall);
-      
+
       this._log('✅ Media deleted successfully');
       
       // V4 CODE REUSE: Remove file from history and exclude from future queries
@@ -13296,6 +13426,9 @@ class MediaCard extends LitElement {
       if (this.provider && this.provider.excludedFiles) {
         this.provider.excludedFiles.add(targetUri);
         this._log(`📝 Added to provider exclusion list: ${targetUri}`);
+      }
+      if (companionUri) {
+        this._excludeMediaUriFromLocalState(companionUri, 'Live Photo companion delete');
       }
       
       // V5.3: Remove from navigation queue (use captured targetUri)
@@ -13376,8 +13509,11 @@ class MediaCard extends LitElement {
     
     // V4 PATTERN: Capture path at button click time to prevent wrong file being marked
     // if slideshow auto-advances while confirmation dialog is open
-    const targetPath = this._currentMediaPath;
-    const filename = this._currentMetadata?.filename || targetPath.split('/').pop();
+    const actionTargets = await this._getLivePhotoActionTargets(this._currentMediaPath);
+    const targetPath = actionTargets.masterUri;
+    const filename = actionTargets.targetWasCompanion
+      ? this._getLivePhotoFileName(targetPath)
+      : (this._currentMetadata?.filename || targetPath.split('/').pop());
     
     // Get actual thumbnail from media browser
     const thumbnailUrl = await this._getMediaThumbnail(targetPath);
@@ -13605,28 +13741,16 @@ class MediaCard extends LitElement {
     if (!targetUri || !MediaProvider.isMediaIndexActive(this.config)) return;
     
     try {
+      const actionTargets = await this._getLivePhotoActionTargets(targetUri);
+      const companionUri = actionTargets.companionUri;
+      targetUri = actionTargets.masterUri;
+
       this._log('✏️ Marking file for edit:', targetUri);
       
-      // V5.2: Call media_index service with media_source_uri (no path conversion needed)
-      const wsCall = {
-        type: 'call_service',
-        domain: 'media_index',
-        service: 'mark_for_edit',
-        service_data: {
-          media_source_uri: targetUri,
-          mark_for_edit: true
-        },
-        return_response: true
-      };
-      
-      // V4: Target specific entity if configured
-      if (this.config.media_index?.entity_id) {
-        wsCall.target = {
-          entity_id: this.config.media_index.entity_id
-        };
-      }
-      
-      await this.hass.callWS(wsCall);
+      await this._callMediaIndexAction('mark_for_edit', {
+        media_source_uri: targetUri,
+        mark_for_edit: true
+      });
       
       this._log('✅ File marked for editing');
       
@@ -13636,6 +13760,9 @@ class MediaCard extends LitElement {
       if (this.provider && this.provider.excludedFiles) {
         this.provider.excludedFiles.add(targetUri);
         this._log(`📝 Added to provider exclusion list: ${targetUri}`);
+      }
+      if (companionUri) {
+        this._excludeMediaUriFromLocalState(companionUri, 'Live Photo companion edit suppression');
       }
       
       // V5.3: Remove from navigation queue (use captured targetUri)
