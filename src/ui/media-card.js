@@ -7768,6 +7768,12 @@ export class MediaCard extends LitElement {
           }
           const vid = getVideo();
           if (!vid || vid.paused) return;
+          // Skip drift correction while a new video is loading.  The poller is still
+          // running from the previous _startCastSync; if it fires before canplay on
+          // the new video it snaps currentTime and sets _suppressCastPushOnCanplay,
+          // which causes _onVideoCanPlay to return early and leaves _navigatingAway=true
+          // permanently — blocking the cast push, the timers, and the slideshow.
+          if (this._navigatingAway) return;
           // Suppress drift correction briefly after a user-initiated seek so the poller
           // doesn't snap the video back to the Roku's pre-seek position.
           if (Date.now() < this._castSeekSuppressUntil) return;
