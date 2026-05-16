@@ -4859,6 +4859,7 @@ class MediaCard extends LitElement {
     this._castSyncTimeout = null;  // setTimeout handle for 10s sync safety fallback
     this._castSyncPausing = false;   // guard: suppress _onVideoPause during cast-sync pause
     this._castPreEndPauseSent = false; // guard: true after pre-end pause sent to Roku (prevents double-send)
+    this._castSeekSuppressUntil = 0;  // timestamp: suppress drift correction until this time after a seek
 
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -9948,14 +9949,23 @@ class MediaCard extends LitElement {
     // continuously unpausing Device A.
     if (data.pauseIntent === true && typeof data.isPaused === 'boolean' && data.isPaused !== this._isPaused) {
       this._setPauseState(data.isPaused);
+      const syncVideoEl = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
       if (data.isPaused) {
         // Incoming group-pause: mark as group-paused so we know to broadcast on resume
         this._groupPaused = true;
         this._pauseTimer();
+        // Also pause the video element so it doesn't finish and auto-advance
+        if (syncVideoEl && !syncVideoEl.paused) {
+          this._castSyncPausing = true; // suppress _onVideoPause side-effects
+          syncVideoEl.pause();
+        }
       } else {
-        // Incoming group-resume: clear group-paused flag
+        // Incoming group-resume: clear group-paused flag and resume video
         this._groupPaused = false;
         this._resumeTimer();
+        if (syncVideoEl && syncVideoEl.paused && !syncVideoEl.ended) {
+          syncVideoEl.play().catch(() => {});
+        }
       }
     }
 
@@ -12395,6 +12405,9 @@ class MediaCard extends LitElement {
           }
           const vid = getVideo();
           if (!vid || vid.paused) return;
+          // Suppress drift correction briefly after a user-initiated seek so the poller
+          // doesn't snap the video back to the Roku's pre-seek position.
+          if (Date.now() < this._castSeekSuppressUntil) return;
           try {
             const driftResp = await this.hass.callWS(makeQueryCall());
             const dr = driftResp?.response ?? driftResp;
@@ -14180,6 +14193,27 @@ class MediaCard extends LitElement {
   }
   
   _handleDoubleTap(e) {
+    // Left/right zone double-tap on a video → seek ±10 seconds (YouTube-style)
+    // Takes priority over double_tap_action in left/right zones.
+    if (this._isVideoFile(this.mediaUrl || '')) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const xFrac = (e.clientX - rect.left) / rect.width;
+      if (xFrac < 0.35) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this._tapTimeout) { clearTimeout(this._tapTimeout); this._tapTimeout = null; }
+        this._seekVideo(-10);
+        return;
+      }
+      if (xFrac > 0.65) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this._tapTimeout) { clearTimeout(this._tapTimeout); this._tapTimeout = null; }
+        this._seekVideo(10);
+        return;
+      }
+    }
+
     if (!this.config.double_tap_action) return;
     
     // Prevent default and stop single tap
@@ -14192,6 +14226,45 @@ class MediaCard extends LitElement {
     }
     
     this._performAction(this.config.double_tap_action);
+  }
+
+  // Seek local video by deltaSeconds (negative = rewind, positive = fast-forward).
+  // Also sends an absolute seek to the active Roku cast session so both screens stay
+  // in sync. Suppresses drift correction for 10 s so it doesn't fight the new position.
+  _seekVideo(deltaSeconds) {
+    const video = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+    if (!video) return;
+    const newTime = Math.max(0, Math.min(video.currentTime + deltaSeconds, video.duration || Infinity));
+    video.currentTime = newTime;
+    this._log(`⏩ Seek ${deltaSeconds > 0 ? '+' : ''}${deltaSeconds}s → ${newTime.toFixed(1)}s`);
+
+    // Suppress drift correction for 10 s so the poller doesn't snap back to Roku's old pos
+    this._castSeekSuppressUntil = Date.now() + 10000;
+
+    // Send seek to Roku if cast is active
+    if (this._castEntityId) {
+      this._sendCastSeek(newTime);
+    }
+  }
+
+  // Send absolute position seek to the active Roku xcast session via ECP input.
+  _sendCastSeek(positionSeconds) {
+    if (!this._castEntityId || !this.hass) return;
+    const wsCall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service: 'roku_ecp_seek',
+      service_data: { roku_entity_id: this._castEntityId, position_seconds: positionSeconds },
+      return_response: false,
+    };
+    if (this.config.media_index?.entity_id) {
+      wsCall.target = { entity_id: this.config.media_index.entity_id };
+    }
+    this.hass.callWS(wsCall).then(() => {
+      this._log(`🎬 Cast seek: sent ${positionSeconds.toFixed(1)}s to ${this._castEntityId}`);
+    }).catch(err => {
+      this._log('⚠️ Cast seek failed:', err);
+    });
   }
   
   _handlePointerDown(e) {
