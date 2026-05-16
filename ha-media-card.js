@@ -4826,6 +4826,7 @@ class MediaCard extends LitElement {
     this._tapTimeout = null;         // V4 tap action double-tap detection
     this._navClickTimerLeft = null;  // debounce: prevent nav-zone click from firing during dblclick seek
     this._navClickTimerRight = null; // same for right zone
+    this._suppressCastPushOnCanplay = false; // true when _startCastSync or _seekVideo already pushed; skip canplay re-push
     this._frontLayerUrl = ''; // V5.6: Front layer for crossfade
     this._backLayerUrl = ''; // V5.6: Back layer for crossfade
     this._frontLayerActive = true; // V5.6: Which layer is currently visible
@@ -8963,8 +8964,15 @@ class MediaCard extends LitElement {
       this._writeSharedQueueState();
     }
 
-    // Cast-to-TV: push current item to TV on every video ready
-    this._pushCurrentToCast();
+    // Cast-to-TV: push current item to TV on every video ready.
+    // Skip if flagged: a programmatic currentTime snap (from _startCastSync) or a seek
+    // re-push (_seekVideo) already fired _pushCurrentToCast; a duplicate push would reset
+    // Roku's position to 0.
+    if (this._suppressCastPushOnCanplay) {
+      this._suppressCastPushOnCanplay = false;
+    } else {
+      this._pushCurrentToCast();
+    }
 
     this.requestUpdate();
   }
@@ -12394,6 +12402,9 @@ class MediaCard extends LitElement {
         if (Math.abs(v.currentTime - rokuPosSec) > 1) v.currentTime = rokuPosSec;
         // Clear user-interaction flag so slideshow auto-advance still works after video ends
         this._videoUserInteracted = false;
+        // Suppress the canplay that v.play() (and any snap of currentTime above) may fire —
+        // we don't want _onVideoCanPlay to push to cast again and reset Roku's position.
+        this._suppressCastPushOnCanplay = true;
         v.play().catch(() => {});
         this._log(`🎬 Cast sync: Roku playing at ${rokuPosSec.toFixed(1)}s — local resumed`);
 
@@ -14263,7 +14274,10 @@ class MediaCard extends LitElement {
 
     // When casting, re-push the video starting at the seeked position so Roku buffers from here.
     // _startCastSync (called inside _pushCurrentToCast) handles sync once Roku is playing.
+    // Set the suppress flag first so the canplay fired by video.currentTime = newTime above
+    // does not trigger a second _pushCurrentToCast without the seek position.
     if (this._castEntityId) {
+      this._suppressCastPushOnCanplay = true;
       this._pushCurrentToCast(newTime);
     }
   }
