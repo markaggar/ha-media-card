@@ -194,7 +194,8 @@ export class MediaCard extends LitElement {
     this._castSyncPoller = null;   // setInterval handle for Roku startup sync polling
     this._castDriftPoller = null;  // setInterval handle for ongoing drift correction
     this._castSyncTimeout = null;  // setTimeout handle for 10s sync safety fallback
-    this._castSyncPausing = false; // guard: suppress _onVideoPause during cast-sync pause
+    this._castSyncPausing = false;   // guard: suppress _onVideoPause during cast-sync pause
+    this._castPreEndPauseSent = false; // guard: true after pre-end pause sent to Roku (prevents double-send)
 
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -4582,10 +4583,22 @@ export class MediaCard extends LitElement {
   }
 
   _onVideoTimeUpdate(e) {
+    const video = e.target;
+    if (!video) return;
+
+    // Fallback pre-end cast pause: if we have an active Roku cast and the primary
+    // setTimeout-based pre-end pause hasn't fired yet, send it via timeupdate once
+    // we're within 3 seconds of the end. Handles cases where duration was 0/unknown
+    // at sync-start time, or where the calculated timeout was slightly too short.
+    if (this._castEntityId && !this._castPreEndPauseSent &&
+        video.duration > 2 && !video.paused && !video.ended &&
+        (video.duration - video.currentTime) <= 3) {
+      this._sendCastPreEndPause(this._castEntityId);
+    }
+
     // V5.6.4: Detect when looping video wraps back to beginning
     // The 'ended' event doesn't fire for videos with loop attribute
-    const video = e.target;
-    if (!video || !this.config.video_loop) return;
+    if (!this.config.video_loop) return;
     
     // V5.6.8: Ignore time updates during user seeking - seeking also causes backward time jumps
     // but shouldn't be treated as video loop completion
@@ -7121,13 +7134,23 @@ export class MediaCard extends LitElement {
     const wasPaused = this._isPaused;
     this._setPauseState(!wasPaused);
 
+    const videoEl = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
     if (!wasPaused) {
       // Short press PAUSE — local only, no broadcast
       this._groupPaused = false;
       this._pauseTimer();
+      // Also pause video element; suppress _onVideoPause side-effects
+      // (_castSyncPausing guard prevents setting _videoUserInteracted / group broadcast)
+      if (videoEl && !videoEl.paused) {
+        this._castSyncPausing = true;
+        videoEl.pause();
+      }
       this._log('🎮 PAUSED locally - timer stopped (short press, no broadcast)');
     } else {
-      // RESUME
+      // RESUME — also resume video element if paused and not ended
+      if (videoEl && videoEl.paused && !videoEl.ended) {
+        videoEl.play().catch(() => {});
+      }
       if (this._groupPaused) {
         // Was group-paused: broadcast resume so all cards resume
         this._groupPaused = false;
@@ -7168,11 +7191,19 @@ export class MediaCard extends LitElement {
     const nowGroupPaused = !this._groupPaused;
     this._groupPaused = nowGroupPaused;
     this._setPauseState(nowGroupPaused);
+    const videoEl = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
     if (nowGroupPaused) {
       this._pauseTimer();
+      if (videoEl && !videoEl.paused) {
+        this._castSyncPausing = true; // suppress _onVideoPause side-effects
+        videoEl.pause();
+      }
       this._log('🔒 Group PAUSED — broadcasting to sync group');
     } else {
       this._resumeTimer();
+      if (videoEl && videoEl.paused && !videoEl.ended) {
+        videoEl.play().catch(() => {});
+      }
       this._log('🔓 Group RESUMED — broadcasting to sync group');
     }
     this._writeSharedQueueState(true);
@@ -7595,8 +7626,27 @@ export class MediaCard extends LitElement {
     if (this._castSyncTimeout) { clearTimeout(this._castSyncTimeout); this._castSyncTimeout = null; }
   }
 
+  _sendCastPreEndPause(entityId) {
+    if (!entityId || !this.hass) return;
+    this._castPreEndPauseSent = true;
+    const kcall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service: 'roku_ecp_keypress',
+      service_data: { roku_entity_id: entityId, keyname: 'Play' },
+      return_response: false,
+    };
+    if (this.config.media_index?.entity_id) {
+      kcall.target = { entity_id: this.config.media_index.entity_id };
+    }
+    this.hass.callWS(kcall).then(() => {
+      this._log(`🎬 Cast: ECP keypress/Play (pre-end pause) sent to ${entityId}`);
+    }).catch(() => {});
+  }
+
   _startCastSync(entityId, duration) {
     this._stopCastSync();
+    this._castPreEndPauseSent = false;
     const POLL_MS = 500;
     const TIMEOUT_MS = 10000;
     const DRIFT_POLL_MS = 3000;
@@ -7668,23 +7718,10 @@ export class MediaCard extends LitElement {
         if (duration > 2) {
           const remaining = Math.max(1, duration - rokuPosSec);
           const pauseAfterMs = Math.max(1000, (remaining - 3) * 1000);
-          this._castPauseTimer = setTimeout(async () => {
+          this._castPauseTimer = setTimeout(() => {
             this._castPauseTimer = null;
             if (this._castEntityId !== entityId) return;
-            try {
-              const kcall = {
-                type: 'call_service',
-                domain: 'media_index',
-                service: 'roku_ecp_keypress',
-                service_data: { roku_entity_id: entityId, keyname: 'Play' },
-                return_response: false,
-              };
-              if (this.config.media_index?.entity_id) {
-                kcall.target = { entity_id: this.config.media_index.entity_id };
-              }
-              await this.hass.callWS(kcall);
-              this._log(`🎬 Cast: ECP keypress/Play (pause) sent to ${entityId}`);
-            } catch (_) {}
+            this._sendCastPreEndPause(entityId);
           }, pauseAfterMs);
         }
 
