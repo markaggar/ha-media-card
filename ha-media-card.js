@@ -4823,7 +4823,9 @@ class MediaCard extends LitElement {
     this._errorState = null; // V4 error state tracking
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
-    this._tapTimeout = null; // V4 tap action double-tap detection
+    this._tapTimeout = null;         // V4 tap action double-tap detection
+    this._navClickTimerLeft = null;  // debounce: prevent nav-zone click from firing during dblclick seek
+    this._navClickTimerRight = null; // same for right zone
     this._frontLayerUrl = ''; // V5.6: Front layer for crossfade
     this._backLayerUrl = ''; // V5.6: Back layer for crossfade
     this._frontLayerActive = true; // V5.6: Which layer is currently visible
@@ -9256,7 +9258,7 @@ class MediaCard extends LitElement {
     // at sync-start time, or where the calculated timeout was slightly too short.
     if (this._castEntityId && !this._castPreEndPauseSent &&
         video.duration > 2 && !video.paused && !video.ended &&
-        (video.duration - video.currentTime) <= 3) {
+        (video.duration - video.currentTime) <= 0.5) {
       this._sendCastPreEndPause(this._castEntityId);
     }
 
@@ -9959,6 +9961,8 @@ class MediaCard extends LitElement {
           this._castSyncPausing = true; // suppress _onVideoPause side-effects
           syncVideoEl.pause();
         }
+        // Pause Roku cast if active
+        this._sendCastPlayToggle();
       } else {
         // Incoming group-resume: clear group-paused flag and resume video
         this._groupPaused = false;
@@ -9966,6 +9970,8 @@ class MediaCard extends LitElement {
         if (syncVideoEl && syncVideoEl.paused && !syncVideoEl.ended) {
           syncVideoEl.play().catch(() => {});
         }
+        // Resume Roku cast if active
+        this._sendCastPlayToggle();
       }
     }
 
@@ -11818,12 +11824,16 @@ class MediaCard extends LitElement {
         this._castSyncPausing = true;
         videoEl.pause();
       }
+      // Pause Roku cast if active
+      this._sendCastPlayToggle();
       this._log('🎮 PAUSED locally - timer stopped (short press, no broadcast)');
     } else {
       // RESUME — also resume video element if paused and not ended
       if (videoEl && videoEl.paused && !videoEl.ended) {
         videoEl.play().catch(() => {});
       }
+      // Resume Roku cast if active
+      this._sendCastPlayToggle();
       if (this._groupPaused) {
         // Was group-paused: broadcast resume so all cards resume
         this._groupPaused = false;
@@ -11871,12 +11881,14 @@ class MediaCard extends LitElement {
         this._castSyncPausing = true; // suppress _onVideoPause side-effects
         videoEl.pause();
       }
+      this._sendCastPlayToggle();
       this._log('🔒 Group PAUSED — broadcasting to sync group');
     } else {
       this._resumeTimer();
       if (videoEl && videoEl.paused && !videoEl.ended) {
         videoEl.play().catch(() => {});
       }
+      this._sendCastPlayToggle();
       this._log('🔓 Group RESUMED — broadcasting to sync group');
     }
     this._writeSharedQueueState(true);
@@ -12390,7 +12402,7 @@ class MediaCard extends LitElement {
         // which has an ~8s HA polling lag and arrives too late to prevent the gap.
         if (duration > 2) {
           const remaining = Math.max(1, duration - rokuPosSec);
-          const pauseAfterMs = Math.max(1000, (remaining - 3) * 1000);
+          const pauseAfterMs = Math.max(500, (remaining - 0.5) * 1000);
           this._castPauseTimer = setTimeout(() => {
             this._castPauseTimer = null;
             if (this._castEntityId !== entityId) return;
@@ -12532,7 +12544,7 @@ class MediaCard extends LitElement {
     if (fileType === 'video') {
       const duration = this._currentMetadata?.duration;
       if (duration && parseFloat(duration) > 2) {
-        const pauseAfterMs = Math.max(1000, (parseFloat(duration) - 2) * 1000);
+        const pauseAfterMs = Math.max(500, (parseFloat(duration) - 0.5) * 1000);
         this._castPauseTimer = setTimeout(async () => {
           this._castPauseTimer = null;
           if (this._castEntityId !== entityId) return;
@@ -14241,6 +14253,12 @@ class MediaCard extends LitElement {
     // Suppress drift correction for 10 s so the poller doesn't snap back to Roku's old pos
     this._castSeekSuppressUntil = Date.now() + 10000;
 
+    // Cancel any outstanding pre-end pause timer (based on pre-seek position) and re-arm
+    // the timeupdate fallback by clearing the sent flag — it will fire once we're within
+    // 0.5 s of the new end position.
+    if (this._castPauseTimer) { clearTimeout(this._castPauseTimer); this._castPauseTimer = null; }
+    this._castPreEndPauseSent = false;
+
     // Send seek to Roku if cast is active
     if (this._castEntityId) {
       this._sendCastSeek(newTime);
@@ -14265,6 +14283,25 @@ class MediaCard extends LitElement {
     }).catch(err => {
       this._log('⚠️ Cast seek failed:', err);
     });
+  }
+
+  // Send ECP Play keypress (toggle pause/resume) to the active Roku cast.
+  // Called from pause button and group-pause/resume handlers to keep Roku in lockstep.
+  _sendCastPlayToggle() {
+    if (!this._castEntityId || !this.hass) return;
+    const kcall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service: 'roku_ecp_keypress',
+      service_data: { roku_entity_id: this._castEntityId, keyname: 'Play' },
+      return_response: false,
+    };
+    if (this.config.media_index?.entity_id) {
+      kcall.target = { entity_id: this.config.media_index.entity_id };
+    }
+    this.hass.callWS(kcall).then(() => {
+      this._log('🎬 Cast: ECP Play (pause/resume toggle) sent');
+    }).catch(() => {});
   }
   
   _handlePointerDown(e) {
@@ -17090,28 +17127,54 @@ class MediaCard extends LitElement {
     return html`
       <div class="navigation-zones">
            <div class="nav-zone nav-zone-left ${this._showButtonsExplicitly ? 'show-buttons' : ''}"
-             @click=${async (e) => { 
-            e.stopPropagation(); 
-            // V5.6.7: Mark as manual navigation
-            this._isManualNavigation = true;
-            // Navigate first
-            await this._loadPrevious(); 
-            // If buttons are showing, restart the 3s timer to auto-hide
-            if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+             @click=${async (e) => {
+            e.stopPropagation();
+            if (this._isVideoFile(this.mediaUrl || '')) {
+              // On video: debounce to let dblclick handler cancel nav and seek instead
+              if (this._navClickTimerLeft) { clearTimeout(this._navClickTimerLeft); this._navClickTimerLeft = null; return; }
+              this._navClickTimerLeft = setTimeout(async () => {
+                this._navClickTimerLeft = null;
+                this._isManualNavigation = true;
+                await this._loadPrevious();
+                if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+              }, 280);
+            } else {
+              this._isManualNavigation = true;
+              await this._loadPrevious();
+              if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+            }
+             }}
+             @dblclick=${(e) => {
+            e.stopPropagation();
+            if (this._navClickTimerLeft) { clearTimeout(this._navClickTimerLeft); this._navClickTimerLeft = null; }
+            if (this._isVideoFile(this.mediaUrl || '')) this._seekVideo(-10);
              }}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
              title="Previous">
         </div>
            <div class="nav-zone nav-zone-right ${this._showButtonsExplicitly ? 'show-buttons' : ''}"  
-             @click=${async (e) => { 
-            e.stopPropagation(); 
-            // V5.6.7: Mark as manual navigation
-            this._isManualNavigation = true;
-            // Navigate first
-            await this._loadNext(); 
-            // If buttons are showing, restart the 3s timer to auto-hide
-            if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+             @click=${async (e) => {
+            e.stopPropagation();
+            if (this._isVideoFile(this.mediaUrl || '')) {
+              // On video: debounce to let dblclick handler cancel nav and seek instead
+              if (this._navClickTimerRight) { clearTimeout(this._navClickTimerRight); this._navClickTimerRight = null; return; }
+              this._navClickTimerRight = setTimeout(async () => {
+                this._navClickTimerRight = null;
+                this._isManualNavigation = true;
+                await this._loadNext();
+                if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+              }, 280);
+            } else {
+              this._isManualNavigation = true;
+              await this._loadNext();
+              if (this._showButtonsExplicitly) { this._startActionButtonsHideTimer(); }
+            }
+             }}
+             @dblclick=${(e) => {
+            e.stopPropagation();
+            if (this._navClickTimerRight) { clearTimeout(this._navClickTimerRight); this._navClickTimerRight = null; }
+            if (this._isVideoFile(this.mediaUrl || '')) this._seekVideo(10);
              }}
              @keydown=${this.config.enable_keyboard_navigation !== false ? this._handleKeyDown : null}
              tabindex="0"
