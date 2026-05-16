@@ -3004,174 +3004,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ` : ''}
         </div>
 
-        ${isFolderMode ? html`
-          <div class="integration-callout">
-            <div class="integration-callout-title">iCloud Photos Sync</div>
-            <p>
-              To display iCloud Photos here, install the
-              <a href="https://github.com/anciltech/ha-icloud-photo-sync" target="_blank" rel="noopener noreferrer">AncilTech iCloud Photo Sync add-on</a>
-              from the Home Assistant Add-on Store repositories. The add-on downloads selected albums into
-              <code>/media/icloud_photos</code>; this card handles display.
-            </p>
-            <p>
-              After the add-on syncs, use
-              <code>media-source://media_source/local/icloud_photos</code>
-              as the folder path, or append an album folder such as
-              <code>/Favorites</code>.
-            </p>
-          </div>
-        ` : ''}
-
-        <div class="section">
-          <div class="section-title">Live Photos & iCloud Media</div>
-
-          <div class="config-row">
-            <label>Live Photos</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.live_photo?.enabled === true}
-                @change=${this._livePhotoEnabledChanged}
-              />
-              <div class="help-text">Pair still images with same-basename companion videos and play them like iPhone Live Photos</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Still Duration</label>
-            <div>
-              <input
-                type="number"
-                min="0.1"
-                max="60"
-                step="0.1"
-                .value=${this._config.live_photo?.still_duration ?? 1}
-                @input=${this._livePhotoStillDurationChanged}
-                ?disabled=${this._config.live_photo?.enabled !== true}
-              />
-              <div class="help-text">Seconds to show the still image before the companion video starts</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Repeat Delay</label>
-            <div>
-              <input
-                type="number"
-                min="0"
-                max="3600"
-                step="1"
-                .value=${this._config.live_photo?.repeat_delay ?? this._config.live_photo?.pause_duration ?? 10}
-                @input=${this._livePhotoRepeatDelayChanged}
-                ?disabled=${this._config.live_photo?.enabled !== true}
-              />
-              <div class="help-text">Seconds to wait after the Live Photo video ends before replaying it</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Hide Companion Videos</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.live_photo?.hide_companion_videos !== false}
-                @change=${this._livePhotoHideCompanionsChanged}
-                ?disabled=${this._config.live_photo?.enabled !== true}
-              />
-              <div class="help-text">Keep Live Photo companion videos out of the normal slideshow/video queue</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>HEIC Conversion</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.heic?.enabled !== false}
-                @change=${this._heicEnabledChanged}
-              />
-              <div class="help-text">Convert HEIC/HEIF images in the browser when a JPEG version is not available</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>HEIC Quality</label>
-            <div>
-              <input
-                type="number"
-                min="0.1"
-                max="1"
-                step="0.01"
-                .value=${this._config.heic?.quality ?? 0.92}
-                @input=${this._heicQualityChanged}
-                ?disabled=${this._config.heic?.enabled === false}
-              />
-              <div class="help-text">JPEG quality for browser-side HEIC conversion</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Preload Media</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.preload?.enabled !== false}
-                @change=${this._preloadEnabledChanged}
-              />
-              <div class="help-text">Prepare images and video metadata before swapping the visible media element</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Image Decode</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.preload?.image_decode !== false}
-                @change=${this._preloadImageDecodeChanged}
-                ?disabled=${this._config.preload?.enabled === false}
-              />
-              <div class="help-text">Decode images before display to reduce visible loading flashes</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Video Preload Mode</label>
-            <div>
-              <select
-                @change=${this._preloadVideoModeChanged}
-                .value=${this._config.preload?.video_mode || 'metadata'}
-                ?disabled=${this._config.preload?.enabled === false}
-              >
-                <option value="metadata">Metadata</option>
-                <option value="canplay">Can Play</option>
-                <option value="none">None</option>
-              </select>
-              <div class="help-text">How much video data to prepare before display</div>
-            </div>
-          </div>
-
-          <div class="config-row">
-            <label>Video Preload Timeout</label>
-            <div>
-              <input
-                type="number"
-                min="250"
-                max="30000"
-                step="250"
-                .value=${this._config.preload?.video_timeout_ms ?? 3000}
-                @input=${this._preloadVideoTimeoutChanged}
-                ?disabled=${this._config.preload?.enabled === false}
-              />
-              <div class="help-text">Maximum milliseconds to wait for video preparation before displaying normally</div>
-            </div>
-          </div>
-
-          <div class="help-text" style="grid-column: 1 / -1;">
-            Advanced Live Photo suffix and extension lists remain available in YAML.
-          </div>
-        </div>
-
         <!-- Filters Section (available when Media Index is enabled) -->
         ${hasMediaIndex && isFolderMode && folderConfig.use_media_index_for_discovery !== false ? html`
           <div style="background: var(--primary-background-color, #fafafa); padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--divider-color, #e0e0e0);">
@@ -3475,6 +3307,24 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
+        ${isFolderMode ? html`
+          <div class="integration-callout">
+            <div class="integration-callout-title">iCloud Photos Sync</div>
+            <p>
+              To display iCloud Photos here, install the
+              <a href="https://github.com/anciltech/ha-icloud-photo-sync" target="_blank" rel="noopener noreferrer">AncilTech iCloud Photo Sync add-on</a>
+              from the Home Assistant Add-on Store repositories. The add-on downloads selected albums into
+              <code>/media/icloud_photos</code>; this card handles display.
+            </p>
+            <p>
+              After the add-on syncs, use
+              <code>media-source://media_source/local/icloud_photos</code>
+              as the folder path, or append an album folder such as
+              <code>/Favorites</code>.
+            </p>
+          </div>
+        ` : ''}
+
         <!-- Single Media Mode Options -->
         ${mediaSourceType === 'single_media' ? html`
           <!-- Single media settings moved to common sections -->
@@ -3498,6 +3348,164 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
         ` : ''}
+
+        <div class="section">
+          <div class="section-title">Live Photos</div>
+
+          <div class="config-row">
+            <label>Live Photos</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.live_photo?.enabled === true}
+                @change=${this._livePhotoEnabledChanged}
+              />
+              <div class="help-text">Pair still images with same-basename companion videos and play them like iPhone Live Photos</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Still Duration</label>
+            <div>
+              <input
+                type="number"
+                min="0.1"
+                max="60"
+                step="0.1"
+                .value=${this._config.live_photo?.still_duration ?? 1}
+                @input=${this._livePhotoStillDurationChanged}
+                ?disabled=${this._config.live_photo?.enabled !== true}
+              />
+              <div class="help-text">Seconds to show the still image before the companion video starts</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Repeat Delay</label>
+            <div>
+              <input
+                type="number"
+                min="0"
+                max="3600"
+                step="1"
+                .value=${this._config.live_photo?.repeat_delay ?? this._config.live_photo?.pause_duration ?? 10}
+                @input=${this._livePhotoRepeatDelayChanged}
+                ?disabled=${this._config.live_photo?.enabled !== true}
+              />
+              <div class="help-text">Seconds to wait after the Live Photo video ends before replaying it</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Hide Companion Videos</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.live_photo?.hide_companion_videos !== false}
+                @change=${this._livePhotoHideCompanionsChanged}
+                ?disabled=${this._config.live_photo?.enabled !== true}
+              />
+              <div class="help-text">Keep Live Photo companion videos out of the normal slideshow/video queue</div>
+            </div>
+          </div>
+
+          <div class="help-text" style="grid-column: 1 / -1;">
+            Advanced Live Photo suffix and extension lists remain available in YAML.
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Loading & Preload</div>
+
+          <div class="config-row">
+            <label>Preload Media</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.preload?.enabled !== false}
+                @change=${this._preloadEnabledChanged}
+              />
+              <div class="help-text">Prepare images and video metadata before swapping the visible media element</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Image Decode</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.preload?.image_decode !== false}
+                @change=${this._preloadImageDecodeChanged}
+                ?disabled=${this._config.preload?.enabled === false}
+              />
+              <div class="help-text">Decode images before display to reduce visible loading flashes</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Video Preload Mode</label>
+            <div>
+              <select
+                @change=${this._preloadVideoModeChanged}
+                .value=${this._config.preload?.video_mode || 'metadata'}
+                ?disabled=${this._config.preload?.enabled === false}
+              >
+                <option value="metadata">Metadata</option>
+                <option value="canplay">Can Play</option>
+                <option value="none">None</option>
+              </select>
+              <div class="help-text">How much video data to prepare before display</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Video Preload Timeout</label>
+            <div>
+              <input
+                type="number"
+                min="250"
+                max="30000"
+                step="250"
+                .value=${this._config.preload?.video_timeout_ms ?? 3000}
+                @input=${this._preloadVideoTimeoutChanged}
+                ?disabled=${this._config.preload?.enabled === false}
+              />
+              <div class="help-text">Maximum milliseconds to wait for video preparation before displaying normally</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">HEIC Handling</div>
+
+          <div class="config-row">
+            <label>HEIC Conversion</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.heic?.enabled !== false}
+                @change=${this._heicEnabledChanged}
+              />
+              <div class="help-text">Convert HEIC/HEIF images in the browser when a JPEG version is not available</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>HEIC Quality</label>
+            <div>
+              <input
+                type="number"
+                min="0.1"
+                max="1"
+                step="0.01"
+                .value=${this._config.heic?.quality ?? 0.92}
+                @input=${this._heicQualityChanged}
+                ?disabled=${this._config.heic?.enabled === false}
+              />
+              <div class="help-text">JPEG quality for browser-side HEIC conversion</div>
+            </div>
+          </div>
+        </div>
 
         ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
           <div class="section">
@@ -3633,7 +3641,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Images load pre-zoomed at this level (1-5x, click image to reset)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Blend Card with Background</label>
             <div>
