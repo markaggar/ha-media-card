@@ -7775,10 +7775,22 @@ export class MediaCard extends LitElement {
             const driftResp = await this.hass.callWS(makeQueryCall());
             const dr = driftResp?.response ?? driftResp;
             if (dr?.state !== 'play') return;
-            const drift = Math.abs(vid.currentTime - (dr.position_ms / 1000));
-            if (drift > DRIFT_THRESHOLD_S) {
-              vid.currentTime = dr.position_ms / 1000;
-              this._log(`🎬 Cast drift: corrected ${drift.toFixed(1)}s`);
+            const rokuPos = dr.position_ms / 1000;
+            const drift = rokuPos - vid.currentTime; // positive → Roku ahead, negative → local ahead
+            if (Math.abs(drift) > DRIFT_THRESHOLD_S) {
+              if (drift > 0) {
+                // Roku is ahead of local — pull local forward to keep up.
+                // Suppress the canplay the currentTime change will fire so we don't
+                // re-push to Roku and restart it from 0.
+                this._suppressCastPushOnCanplay = true;
+                vid.currentTime = rokuPos;
+                this._log(`🎬 Cast drift: snapped local +${drift.toFixed(1)}s (Roku was ahead)`);
+              } else {
+                // Local is ahead of Roku — this almost always means Roku ignored the
+                // contentPosition on a seek re-push and restarted from 0.
+                // Do NOT snap local backwards; that would undo the user's seek.
+                this._log(`🎬 Cast drift: ignoring — local is ${(-drift).toFixed(1)}s ahead of Roku (seek pending on Roku)`);
+              }
             }
           } catch (_) {}
         }, DRIFT_POLL_MS);
