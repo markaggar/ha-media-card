@@ -12437,7 +12437,7 @@ class MediaCard extends LitElement {
     }, POLL_MS);
   }
 
-  async _pushCurrentToCast() {
+  async _pushCurrentToCast(seekPositionSec = null) {
     if (!this._castEntityId || !this.hass || !this._currentMediaPath) return;
 
     // Cancel any pre-end pause from the previous item
@@ -12485,6 +12485,12 @@ class MediaCard extends LitElement {
         castData.file_path = this._currentMetadata.path;
       } else {
         castData.path_contains = filename;
+      }
+
+      // For seek re-push: start Roku buffering from the seek position instead of the beginning.
+      // contentPosition is handled by the roku_ecp_cast service and appended to the xcast URL.
+      if (seekPositionSec !== null) {
+        castData.start_position_seconds = seekPositionSec;
       }
 
       // Route to the correct media_index instance (same pattern as get_random_items)
@@ -14241,8 +14247,8 @@ class MediaCard extends LitElement {
   }
 
   // Seek local video by deltaSeconds (negative = rewind, positive = fast-forward).
-  // Also sends an absolute seek to the active Roku cast session so both screens stay
-  // in sync. Suppresses drift correction for 10 s so it doesn't fight the new position.
+  // When casting to Roku, re-pushes the current video with contentPosition so xcast
+  // buffers from the correct position (ECP cmd_seek is not supported by xcast).
   _seekVideo(deltaSeconds) {
     const video = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
     if (!video) return;
@@ -14250,39 +14256,16 @@ class MediaCard extends LitElement {
     video.currentTime = newTime;
     this._log(`⏩ Seek ${deltaSeconds > 0 ? '+' : ''}${deltaSeconds}s → ${newTime.toFixed(1)}s`);
 
-    // Suppress drift correction for 10 s so the poller doesn't snap back to Roku's old pos
-    this._castSeekSuppressUntil = Date.now() + 10000;
-
     // Cancel any outstanding pre-end pause timer (based on pre-seek position) and re-arm
-    // the timeupdate fallback by clearing the sent flag — it will fire once we're within
-    // 0.5 s of the new end position.
+    // the timeupdate fallback by clearing the sent flag — it will fire once within 0.5s of the new end.
     if (this._castPauseTimer) { clearTimeout(this._castPauseTimer); this._castPauseTimer = null; }
     this._castPreEndPauseSent = false;
 
-    // Send seek to Roku if cast is active
+    // When casting, re-push the video starting at the seeked position so Roku buffers from here.
+    // _startCastSync (called inside _pushCurrentToCast) handles sync once Roku is playing.
     if (this._castEntityId) {
-      this._sendCastSeek(newTime);
+      this._pushCurrentToCast(newTime);
     }
-  }
-
-  // Send absolute position seek to the active Roku xcast session via ECP input.
-  _sendCastSeek(positionSeconds) {
-    if (!this._castEntityId || !this.hass) return;
-    const wsCall = {
-      type: 'call_service',
-      domain: 'media_index',
-      service: 'roku_ecp_seek',
-      service_data: { roku_entity_id: this._castEntityId, position_seconds: positionSeconds },
-      return_response: false,
-    };
-    if (this.config.media_index?.entity_id) {
-      wsCall.target = { entity_id: this.config.media_index.entity_id };
-    }
-    this.hass.callWS(wsCall).then(() => {
-      this._log(`🎬 Cast seek: sent ${positionSeconds.toFixed(1)}s to ${this._castEntityId}`);
-    }).catch(err => {
-      this._log('⚠️ Cast seek failed:', err);
-    });
   }
 
   // Send ECP Play keypress (toggle pause/resume) to the active Roku cast.
