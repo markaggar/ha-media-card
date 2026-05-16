@@ -1346,6 +1346,13 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _showFilterButtonChanged(ev) {
+    this._config = ev.target.checked
+      ? { ...this._config, show_filter_button: true }
+      : (() => { const c = { ...this._config }; delete c.show_filter_button; return c; })();
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -4125,6 +4132,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   @change=${this._showCastButtonChanged}
                 />
                 <div class="help-text">Show a cast icon to mirror this card to any media_player entity in real time. Roku uses media_index.roku_ecp_cast (requires media_index). Other players (LG, Chromecast, etc.) use media_player.play_media directly.</div>
+              </div>
+            </div>
+
+            <div class="config-row">
+              <label>Filter &amp; Playback Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_filter_button === true}
+                  @change=${this._showFilterButtonChanged}
+                />
+                <div class="help-text">Show a filter icon to temporarily override folder, media type, date range, mode, favorites, and video playback settings for the current session. Settings reset when the page reloads.</div>
               </div>
             </div>
           </div>

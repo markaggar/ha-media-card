@@ -202,6 +202,10 @@ export class MediaCard extends LitElement {
     this._castSeekSuppressUntil = 0;  // timestamp: suppress drift correction until this time after a seek
     this._castEndWatcher = null;         // setInterval handle: polls Roku ECP after local video ends (auto-advance with cast)
 
+    // Session override (runtime filter/playback picker)
+    this._sessionOverride = null; // null = no override; object = active override choices
+    this._baseConfig = null;      // saved this.config before first override applied
+
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
     this._panelMode = null;            // null | 'burst' | 'queue' | 'history'
@@ -828,7 +832,11 @@ export class MediaCard extends LitElement {
       throw new Error('Invalid configuration');
     }
     this._log('📝 setConfig called with:', config);
-    
+
+    // Clear any active session override — new YAML config takes precedence
+    this._sessionOverride = null;
+    this._baseConfig = null;
+
     // MIGRATION: Detect V4 config and convert to V5a format
     if (!config.media_source_type && config.media_path) {
       this._log('🔄 Detected V4 config - migrating to V5a format');
@@ -6182,7 +6190,10 @@ export class MediaCard extends LitElement {
     
     // Don't render anything if all buttons are disabled
     const enableCast = this.config?.show_cast_button === true;
-    const anyButtonEnabled = enablePause || showMuteButton || enableDebugButton || enableRefresh || enableFullscreen || 
+    const enableFilterPicker = this.config?.show_filter_button === true &&
+                               this.config.media_source_type !== 'single_media';
+    const isFilterActive = !!this._sessionOverride;
+    const anyButtonEnabled = enablePause || showMuteButton || enableDebugButton || enableRefresh || enableFullscreen || enableFilterPicker ||
                             (showMediaIndexButtons && (enableFavorite || enableDelete || enableEdit || enableInfo || enableBurstReview || enableRelatedPhotos || enableOnThisDay || enableCast)) ||
                             showQueueButton;
     if (!anyButtonEnabled) {
@@ -6320,6 +6331,14 @@ export class MediaCard extends LitElement {
             @click=${this._handleCastButtonClick}
             title="${this._castEntityId ? `Casting to ${this._castEntityId} (tap to stop)` : 'Cast to TV'}">
             <ha-icon icon="${this._castEntityId ? 'mdi:cast-connected' : 'mdi:cast'}"></ha-icon>
+          </button>
+        ` : ''}
+        ${enableFilterPicker ? html`
+          <button
+            class="action-btn filter-btn ${isFilterActive ? 'active' : ''}"
+            @click=${this._handleFilterPickerClick}
+            title="${isFilterActive ? 'Override Active — Tap to Edit' : 'Filter & Playback'}">
+            <ha-icon icon="${isFilterActive ? 'mdi:filter-settings' : 'mdi:filter-outline'}"></ha-icon>
           </button>
         ` : ''}
       </div>
@@ -7724,6 +7743,263 @@ export class MediaCard extends LitElement {
     if (this.config.media_index?.entity_id) wsCall.target = { entity_id: this.config.media_index.entity_id };
     this.hass.callWS(wsCall).catch(() => {});
     this._log(`🎬 Cast: paused for manual navigation (will resume when new video pushes)`);
+  }
+
+  // ── Runtime Filter/Playback Picker ─────────────────────────────────────────
+
+  /**
+   * Merge override choices onto the base config and reinitialise the provider.
+   * Call with the raw values from the picker dialog.
+   */
+  _applySessionOverride(overrides) {
+    if (!this._baseConfig) this._baseConfig = this.config;
+    this._sessionOverride = overrides;
+
+    const base = this._baseConfig;
+    const merged = { ...base };
+
+    // Folder path
+    if (overrides.folder_path && overrides.folder_path.trim()) {
+      merged.folder = { ...(base.folder || {}), path: overrides.folder_path.trim() };
+    } else {
+      merged.folder = base.folder ? { ...base.folder } : merged.folder;
+    }
+
+    // Mode (random / sequential)
+    if (overrides.mode) {
+      merged.folder = { ...(merged.folder || {}), mode: overrides.mode };
+    }
+
+    // Media type
+    if (overrides.media_type && overrides.media_type !== 'all') {
+      merged.media_type = overrides.media_type;
+    } else if (overrides.media_type === 'all') {
+      const c = { ...merged };
+      delete c.media_type;
+      Object.assign(merged, c);
+    }
+
+    // Filters
+    const baseFilters = base.filters || {};
+    const mergedFilters = { ...baseFilters };
+    if (overrides.favorites) {
+      mergedFilters.favorites = true;
+    } else {
+      delete mergedFilters.favorites;
+    }
+    if (overrides.date_from || overrides.date_to) {
+      mergedFilters.date_range = {
+        ...(baseFilters.date_range || {}),
+        ...(overrides.date_from ? { start: overrides.date_from } : {}),
+        ...(overrides.date_to   ? { end:   overrides.date_to   } : {}),
+      };
+      if (!overrides.date_from) delete mergedFilters.date_range.start;
+      if (!overrides.date_to)   delete mergedFilters.date_range.end;
+    } else {
+      delete mergedFilters.date_range;
+    }
+    merged.filters = mergedFilters;
+
+    // Video play-to-end
+    if (overrides.video_play_to_end === true) {
+      merged.video_max_duration = 0;
+    } else if (overrides.video_play_to_end === false && base.video_max_duration !== undefined) {
+      merged.video_max_duration = base.video_max_duration;
+    } else {
+      delete merged.video_max_duration;
+    }
+
+    // Video muted
+    if (overrides.video_unmuted === true) {
+      merged.video_muted = false;
+    } else if (overrides.video_unmuted === false) {
+      merged.video_muted = true;
+    } else {
+      merged.video_muted = base.video_muted;
+    }
+
+    this.config = merged;
+    this._reinitWithClear();
+  }
+
+  /** Restore the original YAML config and reinitialise the provider. */
+  _clearSessionOverride() {
+    if (this._baseConfig) this.config = this._baseConfig;
+    this._baseConfig = null;
+    this._sessionOverride = null;
+    this._reinitWithClear();
+  }
+
+  /** Dispose the current provider and restart from a clean navigation state. */
+  _reinitWithClear() {
+    // Navigation state
+    this.navigationQueue = [];
+    this.navigationIndex = -1;
+    this.isNavigationQueuePreloaded = false;
+    this._itemsSinceRefresh = 0;
+
+    // Display state
+    this.currentMedia = null;
+    this._currentMediaPath = null;
+    this._currentMetadata = null;
+    this._pendingMetadata = null;
+    this._pendingNavigationIndex = null;
+    this.mediaUrl = '';
+    this._frontLayerUrl = '';
+    this._backLayerUrl = '';
+
+    // Dispose provider
+    if (this.provider?.dispose) this.provider.dispose();
+    this.provider = null;
+
+    this._initializeProvider();
+    this.requestUpdate();
+  }
+
+  /** Open the filter/playback picker dialog. */
+  _handleFilterPickerClick(e) {
+    e.stopPropagation();
+
+    const activeOverride = this._sessionOverride || {};
+    const baseCfg = this._baseConfig || this.config;
+    const currentFolder  = activeOverride.folder_path  ?? (baseCfg.folder?.path || '');
+    const currentType    = activeOverride.media_type   ?? (baseCfg.media_type || 'all');
+    const currentDateFrom = activeOverride.date_from   ?? (baseCfg.filters?.date_range?.start || '');
+    const currentDateTo  = activeOverride.date_to      ?? (baseCfg.filters?.date_range?.end   || '');
+    const currentFavs    = activeOverride.favorites    ?? (baseCfg.filters?.favorites === true);
+    const currentMode    = activeOverride.mode         ?? (baseCfg.folder?.mode || 'random');
+    const currentPlayToEnd = activeOverride.video_play_to_end ??
+                             (baseCfg.video_max_duration === 0 ? true : false);
+    const currentUnmuted  = activeOverride.video_unmuted ??
+                             (baseCfg.video_muted === false ? true : false);
+
+    const isMediaIndex = MediaProvider.isMediaIndexActive(this.config);
+    const hideVideoSection = currentType === 'image';
+    const hideModeSection  = !isMediaIndex;
+
+    const dialog = document.createElement('div');
+    dialog.className = 'filter-picker-overlay';
+    // Build HTML — values set programmatically below to avoid XSS
+    dialog.innerHTML = `
+      <div class="filter-picker-content">
+        <h3 class="filter-picker-title">Filter &amp; Playback</h3>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Folder</span>
+          <input type="text" class="filter-picker-input" id="fp-folder"
+            placeholder="${baseCfg.folder?.path ? baseCfg.folder.path : 'Use config folder'}">
+        </div>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Media Type</span>
+          <div class="filter-picker-radio-group" id="fp-media-type">
+            <label class="filter-picker-radio-label"><input type="radio" name="fp-mt" value="all"> All</label>
+            <label class="filter-picker-radio-label"><input type="radio" name="fp-mt" value="image"> Images</label>
+            <label class="filter-picker-radio-label"><input type="radio" name="fp-mt" value="video"> Videos</label>
+          </div>
+        </div>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Date Range</span>
+          <div class="filter-picker-date-row">
+            <input type="date" class="filter-picker-date" id="fp-date-from">
+            <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
+            <input type="date" class="filter-picker-date" id="fp-date-to">
+          </div>
+        </div>
+
+        <div class="filter-picker-toggle-row">
+          <span class="filter-picker-label">Favorites Only</span>
+          <label class="filter-picker-toggle">
+            <input type="checkbox" id="fp-favorites">
+            <span class="filter-picker-toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="filter-picker-section" id="fp-video-section" style="${hideVideoSection ? 'display:none' : ''}">
+          <span class="filter-picker-label">Video Options</span>
+          <div class="filter-picker-toggle-row" style="margin-top:4px">
+            <span style="font-size:12px;color:rgba(255,255,255,0.7)">Play to completion</span>
+            <label class="filter-picker-toggle">
+              <input type="checkbox" id="fp-play-to-end">
+              <span class="filter-picker-toggle-slider"></span>
+            </label>
+          </div>
+          <div class="filter-picker-toggle-row" style="margin-top:6px">
+            <span style="font-size:12px;color:rgba(255,255,255,0.7)">Unmuted</span>
+            <label class="filter-picker-toggle">
+              <input type="checkbox" id="fp-unmuted">
+              <span class="filter-picker-toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="filter-picker-section" id="fp-mode-section" style="${hideModeSection ? 'display:none' : ''}">
+          <span class="filter-picker-label">Mode</span>
+          <div class="filter-picker-radio-group" id="fp-mode">
+            <label class="filter-picker-radio-label"><input type="radio" name="fp-mode" value="random"> Random</label>
+            <label class="filter-picker-radio-label"><input type="radio" name="fp-mode" value="sequential"> Sequential</label>
+          </div>
+        </div>
+
+        <div class="filter-picker-actions">
+          <button class="filter-picker-apply">Apply</button>
+          <button class="filter-picker-clear">Clear</button>
+          <button class="filter-picker-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    // Set form values programmatically (safe — no user data in innerHTML above)
+    dialog.querySelector('#fp-folder').value = currentFolder;
+    dialog.querySelectorAll('[name="fp-mt"]').forEach(r => { r.checked = (r.value === currentType); });
+    dialog.querySelector('#fp-date-from').value = currentDateFrom;
+    dialog.querySelector('#fp-date-to').value   = currentDateTo;
+    dialog.querySelector('#fp-favorites').checked = currentFavs;
+    dialog.querySelector('#fp-play-to-end').checked = currentPlayToEnd;
+    dialog.querySelector('#fp-unmuted').checked     = currentUnmuted;
+    dialog.querySelectorAll('[name="fp-mode"]').forEach(r => { r.checked = (r.value === currentMode); });
+
+    // Show/hide video section when media type radio changes
+    dialog.querySelector('#fp-media-type').addEventListener('change', ev => {
+      const videoSection = dialog.querySelector('#fp-video-section');
+      if (videoSection) videoSection.style.display = ev.target.value === 'image' ? 'none' : '';
+    });
+
+    const card = this.shadowRoot.querySelector('.card');
+    card.appendChild(dialog);
+
+    const cleanup = () => dialog.remove();
+    dialog.querySelector('.filter-picker-cancel').addEventListener('click', cleanup);
+    dialog.addEventListener('click', ev => { if (ev.target === dialog) cleanup(); });
+
+    dialog.querySelector('.filter-picker-clear').addEventListener('click', () => {
+      cleanup();
+      this._clearSessionOverride();
+    });
+
+    dialog.querySelector('.filter-picker-apply').addEventListener('click', () => {
+      const folder   = dialog.querySelector('#fp-folder').value.trim() || null;
+      const mt       = [...dialog.querySelectorAll('[name="fp-mt"]')].find(r => r.checked)?.value || 'all';
+      const dateFrom = dialog.querySelector('#fp-date-from').value || null;
+      const dateTo   = dialog.querySelector('#fp-date-to').value   || null;
+      const favs     = dialog.querySelector('#fp-favorites').checked;
+      const playEnd  = dialog.querySelector('#fp-play-to-end').checked;
+      const unmuted  = dialog.querySelector('#fp-unmuted').checked;
+      const modeEl   = [...dialog.querySelectorAll('[name="fp-mode"]')].find(r => r.checked);
+      const mode     = modeEl?.value || null;
+      cleanup();
+      this._applySessionOverride({
+        folder_path:       folder,
+        media_type:        mt,
+        date_from:         dateFrom,
+        date_to:           dateTo,
+        favorites:         favs,
+        mode:              mode,
+        video_play_to_end: playEnd,
+        video_unmuted:     unmuted,
+      });
+    });
   }
 
   // Poll Roku via direct ECP query every second after local video ends.
@@ -11614,6 +11890,232 @@ export class MediaCard extends LitElement {
     }
 
     .cast-picker-cancel:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    /* ── Filter / Playback Picker Dialog ────────────────────────────────────── */
+    .filter-picker-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .filter-picker-content {
+      background: rgba(30, 30, 30, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+      min-width: 300px;
+      max-width: 480px;
+      width: 92%;
+      padding: 20px 16px 16px;
+      animation: dialogSlideIn 0.25s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .filter-picker-title {
+      margin: 0 0 2px;
+      font-size: 15px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.9);
+      text-align: center;
+      letter-spacing: 0.3px;
+    }
+
+    .filter-picker-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .filter-picker-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: rgba(255, 255, 255, 0.45);
+    }
+
+    .filter-picker-input {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 13px;
+      padding: 8px 10px;
+      width: 100%;
+      box-sizing: border-box;
+      outline: none;
+    }
+
+    .filter-picker-input:focus {
+      border-color: rgba(255, 255, 255, 0.35);
+    }
+
+    .filter-picker-date-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .filter-picker-date {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 12px;
+      padding: 7px 8px;
+      outline: none;
+      color-scheme: dark;
+    }
+
+    .filter-picker-date:focus {
+      border-color: rgba(255, 255, 255, 0.35);
+    }
+
+    .filter-picker-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .filter-picker-toggle {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .filter-picker-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .filter-picker-toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 22px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .filter-picker-toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      left: 3px;
+      top: 3px;
+      background: rgba(255, 255, 255, 0.7);
+      border-radius: 50%;
+      transition: transform 0.2s ease, background 0.2s ease;
+    }
+
+    .filter-picker-toggle input:checked + .filter-picker-toggle-slider {
+      background: var(--primary-color, #03a9f4);
+    }
+
+    .filter-picker-toggle input:checked + .filter-picker-toggle-slider::before {
+      transform: translateX(18px);
+      background: white;
+    }
+
+    .filter-picker-radio-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .filter-picker-radio-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.8);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .filter-picker-radio-label:has(input:checked) {
+      background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.25);
+      border-color: rgba(var(--rgb-primary-color, 3, 169, 244), 0.6);
+    }
+
+    .filter-picker-radio-label input[type="radio"] {
+      display: none;
+    }
+
+    .filter-picker-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .filter-picker-apply {
+      flex: 1;
+      padding: 10px;
+      border-radius: 10px;
+      border: none;
+      background: var(--primary-color, #03a9f4);
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+
+    .filter-picker-apply:hover { opacity: 0.85; }
+
+    .filter-picker-clear {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 100, 100, 0.4);
+      background: rgba(255, 80, 80, 0.12);
+      color: rgba(255, 160, 160, 0.9);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .filter-picker-clear:hover {
+      background: rgba(255, 80, 80, 0.22);
+    }
+
+    .filter-picker-cancel {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .filter-picker-cancel:hover {
       background: rgba(255, 255, 255, 0.12);
       color: rgba(255, 255, 255, 0.9);
     }
