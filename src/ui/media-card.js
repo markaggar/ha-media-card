@@ -3466,6 +3466,9 @@ export class MediaCard extends LitElement {
         this.requestUpdate();
       } catch (error) {
         console.error('[MediaCard] Failed to resolve media URL:', mediaId, error);
+        // Exclude from provider queue so stale/deleted files aren't re-queued
+        const _mip = this.provider?.mediaIndexProvider || (this.provider?.constructor?.name === 'MediaIndexProvider' ? this.provider : null);
+        if (_mip) _mip.excludedFiles.add(mediaId);
         // Advance past this item — do NOT set mediaUrl to '' which leaves navigationIndex
         // stuck and causes the same item to be retried on every subsequent _loadNext call.
         // Set navigationIndex now so the next call skips this item, then schedule a new
@@ -3492,6 +3495,8 @@ export class MediaCard extends LitElement {
         this.requestUpdate();
       } catch (error) {
         console.warn('[MediaCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
+        const _mip2 = this.provider?.mediaIndexProvider || (this.provider?.constructor?.name === 'MediaIndexProvider' ? this.provider : null);
+        if (_mip2) _mip2.excludedFiles.add(mediaId);
         if (this._pendingNavigationIndex !== null && this._pendingNavigationIndex !== undefined) {
           this.navigationIndex = this._pendingNavigationIndex;
         }
