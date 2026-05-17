@@ -1276,8 +1276,11 @@ export class MediaCard extends LitElement {
             this.currentMedia = item;
             this._pendingNavigationIndex = this.navigationIndex;
             this._pendingMediaPath = item.media_content_id;
-            this._pendingMetadata = null;
+            this._pendingMetadata = item.metadata || null;
             await this._resolveMediaUrl();
+            // Fetch fresh metadata from media_index in background (item.metadata from
+            // shared queue restore may be null or stale if the sync state was old)
+            this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
           } else {
             await this._loadNext();
           }
@@ -2500,8 +2503,11 @@ export class MediaCard extends LitElement {
     );
     
     if (existingIndex >= 0) {
-      // Item already in queue - jump to it
+      // Item already in queue - refresh its metadata with fresh data from provider and jump to it
       this._log(`🔄 First item already in queue at index ${existingIndex}, jumping to it`);
+      if (firstItem.metadata) {
+        this.navigationQueue[existingIndex].metadata = firstItem.metadata;
+      }
       this.navigationIndex = existingIndex;
     } else {
       // New item - add to end and navigate to it
@@ -2544,6 +2550,9 @@ export class MediaCard extends LitElement {
     
     await this._resolveMediaUrl();
     this.requestUpdate();
+
+    // Refresh metadata from media_index in background (same as _loadNext)
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
   }
 
   /**
@@ -2960,17 +2969,21 @@ export class MediaCard extends LitElement {
           return;
         }
 
-        // V5.6.5: If we have pending metadata, update that instead of current
-        // This prevents refreshed metadata from being applied before media loads
-        if (this._pendingMetadata !== null) {
-          // Merge with pending metadata (which contains path-based metadata)
+        // V5.6.5: If we have pending metadata for the SAME item, update it instead of current.
+        // This prevents refreshed metadata from being applied before media loads.
+        // TOCTOU guard: _pendingMetadata may belong to the NEXT item (C) while this refresh
+        // was triggered for the item that just finished displaying (B). Only merge into
+        // pending when the pending path matches the refreshed path; otherwise fall through
+        // to update the still-visible current metadata so B's overlay stays accurate.
+        if (this._pendingMetadata !== null && this._pendingMediaPath === targetPath) {
+          // Merge with pending metadata for the same item
           this._pendingMetadata = {
             ...this._pendingMetadata,
             ...freshMetadata
           };
           this._log('📊 Refreshed metadata from media_index (applied to pending)');
         } else {
-          // No pending state - apply directly to current
+          // Either no pending state, or pending is for a different item — apply to current
           this._currentMetadata = {
             ...this._currentMetadata,
             ...freshMetadata
@@ -4941,7 +4954,14 @@ export class MediaCard extends LitElement {
         });
         const data = resp?.response;
         if (data?.found && Array.isArray(data.queue) && data.queue.length) {
-          return this._applyRestoredState(data.queue, data.current_index);
+          // Parse current_metadata (stored as JSON string by media_index service)
+          let restoredMetadata = null;
+          try {
+            restoredMetadata = typeof data.current_metadata === 'string'
+              ? JSON.parse(data.current_metadata)
+              : (data.current_metadata || null);
+          } catch (_e) {}
+          return this._applyRestoredState(data.queue, data.current_index, restoredMetadata);
         }
       } catch (e) {
         this._log('⚠️ Could not fetch sync state from media_index, falling back to localStorage:', e);
@@ -4954,7 +4974,7 @@ export class MediaCard extends LitElement {
       if (!raw) return false;
       const data = JSON.parse(raw);
       if (!Array.isArray(data.queue) || !data.queue.length) return false;
-      return this._applyRestoredState(data.queue, data.currentIndex);
+      return this._applyRestoredState(data.queue, data.currentIndex, data.currentMetadata || null);
     } catch (_e) {
       return false;
     }
@@ -5027,7 +5047,7 @@ export class MediaCard extends LitElement {
   }
 
   // ── Shared helper ───────────────────────────────────────────────────────────
-  _applyRestoredState(queue, rawIndex) {
+  _applyRestoredState(queue, rawIndex, currentMetadata = null) {
     this.navigationQueue = queue.map(mediaId => ({
       media_content_id: mediaId,
       media_content_type: MediaUtils.detectFileType(mediaId) || 'image',
@@ -5038,6 +5058,10 @@ export class MediaCard extends LitElement {
       typeof rawIndex === 'number' ? rawIndex : 0,
       this.navigationQueue.length - 1
     );
+    // Apply restored metadata to the current item so it's available immediately on first render
+    if (currentMetadata && this.navigationQueue[this.navigationIndex]) {
+      this.navigationQueue[this.navigationIndex].metadata = currentMetadata;
+    }
     this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
     // Cross-device reconnect grace period: when we restore at the last (or only) slot
     // the driver may be about to extend the queue and broadcast the next item.  Enter a
@@ -5705,12 +5729,15 @@ export class MediaCard extends LitElement {
   
   // V4: Metadata display methods
   _renderMetadataOverlay() {
-    // Only show if metadata is configured and available
-    if (!this.config.metadata || !this._currentMetadata) {
+    // Only show if metadata is configured and available.
+    // Prefer pending metadata when mid-navigation so the overlay updates at the same
+    // time as the visual transition rather than lagging until _onMediaLoaded fires.
+    const activeMetadata = this._pendingMetadata || this._currentMetadata;
+    if (!this.config.metadata || !activeMetadata) {
       return html``;
     }
 
-    const metadataText = this._formatMetadataDisplay(this._currentMetadata);
+    const metadataText = this._formatMetadataDisplay(activeMetadata);
     if (!metadataText) {
       return html``;
     }
@@ -6447,14 +6474,18 @@ export class MediaCard extends LitElement {
       return html``;
     }
 
-    // If overlay is open but we don't have full metadata, fetch it now
-    if (!this._fullMetadata && this._currentMediaPath && MediaProvider.isMediaIndexActive(this.config)) {
+    // If overlay is open but we don't have full metadata, fetch it now.
+    // Use pending path when mid-navigation so we fetch for the item being shown, not
+    // the one that is still fading out.
+    const activePath = this._pendingMediaPath || this._currentMediaPath;
+    if (!this._fullMetadata && activePath && MediaProvider.isMediaIndexActive(this.config)) {
       // Trigger async fetch (don't await, will update on next render)
       this._fetchFullMetadataAsync();
     }
 
-    // Use full metadata if available, otherwise fall back to current metadata
-    const metadata = this._fullMetadata || this._currentMetadata || {};
+    // Use full metadata if available, fall back through pending → current so the
+    // pane never shows a previous item's data while the new item is still loading.
+    const metadata = this._fullMetadata || this._pendingMetadata || this._currentMetadata || {};
     const exif = metadata.exif || {};
 
     // Format timestamp to locale date/time
@@ -7571,6 +7602,10 @@ export class MediaCard extends LitElement {
     if (this._fetchingMetadata) return;
     this._fetchingMetadata = true;
     
+    // Capture path at fetch start — prefer pending path when mid-navigation so we
+    // always fetch for the item that will be displayed, not the one still fading out.
+    const targetPath = this._pendingMediaPath || this._currentMediaPath;
+    
     try {
       // V5.2: Pass media_source_uri as-is to Media Index
       const wsCall = {
@@ -7578,7 +7613,7 @@ export class MediaCard extends LitElement {
         domain: 'media_index',
         service: 'get_file_metadata',
         service_data: {
-          media_source_uri: this._currentMediaPath
+          media_source_uri: targetPath
         },
         return_response: true
       };
@@ -7589,6 +7624,13 @@ export class MediaCard extends LitElement {
       
       const response = await this.hass.callWS(wsCall);
       
+      // TOCTOU guard: discard if the card has navigated to a different item since we started
+      const stillActive = this._pendingMediaPath === targetPath || this._currentMediaPath === targetPath;
+      if (!stillActive) {
+        this._log('📊 Full metadata fetch discarded — navigated away before result returned');
+        return;
+      }
+      
       // Store full metadata and trigger re-render
       this._fullMetadata = response.response;
       this._log('📊 Auto-fetched full metadata for open info overlay:', this._fullMetadata);
@@ -7596,7 +7638,7 @@ export class MediaCard extends LitElement {
       
     } catch (error) {
       console.error('Failed to auto-fetch metadata:', error);
-      this._fullMetadata = this._currentMetadata; // Fallback to basic metadata
+      this._fullMetadata = this._pendingMetadata || this._currentMetadata; // Fallback to basic metadata
       this.requestUpdate();
     } finally {
       this._fetchingMetadata = false;
