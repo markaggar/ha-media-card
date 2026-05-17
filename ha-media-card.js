@@ -4943,7 +4943,15 @@ class MediaCard extends LitElement {
     // V5.6.8: Periodic refresh counter - tracks items since last provider refresh
     // Triggers a check for new files every slideshow_window items
     this._itemsSinceRefresh = 0;
-    
+
+    // Lookahead queue fill count (set in setConfig from queue_lookahead config key)
+    this._lookaheadCount = 10;
+
+    // Thumbnail long-press menu state
+    this._thumbnailHoldTimer = null;
+    this._thumbnailHoldFired = false;
+    this._thumbnailMenuIndex = null;   // actualIndex of open mini-menu; null = none
+
     // V5.6.7: Track which navigation index each crossfade layer belongs to
     this._frontLayerNavigationIndex = null;  // Navigation index for front layer image
     this._backLayerNavigationIndex = null;   // Navigation index for back layer image
@@ -5729,6 +5737,7 @@ class MediaCard extends LitElement {
     this.maxNavQueueSize = this.config.navigation_queue_size || defaultQueueSize;
     this._periodicRefreshInterval = slideshowWindow; // How often to check for new files
     this._log('Set maxNavQueueSize to', this.maxNavQueueSize, 'periodicRefreshInterval:', this._periodicRefreshInterval);
+    this._lookaheadCount = Math.min(100, Math.max(1, this.config.queue_lookahead ?? 10));
     
     // V5.7: Compile excluded_paths patterns for path filtering
     // Patterns are compiled to regex once and stored on the card instance.
@@ -6443,7 +6452,9 @@ class MediaCard extends LitElement {
       
       // Store pending index (will apply when media loads)
       this._pendingNavigationIndex = nextIndex;
-      
+      // Pre-populate queue so Queue Preview always shows upcoming items
+      this._fillLookahead();
+
       // Add to history for tracking (providers use this for exclusion)
       // Check by media_content_id to avoid duplicate object references
       const alreadyInHistory = this.history.some(h => h.media_content_id === item.media_content_id);
@@ -6822,6 +6833,66 @@ class MediaCard extends LitElement {
     
     // V5: Setup auto-advance after jumping to position
     this._setupAutoRefresh();
+  }
+
+  /**
+   * Remove an item from the navigation queue ("Skip session" in queue panel).
+   * Excludes from provider so the item won't reappear this session.
+   */
+  _removeFromQueue(actualIndex) {
+    if (actualIndex < 0 || actualIndex >= this.navigationQueue.length) return;
+    const removed = this.navigationQueue.splice(actualIndex, 1)[0];
+    if (actualIndex < this.navigationIndex) {
+      this.navigationIndex--;
+      if (this._pendingNavigationIndex !== null) this._pendingNavigationIndex--;
+    }
+    if (this.provider && typeof this.provider.excludeFile === 'function') {
+      const path = removed.metadata?.path || removed.path;
+      const uri  = removed.media_source_uri || removed.media_content_id;
+      if (path) this.provider.excludeFile(path);
+      if (uri && uri !== path) this.provider.excludeFile(uri);
+    }
+    this._log('⏭ Skipped from queue:', removed.metadata?.filename || removed.media_content_id);
+    this._fillLookahead();
+    this.requestUpdate();
+  }
+
+  /**
+   * Remove an item from the panel queue ("Remove from panel" for non-queue panels).
+   * Does NOT exclude from provider — item may still appear in the main slideshow.
+   */
+  _removeFromPanelQueue(actualIndex) {
+    if (actualIndex < 0 || actualIndex >= this._panelQueue.length) return;
+    const removed = this._panelQueue.splice(actualIndex, 1)[0];
+    if (actualIndex < this._panelQueueIndex) {
+      this._panelQueueIndex--;
+    }
+    this._log('⏭ Removed from panel:', removed.filename || removed.path);
+    this.requestUpdate();
+  }
+
+  /**
+   * Open delete confirmation for a thumbnail menu action.
+   */
+  async _handleThumbnailMenuDelete(item) {
+    const path = item.media_source_uri || item.media_content_id || (item.path ? `media-source://media_source${item.path}` : null);
+    if (!path) return;
+    // Prefer the already-resolved URL from the thumbnail strip; fall back to a fresh resolve
+    const thumbUrl  = item._resolvedUrl || await this._getMediaThumbnail(path);
+    const filename  = item.metadata?.filename ?? item.filename ?? path.split('/').pop();
+    this._showDeleteConfirmation(path, thumbUrl, filename);
+  }
+
+  /**
+   * Open edit confirmation for a thumbnail menu action.
+   */
+  async _handleThumbnailMenuEdit(item) {
+    const path = item.media_source_uri || item.media_content_id || (item.path ? `media-source://media_source${item.path}` : null);
+    if (!path) return;
+    // Prefer the already-resolved URL from the thumbnail strip; fall back to a fresh resolve
+    const thumbUrl  = item._resolvedUrl || await this._getMediaThumbnail(path);
+    const filename  = item.metadata?.filename ?? item.filename ?? path.split('/').pop();
+    this._showEditConfirmation(path, thumbUrl, filename);
   }
 
   /**
@@ -9602,6 +9673,12 @@ class MediaCard extends LitElement {
   async _tryRestoreFromSharedQueue() {
     const id = this.config?.shared_queue_id;
     if (!id) return false;
+    // Skip restore when reinit was triggered by an explicit session override change
+    // (filter picker apply/clear). The old queue belongs to a different content set.
+    if (this._skipSharedQueueRestore) {
+      this._skipSharedQueueRestore = false;
+      return false;
+    }
 
     // Cross-device: fetch from media-index (authoritative, any device may have written it)
     if (this._hasCrossDeviceSync()) {
@@ -11167,6 +11244,17 @@ class MediaCard extends LitElement {
       return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     };
 
+    // Compute a friendly orientation label
+    const orientMap = { 'normal': 'Normal', '90_cw': 'Rotated 90° CW', '90_ccw': 'Rotated 90° CCW', '180': 'Rotated 180°' };
+    let orientLabel = null;
+    if (metadata.orientation) {
+      orientLabel = orientMap[metadata.orientation] || metadata.orientation;
+    } else if (metadata.width && metadata.height) {
+      if (metadata.width === metadata.height) orientLabel = 'Square';
+      else if (metadata.width > metadata.height) orientLabel = 'Landscape';
+      else orientLabel = 'Portrait';
+    }
+
     return html`
       <div class="info-overlay">
         <div class="info-content">
@@ -11305,12 +11393,6 @@ class MediaCard extends LitElement {
                 <div class="info-value">${exif.white_balance}</div>
               </div>
             ` : ''}
-            ${metadata.orientation ? html`
-              <div class="info-section">
-                <div class="info-label">Orientation:</div>
-                <div class="info-value">${metadata.orientation}</div>
-              </div>
-            ` : ''}
             
             <div class="info-group-header">📁 File Info</div>
             ${metadata.file_size ? html`
@@ -11347,6 +11429,12 @@ class MediaCard extends LitElement {
               <div class="info-section">
                 <div class="info-label">Dimensions:</div>
                 <div class="info-value">${metadata.width} × ${metadata.height}</div>
+              </div>
+            ` : ''}
+            ${orientLabel ? html`
+              <div class="info-section">
+                <div class="info-label">Orientation:</div>
+                <div class="info-value">${orientLabel}</div>
               </div>
             ` : ''}
             ${metadata.last_scanned ? html`
@@ -12553,7 +12641,7 @@ class MediaCard extends LitElement {
     }
 
     this.config = merged;
-    this._reinitWithClear();
+    this._reinitWithClear(true); // skip shared-queue restore — user explicitly chose new content
   }
 
   /** Restore the original YAML config and reinitialise the provider. */
@@ -12561,16 +12649,18 @@ class MediaCard extends LitElement {
     if (this._baseConfig) this.config = this._baseConfig;
     this._baseConfig = null;
     this._sessionOverride = null;
-    this._reinitWithClear();
+    this._reinitWithClear(true); // skip shared-queue restore — user explicitly cleared override
   }
 
   /** Dispose the current provider and restart from a clean navigation state. */
-  _reinitWithClear() {
+  _reinitWithClear(skipSharedQueueRestore = false) {
     // Navigation state
     this.navigationQueue = [];
     this.navigationIndex = -1;
     this.isNavigationQueuePreloaded = false;
     this._itemsSinceRefresh = 0;
+    this._fillLookaheadRunning = false; // Cancel any in-flight lookahead from the old provider
+    this._skipSharedQueueRestore = skipSharedQueueRestore;
 
     // Display state
     this.currentMedia = null;
@@ -13372,6 +13462,7 @@ class MediaCard extends LitElement {
     // V4 PATTERN: Use captured values, not current state
     // Detect if this is a video based on file extension
     const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(filename);
+    const videoThumbnailTime = this.config?.video_thumbnail_time || 1;
     
     // Construct the destination path for display
     // Use folder.path in folder mode, media_path in single_media mode
@@ -13393,11 +13484,13 @@ class MediaCard extends LitElement {
     dialog.innerHTML = `
       <div class="delete-confirmation-content">
         <h3>Delete Media?</h3>
-        ${!isVideo ? `
+        ${thumbnailUrl ? `
         <div class="delete-thumbnail">
-          ${thumbnailUrl ? `<img src="${thumbnailUrl}" alt="Preview">` : '<div style="padding: 40px; opacity: 0.5;">Loading preview...</div>'}
-        </div>
-        ` : ''}
+          ${isVideo
+            ? `<video preload="metadata" muted playsinline src="${thumbnailUrl}#t=${videoThumbnailTime}" style="width:100%;height:100%;object-fit:cover;display:block;"></video>`
+            : `<img src="${thumbnailUrl}" alt="Preview">`
+          }
+        </div>` : ''}
         <p><strong>File:</strong> ${filename}</p>
         <p><strong>Moving to:</strong> ${destinationPath}</p>
         <div class="delete-actions">
@@ -13410,6 +13503,12 @@ class MediaCard extends LitElement {
     // Add to card
     const cardElement = this.shadowRoot.querySelector('.card');
     cardElement.appendChild(dialog);
+    
+    // Prevent video preview from playing
+    if (isVideo && thumbnailUrl) {
+      const previewVideo = dialog.querySelector('.delete-thumbnail video');
+      if (previewVideo) previewVideo.addEventListener('play', () => previewVideo.pause());
+    }
     
     // Handle cancel
     const cancelBtn = dialog.querySelector('.cancel-btn');
@@ -13717,6 +13816,7 @@ class MediaCard extends LitElement {
     // V4 PATTERN: Use captured values, not current state
     // Detect if this is a video based on file extension
     const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(filename);
+    const videoThumbnailTime = this.config?.video_thumbnail_time || 1;
     
     // Construct the destination path for display
     // Use folder.path in folder mode, media_path in single_media mode
@@ -13733,11 +13833,13 @@ class MediaCard extends LitElement {
     dialog.innerHTML = `
       <div class="delete-confirmation-content">
         <h3>Mark for Editing?</h3>
-        ${!isVideo ? `
+        ${thumbnailUrl ? `
         <div class="delete-thumbnail">
-          <img src="${thumbnailUrl}" alt="Preview">
-        </div>
-        ` : ''}
+          ${isVideo
+            ? `<video preload="metadata" muted playsinline src="${thumbnailUrl}#t=${videoThumbnailTime}" style="width:100%;height:100%;object-fit:cover;display:block;"></video>`
+            : `<img src="${thumbnailUrl}" alt="Preview">`
+          }
+        </div>` : ''}
         <p><strong>File:</strong> ${filename}</p>
         <p><strong>Moving to:</strong> ${destinationPath}</p>
         <div class="delete-actions">
@@ -13750,6 +13852,12 @@ class MediaCard extends LitElement {
     // Add to card
     const cardElement = this.shadowRoot.querySelector('.card');
     cardElement.appendChild(dialog);
+    
+    // Prevent video preview from playing
+    if (isVideo && thumbnailUrl) {
+      const previewVideo = dialog.querySelector('.delete-thumbnail video');
+      if (previewVideo) previewVideo.addEventListener('play', () => previewVideo.pause());
+    }
     
     // Handle cancel
     const cancelBtn = dialog.querySelector('.cancel-btn');
@@ -14115,11 +14223,15 @@ class MediaCard extends LitElement {
       
       this._panelMode = 'queue';
       this._panelOpen = true;
-      
+      // Pre-populate lookahead items so panel shows items ahead of current position
+      this._fillLookahead();
+
       // Initialize paging for queue preview
       // V5.6.7: Use pending index if available (syncs with deferred navigation updates)
+      // Reset to null so the lazy init in _renderThumbnailStrip centers the current item
+      // using the actual maxDisplay value computed there.
       const currentIndex = this._pendingNavigationIndex ?? this.navigationIndex;
-      this._panelPageStartIndex = currentIndex;
+      this._panelPageStartIndex = null;
       
       // Load current item to show in panel
       const currentItem = this.navigationQueue[currentIndex];
@@ -14136,7 +14248,49 @@ class MediaCard extends LitElement {
       this.requestUpdate();
     }
   }
-  
+
+  /**
+   * Pre-populate the navigation queue ahead of the current position.
+   * Called fire-and-forget (no await) from _loadNext() and _enterQueuePreviewMode().
+   * Only active for MediaIndex providers on the queue panel.
+   */
+  _fillLookahead() {
+    if (this.isNavigationQueuePreloaded) return;
+    if (!this.provider) return;
+    if (!MediaProvider.isMediaIndexActive(this.config)) return;
+    if (this._fillLookaheadRunning) return;
+    this._fillLookaheadRunning = true;
+    const capturedProvider = this.provider;
+
+    (async () => {
+      const target = (this._pendingNavigationIndex ?? this.navigationIndex) + this._lookaheadCount;
+      let added = 0;
+      let consecutiveDupes = 0;
+      while (this.navigationQueue.length < target && this.navigationQueue.length < this.maxNavQueueSize) {
+        const item = await capturedProvider.getNext();
+        if (!item) break;
+        // Bail if the provider was replaced (e.g. a filter was applied while we were awaiting)
+        if (this.provider !== capturedProvider) break;
+        if (this.navigationQueue.some(q => q.media_content_id === item.media_content_id)) {
+          // If we've received as many consecutive duplicates as there are items in the
+          // queue, the provider has looped through its entire sequence — no new items.
+          if (++consecutiveDupes >= Math.max(this.navigationQueue.length, 1)) break;
+          continue;
+        }
+        consecutiveDupes = 0;
+        if (!item.metadata) {
+          item.metadata = await this._extractMetadataFromItem(item);
+          if (this.provider !== capturedProvider) break;
+        }
+        this.navigationQueue.push(item);
+        added++;
+      }
+      if (added > 0) this.requestUpdate();
+    })()
+      .catch(err => this._log('⚠️ _fillLookahead error:', err))
+      .finally(() => { this._fillLookaheadRunning = false; });
+  }
+
   _exitRelatedMode() {
     this._log('🚪 Exiting related photos mode');
     this._exitPanelMode();
@@ -17853,6 +18007,55 @@ class MediaCard extends LitElement {
       color: var(--secondary-text-color);
       font-size: 14px;
     }
+
+    .thumbnail-menu-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: center;
+      gap: 2px;
+      padding: 34px 4px 4px;
+      z-index: 10;
+      border-radius: inherit;
+    }
+
+    .thumbnail-menu-overlay button {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px;
+      border: none;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      cursor: pointer;
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+      white-space: nowrap;
+    }
+
+    .thumbnail-menu-overlay button:hover {
+      background: rgba(255, 255, 255, 0.28);
+    }
+
+    .menu-btn-delete { background: rgba(200, 50, 50, 0.55) !important; }
+    .menu-btn-delete:hover { background: rgba(200, 50, 50, 0.75) !important; }
+
+    .menu-btn-edit { background: rgba(50, 120, 200, 0.55) !important; }
+    .menu-btn-edit:hover { background: rgba(50, 120, 200, 0.75) !important; }
+
+    .menu-btn-cancel {
+      margin-top: 4px;
+      background: rgba(255, 255, 255, 0.08) !important;
+      justify-content: center;
+    }
+
+    /* Prevent accidental long-press + scroll on touch devices */
+    .thumbnail-strip .thumbnail {
+      touch-action: none;
+    }
   `;
 
   render() {
@@ -18442,7 +18645,11 @@ class MediaCard extends LitElement {
   _renderThumbnailStrip() {
     // For queue mode, read directly from navigationQueue
     const allItems = this._panelMode === 'queue' ? this.navigationQueue : this._panelQueue;
-    
+    const activeIndex = this._panelMode === 'queue'
+      ? this.navigationIndex
+      : this._panelQueueIndex;
+    const isQueuePanel = this._panelMode === 'queue';
+
     if (!allItems || allItems.length === 0) {
       return html`
         <div class="thumbnail-strip">
@@ -18458,7 +18665,8 @@ class MediaCard extends LitElement {
     // Initialize unified page start index
     if (this._panelPageStartIndex === undefined || this._panelPageStartIndex === null) {
       if (this._panelMode === 'queue') {
-        this._panelPageStartIndex = this.navigationIndex;
+        // Center the current item so items before it are also visible
+        this._panelPageStartIndex = Math.max(0, this.navigationIndex - Math.floor(maxDisplay / 2));
       } else {
         this._panelPageStartIndex = 0; // Start at beginning for burst/related
       }
@@ -18552,7 +18760,13 @@ class MediaCard extends LitElement {
     });
 
     return html`
-      <div class="thumbnail-strip" style="--thumbnail-height: ${thumbnailHeight}px">
+      <div class="thumbnail-strip" style="--thumbnail-height: ${thumbnailHeight}px"
+           @click=${() => {
+             if (this._thumbnailMenuIndex !== null) {
+               this._thumbnailMenuIndex = null;
+               this.requestUpdate();
+             }
+           }}>
         ${hasPreviousPage ? html`
           <button class="page-nav-button prev-page" @click=${() => this._pageQueueThumbnails('prev')}>
             <ha-icon icon="mdi:chevron-up"></ha-icon>
@@ -18562,9 +18776,7 @@ class MediaCard extends LitElement {
         
         ${displayItems.map((item, displayIndex) => {
           const actualIndex = displayStartIndex + displayIndex;
-          const isActive = this._panelMode === 'queue' 
-            ? actualIndex === this.navigationIndex 
-            : actualIndex === this._panelQueueIndex;
+          const isActive = actualIndex === activeIndex;
           const itemUri = item.media_source_uri || item.media_content_id || item.path;
           // Check multiple sources for favorite status.
           // Queue items store metadata inside item.metadata object
@@ -18616,14 +18828,37 @@ class MediaCard extends LitElement {
             <div 
               class="thumbnail ${isFavorited ? 'favorited' : ''}"
               data-item-index="${actualIndex}"
+              @pointerdown=${() => {
+                this._thumbnailHoldTimer = setTimeout(() => {
+                  this._thumbnailMenuIndex = actualIndex;
+                  this._thumbnailHoldFired = true;
+                  this._thumbnailHoldTimer = null;
+                  this.requestUpdate();
+                }, 600);
+              }}
+              @pointerup=${() => {
+                if (this._thumbnailHoldTimer) {
+                  clearTimeout(this._thumbnailHoldTimer);
+                  this._thumbnailHoldTimer = null;
+                }
+              }}
+              @pointercancel=${() => {
+                if (this._thumbnailHoldTimer) {
+                  clearTimeout(this._thumbnailHoldTimer);
+                  this._thumbnailHoldTimer = null;
+                }
+              }}
               @click=${(e) => {
-                if (this._panelMode === 'queue') {
-                  this._jumpToQueuePosition(actualIndex);
-                } else if (this._panelMode === 'burst' && actualIndex === this._panelQueueIndex) {
-                  // Already viewing this image — toggle its favorite status.
-                  // Pass isFavorited so the toggle uses the same current source of truth as
-                  // the ♥ badge, rather than recomputing from is_favorited + _burstFavoritedFiles.
+                if (this._thumbnailHoldFired) {
+                  this._thumbnailHoldFired = false;
+                  e.stopPropagation(); // prevent strip dismiss-click from closing the menu
+                  return;
+                }
+                if (actualIndex === activeIndex) {
+                  // Active item → toggle favourite (all panels)
                   this._handleFavoriteClick(e, isFavorited);
+                } else if (isQueuePanel) {
+                  this._jumpToQueuePosition(actualIndex);
                 } else {
                   this._loadPanelItem(actualIndex);
                 }
@@ -18679,6 +18914,39 @@ class MediaCard extends LitElement {
               `}
               ${badge ? html`<div class="time-badge">${badge}</div>` : ''}
               ${isFavorited ? html`<div class="favorite-badge">♥</div>` : ''}
+              ${this._thumbnailMenuIndex === actualIndex ? html`
+                <div class="thumbnail-menu-overlay" @click=${(e) => e.stopPropagation()}>
+                  <button @click=${() => {
+                    this._thumbnailMenuIndex = null;
+                    isQueuePanel
+                      ? this._removeFromQueue(actualIndex)
+                      : this._removeFromPanelQueue(actualIndex);
+                  }}>
+                    <ha-icon icon="mdi:eye-off-outline"></ha-icon>
+                    Clear
+                  </button>
+                  <button class="menu-btn-delete" @click=${async () => {
+                    this._thumbnailMenuIndex = null;
+                    this.requestUpdate();
+                    await this._handleThumbnailMenuDelete(item);
+                  }}>
+                    <ha-icon icon="mdi:trash-can-outline"></ha-icon> Move to _Junk
+                  </button>
+                  <button class="menu-btn-edit" @click=${async () => {
+                    this._thumbnailMenuIndex = null;
+                    this.requestUpdate();
+                    await this._handleThumbnailMenuEdit(item);
+                  }}>
+                    <ha-icon icon="mdi:folder-move-outline"></ha-icon> Move to _Edit
+                  </button>
+                  <button class="menu-btn-cancel" @click=${() => {
+                    this._thumbnailMenuIndex = null;
+                    this.requestUpdate();
+                  }}>
+                    ✕ Cancel
+                  </button>
+                </div>
+              ` : ''}
             </div>
           `;
         })}
@@ -21991,6 +22259,29 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Automatically advance to next media every N seconds (0 = disabled)</div>
             </div>
           </div>
+          ${MediaProvider.isMediaIndexActive(this._config) ? html`
+            <div class="config-row">
+              <label>Queue Lookahead</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  .value=${this._config.queue_lookahead ?? 10}
+                  @input=${(e) => {
+                    const v = parseInt(e.target.value);
+                    if (!isNaN(v) && v >= 1 && v <= 100) {
+                      this._config = { ...this._config, queue_lookahead: v };
+                      this._fireConfigChanged();
+                    }
+                  }}
+                  placeholder="10"
+                />
+                <div class="help-text">Items to pre-fetch ahead of current position in Queue Preview (1–100, MediaIndex only)</div>
+              </div>
+            </div>
+          ` : ''}
         ` : ''}
 
         ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
