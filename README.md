@@ -46,7 +46,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🔗 **Cross-Device Shared Queue** (`shared_queue_id`): Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
 - 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
-- 📲 **Touch Screen Support**: Swipe left/right, pause etc.
+- 📲 **Touch Screen Support**: Swipe left/right to navigate, long-press to pause; double-tap the left or right video zone to seek ±10 s
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
 ### **Media Discovery Features** (requires Media Index)
 - 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot
@@ -60,11 +60,14 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently with near immediate display of images
 - 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
 - ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return
+- 🎛️ **Runtime Filter Picker** (`show_filter_button: true`): Tap a filter icon to temporarily override folder, media type, date range, favorites, mode, and video settings for the current session — no YAML editing required. Includes a built-in folder browser. Settings reset on page reload.
 ### **📺 Cast to TV** (requires Media Index)
 - 📺 **Cast Button** (`show_cast_button: true`): Tap the cast icon to open a native picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
 - **Roku xcast**: Roku TV entities are automatically detected and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) for native image display without transcoding by the TV — no DLNA/DMR required.
   - **Requirements for Roku**: Roku HA integration configured, [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku device, and Media Index v1.7.1+
   - The xcast channel acts as a Digital Media Renderer (DMR) receiving content pushed from HA. It must be installed from the Roku Channel Store before first use. On a cold-start the card sends the image immediately to wake xcast, then retries 2.5 s later once it has fully launched.
+  - **Roku Video Sync**: When casting a video, the card continuously polls the Roku's playback position via ECP and corrects any drift >±2 s, keeping the local clock and the TV perfectly aligned.
+  - **Smooth transitions**: Roku is paused immediately when the user manually navigates (no xcast banner gap) and the card waits for Roku to finish before auto-advancing to the next item.
 - **Generic media players** (LG WebOS, Chromecast, etc.): Cast via `media_player.play_media` — requires the player to support DMR/HTTP URLs.
 - **Stop cast**: Tap the cast button again or navigate away to stop. For Roku, this sends a `keypress/Home` ECP command so the TV returns to its home screen instead of showing a frozen image.
 

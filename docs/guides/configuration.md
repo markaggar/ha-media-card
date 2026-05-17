@@ -395,6 +395,8 @@ Overlay buttons for quick access to card features:
 | `action_buttons.enable_pause` | boolean | `true` | Show pause/resume button |
 | `action_buttons.enable_fullscreen` | boolean | `false` | Show fullscreen button |
 | `show_refresh_button` | boolean | `false` | Show manual refresh button |
+| `show_cast_button` | boolean | `false` | Show cast button to mirror the card to any `media_player` entity. Roku uses ECP via media_index; other players use `media_player.play_media`. |
+| `show_filter_button` | boolean | `false` | Show filter/playback picker button. Opens a dialog to temporarily override folder, media type, date range, favorites, mode, and video settings for the current session (resets on page reload). Includes a built-in folder browser. |
 | `debug_button` | boolean | `false` | Show debug mode toggle button |
 
 ### Media Index Action Buttons

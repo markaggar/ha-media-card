@@ -12463,8 +12463,10 @@ class MediaCard extends LitElement {
     }
     merged.filters = mergedFilters;
 
-    // Video play-to-end
-    if (overrides.video_play_to_end === true) {
+    // Video play-to-end / max duration (explicit max_duration_secs > 0 takes precedence)
+    if (overrides.video_max_duration_secs != null && overrides.video_max_duration_secs > 0) {
+      merged.video_max_duration = overrides.video_max_duration_secs;
+    } else if (overrides.video_play_to_end === true || overrides.video_max_duration_secs === 0) {
       merged.video_max_duration = 0;
     } else if (overrides.video_play_to_end === false && base.video_max_duration !== undefined) {
       merged.video_max_duration = base.video_max_duration;
@@ -12479,6 +12481,33 @@ class MediaCard extends LitElement {
       merged.video_muted = true;
     } else {
       merged.video_muted = base.video_muted;
+    }
+
+    // Video loop
+    if (overrides.video_loop === true) {
+      merged.video_loop = true;
+    } else {
+      merged.video_loop = base.video_loop;
+    }
+
+    // Auto-advance interval
+    if (overrides.auto_advance_seconds != null && overrides.auto_advance_seconds > 0) {
+      merged.auto_advance_seconds = overrides.auto_advance_seconds;
+    } else if (overrides.auto_advance_seconds != null) {
+      delete merged.auto_advance_seconds;
+    }
+    // else: null means not provided — leave base config value unchanged
+
+    // Sequential sort options (applied when mode is sequential)
+    if (overrides.mode === 'sequential' && (overrides.sort_by || overrides.sort_direction)) {
+      merged.folder = {
+        ...(merged.folder || {}),
+        sequential: {
+          ...((base.folder?.sequential) || {}),
+          ...(overrides.sort_by        ? { order_by:        overrides.sort_by }        : {}),
+          ...(overrides.sort_direction ? { order_direction: overrides.sort_direction } : {}),
+        },
+      };
     }
 
     this.config = merged;
@@ -12536,9 +12565,16 @@ class MediaCard extends LitElement {
     const currentUnmuted  = activeOverride.video_unmuted ??
                              (baseCfg.video_muted === false ? true : false);
 
+    const currentSortBy   = activeOverride.sort_by ?? (baseCfg.folder?.sequential?.order_by || 'date_taken');
+    const currentSortDir  = activeOverride.sort_direction ?? (baseCfg.folder?.sequential?.order_direction || 'desc');
+    const currentAutoAdv  = activeOverride.auto_advance_seconds ?? (baseCfg.auto_advance_seconds != null ? baseCfg.auto_advance_seconds : '');
+    const currentLoop     = activeOverride.video_loop ?? (baseCfg.video_loop === true);
+    const currentMaxDur   = activeOverride.video_max_duration_secs ?? (baseCfg.video_max_duration > 0 ? baseCfg.video_max_duration : '');
+
     const isMediaIndex = MediaProvider.isMediaIndexActive(this.config);
     const hideVideoSection = currentType === 'image';
     const hideModeSection  = !isMediaIndex;
+    const hideSeqSection   = hideModeSection || currentMode !== 'sequential';
 
     const dialog = document.createElement('div');
     dialog.className = 'filter-picker-overlay';
@@ -12598,6 +12634,21 @@ class MediaCard extends LitElement {
               <span class="filter-picker-toggle-slider"></span>
             </label>
           </div>
+          <div class="filter-picker-toggle-row" style="margin-top:6px">
+            <span style="font-size:12px;color:rgba(255,255,255,0.7)">Loop videos</span>
+            <label class="filter-picker-toggle">
+              <input type="checkbox" id="fp-loop">
+              <span class="filter-picker-toggle-slider"></span>
+            </label>
+          </div>
+          <div id="fp-max-dur-row" class="filter-picker-toggle-row" style="margin-top:8px;${currentPlayToEnd ? 'display:none' : ''}">
+            <span style="font-size:12px;color:rgba(255,255,255,0.7)">Max duration</span>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="number" id="fp-max-duration" min="0" placeholder="\u221e"
+                style="width:60px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:3px 6px;color:white;font-size:12px;text-align:right">
+              <span style="font-size:11px;color:rgba(255,255,255,0.4)">sec</span>
+            </div>
+          </div>
         </div>
 
         <div class="filter-picker-section" id="fp-mode-section" style="${hideModeSection ? 'display:none' : ''}">
@@ -12605,6 +12656,34 @@ class MediaCard extends LitElement {
           <div class="filter-picker-radio-group" id="fp-mode">
             <label class="filter-picker-radio-label"><input type="radio" name="fp-mode" value="random"> Random</label>
             <label class="filter-picker-radio-label"><input type="radio" name="fp-mode" value="sequential"> Sequential</label>
+          </div>
+        </div>
+
+        <div id="fp-seq-section" style="${hideSeqSection ? 'display:none' : ''}">
+          <div class="filter-picker-section" style="margin-top:2px">
+            <span class="filter-picker-label">Sort By</span>
+            <select id="fp-sort-by" class="filter-picker-input" style="width:100%">
+              <option value="date_taken">Date Taken (EXIF)</option>
+              <option value="filename">Filename</option>
+              <option value="path">Full Path</option>
+              <option value="modified_time">Modified Time</option>
+            </select>
+          </div>
+          <div class="filter-picker-section" style="margin-top:4px">
+            <span class="filter-picker-label">Sort Direction</span>
+            <select id="fp-sort-dir" class="filter-picker-input" style="width:100%">
+              <option value="desc">Descending (newest / Z-A first)</option>
+              <option value="asc">Ascending (oldest / A-Z first)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Auto-advance</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input type="number" id="fp-auto-advance" min="0" placeholder="off"
+              style="width:60px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:3px 6px;color:white;font-size:12px;text-align:right">
+            <span style="font-size:12px;color:rgba(255,255,255,0.45)">sec (blank = off)</span>
           </div>
         </div>
 
@@ -12625,11 +12704,31 @@ class MediaCard extends LitElement {
     dialog.querySelector('#fp-play-to-end').checked = currentPlayToEnd;
     dialog.querySelector('#fp-unmuted').checked     = currentUnmuted;
     dialog.querySelectorAll('[name="fp-mode"]').forEach(r => { r.checked = (r.value === currentMode); });
+    dialog.querySelector('#fp-sort-by').value  = currentSortBy;
+    dialog.querySelector('#fp-sort-dir').value = currentSortDir;
+    if (currentAutoAdv !== '') dialog.querySelector('#fp-auto-advance').value = String(currentAutoAdv);
+    dialog.querySelector('#fp-loop').checked   = currentLoop;
+    if (currentMaxDur !== '') dialog.querySelector('#fp-max-duration').value  = String(currentMaxDur);
+
+    // Stop card keyboard navigation from intercepting folder text editing
+    dialog.querySelector('#fp-folder').addEventListener('keydown', e => e.stopPropagation());
+
+    // Play-to-end toggle shows/hides the max duration row
+    dialog.querySelector('#fp-play-to-end').addEventListener('change', ev => {
+      const maxDurRow = dialog.querySelector('#fp-max-dur-row');
+      if (maxDurRow) maxDurRow.style.display = ev.target.checked ? 'none' : '';
+    });
 
     // Show/hide video section when media type radio changes
     dialog.querySelector('#fp-media-type').addEventListener('change', ev => {
       const videoSection = dialog.querySelector('#fp-video-section');
       if (videoSection) videoSection.style.display = ev.target.value === 'image' ? 'none' : '';
+    });
+
+    // Show/hide sequential sort options when mode changes
+    dialog.querySelector('#fp-mode')?.addEventListener('change', ev => {
+      const seqSection = dialog.querySelector('#fp-seq-section');
+      if (seqSection) seqSection.style.display = ev.target.value === 'sequential' ? '' : 'none';
     });
 
     const card = this.shadowRoot.querySelector('.card');
@@ -12661,16 +12760,28 @@ class MediaCard extends LitElement {
       const unmuted  = dialog.querySelector('#fp-unmuted').checked;
       const modeEl   = [...dialog.querySelectorAll('[name="fp-mode"]')].find(r => r.checked);
       const mode     = modeEl?.value || null;
+      const sortBy   = dialog.querySelector('#fp-sort-by')?.value || 'date_taken';
+      const sortDir  = dialog.querySelector('#fp-sort-dir')?.value || 'desc';
+      const autoAdvRaw = dialog.querySelector('#fp-auto-advance').value;
+      const autoAdv    = autoAdvRaw !== '' ? Number(autoAdvRaw) : null;
+      const loop       = dialog.querySelector('#fp-loop').checked;
+      const maxDurRaw  = dialog.querySelector('#fp-max-duration').value;
+      const maxDur     = maxDurRaw !== '' ? Number(maxDurRaw) : null;
       cleanup();
       this._applySessionOverride({
-        folder_path:       folder,
-        media_type:        mt,
-        date_from:         dateFrom,
-        date_to:           dateTo,
-        favorites:         favs,
-        mode:              mode,
-        video_play_to_end: playEnd,
-        video_unmuted:     unmuted,
+        folder_path:             folder,
+        media_type:              mt,
+        date_from:               dateFrom,
+        date_to:                 dateTo,
+        favorites:               favs,
+        mode:                    mode,
+        sort_by:                 sortBy,
+        sort_direction:          sortDir,
+        auto_advance_seconds:    autoAdv,
+        video_play_to_end:       playEnd,
+        video_unmuted:           unmuted,
+        video_loop:              loop,
+        video_max_duration_secs: maxDur,
       });
     });
   }
