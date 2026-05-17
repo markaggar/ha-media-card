@@ -39,12 +39,13 @@ It is highly recommended you also install the [Media Index Integration](https://
 ### **Metadata Visibility & Management with Media Index**
 - ❤️ **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
 - ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
-- 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location and camera information
+- 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location, camera information, and orientation (with fallback to Portrait / Landscape / Square from pixel dimensions)
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 ### **Intelligent Navigation**
 - ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
 - 🔗 **Cross-Device Shared Queue** (`shared_queue_id`): Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
-- 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
+- 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation. Long-press any thumbnail (including the currently playing item) to open a quick-action mini-menu: **Clear** from queue, **Move to _Junk**, or **Move to _Edit**
+- ⚡ **Rolling Lookahead Queue**: Upcoming items are silently pre-fetched in the background while the current item plays, so tapping forward is instant with no visible fetch delay
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
 - 📲 **Touch Screen Support**: Swipe left/right to navigate, long-press to pause; double-tap the left or right video zone to seek ±10 s
 - 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages

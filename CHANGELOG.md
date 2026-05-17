@@ -5,10 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
----
-
 ## [v5.11.0] - 2026-05-14
 
 ### Added
@@ -24,8 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Group Pause Now Pauses / Resumes Video on All Cards**: Long-pressing the pause button (600 ms) broadcasts a group pause event to all peer cards sharing the same `shared_queue_id`. Video cards now honour this by pausing or resuming the `<video>` element in addition to stopping the slideshow timer.
 
-- **Roku Video Clock Sync (Drift Corrector)**: After pushing a video to Roku via xcast, the card continuously polls the Roku's playback position via ECP and snaps any drift greater than ±2 s back into alignment. Polling begins 5 s after the video starts (to allow xcast to initialise), then runs every 5 s. The corrector is skipped during navigation, user-initiated seeks, and the 10 s window after each seek.
-
 - **Runtime Filter/Playback Picker** (`show_filter_button: true`): Opt-in action button that opens a frosted-glass dialog for temporarily overriding the card's media source settings without editing YAML. All overrides are session-only and discarded on page reload or when the visual editor saves new config.
   - **Controls**: Folder path (with built-in folder browser), Media Type (All / Images / Videos), Date Range (from / to), Favorites Only toggle, Video Options (Play to completion, Unmuted), Mode (Random / Sequential)
   - **Folder browser**: The Browse button opens a nested folder-picker overlay that uses the same `media_source/browse_media` HA API as the config editor, starting from the `media_index` entity's `media_source_uri` attribute if available. Navigate into subfolders with a history stack; "Use This Folder" sets the value and closes the browser.
@@ -34,9 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enable in the visual editor under **Cast to TV Button → Filter & Playback Button**, or in YAML: `show_filter_button: true`
 
 - **Roku xcast Cast Support**: The cast button now supports direct Roku TV casting via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) in addition to the existing `media_player.play_media` mirror
-  - Roku `media_player` entities are identified automatically by the presence of an `app_id` attribute and routed via `media_index.roku_ecp_cast` (server-side ECP call) instead of `media_player.play_media`
-  - Roku devices appear first in the cast picker with a green left-border accent
+  - Roku `media_player` entities are identified automatically and routed via `media_index.roku_ecp_cast` (server-side ECP call); Roku devices appear first in the cast picker with a green left-border accent
   - **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.8.0+, Roku HA integration, and the [xcast](https://channelstore.roku.com/details/687485) channel installed on the Roku
+  - **Video sync**: After pushing a video the card polls the Roku's playback position every 5 s and snaps any drift >±2 s back into alignment; corrector skips during navigation, seeks, and for 10 s after each seek
+  - **Slideshow sync**: In auto-advance mode the card waits for Roku to finish the video before advancing — an ECP end-watcher fires instead of the local timer
+  - **Smooth manual navigation**: Roku is paused instantly when the user taps forward / back, freezing the current frame on the TV during the load gap (no xcast banner flash); the ECP push reliably follows every navigation
+  - **Reliable startup**: Image pushed immediately on cast activation to wake xcast, then retried after 2.5 s — cold-start xcast is handled gracefully
+  - **Clean session end**: Stopping cast (button tap or navigating away from the dashboard) sends `keypress/Home` to the Roku, returning its home screen instead of leaving a frozen image
 
 - **Swipe Gesture Navigation**: Swipe left to advance and swipe right to go back on touch screens
   - Works on both images and video — the `touchstart` on the video element no longer blocks swipe detection in the parent container
@@ -46,33 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Values can be `YYYY-MM-DD` strings or HA entity IDs (the card reads the entity state and strips any time component)
   - Passed to the backend as `date_from` / `date_to` on every page fetch, including cursor-based continuation pages
 
-### Changed
+- **Rolling Lookahead Queue**: The card silently pre-loads upcoming items while the current item is playing so tapping forward is instant rather than waiting for a network fetch on every step. The fill runs in the background and is cancelled automatically when the media source or runtime filter changes.
 
-- **Cast auto-advance now waits for Roku to finish**: In auto-advance slideshows, when the local video ends and a Roku cast is active, the card no longer immediately advances. Instead, an ECP end-watcher polls the Roku's position every second and advances only once Roku's playback state leaves `play` (or the Roku is within 1.5 s of its end and a pre-end pause fires). This prevents the slideshow from racing ahead of the TV.
+- **Queue Panel Mini-Menu**: Long-pressing any thumbnail in the queue panel — including the currently active item — opens a quick-action mini-menu. Actions: **Clear** (remove from queue), **Move to _Junk**, **Move to _Edit**. Videos in the queue panel now show a still-frame preview in the delete and edit confirmation dialogs, matching the behavior already used in the thumbnail strip.
 
-- **Roku paused immediately on manual navigation**: When the user taps forward / back or clicks a queue thumbnail, the card sends an immediate ECP `keypress/Play` (pause) to the Roku at the start of navigation — before any async loading begins. This freezes the last frame on the TV during the ~0.5–2 s load gap and prevents the xcast banner from appearing.
-
-- **Cast picker replaced browser `prompt()` with a card-native frosted-glass dialog**: Clickable device list replaces the numbered text prompt; matches the card's existing design language (same frosted-glass style as the delete confirmation). Each item shows device name and current state. Tap outside the panel or Cancel to dismiss.
-
-- **Cast stop now clears the Roku display**: When a cast session is stopped (button tap or card disconnect), `media_index.stop_cast` (ECP `keypress/Home`) is called, returning the Roku to its home screen instead of leaving the last image frozen on the TV
-
-- **Cast stop fires on card disconnect**: Navigating away from a dashboard containing the card now automatically stops any active Roku cast session
-
-- **Improved first-cast reliability for cold-start xcast**: The current image is pushed immediately on cast activation (waking xcast if not running) and again after 2.5 s. If xcast was cold-starting, the retry arrives once it is fully launched; if it was already running, the first push shows the image instantly.
-
-- **Cast button help text clarifies Roku-only media_index dependency**: The visual editor now accurately states that Roku uses `media_index.roku_ecp_cast` (requires media_index), while other players (LG, Chromecast, etc.) use `media_player.play_media` directly and do not require media_index.
+- **Orientation in Media Info Pane**: The File Info section of the info overlay now shows an Orientation field. Displays EXIF / video rotation metadata from the database (Normal, Rotated 90° CW, Rotated 90° CCW, Rotated 180°), or infers Portrait, Landscape, or Square from pixel dimensions when rotation is not recorded.
 
 ### Fixed
 
-- **Roku cast reliably follows every manual navigation**: A chain of flag-corruption bugs could silently swallow the ECP cast push whenever the user navigated while a Roku cast was active.
-  - Stale `_suppressCastPushOnCanplay` left by the previous video's startup sync (no `canplay` to clear it) was honoured by the new video's `canplay`, causing the cast push to return early.
-  - Premature `_navigatingAway = false` clears in `_loadPrevious` and `_jumpToQueuePosition` fired long before `canplay`, allowing the stale suppress flag to take effect.
-  - An async race in the drift poller: `_navigatingAway` was checked before `await callWS()`, but navigation could start during the round-trip and the drift snap would still fire on the new video.
-  - All three paths are now guarded: the suppress flag is only honoured when `_navigatingAway` is false; the premature clears only happen for non-video items (video clears via `canplay`); and the drift poller re-checks `_navigatingAway` after every `await`.
+- **Runtime filter applied while shared queue active caused items from previous source to appear**: Applying a filter change while `shared_queue_id` is configured triggered a shared queue restore immediately after provider reinit, injecting the previous source's items into the new queue. The restore is now skipped when reinit is triggered by an explicit filter apply or clear.
 
-- **Roku drift corrector no longer snaps to old position during back-navigation or after user seek**: The corrector now skips its snap if `_navigatingAway` is true at either the pre-`await` check or the post-`await` re-check. A 10 s seek-suppress window prevents the corrector from reversing a user-initiated seek on the Roku.
-
-- **Roku: eliminated seek-reset and brief-play on video load**: The initial cast startup sequence was re-pushing the video with a seek offset and then immediately pausing on canplay, causing a visible "play → seek → pause" flash. The entire startup sync is now suppressed when a new video is loading (`_navigatingAway = true`), and duplicate `canplay`-triggered pushes are absorbed by the suppress flag before it is cleared.
+- **Lookahead background fill continued running after filter change, producing duplicate items**: The background pre-fetch task held a reference to the old provider after a filter change replaced it, pushing wrong-source items into the new queue. The task now captures a provider snapshot at start and stops as soon as the active provider changes.
 
 - **Unresolvable media-source items removed from queue on first failure**: When the card resolves a batch of media-source URIs (e.g. after a server restart), stale or expired items that return a network error are now silently removed from the provider queue immediately rather than stalling the slideshow. Back-navigation also skips removed positions so history stays consistent.
 
@@ -82,7 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Double-tap: the video's `click` handler called `stopPropagation()`, so a `dblclick` on the container never fired — fixed by binding `@dblclick` directly on the `<video>` element
 
 - **Sequential mode DESC order returning oldest files first**: The `get_ordered_files` sort expression incorrectly wrapped an already-integer `date_taken` Unix timestamp in SQLite's `unixepoch()`, which treats the integer as a Julian Day Number and produces large negative values — causing 2018 photos to rank above 2026 photos in descending order.
-
 
 
 ## v5.10.0 - 2026-04-22
