@@ -52,10 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Runtime filter applied while shared queue active caused items from previous source to appear**: Applying a filter change while `shared_queue_id` is configured triggered a shared queue restore immediately after provider reinit, injecting the previous source's items into the new queue. The restore is now skipped when reinit is triggered by an explicit filter apply or clear.
-
-- **Lookahead background fill continued running after filter change, producing duplicate items**: The background pre-fetch task held a reference to the old provider after a filter change replaced it, pushing wrong-source items into the new queue. The task now captures a provider snapshot at start and stops as soon as the active provider changes.
-
 - **Unresolvable media-source items removed from queue on first failure**: When the card resolves a batch of media-source URIs (e.g. after a server restart), stale or expired items that return a network error are now silently removed from the provider queue immediately rather than stalling the slideshow. Back-navigation also skips removed positions so history stays consistent.
 
 - **Touch interactions on video not working (swipe, hold, double-tap)**: All three gestures were broken when the user's finger landed on the `<video>` element
