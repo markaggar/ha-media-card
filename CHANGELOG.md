@@ -9,13 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **iCloud Live Photo Playback**: Pairs a still image with its iCloud-style companion video and plays them as a still → motion → pause loop on every slideshow cycle. The motion segment does not advance the slideshow — normal `auto_advance_seconds` controls when the card moves on. Configure with the `live_photo` block (`enabled`, `still_duration`, `repeat_delay`, `hide_companion_videos`). Integrated with the iCloud Photos preset so a single config block enables everything.
-  - **HEIC/HEIF browser fallback** (`heic.enabled: true`): The card loads `heic2any` and converts `.heic`/`.heif` files to JPEG in the browser before display. Intended as a fallback when server-side JPEG conversion is not yet available; server-side conversion is faster for always-on dashboards. CDN URL is configurable for offline deployments.
-  - **Companion video prewarming**: Companion videos are eagerly fetched into a `<video>` element at the start of each still phase so playback starts without buffering delay.
-  - Same-basename companion videos (e.g. `IMG_1234.mp4` alongside `IMG_1234.heic`) are skipped from the main slideshow queue so they do not appear as standalone items.
-
-- **iCloud Photos Preset** (`icloud_photos.enabled: true`): Convenience preset that configures folder mode, recursion, mixed media type, and Live Photo defaults in one block. The card editor shows an iCloud Photos Sync panel in folder mode with a direct link to the [AncilTech iCloud Photo Sync add-on](https://github.com/anciltech/ha-icloud-photo-sync) and the recommended `media-source://media_source/local/icloud_photos` path.
-
 - **Double-Tap Video Zone to Seek ±10s**: Double-tapping the left or right navigation zone on a video now seeks −10 s or +10 s respectively. A single tap continues to navigate backward or forward in the queue.
 
 - **Group Pause Now Pauses / Resumes Video on All Cards**: Long-pressing the pause button (600 ms) broadcasts a group pause event to all peer cards sharing the same `shared_queue_id`. Video cards now honour this by pausing or resuming the `<video>` element in addition to stopping the slideshow timer.
@@ -27,10 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Apply** merges overrides onto the base config and reinitialises the provider. **Clear** restores the original YAML config. **Cancel** / outside-tap dismisses without changes.
   - Enable in the visual editor under **Cast to TV Button → Filter & Playback Button**, or in YAML: `show_filter_button: true`
 
-- **Roku xcast Cast Support**: The cast button now supports direct Roku TV casting via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) in addition to the existing `media_player.play_media` mirror
-  - Roku `media_player` entities are identified automatically and routed via `media_index.roku_ecp_cast` (server-side ECP call); Roku devices appear first in the cast picker with a green left-border accent
-  - **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.8.0+, Roku HA integration, and the [xcast](https://channelstore.roku.com/details/687485) channel installed on the Roku
-  - **Video sync**: After pushing a video the card polls the Roku's playback position every 5 s and snaps any drift >±2 s back into alignment; corrector skips during navigation, seeks, and for 10 s after each seek
+- **Cast to TV** (`show_cast_button: true`): New feature — tap the cast icon to open a picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
+  - **Roku xcast**: Roku `media_player` entities are automatically identified and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) — native image and video display on the TV without transcoding. Roku devices appear first in the picker with a green left-border accent. **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.8.0+, Roku HA integration, and the [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku.
+  - **Generic media players** (LG WebOS, Chromecast, etc.): cast via `media_player.play_media` — requires the player to support DMR/HTTP URLs
+  - **Video sync**: After pushing a video to Roku, the card polls its playback position every 5 s and snaps any drift >±2 s back into alignment; corrector skips during navigation, seeks, and for 10 s after each seek
   - **Slideshow sync**: In auto-advance mode the card waits for Roku to finish the video before advancing — an ECP end-watcher fires instead of the local timer
   - **Smooth manual navigation**: Roku is paused instantly when the user taps forward / back, freezing the current frame on the TV during the load gap (no xcast banner flash); the ECP push reliably follows every navigation
   - **Reliable startup**: Image pushed immediately on cast activation to wake xcast, then retried after 2.5 s — cold-start xcast is handled gracefully
@@ -39,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Swipe Gesture Navigation**: Swipe left to advance and swipe right to go back on touch screens
   - Works on both images and video — the `touchstart` on the video element no longer blocks swipe detection in the parent container
   - Minimum 50 px horizontal travel required; gesture is cancelled if vertical movement exceeds horizontal so intentional scroll is not intercepted
+
+- **iCloud Live Photo Playback**: Pairs a still image with its iCloud-style companion video and plays them as a still → motion → pause loop on every slideshow cycle. The motion segment does not advance the slideshow — normal `auto_advance_seconds` controls when the card moves on. Configure with the `live_photo` block (`enabled`, `still_duration`, `repeat_delay`, `hide_companion_videos`). Integrated with the iCloud Photos preset so a single config block enables everything.
+  - **HEIC/HEIF browser fallback** (`heic.enabled: true`): The card loads `heic2any` and converts `.heic`/`.heif` files to JPEG in the browser before display. Intended as a fallback when server-side JPEG conversion is not yet available; server-side conversion is faster for always-on dashboards. CDN URL is configurable for offline deployments.
+  - **Companion video prewarming**: Companion videos are eagerly fetched into a `<video>` element at the start of each still phase so playback starts without buffering delay.
+  - Same-basename companion videos (e.g. `IMG_1234.mp4` alongside `IMG_1234.heic`) are skipped from the main slideshow queue so they do not appear as standalone items.
+
+- **iCloud Photos Preset** (`icloud_photos.enabled: true`): Convenience preset that configures folder mode, recursion, mixed media type, and Live Photo defaults in one block. The card editor shows an iCloud Photos Sync panel in folder mode with a direct link to the [AncilTech iCloud Photo Sync add-on](https://github.com/anciltech/ha-icloud-photo-sync) and the recommended `media-source://media_source/local/icloud_photos` path.
 
 - **Date Range Filters for Sequential Mode**: `get_ordered_files` (sequential/ordered provider) now accepts `filters.date_range.start` and `filters.date_range.end`
   - Values can be `YYYY-MM-DD` strings or HA entity IDs (the card reads the entity state and strips any time component)
