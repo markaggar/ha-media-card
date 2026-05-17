@@ -13078,7 +13078,7 @@ class MediaCard extends LitElement {
       this._castSyncTimeout = null;
       if (this._castEntityId !== entityId) return;
       const v = getVideo();
-      if (v) v.play().catch(() => {});
+      if (v && !this._isPaused) v.play().catch(() => {});
     }, TIMEOUT_MS);
 
     // Poll every 500ms until Roku reports state = 'play'
@@ -13102,6 +13102,16 @@ class MediaCard extends LitElement {
         if (Math.abs(v.currentTime - rokuPosSec) > 1) v.currentTime = rokuPosSec;
         // Clear user-interaction flag so slideshow auto-advance still works after video ends
         this._videoUserInteracted = false;
+
+        // If the card was intentionally paused by the user when the cast started, respect
+        // that state: keep local paused and send an ECP pause to Roku so both stay in sync.
+        // The user can then press play to start both together.
+        if (this._isPaused) {
+          this._sendCastPlayToggle(); // Roku just started playing → toggle → pauses it
+          this._log('🎬 Cast sync: card was paused — sent ECP pause to Roku to match');
+          return;
+        }
+
         // Suppress the canplay that v.play() (and any snap of currentTime above) may fire —
         // we don't want _onVideoCanPlay to push to cast again and reset Roku's position.
         this._suppressCastPushOnCanplay = true;
@@ -13251,6 +13261,7 @@ class MediaCard extends LitElement {
         wsCall.target = { entity_id: this.config.media_index.entity_id };
       }
 
+      this._log(`🎬 Cast (Roku xcast) castData: ${JSON.stringify(castData)}`);
       this._log(`🎬 Cast (Roku xcast) → ${entityId}: type=${fileType}, ${uri}`);
       try {
         const castResp = await this.hass.callWS(wsCall);
