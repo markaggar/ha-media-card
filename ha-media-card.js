@@ -12567,9 +12567,7 @@ class MediaCard extends LitElement {
     if (overrides.media_type && overrides.media_type !== 'all') {
       merged.media_type = overrides.media_type;
     } else if (overrides.media_type === 'all') {
-      const c = { ...merged };
-      delete c.media_type;
-      Object.assign(merged, c);
+      delete merged.media_type;
     }
 
     // Filters
