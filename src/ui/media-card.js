@@ -7774,7 +7774,7 @@ export class MediaCard extends LitElement {
         entity_id: id,
         friendly_name: state.attributes?.friendly_name || id,
         state: state.state,
-        is_roku: 'app_id' in (state.attributes || {}),
+        is_roku: this.hass.entities?.[id]?.platform === 'roku',
       }))
       .sort((a, b) => {
         // Roku devices first, then alphabetical
@@ -7825,7 +7825,7 @@ export class MediaCard extends LitElement {
 
   _stopCast() {
     const entityId = this._castEntityId;
-    const isRoku = entityId && 'app_id' in (this.hass?.states[entityId]?.attributes || {});
+    const isRoku = entityId && this.hass?.entities?.[entityId]?.platform === 'roku';
 
     this._stopCastSync();
     this._castEntityId = null;
@@ -7836,12 +7836,15 @@ export class MediaCard extends LitElement {
     }
     this.requestUpdate();
 
-    // Tell the Roku to stop via ECP keypress/Home — this sends it back to the
-    // home screen so the last cast image doesn't appear frozen on the TV.
-    // We use our own backend service because the Roku HA entity does not
-    // support the generic media_player.media_stop action.
     if (isRoku && this.hass) {
+      // Tell the Roku to stop via ECP keypress/Home — returns it to the home screen
+      // so the last cast image doesn't appear frozen on the TV.
+      // We use our own backend service because the Roku HA entity does not
+      // support the generic media_player.media_stop action.
       this.hass.callService('media_index', 'stop_cast', { roku_entity_id: entityId }).catch(() => {});
+    } else if (entityId && this.hass) {
+      // Generic DLNA/DMR player: stop via standard HA service
+      this.hass.callService('media_player', 'media_stop', { entity_id: entityId }).catch(() => {});
     }
   }
 
@@ -7863,6 +7866,8 @@ export class MediaCard extends LitElement {
   // video's push (from _onVideoCanPlay → _pushCurrentToCast) replaces it moments later.
   _pauseCastForNavigation() {
     if (!this._castEntityId || !this.hass) return;
+    // Only Roku supports ECP keypress — skip for DLNA/DMR and other players
+    if (this.hass.entities?.[this._castEntityId]?.platform !== 'roku') return;
     if (this._castPauseTimer) { clearTimeout(this._castPauseTimer); this._castPauseTimer = null; }
     this._stopCastEndWatch();
     const wsCall = {
@@ -8623,8 +8628,7 @@ export class MediaCard extends LitElement {
     // async ECP call — so there's no brief visible play during the ~300ms roundtrip.
     // _startCastSync will resume once Roku reports it's playing.
     // On seek re-push we skip this: the video is already playing at the right time.
-    const playerAttrsEarly = this.hass.states[entityId]?.attributes || {};
-    const isRokuEarly = 'app_id' in playerAttrsEarly;
+    const isRokuEarly = this.hass.entities?.[entityId]?.platform === 'roku';
     if (isRokuEarly && fileType === 'video' && seekPositionSec === null) {
       const vidEarly = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
       if (vidEarly && !vidEarly.paused) {
@@ -8648,9 +8652,9 @@ export class MediaCard extends LitElement {
       }
     }
 
-    // Detect Roku: Roku media_player entities have an app_id attribute
-    const playerAttrs = this.hass.states[entityId]?.attributes || {};
-    const isRoku = 'app_id' in playerAttrs;
+    // Detect Roku via entity registry — platform === 'roku' is set by the Roku HA integration.
+    // Using app_id presence was unreliable: LG WebOS and Chromecast entities also carry app_id.
+    const isRoku = this.hass.entities?.[entityId]?.platform === 'roku';
 
     if (isRoku) {
       // Roku: use media_index.roku_ecp_cast which runs the xcast ECP call server-side.
