@@ -4969,9 +4969,12 @@ class MediaCard extends LitElement {
     this._livePhotoCompanionCache = new Map();
     this._livePhotoCompanionVideoCache = new Map();
     this._livePhotoNegativeCacheMs = 5 * 60 * 1000;
+    this._livePhotoCompanionCacheLimit = 48;
+    this._livePhotoCompanionVideoCacheLimit = 128;
     this._livePhotoGeneration = 0;
 
     this._heicObjectUrlCache = new Map();
+    this._heicObjectUrlCacheLimit = 4;
     this._heicConverterPromise = null;
 
     this._log('💎 Constructor called, cardId:', this._cardId);
@@ -5518,6 +5521,7 @@ class MediaCard extends LitElement {
     this._clearLivePhotoPlayback();
     this._livePhotoCompanionCache?.clear();
     this._livePhotoCompanionVideoCache?.clear();
+    this._revokeHeicObjectUrls();
     
     // V5: Validate and clamp max_height_pixels if present
     if (config.max_height_pixels !== undefined) {
@@ -7729,6 +7733,41 @@ class MediaCard extends LitElement {
     this._log(`⏭️ Canceled media preparation (${reason})`);
   }
 
+  _releaseMediaElement(element) {
+    if (!element) return;
+
+    try {
+      if (element.tagName?.toLowerCase() === 'video') {
+        element.pause?.();
+        element.removeAttribute('src');
+        element.querySelectorAll?.('source')?.forEach(source => source.removeAttribute('src'));
+        element.load?.();
+      } else if (element.tagName?.toLowerCase() === 'img') {
+        element.removeAttribute('src');
+      }
+    } catch (error) {
+      // Best-effort cleanup only.
+    }
+  }
+
+  _setBoundedMapEntry(map, key, value, limit, onEvict = null) {
+    if (!map || !key) return;
+
+    if (map.has(key)) {
+      const previous = map.get(key);
+      if (previous !== value && onEvict) onEvict(previous, key);
+      map.delete(key);
+    }
+
+    map.set(key, value);
+    while (map.size > limit) {
+      const oldestKey = map.keys().next().value;
+      const oldestValue = map.get(oldestKey);
+      map.delete(oldestKey);
+      if (onEvict) onEvict(oldestValue, oldestKey);
+    }
+  }
+
   _revokeHeicObjectUrls() {
     if (!this._heicObjectUrlCache) return;
 
@@ -7737,6 +7776,15 @@ class MediaCard extends LitElement {
     }
 
     this._heicObjectUrlCache.clear();
+  }
+
+  _revokeHeicObjectUrl(objectUrl) {
+    if (!objectUrl) return;
+    try {
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      // Ignore stale/invalid blob URLs.
+    }
   }
 
   _loadHeicConverter() {
@@ -7783,7 +7831,11 @@ class MediaCard extends LitElement {
     }
 
     if (this._heicObjectUrlCache?.has(url)) {
-      return this._heicObjectUrlCache.get(url);
+      const objectUrl = this._heicObjectUrlCache.get(url);
+      // Refresh LRU position so active/recent images are not evicted first.
+      this._heicObjectUrlCache.delete(url);
+      this._heicObjectUrlCache.set(url, objectUrl);
+      return objectUrl;
     }
 
     try {
@@ -7811,7 +7863,14 @@ class MediaCard extends LitElement {
         return '';
       }
 
-      this._heicObjectUrlCache.set(url, objectUrl);
+      const cacheLimit = Math.max(1, Number(this.config?.heic?.cache_size) || this._heicObjectUrlCacheLimit);
+      this._setBoundedMapEntry(
+        this._heicObjectUrlCache,
+        url,
+        objectUrl,
+        cacheLimit,
+        oldObjectUrl => this._revokeHeicObjectUrl(oldObjectUrl)
+      );
       return objectUrl;
     } catch (error) {
       console.warn('[MediaCard] HEIC conversion failed, falling back to native image support:', error);
@@ -8580,9 +8639,16 @@ class MediaCard extends LitElement {
   _clearLivePhotoPlayback() {
     this._clearLivePhotoTimer();
     this._livePhotoGeneration++;
+    this._cleanupLivePhotoVideoElements();
     this._livePhotoPhase = 'idle';
     this._livePhotoVideoUrl = '';
     this._livePhotoVideoReady = false;
+  }
+
+  _cleanupLivePhotoVideoElements() {
+    this.shadowRoot?.querySelectorAll?.('.live-photo-video')?.forEach(video => {
+      this._releaseMediaElement(video);
+    });
   }
 
   _getLivePhotoItemId(item = this.currentMedia) {
@@ -8648,6 +8714,10 @@ class MediaCard extends LitElement {
 
     const cached = this._livePhotoCompanionVideoCache.get(itemId);
     if (cached === true || cached?.value === true) {
+      if (cached?.value === true) {
+        this._livePhotoCompanionVideoCache.delete(itemId);
+        this._livePhotoCompanionVideoCache.set(itemId, cached);
+      }
       return true;
     }
     if (cached && cached.value === false) {
@@ -8661,7 +8731,12 @@ class MediaCard extends LitElement {
 
     const candidates = this._buildLivePhotoStillCandidatesForVideo(item);
     if (!candidates.length) {
-      this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
+      this._setBoundedMapEntry(
+        this._livePhotoCompanionVideoCache,
+        itemId,
+        { value: false, checkedAt: Date.now() },
+        this._livePhotoCompanionVideoCacheLimit
+      );
       return false;
     }
 
@@ -8675,11 +8750,12 @@ class MediaCard extends LitElement {
           media_content_id: mediaContentId,
           expires: 60
         });
-        this._livePhotoCompanionVideoCache.set(itemId, {
-          value: true,
-          media_content_id: mediaContentId,
-          checkedAt: Date.now()
-        });
+        this._setBoundedMapEntry(
+          this._livePhotoCompanionVideoCache,
+          itemId,
+          { value: true, media_content_id: mediaContentId, checkedAt: Date.now() },
+          this._livePhotoCompanionVideoCacheLimit
+        );
         this._log('🎞️ Live Photo still found for companion video:', mediaContentId);
         return true;
       } catch (error) {
@@ -8687,7 +8763,12 @@ class MediaCard extends LitElement {
       }
     }
 
-    this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
+    this._setBoundedMapEntry(
+      this._livePhotoCompanionVideoCache,
+      itemId,
+      { value: false, checkedAt: Date.now() },
+      this._livePhotoCompanionVideoCacheLimit
+    );
     return false;
   }
 
@@ -8713,18 +8794,24 @@ class MediaCard extends LitElement {
           media_content_id: mediaContentId,
           expires: 60
         });
-        this._livePhotoCompanionVideoCache.set(itemId, {
-          value: true,
-          media_content_id: mediaContentId,
-          checkedAt: Date.now()
-        });
+        this._setBoundedMapEntry(
+          this._livePhotoCompanionVideoCache,
+          itemId,
+          { value: true, media_content_id: mediaContentId, checkedAt: Date.now() },
+          this._livePhotoCompanionVideoCacheLimit
+        );
         return { media_content_id: mediaContentId };
       } catch (error) {
         // Candidate does not exist or is not resolvable; try the next still extension.
       }
     }
 
-    this._livePhotoCompanionVideoCache.set(itemId, { value: false, checkedAt: Date.now() });
+    this._setBoundedMapEntry(
+      this._livePhotoCompanionVideoCache,
+      itemId,
+      { value: false, checkedAt: Date.now() },
+      this._livePhotoCompanionVideoCacheLimit
+    );
     return null;
   }
 
@@ -8901,7 +8988,10 @@ class MediaCard extends LitElement {
     if (!itemId || !this.hass) return null;
 
     if (this._livePhotoCompanionCache.get(itemId)) {
-      return this._livePhotoCompanionCache.get(itemId);
+      const companion = this._livePhotoCompanionCache.get(itemId);
+      this._livePhotoCompanionCache.delete(itemId);
+      this._livePhotoCompanionCache.set(itemId, companion);
+      return companion;
     }
 
     for (const candidate of this._buildLivePhotoCompanionCandidates(item)) {
@@ -8917,7 +9007,12 @@ class MediaCard extends LitElement {
         });
         const url = this._addCacheBustingTimestamp(resolved.url);
         const companion = { media_content_id: mediaContentId, url };
-        this._livePhotoCompanionCache.set(itemId, companion);
+        this._setBoundedMapEntry(
+          this._livePhotoCompanionCache,
+          itemId,
+          companion,
+          this._livePhotoCompanionCacheLimit
+        );
         this._log('🎞️ Live Photo companion resolved:', mediaContentId);
         return companion;
       } catch (error) {
@@ -9054,6 +9149,7 @@ class MediaCard extends LitElement {
 
   _onLivePhotoVideoError() {
     if (this._livePhotoPhase !== 'video') return;
+    this._cleanupLivePhotoVideoElements();
     const itemId = this._getLivePhotoItemId(this.currentMedia);
     if (itemId) this._livePhotoCompanionCache.delete(itemId);
     this._livePhotoPhase = 'still';
@@ -9067,6 +9163,7 @@ class MediaCard extends LitElement {
     e?.stopPropagation?.();
     if (this._livePhotoPhase !== 'video') return false;
 
+    this._releaseMediaElement(e?.target);
     this._clearLivePhotoTimer();
     const generation = ++this._livePhotoGeneration;
     const itemId = this._getLivePhotoItemId(this.currentMedia);
