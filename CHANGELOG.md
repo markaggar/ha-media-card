@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v5.11.0] - 2026-05-14
+## [v5.11.0] - 2026-05-18
 
 ### Added
 
@@ -65,12 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v5.10.0 - 2026-04-22
 
 ### Added
-- **Cast to TV** (`show_cast_button: true`): Cast button (opt-in) in the action toolbar lets users mirror the card's current media to any HA `media_player` entity (LG WebOS, Chromecast, etc.) in real time.
-  - Tap the cast icon to open a picker showing all `media_player` entities. Select one to start mirroring — every time the card advances, the same item is pushed to the TV via `media_player.play_media`.
-  - While a cast session is active the button shows `mdi:cast-connected` and a stop-cast tooltip. Tap again to stop.
-  - Uses the card's existing `shared_queue_id` if configured; otherwise generates a transient sync group for the session.
-  - Powered by new ha-media-index services: `mirror_to_cast`, `start_cast_slideshow`, `stop_cast_slideshow` (see ha-media-index CHANGELOG).
-  - Opt-in via config: `show_cast_button: true`
 - **Cross-Device Slideshow Sync** (`shared_queue_id`): Multiple cards across any number of views, devices, and browsers share a single navigation queue and stay in lock-step. Set the same `shared_queue_id` on every participating card and they will always show the same image with a shared navigation history so back/forward work everywhere. Three complementary transports keep all cards in sync:
   - **Same-window**: `CustomEvent` bus for zero-latency sync between cards on the same browser tab. Exactly one card drives the slideshow timer — others suppress theirs and follow the leader. Manual navigation instantly promotes that card to leader; when a leader is destroyed the next card claims leadership automatically via a vacancy event
   - **Cross-view persistence**: `localStorage` so switching to a different dashboard view immediately shows the current image
