@@ -5869,7 +5869,13 @@ class MediaCard extends LitElement {
     this._localConfigFields = this._extractBlockingConfigFields(this._baseConfig || this.config);
     // Discard any stale pending filter-change restore from a prior reinit so it doesn't
     // leak into this fresh initialization if the reinit wasn't filter-change-driven.
-    this._pendingFilterChangeRestore = null;
+    // IMPORTANT: when _skipSharedQueueRestore = true, this reinit WAS triggered by a
+    // filter change (local apply/clear or incoming sync override). In that case, preserve
+    // the stash so _tryRestoreFromSharedQueue can adopt the driver's exact position
+    // immediately instead of going to follower-wait mode.
+    if (!this._skipSharedQueueRestore) {
+      this._pendingFilterChangeRestore = null;
+    }
 
     // Reset max queue size when initializing new provider
     this._maxQueueSize = 0;
@@ -13193,6 +13199,10 @@ class MediaCard extends LitElement {
 
     dialog.querySelector('.filter-picker-clear').addEventListener('click', () => {
       cleanup();
+      // This is a deliberate local user action — become the driver so the sync write
+      // goes through immediately (same treatment as the Apply handler above).
+      this._localFilterAppliedAt = Date.now();
+      this._claimDriverRole();
       this._clearSessionOverride();
     });
 
