@@ -13789,6 +13789,17 @@ export class MediaCard extends LitElement {
     }
 
     if (!this.currentMedia) {
+      // Provider is null during a reinit (filter change, reconnect, etc.).
+      // Showing a media_type-specific error banner here would flash "No images/videos
+      // found" on screen for the brief async gap between the old provider being torn
+      // down and the new provider loading its first item.  Show a neutral blank card
+      // instead; the real error messages (No images found / No videos found) are
+      // reserved for when the provider has actually completed a query and truly found
+      // nothing to show.
+      if (!this.provider) {
+        return html`<ha-card><div class="card"></div></ha-card>`;
+      }
+
       // Show helpful message based on media_type filter
       const mediaType = this.config.media_type || 'all';
       let message = 'No media configured';
