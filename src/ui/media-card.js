@@ -208,6 +208,7 @@ export class MediaCard extends LitElement {
     this._castEndWatcher = null;         // setInterval handle: polls Roku ECP after local video ends (auto-advance with cast)
     this._castPrevEntityState = null;    // last known media_player state for remote pause/resume detection
     this._castRemotePaused = false;      // true when the slideshow was paused by the cast remote (not the card)
+    this._pendingSyncCastSeekPosition = null; // one-shot video position (seconds) to include in next sync broadcast
 
     // Session override (runtime filter/playback picker)
     this._sessionOverride = null; // null = no override; object = active override choices
@@ -509,18 +510,40 @@ export class MediaCard extends LitElement {
       if (prev && entityState && entityState !== prev) {
         if (entityState === 'paused' && !this._castPreEndPauseSent && !this._castSyncPausing && !this._isPaused) {
           // User paused via the TV/Roku remote — group-pause all synced cards.
+          // Capture the seek position from the entity so all cards snap to the same video frame.
+          const mediaPos = this.hass.states[this._castEntityId]?.attributes?.media_position;
+          const seekPos = typeof mediaPos === 'number' ? mediaPos : null;
           this._castRemotePaused = true;
           this._groupPaused = true;
           this._setPauseState(true);
           this._pauseTimer();
+          // Pause and seek the local video to match the TV's reported position.
+          const castLocalVideo = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+          if (castLocalVideo && !castLocalVideo.paused) {
+            this._castSyncPausing = true;
+            castLocalVideo.pause();
+          }
+          if (seekPos !== null && castLocalVideo && !castLocalVideo.ended) {
+            castLocalVideo.currentTime = seekPos;
+          }
+          // Broadcast pause + seek position to all synced cards.
+          this._pendingSyncCastSeekPosition = seekPos;
+          this._claimDriverRole();
           this._writeSharedQueueState(true);
-          this._log('⏸️ Cast entity paused by remote — group pausing slideshow');
+          this._log('⏸️ Cast entity paused by remote — group pausing slideshow at ' + (seekPos !== null ? seekPos.toFixed(1) : '?') + 's');
         } else if (entityState === 'playing' && this._castRemotePaused && this._isPaused) {
           // User resumed via the TV/Roku remote — group-resume all synced cards.
           this._castRemotePaused = false;
           this._groupPaused = false;
           this._setPauseState(false);
           this._resumeTimer();
+          // Resume the local video on the casting card.
+          const castLocalVideo = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+          if (castLocalVideo && castLocalVideo.paused && !castLocalVideo.ended) {
+            this._suppressCastPushOnCanplay = true;
+            castLocalVideo.play().catch(() => {});
+          }
+          this._claimDriverRole();
           this._writeSharedQueueState(true);
           this._log('▶️ Cast entity resumed by remote — group resuming slideshow');
         }
@@ -5023,6 +5046,10 @@ export class MediaCard extends LitElement {
     }
     this._suppressSyncWriteUntil = 0;
 
+    // Capture and consume the one-shot cast seek position so it travels in this broadcast.
+    const castSeekPosition = this._pendingSyncCastSeekPosition;
+    this._pendingSyncCastSeekPosition = null;
+
     // Always write localStorage for instant same-device sync
     try {
       const data = {
@@ -5033,6 +5060,7 @@ export class MediaCard extends LitElement {
         currentMetadata: this._currentMetadata || this._pendingMetadata || null,
         isPaused: this._isPaused,
         pauseIntent,
+        castSeekPosition: castSeekPosition !== null ? castSeekPosition : undefined,
         updatedAt: Date.now(),
         sourceCardId: this._cardId,
         sessionOverride: this._sessionOverride || null,
@@ -5737,6 +5765,10 @@ export class MediaCard extends LitElement {
           this._castSyncPausing = true; // suppress _onVideoPause side-effects
           syncVideoEl.pause();
         }
+        // Seek video to match the cast pause position so all cards are at the same frame.
+        if (typeof data.castSeekPosition === 'number' && syncVideoEl && !syncVideoEl.ended) {
+          syncVideoEl.currentTime = data.castSeekPosition;
+        }
         // Pause Roku cast if active
         this._sendCastPlayToggle();
       } else {
@@ -5770,6 +5802,15 @@ export class MediaCard extends LitElement {
           // Already showing — apply directly and re-render
           this._currentMetadata = { ...(this._currentMetadata || {}), ...data.currentMetadata };
           this.requestUpdate();
+        }
+      }
+      // Snap the local video to the cast video start position. The casting card broadcasts
+      // this after Roku starts playing so non-casting follower cards (which started the
+      // video immediately) seek to the same point and stay in sync.
+      if (!data.pauseIntent && typeof data.castSeekPosition === 'number') {
+        const castSyncVidEl = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+        if (castSyncVidEl && !castSyncVidEl.ended && Math.abs(castSyncVidEl.currentTime - data.castSeekPosition) > 1) {
+          castSyncVidEl.currentTime = data.castSeekPosition;
         }
       }
       return;
@@ -8870,10 +8911,19 @@ export class MediaCard extends LitElement {
     // Pause local video immediately while Roku buffers the pushed content.
     // Set guard flag first so _onVideoPause ignores this programmatic pause
     // and does not set _videoUserInteracted or broadcast to sync group peers.
+    // IMPORTANT: Only set the flag (and pause) when the video is currently playing.
+    // If it is already paused (e.g. the early Roku pre-pause in _pushCurrentToCast ran
+    // first and the pause event was processed during the await ECP call), the browser
+    // will NOT fire a second pause event — _castSyncPausing would get stuck at true and
+    // permanently block remote-pause detection for the entire video.
     const video = getVideo();
     if (video) {
-      this._castSyncPausing = true;
-      video.pause();
+      if (!video.paused) {
+        this._castSyncPausing = true;
+        video.pause();
+      } else {
+        this._castSyncPausing = false; // ensure clean state
+      }
     }
 
     // Build a roku_ecp_query WS call payload (same routing pattern as roku_ecp_cast)
@@ -8937,6 +8987,12 @@ export class MediaCard extends LitElement {
         this._suppressCastPushOnCanplay = true;
         v.play().catch(() => {});
         this._log(`🎬 Cast sync: Roku playing at ${rokuPosSec.toFixed(1)}s — local resumed`);
+
+        // Broadcast the Roku start position to synced follower cards so they seek to
+        // the same frame — prevents non-casting cards from running ahead while this
+        // card was paused waiting for Roku to buffer and begin playback.
+        this._pendingSyncCastSeekPosition = rokuPosSec;
+        this._writeSharedQueueState(false);
 
         // Schedule pre-end pause so Roku doesn't snap to home screen when video ends.
         // Use ECP keypress/Play directly (instant) instead of media_player.media_pause
