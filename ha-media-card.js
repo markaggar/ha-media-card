@@ -10401,6 +10401,17 @@ class MediaCard extends LitElement {
         // driver loads its first item under the new filter (anti-ping-pong).
         this._suppressSyncWriteUntil = Date.now() + 5000;
         this._suppressFilterBroadcast = true;
+        // Record the leader's current path so timerCallback's window-extension check
+        // works correctly after the filter-change reinit and _pendingFilterChangeRestore
+        // apply. Without this, _crossDeviceLeaderMediaPath stays stale (pointing to the
+        // pre-filter-change item) and the extension check fails when the window expires,
+        // causing the follower to auto-advance with its own random items instead of
+        // waiting for the leader's next broadcast.
+        if (Array.isArray(data.queue) && data.queue.length) {
+          const ri = typeof data.currentIndex === 'number'
+            ? Math.min(data.currentIndex, data.queue.length - 1) : 0;
+          this._crossDeviceLeaderMediaPath = data.queue[ri];
+        }
         if (data.sessionOverride) {
           this._applySessionOverride(data.sessionOverride);
         } else {
