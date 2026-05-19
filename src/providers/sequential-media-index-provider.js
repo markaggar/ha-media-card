@@ -26,6 +26,15 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
     this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+
+    // Resume from a saved cursor when the user clears a runtime filter — the card stores
+    // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
+    // initialize() queries from where the user left off instead of from the very beginning.
+    if (card?._pendingProviderCursor) {
+      this.lastSeenValue = card._pendingProviderCursor.lastSeenValue;
+      this.lastSeenId    = card._pendingProviderCursor.lastSeenId;
+      card._pendingProviderCursor = null;
+    }
   }
 
   _log(...args) {

@@ -3841,6 +3841,15 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
     this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+
+    // Resume from a saved cursor when the user clears a runtime filter — the card stores
+    // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
+    // initialize() queries from where the user left off instead of from the very beginning.
+    if (card?._pendingProviderCursor) {
+      this.lastSeenValue = card._pendingProviderCursor.lastSeenValue;
+      this.lastSeenId    = card._pendingProviderCursor.lastSeenId;
+      card._pendingProviderCursor = null;
+    }
   }
 
   _log(...args) {
@@ -4869,11 +4878,15 @@ class MediaCard extends LitElement {
     this._castPreEndPauseSent = false; // guard: true after pre-end pause sent to Roku (prevents double-send)
     this._castSeekSuppressUntil = 0;  // timestamp: suppress drift correction until this time after a seek
     this._castEndWatcher = null;         // setInterval handle: polls Roku ECP after local video ends (auto-advance with cast)
+    this._castPrevEntityState = null;    // last known media_player state for remote pause/resume detection
+    this._castRemotePaused = false;      // true when the slideshow was paused by the cast remote (not the card)
 
     // Session override (runtime filter/playback picker)
     this._sessionOverride = null; // null = no override; object = active override choices
     this._baseConfig = null;      // saved this.config before first override applied
     this._suppressFilterBroadcast = false; // guard: skip broadcast when applying filter received from sync
+    this._preFilterCursor = null;          // SequentialMediaIndexProvider cursor saved when filter is applied
+    this._pendingProviderCursor = null;    // cursor to inject into new provider when filter is cleared
 
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -5156,6 +5169,34 @@ class MediaCard extends LitElement {
         !this._kioskStateSubscription) {
       this._log('🖼️ Hass available - setting up kiosk mode monitoring');
       this._setupKioskModeMonitoring();
+    }
+
+    // Cast remote pause/resume detection: when a cast session is active, monitor the
+    // media_player entity state so that pausing or resuming on the physical remote
+    // (or TV controls) propagates as a group pause/resume to all synced cards.
+    if (changedProperties.has('hass') && this._castEntityId && this.hass) {
+      const entityState = this.hass.states[this._castEntityId]?.state;
+      const prev = this._castPrevEntityState;
+      this._castPrevEntityState = entityState;
+      if (prev && entityState && entityState !== prev) {
+        if (entityState === 'paused' && !this._castPreEndPauseSent && !this._castSyncPausing && !this._isPaused) {
+          // User paused via the TV/Roku remote — group-pause all synced cards.
+          this._castRemotePaused = true;
+          this._groupPaused = true;
+          this._setPauseState(true);
+          this._pauseTimer();
+          this._writeSharedQueueState(true);
+          this._log('⏸️ Cast entity paused by remote — group pausing slideshow');
+        } else if (entityState === 'playing' && this._castRemotePaused && this._isPaused) {
+          // User resumed via the TV/Roku remote — group-resume all synced cards.
+          this._castRemotePaused = false;
+          this._groupPaused = false;
+          this._setPauseState(false);
+          this._resumeTimer();
+          this._writeSharedQueueState(true);
+          this._log('▶️ Cast entity resumed by remote — group resuming slideshow');
+        }
+      }
     }
     
     if (changedProperties.has('mediaUrl')) {
@@ -12720,6 +12761,10 @@ class MediaCard extends LitElement {
       btn.addEventListener('click', () => {
         cleanup();
         this._castEntityId = btn.dataset.entity;
+        // Snapshot the current entity state so the first real transition in updated()
+        // is not compared against undefined (which would always look like a change).
+        this._castPrevEntityState = this.hass?.states[this._castEntityId]?.state ?? null;
+        this._castRemotePaused = false;
         this.requestUpdate();
         // Send immediately to launch xcast (or update if already running).
         // Then retry after 2.5 s — if xcast was cold-starting the first send
@@ -12736,6 +12781,8 @@ class MediaCard extends LitElement {
 
     this._stopCastSync();
     this._castEntityId = null;
+    this._castPrevEntityState = null;
+    this._castRemotePaused = false;
     // Cancel any pending pre-end pause
     if (this._castPauseTimer) {
       clearTimeout(this._castPauseTimer);
@@ -12924,8 +12971,9 @@ class MediaCard extends LitElement {
     }
 
     // Video loop
-    if (overrides.video_loop === true) {
-      merged.video_loop = true;
+    if (overrides.video_loop != null) {
+      // Allow explicit false to disable looping even when the base config has it on.
+      merged.video_loop = overrides.video_loop;
     } else {
       merged.video_loop = base.video_loop;
     }
@@ -12951,6 +12999,9 @@ class MediaCard extends LitElement {
     }
 
     this.config = merged;
+    // Save the sequential provider cursor before reinit so clearing the filter can
+    // resume from approximately this position instead of restarting from index 0.
+    this._preFilterCursor = this._getSequentialProviderCursor();
     this._reinitWithClear(true); // skip shared-queue restore — user explicitly chose new content
     // Broadcast the new filter to all cards in the shared queue group.
     if (!this._suppressFilterBroadcast) {
@@ -12964,6 +13015,12 @@ class MediaCard extends LitElement {
     if (this._baseConfig) this.config = this._baseConfig;
     this._baseConfig = null;
     this._sessionOverride = null;
+    // Restore the pre-filter sequential cursor so the new provider queries from
+    // where we left off rather than starting at the beginning of the sequence.
+    if (this._preFilterCursor) {
+      this._pendingProviderCursor = this._preFilterCursor;
+      this._preFilterCursor = null;
+    }
     this._reinitWithClear(true); // skip shared-queue restore — user explicitly cleared override
     // Broadcast the filter clear to all cards in the shared queue group.
     if (!this._suppressFilterBroadcast) {
@@ -12998,6 +13055,18 @@ class MediaCard extends LitElement {
 
     this._initializeProvider();
     this.requestUpdate();
+  }
+
+  /** Return { lastSeenValue, lastSeenId } from the active SequentialMediaIndexProvider,
+   *  or null if the current provider is not sequential. Used to save/restore position
+   *  across a runtime filter apply/clear cycle. */
+  _getSequentialProviderCursor() {
+    if (!this.provider) return null;
+    const seqP = this.provider.constructor?.name === 'SequentialMediaIndexProvider'
+      ? this.provider
+      : (this.provider.sequentialProvider || null);
+    if (!seqP || seqP.lastSeenValue === undefined) return null;
+    return { lastSeenValue: seqP.lastSeenValue, lastSeenId: seqP.lastSeenId };
   }
 
   /** Open the filter/playback picker dialog. */
