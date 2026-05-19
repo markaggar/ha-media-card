@@ -4830,9 +4830,13 @@ export class MediaCard extends LitElement {
       video.muted = shouldBeMuted;
       this._log(`🔊 Video loaded - muted=${shouldBeMuted} (preference=${this._userMutePreference}, valid=${this._isUserMutePreferenceValid()})`);
       
-      // Force the video controls to update by toggling muted state
-      // V5.8: Suppress the volumechange handler during this programmatic toggle
+      // Force the video controls to update by toggling muted state.
+      // Only safe when the video is still paused — toggling muted on a playing
+      // video triggers Chrome's autoplay policy ("Unmuting failed") which
+      // force-pauses the element, and the card then misinterprets it as a
+      // deliberate user pause and stops the slideshow.
       setTimeout(() => {
+        if (!video || !video.paused) return; // skip if already playing
         this._suppressVolumeChangeHandler = true;
         const currentMuted = video.muted;
         video.muted = !currentMuted;
