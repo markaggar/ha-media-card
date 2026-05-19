@@ -4791,6 +4791,8 @@ class MediaCard extends LitElement {
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
         still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
+        max_plays_per_item: 1,
+        preload_mode: 'metadata',
         ...config.live_photo
       }
     };
@@ -4972,6 +4974,8 @@ class MediaCard extends LitElement {
     this._livePhotoCompanionCacheLimit = 48;
     this._livePhotoCompanionVideoCacheLimit = 128;
     this._livePhotoGeneration = 0;
+    this._livePhotoPlaybackItemId = '';
+    this._livePhotoPlaybackCount = 0;
 
     this._heicObjectUrlCache = new Map();
     this._heicObjectUrlCacheLimit = 4;
@@ -5621,6 +5625,8 @@ class MediaCard extends LitElement {
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
         still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
+        max_plays_per_item: 1,
+        preload_mode: 'metadata',
         ...config.live_photo
       },
       heic: {
@@ -7936,6 +7942,7 @@ class MediaCard extends LitElement {
       if (this._activeMediaPrepare === active) {
         this._activeMediaPrepare = null;
       }
+      this._releaseMediaElement(image);
     }
   }
 
@@ -8643,6 +8650,8 @@ class MediaCard extends LitElement {
     this._livePhotoPhase = 'idle';
     this._livePhotoVideoUrl = '';
     this._livePhotoVideoReady = false;
+    this._livePhotoPlaybackItemId = '';
+    this._livePhotoPlaybackCount = 0;
   }
 
   _cleanupLivePhotoVideoElements() {
@@ -9039,6 +9048,8 @@ class MediaCard extends LitElement {
     const generation = ++this._livePhotoGeneration;
     const itemId = this._getLivePhotoItemId(this.currentMedia);
     this._livePhotoPhase = 'still';
+    this._livePhotoPlaybackItemId = itemId;
+    this._livePhotoPlaybackCount = 0;
     const stillMs = Math.max(0.1, Number(this.config.live_photo?.still_duration) || 1) * 1000;
 
     this._warmLivePhotoCompanion(generation, itemId);
@@ -9076,8 +9087,7 @@ class MediaCard extends LitElement {
         video.removeEventListener('loadedmetadata', onReady);
         video.removeEventListener('canplay', onReady);
         video.removeEventListener('error', onDone);
-        video.removeAttribute('src');
-        video.load?.();
+        this._releaseMediaElement(video);
         resolve();
       };
       const isCurrent = () =>
@@ -9092,7 +9102,10 @@ class MediaCard extends LitElement {
         return;
       }
 
-      video.preload = 'auto';
+      const preloadMode = this.config?.live_photo?.preload_mode ||
+        this.config?.preload?.video_mode ||
+        'metadata';
+      video.preload = preloadMode === 'auto' || preloadMode === 'canplay' ? 'auto' : 'metadata';
       video.muted = true;
       video.playsInline = true;
       video.addEventListener('loadedmetadata', onReady, { once: true });
@@ -9174,6 +9187,22 @@ class MediaCard extends LitElement {
     this._livePhotoVideoReady = false;
     this._hideBottomOverlaysForVideo = false;
     this.requestUpdate();
+
+    if (this._livePhotoPlaybackItemId !== itemId) {
+      this._livePhotoPlaybackItemId = itemId;
+      this._livePhotoPlaybackCount = 0;
+    }
+    this._livePhotoPlaybackCount = (this._livePhotoPlaybackCount || 0) + 1;
+
+    const maxPlaysRaw = this.config?.live_photo?.max_plays_per_item;
+    const maxPlays = maxPlaysRaw === undefined || maxPlaysRaw === null
+      ? 1
+      : Math.max(0, Number(maxPlaysRaw) || 0);
+
+    if (maxPlays > 0 && this._livePhotoPlaybackCount >= maxPlays) {
+      this._livePhotoPhase = 'idle';
+      return true;
+    }
 
     this._livePhotoTimer = setTimeout(() => {
       this._startLivePhotoVideo(generation, itemId);
