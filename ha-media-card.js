@@ -7209,6 +7209,14 @@ class MediaCard extends LitElement {
             this._log('\u{1f465} Cross-device follower \u2014 skipping auto-advance (leader drives)');
             return;
           }
+          // Follower window expired, but if we're still showing the same media the leader
+          // last sent, the leader is mid-video (longer than the window). Extend and stay put.
+          if (this._hasCrossDeviceSync() && this._crossDeviceLeaderMediaPath &&
+              this._currentMediaPath === this._crossDeviceLeaderMediaPath) {
+            this._crossDeviceFollowerUntil = Date.now() + 120000;
+            this._log('\u{1f465} Cross-device follower \u2014 window renewed (still on leader media, long video)');
+            return;
+          }
           this._pauseLogShown = false;
           
           // Check for new files FIRST (before video completion check)
@@ -10203,6 +10211,7 @@ class MediaCard extends LitElement {
     // Clear ALL cross-device follower/deferral state so the HA write goes through
     // immediately, regardless of whether same-window leadership is changing.
     this._crossDeviceFollowerUntil = 0;
+    this._crossDeviceLeaderMediaPath = null; // clear so follower window logic doesn't re-extend
     this._crossDeviceProviderFetchUntil = 0;
     if (this._crossDeviceGraceRetryTimer) {
       clearTimeout(this._crossDeviceGraceRetryTimer);
@@ -10490,6 +10499,9 @@ class MediaCard extends LitElement {
     // HOWEVER: a second broadcast for the same path may carry metadata that the first
     // (early) broadcast lacked — apply it even if we skip navigation.
     if (newPath === this._currentMediaPath || newPath === this._pendingMediaPath) {
+      // Keep leader path current even on same-path syncs so the long-video follower
+      // extension in timerCallback can match correctly.
+      this._crossDeviceLeaderMediaPath = newPath;
       if (data.currentMetadata) {
         if (this._pendingMediaPath !== null) {
           // Still loading — merge into pending so it applies when image loads
@@ -10531,7 +10543,9 @@ class MediaCard extends LitElement {
     const item = this.navigationQueue[newIndex];
     this._clearLivePhotoPlayback();
     this.currentMedia = item;
-    this._pendingNavigationIndex = newIndex;
+    // Record this path as the leader's current media so followers can detect long
+    // videos and extend their follower window rather than advancing prematurely.
+    this._crossDeviceLeaderMediaPath = newPath;
     this._pendingMediaPath = newPath;
     // Use metadata from the sender if provided — avoids a round-trip fetch and
     // works even when this card has no media-index configured.
