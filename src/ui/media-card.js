@@ -5605,6 +5605,7 @@ export class MediaCard extends LitElement {
     // enough to cover normal slideshow intervals; if the driver goes away, this card
     // will naturally take over writing once the window expires.
     this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    let currentMetadata;
     if (data.current_metadata) {
       try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
     }
