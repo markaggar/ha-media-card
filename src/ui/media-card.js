@@ -4636,6 +4636,15 @@ export class MediaCard extends LitElement {
   _onVideoSeeking(e) {
     // V5.6.8: Track that we're in the middle of a seek operation
     this._videoIsSeeking = true;
+
+    // Suppress user-interaction marking for code-driven seeks (cast position snaps,
+    // drift corrections). _suppressSeekInteraction is set before any programmatic
+    // currentTime assignment; the seeking event fires asynchronously so the flag
+    // is still set when this handler runs.
+    if (this._suppressSeekInteraction) {
+      this._suppressSeekInteraction = false;
+      return;
+    }
     
     // V5.6.4: Only mark as user interaction if video has started playing
     // Browser fires seeking events during initial load - ignore those
@@ -9077,7 +9086,11 @@ export class MediaCard extends LitElement {
 
         // Snap local position to Roku if off by more than 1 second
         const rokuPosSec = (r.position_ms ?? 0) / 1000;
-        if (Math.abs(v.currentTime - rokuPosSec) > 1) v.currentTime = rokuPosSec;
+        if (Math.abs(v.currentTime - rokuPosSec) > 1) {
+          // Mark as code-driven so _onVideoSeeking does not count this as a user interaction.
+          this._suppressSeekInteraction = true;
+          v.currentTime = rokuPosSec;
+        }
         // Clear user-interaction flag so slideshow auto-advance still works after video ends
         this._videoUserInteracted = false;
 
@@ -9155,7 +9168,9 @@ export class MediaCard extends LitElement {
                 // Roku is ahead of local — pull local forward to keep up.
                 // Suppress the canplay the currentTime change will fire so we don't
                 // re-push to Roku and restart it from 0.
+                // Also suppress the seeking event so it isn't treated as a user interaction.
                 this._suppressCastPushOnCanplay = true;
+                this._suppressSeekInteraction = true;
                 vid.currentTime = rokuPos;
                 this._log(`🎬 Cast drift: snapped local +${drift.toFixed(1)}s (Roku was ahead)`);
               } else {
