@@ -4791,7 +4791,7 @@ class MediaCard extends LitElement {
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
         still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
-        max_plays_per_item: 1,
+        max_plays_per_item: 0,
         preload_mode: 'metadata',
         ...config.live_photo
       }
@@ -5625,7 +5625,7 @@ class MediaCard extends LitElement {
         video_extensions: ['MOV', 'mov', 'mp4', 'MP4', 'm4v', 'M4V'],
         still_extensions: ['JPG', 'jpg', 'JPEG', 'jpeg', 'PNG', 'png', 'WEBP', 'webp'],
         hide_companion_videos: true,
-        max_plays_per_item: 1,
+        max_plays_per_item: 0,
         preload_mode: 'metadata',
         ...config.live_photo
       },
@@ -9196,7 +9196,7 @@ class MediaCard extends LitElement {
 
     const maxPlaysRaw = this.config?.live_photo?.max_plays_per_item;
     const maxPlays = maxPlaysRaw === undefined || maxPlaysRaw === null
-      ? 1
+      ? 0
       : Math.max(0, Number(maxPlaysRaw) || 0);
 
     if (maxPlays > 0 && this._livePhotoPlaybackCount >= maxPlays) {
