@@ -511,8 +511,11 @@ export class MediaCard extends LitElement {
         if (videoElement && this.mediaUrl) {
           videoElement.load(); // Force browser to reload the video with new source
           
-          // Auto-play if configured
-          if (this.config.video_autoplay) {
+          // Auto-play if configured and not group-paused.
+          // Skip play() when group-paused: a combined navigation+group-pause sync
+          // (from cast manual navigation) sets _groupPaused before the video loads;
+          // starting playback here would immediately override the paused state.
+          if (this.config.video_autoplay && !this._groupPaused) {
             videoElement.play().catch(err => {
               // AbortError happens when video is removed from DOM before play() completes (rapid navigation)
               // This is normal during fast navigation and can be safely ignored
@@ -4539,7 +4542,22 @@ export class MediaCard extends LitElement {
       this._currentMediaPath = this._pendingMediaPath;
       this._pendingMediaPath = null;
     }
-    
+
+    // If group-paused (cast group-pause sync arrived before or combined with navigation),
+    // immediately re-pause the new video. This handles manual navigation where
+    // _claimDriverRole() in _startCastSync() cancels the navigation-only HA write,
+    // causing followers to receive a single combined sync with both navigation and
+    // group-pause — the video autoplay attribute plays it when ready, so we pause here.
+    if (this._groupPaused) {
+      const video = this.renderRoot?.querySelector('video:not(.live-photo-video)');
+      if (video && !video.paused) {
+        this._castSyncPausing = true; // suppress _onVideoPause side-effects
+        video.pause();
+      }
+      this.requestUpdate();
+      return;
+    }
+
     // Shared queue: broadcast navigation — suppress if locally paused (short press)
     if (!this._isLocallyPaused()) {
       this._writeSharedQueueState();
