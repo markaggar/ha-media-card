@@ -9751,16 +9751,19 @@ class MediaCard extends LitElement {
         const data = resp?.response;
         if (data?.found && Array.isArray(data.queue) && data.queue.length) {
           // ── Config mismatch check ──
+          // Stored state has a different config (e.g. entity_id changed). This just
+          // means the cache is stale — silently skip restore and let the card init
+          // fresh. Do NOT set _configMismatchDetected: that flag is only for live
+          // cross-device sync events where another card with a different config is
+          // actively trying to push its queue to this card.
           if (data.config_fields && this._localConfigFields) {
             let storedFields;
             try { storedFields = typeof data.config_fields === 'string' ? JSON.parse(data.config_fields) : data.config_fields; } catch (_e) { storedFields = null; }
             if (storedFields) {
               const diff = this._diffConfigFields(this._localConfigFields, storedFields);
               if (diff.length > 0) {
-                this._configMismatchDetected = true;
-                this._configMismatchDiff = diff;
-                this._log('🚫 Shared queue config mismatch on restore:', diff.map(d => d.key).join(', '));
-                return false; // _initializeProvider will block on _configMismatchDetected
+                this._log('⏭️ Shared queue restore skipped: stored config is stale (', diff.map(d => d.key).join(', '), ')');
+                return false; // stale data — init fresh, no error banner
               }
             }
           }
@@ -9805,12 +9808,11 @@ class MediaCard extends LitElement {
       if (!Array.isArray(data.queue) || !data.queue.length) return false;
 
       // ── Config mismatch check (localStorage) ──
+      // Stale stored config means the user changed settings — skip restore silently.
       if (data.configFields && this._localConfigFields) {
         const diff = this._diffConfigFields(this._localConfigFields, data.configFields);
         if (diff.length > 0) {
-          this._configMismatchDetected = true;
-          this._configMismatchDiff = diff;
-          this._log('🚫 Shared queue config mismatch on localStorage restore:', diff.map(d => d.key).join(', '));
+          this._log('⏭️ Shared queue localStorage restore skipped: stored config is stale (', diff.map(d => d.key).join(', '), ')');
           return false;
         }
       }
@@ -9889,13 +9891,11 @@ class MediaCard extends LitElement {
     if (!queue) return;
 
     // ── Config mismatch check ──
+    // Stale stored config (e.g. entity_id changed) — skip sync silently, no error banner.
     if (configFields && this._localConfigFields) {
       const diff = this._diffConfigFields(this._localConfigFields, configFields);
       if (diff.length > 0) {
-        this._configMismatchDetected = true;
-        this._configMismatchDiff = diff;
-        this._log('🚫 Shared queue config mismatch on reconnect:', diff.map(d => d.key).join(', '));
-        this.requestUpdate();
+        this._log('⏭️ Shared queue reconnect sync skipped: stored config is stale (', diff.map(d => d.key).join(', '), ')');
         return;
       }
     }
