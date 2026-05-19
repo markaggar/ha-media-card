@@ -5889,6 +5889,7 @@ export class MediaCard extends LitElement {
     // Record this path as the leader's current media so followers can detect long
     // videos and extend their follower window rather than advancing prematurely.
     this._crossDeviceLeaderMediaPath = newPath;
+    this._pendingNavigationIndex = newIndex;
     this._pendingMediaPath = newPath;
     // Use metadata from the sender if provided — avoids a round-trip fetch and
     // works even when this card has no media-index configured.
