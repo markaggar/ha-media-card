@@ -1199,7 +1199,8 @@ export class MediaCard extends LitElement {
       const castEntityPrev  = this._castPrevEntityState;
       this._castPrevEntityState = castEntityState;
       if (castEntityPrev && castEntityState && castEntityState !== castEntityPrev) {
-        if (castEntityState === 'paused' && !this._castPreEndPauseSent && !this._castSyncPausing && !this._isPaused) {
+        if (castEntityState === 'paused' && !this._castPreEndPauseSent && !this._castSyncPausing && !this._isPaused &&
+            (!this._castNavigationPauseAt || Date.now() - this._castNavigationPauseAt > 5000)) {
           // User paused via the TV/Roku remote — group-pause all synced cards.
           const mediaPos = hass.states[this._castEntityId]?.attributes?.media_position;
           const seekPos  = typeof mediaPos === 'number' ? mediaPos : null;
@@ -8288,6 +8289,7 @@ export class MediaCard extends LitElement {
     };
     if (this.config.media_index?.entity_id) wsCall.target = { entity_id: this.config.media_index.entity_id };
     this.hass.callWS(wsCall).catch(() => {});
+    this._castNavigationPauseAt = Date.now();
     this._log(`🎬 Cast: paused for manual navigation (will resume when new video pushes)`);
   }
 
@@ -9092,6 +9094,9 @@ export class MediaCard extends LitElement {
         // Suppress the canplay that v.play() (and any snap of currentTime above) may fire —
         // we don't want _onVideoCanPlay to push to cast again and reset Roku's position.
         this._suppressCastPushOnCanplay = true;
+        // Roku is now confirmed playing the new video — clear the navigation-pause
+        // suppression window so genuine remote pauses are detected normally again.
+        this._castNavigationPauseAt = 0;
         v.play().catch(() => {});
         this._log(`🎬 Cast sync: Roku playing at ${rokuPosSec.toFixed(1)}s — local resumed`);
 
@@ -9176,6 +9181,10 @@ export class MediaCard extends LitElement {
       clearTimeout(this._castPauseTimer);
       this._castPauseTimer = null;
     }
+
+    // Record that a cast push is in progress so the hass-setter remote-pause
+    // guard can suppress false pause detections during Roku video transitions.
+    this._castNavigationPauseAt = Date.now();
 
     const uri = this._currentMediaPath;
     const entityId = this._castEntityId;
