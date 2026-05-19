@@ -5635,6 +5635,8 @@ export class MediaCard extends LitElement {
       // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
       // writes its (identical) state to HA — wasted service calls and log noise.
       this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+      this._applySharedQueueUpdate(data);
+    } catch (_e) {}
   }
 
   // window CustomEvent (same window, instant)
@@ -5646,6 +5648,7 @@ export class MediaCard extends LitElement {
     // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
     // writes its (identical) state to HA — wasted service calls and log noise.
     this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    this._applySharedQueueUpdate(event.detail);
   }
 
   // Broadcast the new queue state (with a specific index) without waiting for image load.
