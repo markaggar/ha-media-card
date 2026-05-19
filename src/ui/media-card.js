@@ -5044,6 +5044,8 @@ export class MediaCard extends LitElement {
         },
         target: { entity_id: entityId },
       });
+      // Record when we last wrote so stale events from followers can be rejected
+      this._lastHaSyncWrittenAt = Date.now();
       this._log(`🔗 Sync state written to media_index for group '${id}'`);
     } catch (e) {
       this._log('⚠️ Failed to write shared queue to media_index:', e);
@@ -5485,6 +5487,16 @@ export class MediaCard extends LitElement {
       this._log('🔗 Manual nav in progress (or pending load) — not entering follower mode for this sync event');
       return;
     }
+    // Reject sync events that were written before our own last HA write — the sender
+    // was still catching up to us and their state is stale (e.g. a follower card
+    // that loaded item N and wrote sync state just before we advanced to N+1 via the
+    // Roku end-watch, which would bounce us back to N).  Use a 1s tolerance for
+    // minor cross-device clock skew on a local network.
+    if (this._lastHaSyncWrittenAt && (data.written_at || 0) < this._lastHaSyncWrittenAt - 1000) {
+      this._log(`⏭️ Ignoring stale sync event: sender wrote_at=${data.written_at}, our last write=${this._lastHaSyncWrittenAt}`);
+      return;
+    }
+
     // Mark this card as a cross-device follower for 30 s.  While in follower mode,
     // auto-advance writes are suppressed so this card doesn't overwrite the driver's
     // DB state with its own independently-fetched queue items.  The window is generous
@@ -8691,6 +8703,10 @@ export class MediaCard extends LitElement {
     const doAdvance = async () => {
       this._stopCastEndWatch();
       this._log('🎬 Cast end-watch: Roku done — advancing to next item');
+      // Claim driver role so the HA sync write goes through even if _crossDeviceFollowerUntil
+      // is still active (set when we received a sync event from a follower card).
+      // The Roku end-watch advance is an authoritative leader action.
+      this._claimDriverRole();
       const queueRefreshed = await this._checkForNewFiles();
       if (!queueRefreshed) this._loadNext().catch(() => {});
     };
