@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Follower shows wrong images after leader applies a filter (cross-device sync)**: Two compounding bugs caused the follower card to diverge entirely from the leader after a filter change via the filter picker.
+  - **Bug 1 (root cause)**: The backend `update_sync_state` service was trimming the broadcast queue to its last 20 items (`queue[-20:]`) while leaving `current_index` pointing into the original full queue. For a 146-item result `current_index=1` mapped to the 2nd-to-last group of photos rather than item 1 — so every sync event navigated the follower to a completely different image.
+  - **Bug 2**: When `_applySharedQueueUpdate` detected a filter change it discarded the incoming queue and reinitialised from scratch (index 0), ignoring where the leader currently was. The new `_pendingFilterChangeRestore` mechanism stashes the leader's queue and current index before the reinit, then `_tryRestoreFromSharedQueue` checks it first (before the `_skipSharedQueueRestore` guard) so the follower lands on the leader's exact position immediately after the filter-change reinit.
+
 - **Unresolvable media-source items removed from queue on first failure**: When the card resolves a batch of media-source URIs (e.g. after a server restart), stale or expired items that return a network error are now silently removed from the provider queue immediately rather than stalling the slideshow. Back-navigation also skips removed positions so history stays consistent.
 
 - **Touch interactions on video not working (swipe, hold, double-tap)**: All three gestures were broken when the user's finger landed on the `<video>` element

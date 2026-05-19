@@ -158,6 +158,11 @@ export class MediaCard extends LitElement {
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
     this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
     this._errorState = null; // V4 error state tracking
+    this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
+    this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
+    this._localConfigFields = null;       // extracted blocking fields from current base config
+    this._initGeneration = 0;             // incremented on each _initializeProvider call; stale inits check this and bail
+    this._pendingFilterChangeRestore = null; // stashed {queue, currentIndex, metadata} to adopt after filter-change reinit
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
     this._tapTimeout = null;         // V4 tap action double-tap detection
@@ -205,6 +210,7 @@ export class MediaCard extends LitElement {
     // Session override (runtime filter/playback picker)
     this._sessionOverride = null; // null = no override; object = active override choices
     this._baseConfig = null;      // saved this.config before first override applied
+    this._suppressFilterBroadcast = false; // guard: skip broadcast when applying filter received from sync
 
     // V5.5: Side Panel System (Burst Review & Queue Preview)
     // Panel state
@@ -1187,6 +1193,21 @@ export class MediaCard extends LitElement {
       return;
     }
 
+    // Increment the generation counter. Every await point below checks this value.
+    // If a newer _initializeProvider call has started (e.g. from _applySessionOverride
+    // being triggered mid-init by _tryRestoreFromSharedQueue), the stale init silently
+    // aborts instead of racing the newer one to set shared state.
+    const generation = ++this._initGeneration;
+
+    // Reset config-mismatch state (fresh check on each init) and capture this card's
+    // blocking fields so write paths and mismatch checks are based on the current config.
+    this._configMismatchDetected = false;
+    this._configMismatchDiff = null;
+    this._localConfigFields = this._extractBlockingConfigFields(this._baseConfig || this.config);
+    // Discard any stale pending filter-change restore from a prior reinit so it doesn't
+    // leak into this fresh initialization if the reinit wasn't filter-change-driven.
+    this._pendingFilterChangeRestore = null;
+
     // Reset max queue size when initializing new provider
     this._maxQueueSize = 0;
 
@@ -1270,12 +1291,22 @@ export class MediaCard extends LitElement {
       this.isLoading = true;
       this._log('Calling provider.initialize()');
       const success = await this.provider.initialize();
+      if (this._initGeneration !== generation) return; // stale — a newer init has taken over
       this._log('Provider initialized:', success);
       
       if (success) {
         // Shared queue takes priority over local history when configured — it holds the
         // freshest cross-card state (what the other card was showing when this view was hidden).
         const restoredFromShared = await this._tryRestoreFromSharedQueue();
+        if (this._initGeneration !== generation) return; // stale — _tryRestoreFromSharedQueue triggered a reinit
+
+        // Config mismatch detected during restore — the stored queue belongs to a card
+        // with different settings. Block this card and show the error banner.
+        if (this._configMismatchDetected) {
+          this.isLoading = false;
+          this.requestUpdate();
+          return;
+        }
 
         if (restoredFromShared) {
           // Queue and index already set — jump directly to the saved item
@@ -1287,11 +1318,13 @@ export class MediaCard extends LitElement {
             this._pendingMediaPath = item.media_content_id;
             this._pendingMetadata = item.metadata || null;
             await this._resolveMediaUrl();
+            if (this._initGeneration !== generation) return;
             // Fetch fresh metadata from media_index in background (item.metadata from
             // shared queue restore may be null or stale if the sync state was old)
             this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
           } else {
             await this._loadNext();
+            if (this._initGeneration !== generation) return;
           }
         } else if (this.history.length > 0 && this.historyPosition >= 0) {
           // V5 FIX: If we reconnected with history, restore current media from history
@@ -1301,15 +1334,19 @@ export class MediaCard extends LitElement {
             this._clearLivePhotoPlayback();
             this.currentMedia = historyItem;
             await this._resolveMediaUrl();
+            if (this._initGeneration !== generation) return;
           } else {
             // Fallback to loading next if history position invalid
             await this._loadNext();
+            if (this._initGeneration !== generation) return;
           }
         } else {
           this._log('Loading first media');
           // V5.3: Smart pre-load - only for small collections
           await this._smartPreloadNavigationQueue();
+          if (this._initGeneration !== generation) return;
           await this._loadNext();
+          if (this._initGeneration !== generation) return;
         }
         
         // V5.5: Auto-open queue preview if configured
@@ -4923,6 +4960,9 @@ export class MediaCard extends LitElement {
   _writeSharedQueueState(pauseIntent = false) {
     const id = this._getEffectiveSyncGroupId();
     if (!id || !this.navigationQueue?.length) return;
+    // Do not write if this card is blocked due to a config mismatch — we must not
+    // corrupt the active queue or override the driver's state.
+    if (this._configMismatchDetected) return;
 
     // Echo-prevention: skip the write that would bounce an incoming navigation sync
     // back to the sender. BUT always allow explicit pause/resume writes through so
@@ -4953,6 +4993,8 @@ export class MediaCard extends LitElement {
         pauseIntent,
         updatedAt: Date.now(),
         sourceCardId: this._cardId,
+        sessionOverride: this._sessionOverride || null,
+        configFields: this._localConfigFields || null,
       };
       localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
       // Broadcast within same window (storage event doesn't fire for same-window writes)
@@ -4980,6 +5022,7 @@ export class MediaCard extends LitElement {
   async _writeSharedQueueStateToMediaIndex(pauseIntent = false) {
     const id = this._getEffectiveSyncGroupId();
     if (!id || !this.navigationQueue?.length) return;
+    if (this._configMismatchDetected) return;
     try {
       const entityId = this._getMediaIndexEntityId();
       const queue = this.navigationQueue.map(item => item.media_content_id);
@@ -4996,6 +5039,8 @@ export class MediaCard extends LitElement {
           source_card_id: this._cardId,
           current_metadata: JSON.stringify(this._currentMetadata || this._pendingMetadata || null),
           written_at: Date.now(),
+          session_override: JSON.stringify(this._sessionOverride || null),
+          config_fields: JSON.stringify(this._localConfigFields || null),
         },
         target: { entity_id: entityId },
       });
@@ -5010,6 +5055,17 @@ export class MediaCard extends LitElement {
   async _tryRestoreFromSharedQueue() {
     const id = this.config?.shared_queue_id;
     if (!id) return false;
+
+    // When a filter-change reinit was triggered by an incoming sync event, restore
+    // directly from the stashed queue data so the follower adopts the leader's exact
+    // position immediately instead of rebuilding from index 0. This check must come
+    // before the _skipSharedQueueRestore guard (which would otherwise block the restore).
+    if (this._pendingFilterChangeRestore && this._pendingFilterChangeRestore.queue?.length) {
+      const pending = this._pendingFilterChangeRestore;
+      this._pendingFilterChangeRestore = null;
+      return this._applyRestoredState(pending.queue, pending.currentIndex, pending.metadata);
+    }
+
     // Skip restore when reinit was triggered by an explicit session override change
     // (filter picker apply/clear). The old queue belongs to a different content set.
     if (this._skipSharedQueueRestore) {
@@ -5031,6 +5087,39 @@ export class MediaCard extends LitElement {
         });
         const data = resp?.response;
         if (data?.found && Array.isArray(data.queue) && data.queue.length) {
+          // ── Config mismatch check ──
+          if (data.config_fields && this._localConfigFields) {
+            let storedFields;
+            try { storedFields = typeof data.config_fields === 'string' ? JSON.parse(data.config_fields) : data.config_fields; } catch (_e) { storedFields = null; }
+            if (storedFields) {
+              const diff = this._diffConfigFields(this._localConfigFields, storedFields);
+              if (diff.length > 0) {
+                this._configMismatchDetected = true;
+                this._configMismatchDiff = diff;
+                this._log('🚫 Shared queue config mismatch on restore:', diff.map(d => d.key).join(', '));
+                return false; // _initializeProvider will block on _configMismatchDetected
+              }
+            }
+          }
+
+          // ── Stale filter TTL (8 hours) ──
+          const FILTER_TTL_MS = 8 * 60 * 60 * 1000;
+          const stateAgeMs = data.updated_at ? (Date.now() - data.updated_at * 1000) : Infinity;
+          let storedOverride = null;
+          if (stateAgeMs < FILTER_TTL_MS && data.session_override) {
+            try { storedOverride = typeof data.session_override === 'string' ? JSON.parse(data.session_override) : data.session_override; } catch (_e) {}
+          }
+          if (storedOverride && JSON.stringify(storedOverride) !== JSON.stringify(this._sessionOverride ?? null)) {
+            this._suppressFilterBroadcast = true;
+            this._applySessionOverride(storedOverride);
+            return false; // reinit will load fresh; queue restore will happen on next broadcast
+          }
+          if (!storedOverride && this._sessionOverride) {
+            this._suppressFilterBroadcast = true;
+            this._clearSessionOverride();
+            return false;
+          }
+
           // Parse current_metadata (stored as JSON string by media_index service)
           let restoredMetadata = null;
           try {
@@ -5051,6 +5140,34 @@ export class MediaCard extends LitElement {
       if (!raw) return false;
       const data = JSON.parse(raw);
       if (!Array.isArray(data.queue) || !data.queue.length) return false;
+
+      // ── Config mismatch check (localStorage) ──
+      if (data.configFields && this._localConfigFields) {
+        const diff = this._diffConfigFields(this._localConfigFields, data.configFields);
+        if (diff.length > 0) {
+          this._configMismatchDetected = true;
+          this._configMismatchDiff = diff;
+          this._log('🚫 Shared queue config mismatch on localStorage restore:', diff.map(d => d.key).join(', '));
+          return false;
+        }
+      }
+
+      // ── Stale filter TTL (localStorage, updatedAt is ms) ──
+      const FILTER_TTL_MS = 8 * 60 * 60 * 1000;
+      const stateAgeMs = data.updatedAt ? (Date.now() - data.updatedAt) : Infinity;
+      let storedOverride = data.sessionOverride ?? null;
+      if (stateAgeMs >= FILTER_TTL_MS) storedOverride = null;
+      if (storedOverride && JSON.stringify(storedOverride) !== JSON.stringify(this._sessionOverride ?? null)) {
+        this._suppressFilterBroadcast = true;
+        this._applySessionOverride(storedOverride);
+        return false;
+      }
+      if (!storedOverride && this._sessionOverride) {
+        this._suppressFilterBroadcast = true;
+        this._clearSessionOverride();
+        return false;
+      }
+
       return this._applyRestoredState(data.queue, data.currentIndex, data.currentMetadata || null);
     } catch (_e) {
       return false;
@@ -5062,7 +5179,7 @@ export class MediaCard extends LitElement {
     const id = this.config?.shared_queue_id;
     if (!id) return;
 
-    let queue = null, currentIndex = 0;
+    let queue = null, currentIndex = 0, sessionOverride = null, configFields = null, updatedAtSec = 0;
 
     // Cross-device: fetch from media-index
     if (this._hasCrossDeviceSync()) {
@@ -5080,6 +5197,9 @@ export class MediaCard extends LitElement {
         if (data?.found && Array.isArray(data.queue) && data.queue.length) {
           queue = data.queue;
           currentIndex = typeof data.current_index === 'number' ? data.current_index : 0;
+          updatedAtSec = data.updated_at || 0;
+          try { sessionOverride = data.session_override ? JSON.parse(data.session_override) : null; } catch (_e) {}
+          try { configFields = data.config_fields ? JSON.parse(data.config_fields) : null; } catch (_e) {}
         }
       } catch (e) {
         this._log('⚠️ Could not fetch sync state from media_index for reconnect:', e);
@@ -5095,12 +5215,43 @@ export class MediaCard extends LitElement {
           if (Array.isArray(data.queue) && data.queue.length) {
             queue = data.queue;
             currentIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
+            sessionOverride = data.sessionOverride ?? null;
+            configFields    = data.configFields    ?? null;
+            updatedAtSec    = data.updatedAt ? (data.updatedAt / 1000) : 0; // convert ms → s
           }
         }
       } catch (_e) {}
     }
 
     if (!queue) return;
+
+    // ── Config mismatch check ──
+    if (configFields && this._localConfigFields) {
+      const diff = this._diffConfigFields(this._localConfigFields, configFields);
+      if (diff.length > 0) {
+        this._configMismatchDetected = true;
+        this._configMismatchDiff = diff;
+        this._log('🚫 Shared queue config mismatch on reconnect:', diff.map(d => d.key).join(', '));
+        this.requestUpdate();
+        return;
+      }
+    }
+
+    // ── Stale filter TTL (8 hours) ──
+    const FILTER_TTL_MS = 8 * 60 * 60 * 1000;
+    const stateAgeMs = updatedAtSec ? (Date.now() - updatedAtSec * 1000) : Infinity;
+    if (stateAgeMs >= FILTER_TTL_MS) sessionOverride = null;
+    if (sessionOverride && JSON.stringify(sessionOverride) !== JSON.stringify(this._sessionOverride ?? null)) {
+      this._suppressFilterBroadcast = true;
+      this._applySessionOverride(sessionOverride);
+      return; // reinit will restore fresh
+    }
+    if (!sessionOverride && this._sessionOverride) {
+      this._suppressFilterBroadcast = true;
+      this._clearSessionOverride();
+      return;
+    }
+
     const newIndex = Math.min(currentIndex, queue.length - 1);
     const newPath = queue[newIndex];
     this.navigationQueue = queue.map(mediaId => ({
@@ -5344,6 +5495,10 @@ export class MediaCard extends LitElement {
     if (data.current_metadata) {
       try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
     }
+    let sessionOverride;
+    try { sessionOverride = data.session_override ? JSON.parse(data.session_override) : null; } catch (_e) { sessionOverride = null; }
+    let configFields;
+    try { configFields = data.config_fields ? JSON.parse(data.config_fields) : null; } catch (_e) { configFields = null; }
     this._applySharedQueueUpdate({
       queue: data.queue,
       currentIndex: data.current_index,
@@ -5351,6 +5506,8 @@ export class MediaCard extends LitElement {
       isPaused: data.is_paused,
       pauseIntent: data.pause_intent,
       updatedAt: data.written_at || 0,
+      sessionOverride,
+      configFields,
     });
   }
 
@@ -5386,6 +5543,7 @@ export class MediaCard extends LitElement {
   _earlyBroadcastSyncState(nextIndex) {
     const id = this.config?.shared_queue_id;
     if (!id) return;
+    if (this._configMismatchDetected) return;
     try {
       const data = {
         queue: this.navigationQueue.map(qi => qi.media_content_id),
@@ -5393,6 +5551,8 @@ export class MediaCard extends LitElement {
         isPaused: this._isPaused,
         updatedAt: Date.now(),
         sourceCardId: this._cardId,
+        sessionOverride: this._sessionOverride || null,
+        configFields: this._localConfigFields || null,
       };
       localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
       window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
@@ -5401,6 +5561,55 @@ export class MediaCard extends LitElement {
 
   // Apply an incoming queue update from any transport
   _applySharedQueueUpdate(data) {
+    // ── Config mismatch check ────────────────────────────────────────────────
+    // If this card is already blocked, ignore all further sync events.
+    if (this._configMismatchDetected) return;
+
+    // Check whether the sender's blocking config fields match ours. Only compare
+    // when BOTH sides have published their fields (old clients won't have them).
+    if (data.configFields && this._localConfigFields) {
+      const diff = this._diffConfigFields(this._localConfigFields, data.configFields);
+      if (diff.length > 0) {
+        this._configMismatchDetected = true;
+        this._configMismatchDiff = diff;
+        this._log('🚫 Shared queue config mismatch detected:', diff.map(d => d.key).join(', '));
+        this.requestUpdate();
+        return;
+      }
+    }
+
+    // ── Filter change detection ──────────────────────────────────────────────
+    // If the sender has a different sessionOverride, apply/clear it here before
+    // processing the queue. The receiving card starts fresh (queue cleared) so
+    // users cannot navigate backwards to pre-filter content.
+    if ('sessionOverride' in data) {
+      const incomingJson = JSON.stringify(data.sessionOverride ?? null);
+      const currentJson  = JSON.stringify(this._sessionOverride  ?? null);
+      if (incomingJson !== currentJson) {
+        // Stash the incoming queue so _tryRestoreFromSharedQueue can apply it after
+        // the reinit, putting the follower at the leader's exact position immediately
+        // instead of rebuilding from index 0. Guard against empty queues (e.g. if the
+        // leader broadcast before loading its first item under the new filter).
+        if (Array.isArray(data.queue) && data.queue.length) {
+          this._pendingFilterChangeRestore = {
+            queue: data.queue,
+            currentIndex: data.currentIndex,
+            metadata: data.currentMetadata || null,
+          };
+        }
+        // Extend the echo-suppression window so this card stays silent while the
+        // driver loads its first item under the new filter (anti-ping-pong).
+        this._suppressSyncWriteUntil = Date.now() + 5000;
+        this._suppressFilterBroadcast = true;
+        if (data.sessionOverride) {
+          this._applySessionOverride(data.sessionOverride);
+        } else {
+          this._clearSessionOverride();
+        }
+        return; // queue intentionally cleared; wait for driver's next broadcast
+      }
+    }
+
     if (!Array.isArray(data.queue) || !data.queue.length) return;
 
     // Reject stale events that arrive out of order. Each write includes a
@@ -7882,6 +8091,69 @@ export class MediaCard extends LitElement {
 
   // ── Runtime Filter/Playback Picker ─────────────────────────────────────────
 
+  /** Labels for blocking config fields shown in the mismatch error banner. */
+  static get _BLOCKING_FIELD_LABELS() {
+    return {
+      entity_id:    'Media Index entity',
+      folder_path:  'Folder path',
+      source_type:  'Source type',
+      media_type:   'Media type',
+      favorites:    'Favorites only',
+      date_from:    'Date from',
+      date_to:      'Date to',
+      auto_advance: 'Auto-advance (seconds)',
+      video_max_dur:'Video max duration',
+      video_muted:  'Video muted',
+      video_loop:   'Video loop',
+      mode:         'Play mode',
+      order_by:     'Sort by',
+      order_dir:    'Sort direction',
+    };
+  }
+
+  /**
+   * Extract only the fields that affect what media is shown and how long it plays.
+   * Used to detect config mismatches between cards sharing the same shared_queue_id.
+   * Non-blocking fields (tap actions, metadata layout, theming) are intentionally excluded.
+   */
+  _extractBlockingConfigFields(cfg) {
+    if (!cfg) return null;
+    const n = v => (v === undefined ? null : (v ?? null));
+    return {
+      entity_id:    n(cfg.media_index?.entity_id),
+      folder_path:  n(cfg.folder?.path),
+      source_type:  n(cfg.media_source_type),
+      media_type:   n(cfg.media_type),
+      favorites:    n(cfg.filters?.favorites),
+      date_from:    n(cfg.filters?.date_range?.start),
+      date_to:      n(cfg.filters?.date_range?.end),
+      auto_advance: n(cfg.auto_advance_seconds),
+      video_max_dur:n(cfg.video_max_duration),
+      video_muted:  n(cfg.video_muted),
+      video_loop:   n(cfg.video_loop),
+      mode:         n(cfg.folder?.mode),
+      order_by:     n(cfg.folder?.sequential?.order_by),
+      order_dir:    n(cfg.folder?.sequential?.order_direction),
+    };
+  }
+
+  /**
+   * Compare two configFields objects. Returns array of differing entries
+   * [{key, label, mine, theirs}], or empty array if identical.
+   */
+  _diffConfigFields(mine, theirs) {
+    const labels = MediaCard._BLOCKING_FIELD_LABELS;
+    const diffs = [];
+    for (const key of Object.keys(labels)) {
+      const a = mine?.[key] ?? null;
+      const b = theirs?.[key] ?? null;
+      if (String(a) !== String(b)) {
+        diffs.push({ key, label: labels[key], mine: a, theirs: b });
+      }
+    }
+    return diffs;
+  }
+
   /**
    * Merge override choices onto the base config and reinitialise the provider.
    * Call with the raw values from the picker dialog.
@@ -7982,6 +8254,11 @@ export class MediaCard extends LitElement {
 
     this.config = merged;
     this._reinitWithClear(true); // skip shared-queue restore — user explicitly chose new content
+    // Broadcast the new filter to all cards in the shared queue group.
+    if (!this._suppressFilterBroadcast) {
+      this._writeSharedQueueState();
+    }
+    this._suppressFilterBroadcast = false;
   }
 
   /** Restore the original YAML config and reinitialise the provider. */
@@ -7990,6 +8267,11 @@ export class MediaCard extends LitElement {
     this._baseConfig = null;
     this._sessionOverride = null;
     this._reinitWithClear(true); // skip shared-queue restore — user explicitly cleared override
+    // Broadcast the filter clear to all cards in the shared queue group.
+    if (!this._suppressFilterBroadcast) {
+      this._writeSharedQueueState();
+    }
+    this._suppressFilterBroadcast = false;
   }
 
   /** Dispose the current provider and restart from a clean navigation state. */
@@ -13398,6 +13680,45 @@ export class MediaCard extends LitElement {
   `;
 
   render() {
+    // Shared queue config mismatch — this card's blocking config differs from the active queue.
+    // Block the card entirely; it cannot function until the user fixes the config or changes
+    // the shared_queue_id.
+    if (this._configMismatchDetected) {
+      const id = this.config?.shared_queue_id || '';
+      const diffRows = (this._configMismatchDiff || []).map(d => html`
+        <tr>
+          <td style="padding:4px 8px;font-weight:500">${d.label}</td>
+          <td style="padding:4px 8px;color:var(--error-color,#db4437)">${d.mine != null ? String(d.mine) : '(not set)'}</td>
+          <td style="padding:4px 8px;color:var(--warning-color,#ff9800)">${d.theirs != null ? String(d.theirs) : '(not set)'}</td>
+        </tr>
+      `);
+      return html`
+        <ha-card>
+          <div class="card">
+            <div class="placeholder" style="padding:16px;text-align:left">
+              <div style="font-size:1.1em;font-weight:bold;margin-bottom:8px;color:var(--error-color,#db4437)">
+                ⛔ Shared Queue Config Mismatch
+              </div>
+              <div style="margin-bottom:10px;font-size:0.9em">
+                Queue ID <strong>${id}</strong> is already active with different settings.
+                Fix the settings below or change this card's <code>shared_queue_id</code>.
+              </div>
+              <table style="border-collapse:collapse;font-size:0.85em;width:100%">
+                <thead>
+                  <tr style="opacity:0.6">
+                    <th style="padding:4px 8px;text-align:left">Setting</th>
+                    <th style="padding:4px 8px;text-align:left">This card</th>
+                    <th style="padding:4px 8px;text-align:left">Active queue</th>
+                  </tr>
+                </thead>
+                <tbody>${diffRows}</tbody>
+              </table>
+            </div>
+          </div>
+        </ha-card>
+      `;
+    }
+
     if (this.isLoading) {
       return html`
         <ha-card>
