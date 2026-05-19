@@ -10265,6 +10265,19 @@ class MediaCard extends LitElement {
       const incomingJson = JSON.stringify(data.sessionOverride ?? null);
       const currentJson  = JSON.stringify(this._sessionOverride  ?? null);
       if (incomingJson !== currentJson) {
+        // Guard against a locally-applied filter being overwritten by a stale sync
+        // event from the previous driver. When the user changes the filter on this
+        // device, _localFilterAppliedAt is stamped and driver role is claimed. Any
+        // incoming event whose timestamp predates that action is stale and must be
+        // rejected — the old driver was still running on the old filter.
+        const _filterEventTs = data.updatedAt || data.written_at || 0;
+        if (this._localFilterAppliedAt && _filterEventTs > 0 && _filterEventTs < this._localFilterAppliedAt) {
+          this._log(`⏭️ Ignoring stale sessionOverride — local filter applied ${Date.now() - this._localFilterAppliedAt}ms ago (event ts=${_filterEventTs})`);
+          return;
+        }
+        // Accept the incoming filter; clear the local-filter-applied marker since
+        // the driver is now in control of the filter state.
+        this._localFilterAppliedAt = null;
         // Stash the incoming queue so _tryRestoreFromSharedQueue can apply it after
         // the reinit, putting the follower at the leader's exact position immediately
         // instead of rebuilding from index 0. Guard against empty queues (e.g. if the
@@ -13201,6 +13214,11 @@ class MediaCard extends LitElement {
       const maxDurRaw  = dialog.querySelector('#fp-max-duration').value;
       const maxDur     = maxDurRaw !== '' ? Number(maxDurRaw) : null;
       cleanup();
+      // This is a deliberate local user action — become the driver so the
+      // sync write goes through immediately and the stale-event guard below
+      // can reject any in-flight events from the previous driver.
+      this._localFilterAppliedAt = Date.now();
+      this._claimDriverRole();
       this._applySessionOverride({
         folder_path:             folder,
         media_type:              mt,
