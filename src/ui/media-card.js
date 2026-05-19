@@ -8945,9 +8945,12 @@ export class MediaCard extends LitElement {
       const castData = {
         roku_entity_id: entityId,
       };
-      // Identify the file — prefer media_source_uri (exact match), then fs path, then filename substring
-      if (this._currentMetadata?.media_source_uri) {
-        castData.media_source_uri = this._currentMetadata.media_source_uri;
+      // Identify the file using the current media URI (always up-to-date).
+      // _currentMetadata may lag a frame behind _currentMediaPath during navigation,
+      // so prefer uri directly for media-source:// items instead of relying on
+      // _currentMetadata.media_source_uri which can still point to the previous image.
+      if (uri.startsWith('media-source://')) {
+        castData.media_source_uri = uri;
       } else if (this._currentMetadata?.path) {
         castData.file_path = this._currentMetadata.path;
       } else {
