@@ -9289,6 +9289,13 @@ class MediaCard extends LitElement {
       this._log('⏸️ Ignoring video pause - no video in DOM (navigated to image)');
       return;
     }
+
+    // Browser fires a 'pause' event immediately after 'ended' as part of the ended
+    // algorithm. This is not a user action — ignore it.
+    if (videoElement.ended) {
+      this._log('⏸️ Ignoring video pause - video ended naturally');
+      return;
+    }
     
     this._log('Video paused by user');
     
