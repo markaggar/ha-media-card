@@ -500,56 +500,6 @@ export class MediaCard extends LitElement {
       this._setupKioskModeMonitoring();
     }
 
-    // Cast remote pause/resume detection: when a cast session is active, monitor the
-    // media_player entity state so that pausing or resuming on the physical remote
-    // (or TV controls) propagates as a group pause/resume to all synced cards.
-    if (changedProperties.has('hass') && this._castEntityId && this.hass) {
-      const entityState = this.hass.states[this._castEntityId]?.state;
-      const prev = this._castPrevEntityState;
-      this._castPrevEntityState = entityState;
-      if (prev && entityState && entityState !== prev) {
-        if (entityState === 'paused' && !this._castPreEndPauseSent && !this._castSyncPausing && !this._isPaused) {
-          // User paused via the TV/Roku remote — group-pause all synced cards.
-          // Capture the seek position from the entity so all cards snap to the same video frame.
-          const mediaPos = this.hass.states[this._castEntityId]?.attributes?.media_position;
-          const seekPos = typeof mediaPos === 'number' ? mediaPos : null;
-          this._castRemotePaused = true;
-          this._groupPaused = true;
-          this._setPauseState(true);
-          this._pauseTimer();
-          // Pause and seek the local video to match the TV's reported position.
-          const castLocalVideo = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
-          if (castLocalVideo && !castLocalVideo.paused) {
-            this._castSyncPausing = true;
-            castLocalVideo.pause();
-          }
-          if (seekPos !== null && castLocalVideo && !castLocalVideo.ended) {
-            castLocalVideo.currentTime = seekPos;
-          }
-          // Broadcast pause + seek position to all synced cards.
-          this._pendingSyncCastSeekPosition = seekPos;
-          this._claimDriverRole();
-          this._writeSharedQueueState(true);
-          this._log('⏸️ Cast entity paused by remote — group pausing slideshow at ' + (seekPos !== null ? seekPos.toFixed(1) : '?') + 's');
-        } else if (entityState === 'playing' && this._castRemotePaused && this._isPaused) {
-          // User resumed via the TV/Roku remote — group-resume all synced cards.
-          this._castRemotePaused = false;
-          this._groupPaused = false;
-          this._setPauseState(false);
-          this._resumeTimer();
-          // Resume the local video on the casting card.
-          const castLocalVideo = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
-          if (castLocalVideo && castLocalVideo.paused && !castLocalVideo.ended) {
-            this._suppressCastPushOnCanplay = true;
-            castLocalVideo.play().catch(() => {});
-          }
-          this._claimDriverRole();
-          this._writeSharedQueueState(true);
-          this._log('▶️ Cast entity resumed by remote — group resuming slideshow');
-        }
-      }
-    }
-    
     if (changedProperties.has('mediaUrl')) {
       // Wait for next frame to ensure video element is rendered
       requestAnimationFrame(() => {
@@ -1233,6 +1183,54 @@ export class MediaCard extends LitElement {
       }
     }
     
+    // Cast remote pause/resume detection: monitor the media_player entity state so
+    // that pausing or resuming via the physical remote propagates as a group pause/resume
+    // to all synced cards. This MUST live in the hass setter — not in updated() — because
+    // the custom get/set hass() pair overrides LitElement's reactive accessor, which means
+    // changedProperties.has('hass') never fires in updated() for this card.
+    if (this._castEntityId && hass) {
+      const castEntityState = hass.states[this._castEntityId]?.state;
+      const castEntityPrev  = this._castPrevEntityState;
+      this._castPrevEntityState = castEntityState;
+      if (castEntityPrev && castEntityState && castEntityState !== castEntityPrev) {
+        if (castEntityState === 'paused' && !this._castPreEndPauseSent && !this._castSyncPausing && !this._isPaused) {
+          // User paused via the TV/Roku remote — group-pause all synced cards.
+          const mediaPos = hass.states[this._castEntityId]?.attributes?.media_position;
+          const seekPos  = typeof mediaPos === 'number' ? mediaPos : null;
+          this._castRemotePaused = true;
+          this._groupPaused = true;
+          this._setPauseState(true);
+          this._pauseTimer();
+          const castLocalVideo = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+          if (castLocalVideo && !castLocalVideo.paused) {
+            this._castSyncPausing = true;
+            castLocalVideo.pause();
+          }
+          if (seekPos !== null && castLocalVideo && !castLocalVideo.ended) {
+            castLocalVideo.currentTime = seekPos;
+          }
+          this._pendingSyncCastSeekPosition = seekPos;
+          this._claimDriverRole();
+          this._writeSharedQueueState(true);
+          this._log('\u23f8\ufe0f Cast entity paused by remote \u2014 group pausing at ' + (seekPos !== null ? seekPos.toFixed(1) : '?') + 's');
+        } else if (castEntityState === 'playing' && this._castRemotePaused && this._isPaused) {
+          // User resumed via the TV/Roku remote — group-resume all synced cards.
+          this._castRemotePaused = false;
+          this._groupPaused = false;
+          this._setPauseState(false);
+          this._resumeTimer();
+          const castLocalVideo = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+          if (castLocalVideo && castLocalVideo.paused && !castLocalVideo.ended) {
+            this._suppressCastPushOnCanplay = true;
+            castLocalVideo.play().catch(() => {});
+          }
+          this._claimDriverRole();
+          this._writeSharedQueueState(true);
+          this._log('\u25b6\ufe0f Cast entity resumed by remote \u2014 group resuming slideshow');
+        }
+      }
+    }
+
     // Note: Don't call requestUpdate() here - Lit will handle it automatically
     // since hass is a reactive property. We can't prevent the auto-update,
     // but we can make render() cheap when paused.
@@ -8991,6 +8989,7 @@ export class MediaCard extends LitElement {
         // Broadcast the Roku start position to synced follower cards so they seek to
         // the same frame — prevents non-casting cards from running ahead while this
         // card was paused waiting for Roku to buffer and begin playback.
+        this._claimDriverRole();
         this._pendingSyncCastSeekPosition = rokuPosSec;
         this._writeSharedQueueState(false);
 
