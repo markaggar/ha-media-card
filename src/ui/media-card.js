@@ -2529,8 +2529,14 @@ export class MediaCard extends LitElement {
             this._log('⏱️ Timer skipped - navigation in progress');
             return;
           }
-          
-          // Reset pause log flag (timer is active again)
+
+          // Cross-device follower: skip auto-advance while another device is the driver.
+          // The timer still runs so this card can take over naturally when the leader
+          // goes away (once _crossDeviceFollowerUntil expires).
+          if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
+            this._log('\u{1f465} Cross-device follower \u2014 skipping auto-advance (leader drives)');
+            return;
+          }
           this._pauseLogShown = false;
           
           // Check for new files FIRST (before video completion check)
@@ -5589,8 +5595,7 @@ export class MediaCard extends LitElement {
     // DB state with its own independently-fetched queue items.  The window is generous
     // enough to cover normal slideshow intervals; if the driver goes away, this card
     // will naturally take over writing once the window expires.
-    this._crossDeviceFollowerUntil = Date.now() + 30000;
-    let currentMetadata = null;
+    this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
     if (data.current_metadata) {
       try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
     }
@@ -5620,9 +5625,7 @@ export class MediaCard extends LitElement {
       // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
       // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
       // writes its (identical) state to HA — wasted service calls and log noise.
-      this._crossDeviceFollowerUntil = Date.now() + 30000;
-      this._applySharedQueueUpdate(data);
-    } catch (_e) {}
+      this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
   }
 
   // window CustomEvent (same window, instant)
@@ -5633,8 +5636,7 @@ export class MediaCard extends LitElement {
     // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
     // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
     // writes its (identical) state to HA — wasted service calls and log noise.
-    this._crossDeviceFollowerUntil = Date.now() + 30000;
-    this._applySharedQueueUpdate(event.detail);
+    this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
   }
 
   // Broadcast the new queue state (with a specific index) without waiting for image load.
