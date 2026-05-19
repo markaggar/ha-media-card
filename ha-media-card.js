@@ -9444,6 +9444,14 @@ class MediaCard extends LitElement {
       const elapsedSeconds = Math.floor(elapsedMs / 1000);
       
       if (elapsedSeconds < autoAdvanceSeconds) {
+        // If navigation to a new video is already in progress, do NOT restart the old
+        // video. Restarting fires canplay which consumes _pendingNavigationIndex for the
+        // wrong video, causing the stale-check in _setMediaUrl to reject the real
+        // navigation and leaving the follower stuck on the old clip.
+        if (this._navigatingAway) {
+          this._log(`🔁 Skipping loop restart — navigation already in progress (_navigatingAway)`);
+          return;
+        }
         this._log(`🔁 Short video with loop enabled (${elapsedSeconds}s < ${autoAdvanceSeconds}s auto-advance) - restarting video`);
         const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
         if (videoElement) {
@@ -9468,6 +9476,14 @@ class MediaCard extends LitElement {
       // V5.6.9: Don't advance if slideshow is paused
       if (this._isPaused) {
         this._log('🎬 Video completed but slideshow is paused - not advancing');
+        return;
+      }
+
+      // Don't call _loadNext() if a sync-driven navigation is already in flight.
+      // _loadNext() increments _navigationGeneration which makes the in-flight
+      // _resolveMediaUrl stale, causing the navigation to be silently dropped.
+      if (this._navigatingAway) {
+        this._log('🎬 Video completed but navigation already in progress — skipping auto-advance');
         return;
       }
       
