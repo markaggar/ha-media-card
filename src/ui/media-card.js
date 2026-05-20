@@ -5447,6 +5447,7 @@ export class MediaCard extends LitElement {
     let queue = null, currentIndex = 0, sessionOverride = null, configFields = null, updatedAtSec = 0;
 
     // Cross-device: fetch from media-index
+    let haQueue = null, haIndex = 0, haSessionOverride = null, haConfigFields = null, haUpdatedAt = 0;
     if (this._hasCrossDeviceSync()) {
       try {
         const entityId = this._getMediaIndexEntityId();
@@ -5460,32 +5461,52 @@ export class MediaCard extends LitElement {
         });
         const data = resp?.response;
         if (data?.found && Array.isArray(data.queue) && data.queue.length) {
-          queue = data.queue;
-          currentIndex = typeof data.current_index === 'number' ? data.current_index : 0;
-          updatedAtSec = data.updated_at || 0;
-          try { sessionOverride = data.session_override ? JSON.parse(data.session_override) : null; } catch (_e) {}
-          try { configFields = data.config_fields ? JSON.parse(data.config_fields) : null; } catch (_e) {}
+          haQueue = data.queue;
+          haIndex = typeof data.current_index === 'number' ? data.current_index : 0;
+          haUpdatedAt = data.updated_at || 0;
+          try { haSessionOverride = data.session_override ? JSON.parse(data.session_override) : null; } catch (_e) {}
+          try { haConfigFields = data.config_fields ? JSON.parse(data.config_fields) : null; } catch (_e) {}
         }
       } catch (e) {
         this._log('⚠️ Could not fetch sync state from media_index for reconnect:', e);
       }
     }
 
-    // Fallback: localStorage
-    if (!queue) {
-      try {
-        const raw = localStorage.getItem(`ha-media-card:${id}`);
-        if (raw) {
-          const data = JSON.parse(raw);
-          if (Array.isArray(data.queue) && data.queue.length) {
-            queue = data.queue;
-            currentIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
-            sessionOverride = data.sessionOverride ?? null;
-            configFields    = data.configFields    ?? null;
-            updatedAtSec    = data.updatedAt ? (data.updatedAt / 1000) : 0; // convert ms → s
-          }
+    // Same-device localStorage: always read regardless of HA availability.
+    // localStorage is written synchronously on every advance (no debounce), so it is
+    // always at least as fresh as the HA state on the same device.  When the previously-
+    // active card disconnected before its 500 ms HA debounce fired, the HA state will be
+    // stale by up to one advance interval — localStorage has the correct latest position.
+    let lsQueue = null, lsIndex = 0, lsUpdatedAt = 0, lsSessionOverride = null, lsConfigFields = null;
+    try {
+      const raw = localStorage.getItem(`ha-media-card:${id}`);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (Array.isArray(data.queue) && data.queue.length) {
+          lsQueue = data.queue;
+          lsIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
+          lsSessionOverride = data.sessionOverride ?? null;
+          lsConfigFields    = data.configFields    ?? null;
+          lsUpdatedAt       = data.updatedAt ? (data.updatedAt / 1000) : 0; // convert ms → s
         }
-      } catch (_e) {}
+      }
+    } catch (_e) {}
+
+    // Pick the fresher source.  localStorage wins on same-device tab-switch because it
+    // is synchronous while HA writes are debounced 500 ms and cancelled on disconnect.
+    // On a different device the HA state is authoritative; localStorage will be absent
+    // (or older) so haQueue will be selected automatically.
+    if (haQueue && lsQueue) {
+      if (lsUpdatedAt > haUpdatedAt) {
+        queue = lsQueue; currentIndex = lsIndex; sessionOverride = lsSessionOverride; configFields = lsConfigFields; updatedAtSec = lsUpdatedAt;
+        this._log(`🔗 Reconnect sync: using localStorage (updated ${lsUpdatedAt.toFixed(0)}s) — newer than HA (${haUpdatedAt.toFixed(0)}s)`);
+      } else {
+        queue = haQueue; currentIndex = haIndex; sessionOverride = haSessionOverride; configFields = haConfigFields; updatedAtSec = haUpdatedAt;
+      }
+    } else if (haQueue) {
+      queue = haQueue; currentIndex = haIndex; sessionOverride = haSessionOverride; configFields = haConfigFields; updatedAtSec = haUpdatedAt;
+    } else if (lsQueue) {
+      queue = lsQueue; currentIndex = lsIndex; sessionOverride = lsSessionOverride; configFields = lsConfigFields; updatedAtSec = lsUpdatedAt;
     }
 
     if (!queue) return;

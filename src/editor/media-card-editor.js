@@ -2949,24 +2949,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ` : ''}
         </div>
 
-        ${isFolderMode ? html`
-          <div class="integration-callout">
-            <div class="integration-callout-title">iCloud Photos Sync</div>
-            <p>
-              To display iCloud Photos here, install the
-              <a href="https://github.com/anciltech/ha-icloud-photo-sync" target="_blank" rel="noopener noreferrer">AncilTech iCloud Photo Sync add-on</a>
-              from the Home Assistant Add-on Store repositories. The add-on downloads selected albums into
-              <code>/media/icloud_photos</code>; this card handles display.
-            </p>
-            <p>
-              After the add-on syncs, use
-              <code>media-source://media_source/local/icloud_photos</code>
-              as the folder path, or append an album folder such as
-              <code>/Favorites</code>.
-            </p>
-          </div>
-        ` : ''}
-
         <!-- Filters Section (available when Media Index is enabled) -->
         ${hasMediaIndex && isFolderMode && folderConfig.use_media_index_for_discovery !== false ? html`
           <div style="background: var(--primary-background-color, #fafafa); padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--divider-color, #e0e0e0);">
