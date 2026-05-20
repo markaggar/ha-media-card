@@ -7247,12 +7247,22 @@ class MediaCard extends LitElement {
           const elapsedSeconds = (this._videoTimerCount || 0) * refreshSeconds;
 
           // Cross-device follower: skip auto-advance while another device is the driver.
-          // Exception: if max_video_duration is set and has been reached, the leader has
-          // not advanced — claim driver role and advance independently.
+          // Exception: if max_video_duration is set and has been reached AND the leader has
+          // missed a full timer interval without syncing, claim driver and advance.
+          // The "missed a full interval" guard is critical: when all followers reset their
+          // _videoTimerCount at the same time (via the same sync event), they all hit
+          // elapsed >= maxDuration on the same timer tick. Without this check, two followers
+          // claim driver simultaneously. Requiring sinceLastSync > refreshSeconds ensures
+          // only a genuinely absent leader triggers takeover — an active leader syncs every
+          // refreshSeconds, so sinceLastSync will never exceed refreshSeconds while it's alive.
           if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
-            if (maxDuration && maxDuration > 0 && elapsedSeconds >= maxDuration && !this._videoUserInteracted) {
+            const sinceLastSync = this._lastLeaderSyncReceivedAt
+              ? Date.now() - this._lastLeaderSyncReceivedAt
+              : Infinity;
+            if (maxDuration && maxDuration > 0 && elapsedSeconds >= maxDuration && !this._videoUserInteracted
+                && sinceLastSync > refreshSeconds * 1000) {
               this._claimDriverRole();
-              this._log(`\u{1f465} Cross-device follower \u2014 max_video_duration (${maxDuration}s) exceeded, taking over as driver`);
+              this._log(`\u{1f465} Cross-device follower \u2014 max_video_duration (${maxDuration}s) exceeded and leader missed an interval (${Math.round(sinceLastSync / 1000)}s since last sync), taking over as driver`);
               // fall through to advance
             } else {
               this._log('\u{1f465} Cross-device follower \u2014 skipping auto-advance (leader drives)');
