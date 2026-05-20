@@ -9176,17 +9176,11 @@ class MediaCard extends LitElement {
     e?.stopPropagation?.();
     if (this._livePhotoPhase !== 'video') return false;
 
-    this._releaseMediaElement(e?.target);
     this._clearLivePhotoTimer();
-    const generation = ++this._livePhotoGeneration;
+    const generation = this._livePhotoGeneration;
     const itemId = this._getLivePhotoItemId(this.currentMedia);
     const pauseMs = this._getLivePhotoRepeatDelaySeconds() * 1000;
-
-    this._livePhotoPhase = 'pause';
-    this._livePhotoVideoUrl = '';
-    this._livePhotoVideoReady = false;
-    this._hideBottomOverlaysForVideo = false;
-    this.requestUpdate();
+    const video = e?.target;
 
     if (this._livePhotoPlaybackItemId !== itemId) {
       this._livePhotoPlaybackItemId = itemId;
@@ -9200,11 +9194,45 @@ class MediaCard extends LitElement {
       : Math.max(0, Number(maxPlaysRaw) || 0);
 
     if (maxPlays > 0 && this._livePhotoPlaybackCount >= maxPlays) {
+      this._releaseMediaElement(video);
       this._livePhotoPhase = 'idle';
+      this._livePhotoVideoUrl = '';
+      this._livePhotoVideoReady = false;
+      this._hideBottomOverlaysForVideo = false;
+      this.requestUpdate();
       return true;
     }
 
+    this._livePhotoPhase = 'video';
+    this._livePhotoVideoReady = false;
+    this._hideBottomOverlaysForVideo = false;
+    this.requestUpdate();
+
     this._livePhotoTimer = setTimeout(() => {
+      if (generation !== this._livePhotoGeneration ||
+          itemId !== this._getLivePhotoItemId(this.currentMedia) ||
+          this._isPaused ||
+          this._backgroundPaused) {
+        return;
+      }
+
+      if (video && video.isConnected) {
+        try {
+          video.currentTime = 0;
+          this._livePhotoVideoReady = true;
+          video.play().catch(error => {
+            if (error?.name !== 'AbortError') {
+              this._log('🎞️ Live Photo replay failed:', error);
+              this._startLivePhotoVideo(generation, itemId);
+            }
+          });
+          this.requestUpdate();
+          return;
+        } catch (error) {
+          this._log('🎞️ Live Photo replay reset failed:', error);
+        }
+      }
+
       this._startLivePhotoVideo(generation, itemId);
     }, pauseMs);
     return true;
