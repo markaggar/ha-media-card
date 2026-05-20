@@ -488,6 +488,13 @@ export class MediaCard extends LitElement {
     this._clearLivePhotoPlayback();
     this._cancelActiveMediaPrepare('card disconnect');
     this._revokeHeicObjectUrls();
+
+    // Clean up passive touchstart listener added in updated()
+    if (this._passiveContainerTouchBound) {
+      this.shadowRoot?.querySelector('.media-container')
+        ?.removeEventListener('touchstart', this._passiveContainerTouchBound);
+      this._passiveContainerTouchBound = null;
+    }
   }
 
   // V4: Force video reload when URL changes
@@ -1121,7 +1128,29 @@ export class MediaCard extends LitElement {
    */
   updated(changedProps) {
     super.updated(changedProps);
-    
+
+    // Attach passive touchstart listeners to avoid scroll-blocking browser violations.
+    // Lit's @touchstart template binding cannot be made passive, so we use imperative
+    // addEventListener here (once per card lifetime). We use event delegation on the
+    // stable .media-container element so the single listener covers both the swipe
+    // gesture and the video-specific button-reveal behaviour.
+    if (!this._passiveContainerTouchBound) {
+      const container = this.shadowRoot?.querySelector('.media-container');
+      if (container) {
+        this._passiveContainerTouchBound = (e) => {
+          // Swipe detection always applies (records start coords; no preventDefault)
+          this._handleSwipeTouchStart(e);
+          // Button reveal when the touch target is (or is inside) the video element
+          if (e.composedPath().some(el => el.tagName === 'VIDEO')) {
+            this._showButtonsExplicitly = true;
+            this._startActionButtonsHideTimer();
+            this.requestUpdate();
+          }
+        };
+        container.addEventListener('touchstart', this._passiveContainerTouchBound, {passive: true});
+      }
+    }
+
     // Update thumbnail active state whenever render completes
     if (this._panelOpen) {
       this._updateThumbnailActiveState();
@@ -14230,7 +14259,6 @@ export class MediaCard extends LitElement {
         @pointerdown=${this._handlePointerDown}
         @pointerup=${this._handlePointerUp}
         @pointercancel=${this._handlePointerCancel}
-        @touchstart=${this._handleSwipeTouchStart}
         @touchend=${this._handleSwipeTouchEnd}
       >
         ${isVideo ? html`
@@ -14258,7 +14286,6 @@ export class MediaCard extends LitElement {
             @dblclick=${this._handleDoubleTap}
             @pointerdown=${(e) => { this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
             @pointermove=${(e) => { e.stopPropagation(); this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); }}
-            @touchstart=${(e) => { this._showButtonsExplicitly = true; this._startActionButtonsHideTimer(); this.requestUpdate(); }}
           >
             <source src="${displayUrl}" type="video/mp4" @error=${this._onSourceError}>
             <source src="${displayUrl}" type="video/webm" @error=${this._onSourceError}>
