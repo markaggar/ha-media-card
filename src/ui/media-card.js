@@ -4439,10 +4439,7 @@ export class MediaCard extends LitElement {
         return;
       }
 
-      const preloadMode = this.config?.live_photo?.preload_mode ||
-        this.config?.preload?.video_mode ||
-        'metadata';
-      video.preload = preloadMode === 'auto' || preloadMode === 'canplay' ? 'auto' : 'metadata';
+      video.preload = this._getLivePhotoVideoPreloadMode();
       video.muted = true;
       video.playsInline = true;
       video.addEventListener('loadedmetadata', onReady, { once: true });
@@ -4481,6 +4478,15 @@ export class MediaCard extends LitElement {
       return Math.max(0, Number(repeatDelay) || 0);
     }
     return Math.max(0, Number(this.config.live_photo?.pause_duration) || 10);
+  }
+
+  _getLivePhotoVideoPreloadMode() {
+    const configuredMode = this.config?.live_photo?.preload_mode ||
+      this.config?.preload?.video_mode ||
+      'metadata';
+    if (configuredMode === 'auto' || configuredMode === 'canplay') return 'auto';
+    if (configuredMode === 'none') return 'none';
+    return 'metadata';
   }
 
   _onLivePhotoVideoCanPlay(e) {
@@ -13432,6 +13438,7 @@ export class MediaCard extends LitElement {
     
     const displayUrl = this.mediaUrl;
     const livePhotoVideoActive = this._livePhotoPhase === 'video' && !!this._livePhotoVideoUrl;
+    const livePhotoVideoPreload = this._getLivePhotoVideoPreloadMode();
 
     if (!displayUrl) {
       return html`<div class="placeholder">Resolving media URL...</div>`;
@@ -13539,7 +13546,7 @@ export class MediaCard extends LitElement {
         ${livePhotoVideoActive ? html`
           <video
             class="live-photo-video ${this._livePhotoVideoReady ? 'ready' : ''}"
-            preload="auto"
+            preload="${livePhotoVideoPreload}"
             playsinline
             autoplay
             muted
