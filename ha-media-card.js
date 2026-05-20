@@ -9296,7 +9296,14 @@ class MediaCard extends LitElement {
     }
 
     // Shared queue: broadcast navigation — suppress if locally paused (short press)
-    if (!this._isLocallyPaused()) {
+    // or if currently in cross-device follower mode.  If a follower writes sync here
+    // the driver receives it (via storage or HA event), sets its own
+    // _crossDeviceFollowerUntil and becomes a follower for 2 minutes — the driver
+    // then stops auto-advancing and the cast/Roku loses its leader.
+    const _nowForFollowerCheck = Date.now();
+    const _isInFollowerMode = this._hasCrossDeviceSync() &&
+        _nowForFollowerCheck < (this._crossDeviceFollowerUntil || 0);
+    if (!this._isLocallyPaused() && !_isInFollowerMode) {
       this._writeSharedQueueState();
     }
 
