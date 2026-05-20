@@ -2588,7 +2588,7 @@ export class MediaCard extends LitElement {
               ? Date.now() - this._lastLeaderSyncReceivedAt
               : Infinity;
             if (maxDuration && maxDuration > 0 && elapsedSeconds >= maxDuration && !this._videoUserInteracted
-                && sinceLastSync > refreshSeconds * 1000) {
+                && sinceLastSync > refreshSeconds * 1500) {
               this._claimDriverRole();
               this._log(`\u{1f465} Cross-device follower \u2014 max_video_duration (${maxDuration}s) exceeded and leader missed an interval (${Math.round(sinceLastSync / 1000)}s since last sync), taking over as driver`);
               // fall through to advance
@@ -2647,6 +2647,13 @@ export class MediaCard extends LitElement {
             // V5.6.4: If user interacted (pause, seek, click), let video play to completion
             if (this._videoUserInteracted && !this._videoHasEnded) {
               this._log('🎬 User interacted with video - playing to completion (ignoring timer/max_duration)');
+              // Cross-device keepalive: the driver must write sync on every timer tick while
+              // watching a video to completion. Without this, follower cards see sinceLastSync
+              // grow beyond refreshSeconds and reclaim driver via the gone-away takeover check,
+              // advancing the whole group away from the video the user chose to watch.
+              if (this._hasCrossDeviceSync() && !(Date.now() < (this._crossDeviceFollowerUntil || 0))) {
+                this._writeSharedQueueState();
+              }
               return;
             }
             
@@ -4552,6 +4559,14 @@ export class MediaCard extends LitElement {
     if (this._isUserMutePreferenceValid() && this._userMutePreference === false) {
       this._videoUserInteracted = true;
       this._log('🎬 Active unmute preference - treating new video as interacted (plays to end, ignores max_video_duration)');
+      // If this card is a follower, claim driver early (before canplay) so the original
+      // driver's canplay write doesn't arrive with isDriverCard:true and re-establish
+      // our follower state. Writing sync now claims the role on all same-device cards;
+      // the canplay write will follow with the confirmed metadata.
+      if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
+        this._claimDriverRole();
+        this._writeSharedQueueState();
+      }
     }
     // V5.6.8: Reset video controls visibility and overlay state for new video
     this._videoControlsVisible = false;
@@ -4730,6 +4745,12 @@ export class MediaCard extends LitElement {
     if (video && video.currentTime >= 0.5) {
       this._videoUserInteracted = true;
       this._log('🎬 User interacted with video (seek) - will play to completion');
+      // If this card is a follower, claim driver so the original driver doesn't advance
+      // the video at max_video_duration while the user is seeking/watching it.
+      if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
+        this._claimDriverRole();
+        this._writeSharedQueueState();
+      }
     }
   }
   
@@ -5083,6 +5104,12 @@ export class MediaCard extends LitElement {
     if (!this._userMutePreference) {
       this._videoUserInteracted = true;
       this._log('🎬 User unmuted via action button - will play to completion');
+      // If this card is a follower, claim driver so the original driver doesn't advance
+      // the video at max_video_duration while the user is watching it with audio.
+      if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
+        this._claimDriverRole();
+        this._writeSharedQueueState();
+      }
     }
     
     this._log(`🔊 Mute toggled: ${currentEffective} → ${this._userMutePreference}`);
@@ -5129,6 +5156,12 @@ export class MediaCard extends LitElement {
       if (!video.muted) {
         this._videoUserInteracted = true;
         this._log('🎬 User unmuted via native controls - will play to completion');
+        // If this card is a follower, claim driver so the original driver doesn't advance
+        // the video at max_video_duration while the user is watching it with audio.
+        if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
+          this._claimDriverRole();
+          this._writeSharedQueueState();
+        }
       }
 
       this.requestUpdate();
@@ -5212,6 +5245,9 @@ export class MediaCard extends LitElement {
         sourceCardId: this._cardId,
         sessionOverride: this._sessionOverride || null,
         configFields: this._localConfigFields || null,
+        // Signal whether this card is the driver. Followers use this to avoid setting
+        // _crossDeviceFollowerUntil when they receive a sync from another follower.
+        isDriverCard: !this._hasCrossDeviceSync() || Date.now() >= (this._crossDeviceFollowerUntil || 0),
       };
       localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
       // Broadcast within same window (storage event doesn't fire for same-window writes)
@@ -5255,7 +5291,6 @@ export class MediaCard extends LitElement {
           sync_group: id,
           queue,
           current_index: this.navigationIndex,
-          is_paused: this._isPaused,
           pause_intent: pauseIntent,
           source_card_id: this._cardId,
           current_metadata: JSON.stringify(this._currentMetadata || this._pendingMetadata || null),
@@ -5264,6 +5299,9 @@ export class MediaCard extends LitElement {
           config_fields: JSON.stringify(this._localConfigFields || null),
           ...(castSeekPosition !== null ? { cast_seek_position: castSeekPosition } : {}),
           is_paused: isPausedOverride !== undefined ? isPausedOverride : this._isPaused,
+          // Signal whether this card is the driver so receiving cards don't become followers
+          // of another follower's write (e.g. a follower broadcasting a pauseIntent).
+          is_driver_card: !this._hasCrossDeviceSync() || Date.now() >= (this._crossDeviceFollowerUntil || 0),
         },
         target: { entity_id: entityId },
       });
@@ -5726,7 +5764,12 @@ export class MediaCard extends LitElement {
     // DB state with its own independently-fetched queue items.  The window is generous
     // enough to cover normal slideshow intervals; if the driver goes away, this card
     // will naturally take over writing once the window expires.
-    this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    // Only extend the follower window when the sender is acting as the driver.
+    // If a follower broadcasts (e.g. a pauseIntent from a follower card), we must not
+    // become a follower of that follower — the original driver would lose its role.
+    if (data.is_driver_card !== false) {
+      this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    }
     this._lastLeaderSyncReceivedAt = Date.now(); // track that an actual leader sync arrived
     let currentMetadata;
     if (data.current_metadata) {
@@ -5758,7 +5801,10 @@ export class MediaCard extends LitElement {
       // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
       // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
       // writes its (identical) state to HA — wasted service calls and log noise.
-      this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+      // Only extend follower window when the sender is the driver (not another follower).
+      if (data.isDriverCard !== false) {
+        this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+      }
       this._lastLeaderSyncReceivedAt = Date.now();
       this._applySharedQueueUpdate(data);
     } catch (_e) {}
@@ -5772,7 +5818,10 @@ export class MediaCard extends LitElement {
     // Mirror the 30s follower deferral that _onHaSyncEvent sets for cross-device events.
     // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
     // writes its (identical) state to HA — wasted service calls and log noise.
-    this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    // Only extend follower window when the sender is the driver (not another follower).
+    if (event.detail?.isDriverCard !== false) {
+      this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    }
     this._lastLeaderSyncReceivedAt = Date.now();
     this._applySharedQueueUpdate(event.detail);
   }
@@ -5793,6 +5842,7 @@ export class MediaCard extends LitElement {
         sourceCardId: this._cardId,
         sessionOverride: this._sessionOverride || null,
         configFields: this._localConfigFields || null,
+        isDriverCard: !this._hasCrossDeviceSync() || Date.now() >= (this._crossDeviceFollowerUntil || 0),
       };
       localStorage.setItem(`ha-media-card:${id}`, JSON.stringify(data));
       window.dispatchEvent(new CustomEvent('ha-media-card-sync', { detail: { sharedQueueId: id, ...data } }));
@@ -5923,11 +5973,13 @@ export class MediaCard extends LitElement {
     // Device B playing and Device A paused leads to Device B's navigation writes
     // continuously unpausing Device A.
     if (data.pauseIntent === true && typeof data.isPaused === 'boolean' && data.isPaused !== this._isPaused) {
-      this._setPauseState(data.isPaused);
       const syncVideoEl = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
       if (data.isPaused) {
-        // Incoming group-pause: mark as group-paused so we know to broadcast on resume
+        // Incoming group-pause: mark as group-paused so we know to broadcast on resume.
+        // _setPauseState is called here (not before the if/else) so that the else-if
+        // below can check _groupPaused before any state mutation.
         this._groupPaused = true;
+        this._setPauseState(true);
         this._pauseTimer();
         // Also pause the video element so it doesn't finish and auto-advance
         if (syncVideoEl && !syncVideoEl.paused) {
@@ -5940,9 +5992,12 @@ export class MediaCard extends LitElement {
         }
         // Pause Roku cast if active
         this._sendCastPlayToggle();
-      } else {
-        // Incoming group-resume: clear group-paused flag and resume video
+      } else if (this._groupPaused) {
+        // Incoming group-resume: only apply to cards that were group-paused.
+        // Cards that were independently user-paused (short-press, _groupPaused=false)
+        // must stay paused — a cast group-resume must not force-resume them.
         this._groupPaused = false;
+        this._setPauseState(false);
         this._resumeTimer();
         // Seek to cast start position before resuming so all synced cards are at the same frame.
         if (typeof data.castSeekPosition === 'number' && syncVideoEl && !syncVideoEl.ended) {
@@ -6020,10 +6075,11 @@ export class MediaCard extends LitElement {
     // works even when this card has no media-index configured.
     this._pendingMetadata = data.currentMetadata || null;
     // Suppress the outgoing write that would otherwise echo this event back.
-    // Use a 1-second window (timestamp) rather than a one-shot boolean so that the
-    // double-load race (rapid-navigation fires two onload events for the same URL)
-    // doesn't consume the flag prematurely on the first load.
-    this._suppressSyncWriteUntil = Date.now() + 1000;
+    // Use a 5-second window (extended from 1s) to cover slow image loads and
+    // the case where two sync transports arrive with a delay between them
+    // (e.g. CustomEvent fires at T=0, HA websocket event at T=500ms; without a
+    // wide-enough window the follower could write between the two).
+    this._suppressSyncWriteUntil = Date.now() + 5000;
     if (this._syncWriteTimer) {
       clearTimeout(this._syncWriteTimer);
       this._syncWriteTimer = null;
@@ -6269,7 +6325,10 @@ export class MediaCard extends LitElement {
     }
     
     // Shared queue: broadcast navigation — suppress if locally paused (short press)
-    if (!this._isLocallyPaused()) {
+    // or if in follower mode to avoid echoing the driver's sync event back.
+    const _nowMl = Date.now();
+    const _isFollowerMl = this._hasCrossDeviceSync() && _nowMl < (this._crossDeviceFollowerUntil || 0);
+    if (!this._isLocallyPaused() && !_isFollowerMl) {
       this._writeSharedQueueState();
     }
     // Cast-to-TV: push current item to TV on every image load
