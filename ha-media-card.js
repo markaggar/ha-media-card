@@ -7206,20 +7206,43 @@ class MediaCard extends LitElement {
             return;
           }
 
+          // Increment the video timer counter BEFORE follower checks so that elapsed
+          // time accumulates even while this card is acting as a cross-device follower.
+          // This ensures max_video_duration is enforced even if the leader goes away.
+          const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
+          const maxDuration = this.config.video_max_duration;
+          if (videoElement && !videoElement.paused && !videoElement.ended) {
+            this._videoTimerCount = (this._videoTimerCount || 0) + 1;
+          }
+          const elapsedSeconds = (this._videoTimerCount || 0) * refreshSeconds;
+
           // Cross-device follower: skip auto-advance while another device is the driver.
-          // The timer still runs so this card can take over naturally when the leader
-          // goes away (once _crossDeviceFollowerUntil expires).
+          // Exception: if max_video_duration is set and has been reached, the leader has
+          // not advanced — claim driver role and advance independently.
           if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
-            this._log('\u{1f465} Cross-device follower \u2014 skipping auto-advance (leader drives)');
-            return;
+            if (maxDuration && maxDuration > 0 && elapsedSeconds >= maxDuration && !this._videoUserInteracted) {
+              this._claimDriverRole();
+              this._log(`\u{1f465} Cross-device follower \u2014 max_video_duration (${maxDuration}s) exceeded, taking over as driver`);
+              // fall through to advance
+            } else {
+              this._log('\u{1f465} Cross-device follower \u2014 skipping auto-advance (leader drives)');
+              return;
+            }
           }
           // Follower window expired, but if we're still showing the same media the leader
-          // last sent, the leader is mid-video (longer than the window). Extend and stay put.
+          // last sent, the leader may be mid-video (longer than the window). Only renew the
+          // window if max_video_duration is not set or not yet reached. If max_video_duration
+          // has been exceeded, the leader must have gone away — advance independently.
           if (this._hasCrossDeviceSync() && this._crossDeviceLeaderMediaPath &&
               this._currentMediaPath === this._crossDeviceLeaderMediaPath) {
-            this._crossDeviceFollowerUntil = Date.now() + 120000;
-            this._log('\u{1f465} Cross-device follower \u2014 window renewed (still on leader media, long video)');
-            return;
+            if (!maxDuration || elapsedSeconds < maxDuration) {
+              this._crossDeviceFollowerUntil = Date.now() + 120000;
+              this._log('\u{1f465} Cross-device follower \u2014 window renewed (still on leader media, long video)');
+              return;
+            }
+            // max_video_duration reached — claim driver role and advance
+            this._claimDriverRole();
+            this._log(`\u{1f465} Cross-device follower \u2014 max_video_duration (${maxDuration}s) reached after window expiry, advancing`);
           }
           this._pauseLogShown = false;
           
@@ -7239,17 +7262,13 @@ class MediaCard extends LitElement {
           // - Short videos that loop: advance on FIRST timer fire after loop detected
           // - Long videos with max_duration: advance when timer count * interval >= max_duration
           // - Long videos without max_duration: never advance on timer (play to completion)
-          const videoElement = this.shadowRoot?.querySelector('video:not(.live-photo-video)');
-          const maxDuration = this.config.video_max_duration;
-          
+          // Note: videoElement, maxDuration, _videoTimerCount increment, and elapsedSeconds
+          // are all handled above — no need to re-query or re-increment here.
+
           // Check if video is currently playing
           if (videoElement && !videoElement.paused && !videoElement.ended) {
-            // Increment timer counter for this video
-            this._videoTimerCount = (this._videoTimerCount || 0) + 1;
-            
             const currentTime = Math.round(videoElement.currentTime * 10) / 10;
             const duration = Math.round(videoElement.duration * 10) / 10;
-            const elapsedSeconds = this._videoTimerCount * refreshSeconds;
             this._log(`🎬 Timer fired #${this._videoTimerCount}: video at ${currentTime}s/${duration}s, hasEnded=${this._videoHasEnded}, elapsed≈${elapsedSeconds}s, maxDuration=${maxDuration}, userInteracted=${this._videoUserInteracted}`);
             
             // V5.6.4: If user interacted (pause, seek, click), let video play to completion
