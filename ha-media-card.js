@@ -6371,6 +6371,7 @@ class MediaCard extends LitElement {
           this._log('Navigation queue exhausted, loading from provider');
           const _nowMs = Date.now();
           const _followerDefer = !this._isManualNavigation &&
+              !this._videoHasEnded &&
               this._crossDeviceFollowerUntil && _nowMs < this._crossDeviceFollowerUntil;
           const _reconnectDefer = !this._isManualNavigation &&
               this._crossDeviceProviderFetchUntil && _nowMs < this._crossDeviceProviderFetchUntil;
@@ -7231,13 +7232,18 @@ class MediaCard extends LitElement {
           }
           // Follower window expired, but if we're still showing the same media the leader
           // last sent, the leader may be mid-video (longer than the window). Only renew the
-          // window if max_video_duration is not set or not yet reached. If max_video_duration
-          // has been exceeded, the leader must have gone away — advance independently.
-          if (this._hasCrossDeviceSync() && this._crossDeviceLeaderMediaPath &&
+          // window if:
+          //   1. The leader actually sent a sync within the past 2 minutes (leader is alive)
+          //   2. max_video_duration is not set or not yet reached
+          // Without condition 1, followers whose leader has gone away renew their own windows
+          // indefinitely, leaving all cards stuck in follower mode forever.
+          const _leaderIsAlive = this._lastLeaderSyncReceivedAt &&
+              Date.now() - this._lastLeaderSyncReceivedAt < 120000;
+          if (_leaderIsAlive && this._hasCrossDeviceSync() && this._crossDeviceLeaderMediaPath &&
               this._currentMediaPath === this._crossDeviceLeaderMediaPath) {
             if (!maxDuration || elapsedSeconds < maxDuration) {
               this._crossDeviceFollowerUntil = Date.now() + 120000;
-              this._log('\u{1f465} Cross-device follower \u2014 window renewed (still on leader media, long video)');
+              this._log('\u{1f465} Cross-device follower \u2014 window renewed (still on leader media, long video)'); 
               return;
             }
             // max_video_duration reached — claim driver role and advance
@@ -10347,6 +10353,7 @@ class MediaCard extends LitElement {
     // enough to cover normal slideshow intervals; if the driver goes away, this card
     // will naturally take over writing once the window expires.
     this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    this._lastLeaderSyncReceivedAt = Date.now(); // track that an actual leader sync arrived
     let currentMetadata;
     if (data.current_metadata) {
       try { currentMetadata = JSON.parse(data.current_metadata); } catch (_e) {}
@@ -10378,6 +10385,7 @@ class MediaCard extends LitElement {
       // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
       // writes its (identical) state to HA — wasted service calls and log noise.
       this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+      this._lastLeaderSyncReceivedAt = Date.now();
       this._applySharedQueueUpdate(data);
     } catch (_e) {}
   }
@@ -10391,6 +10399,7 @@ class MediaCard extends LitElement {
     // Without this, _suppressSyncWriteUntil expires after 1s and the follower card
     // writes its (identical) state to HA — wasted service calls and log noise.
     this._crossDeviceFollowerUntil = Date.now() + 120000; // 2-min window — must exceed max slideshow interval
+    this._lastLeaderSyncReceivedAt = Date.now();
     this._applySharedQueueUpdate(event.detail);
   }
 
