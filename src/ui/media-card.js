@@ -165,6 +165,7 @@ export class MediaCard extends LitElement {
     this._pendingFilterChangeRestore = null; // stashed {queue, currentIndex, metadata} to adopt after filter-change reinit
     this._reconnectSyncApplied = false;       // set by _syncFromSharedQueueOnReconnect to block _tryRestoreFromSharedQueue from clobbering fresher state
     this._suppressLookaheadFill = false;         // set after any shared-queue restore; cleared on first _loadNext() to prevent each card independently pre-filling with different random items
+    this._videoEndFollowerTimer = null;          // safety timer set when a cross-device follower defers its video-end advance to the leader
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
     this._tapTimeout = null;         // V4 tap action double-tap detection
@@ -409,7 +410,13 @@ export class MediaCard extends LitElement {
     if (this._castEntityId) this._stopCast();
 
     this._log('🔌 Component disconnected - cleaning up resources');
-    
+
+    // Cancel any pending follower video-end safety timer
+    if (this._videoEndFollowerTimer) {
+      clearTimeout(this._videoEndFollowerTimer);
+      this._videoEndFollowerTimer = null;
+    }
+
     // NEW: Cleanup kiosk mode monitoring
     this._cleanupKioskModeMonitoring();
     
@@ -4941,6 +4948,24 @@ export class MediaCard extends LitElement {
           : parseFloat(this._currentMetadata?.duration || '0');
         this._log(`🎬 Video completed — cast active, waiting for Roku to finish (dur=${dur.toFixed(1)}s)`);
         this._startCastEndWatch(this._castEntityId, dur);
+        return;
+      }
+
+      // Cross-device follower: don't advance immediately — wait for the leader's sync
+      // event (which will arrive once the leader finishes its own advance or cast end-watch).
+      // A 10-second safety timer advances us independently if the leader goes away.
+      if (this._hasCrossDeviceSync() && Date.now() < (this._crossDeviceFollowerUntil || 0)) {
+        this._log('🎬 Video completed naturally — cross-device follower, awaiting leader sync');
+        if (!this._videoEndFollowerTimer) {
+          const mediaAtEnd = this.currentMedia;
+          this._videoEndFollowerTimer = setTimeout(() => {
+            this._videoEndFollowerTimer = null;
+            if (this.currentMedia === mediaAtEnd && !this._navigatingAway) {
+              this._log('🎬 Follower video-end safety advance — no leader sync within 10s');
+              this._loadNext().catch(() => {});
+            }
+          }, 10000);
+        }
         return;
       }
 
