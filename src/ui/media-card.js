@@ -163,6 +163,8 @@ export class MediaCard extends LitElement {
     this._localConfigFields = null;       // extracted blocking fields from current base config
     this._initGeneration = 0;             // incremented on each _initializeProvider call; stale inits check this and bail
     this._pendingFilterChangeRestore = null; // stashed {queue, currentIndex, metadata} to adopt after filter-change reinit
+    this._reconnectSyncApplied = false;       // set by _syncFromSharedQueueOnReconnect to block _tryRestoreFromSharedQueue from clobbering fresher state
+    this._suppressLookaheadFill = false;         // set after any shared-queue restore; cleared on first _loadNext() to prevent each card independently pre-filling with different random items
     this._currentMetadata = null; // V4 metadata tracking for action buttons/display
     this._currentMediaPath = null; // V4 current file path for action buttons
     this._tapTimeout = null;         // V4 tap action double-tap detection
@@ -1645,6 +1647,9 @@ export class MediaCard extends LitElement {
 
   // V5: Unified navigation - card owns queue/history, provider just supplies items
   async _loadNext() {
+    // Clear suppress-lookahead flag on first forward navigation after a shared-queue restore.
+    // This ensures _fillLookahead() is a no-op during init but works normally thereafter.
+    this._suppressLookaheadFill = false;
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadNext
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -5329,6 +5334,15 @@ export class MediaCard extends LitElement {
       return this._applyRestoredState(pending.queue, pending.currentIndex, pending.metadata);
     }
 
+    // Skip restore when _syncFromSharedQueueOnReconnect already applied the correct
+    // (fresher, localStorage-preferred) state during this reconnect cycle. Without this
+    // guard the init-path restore would overwrite the reconnect state with stale HA data.
+    if (this._reconnectSyncApplied) {
+      this._reconnectSyncApplied = false;
+      this._log('⏭️ Shared queue init-path restore skipped: reconnect sync already applied state');
+      return true; // signal success so init uses navigationQueue[navigationIndex] instead of _loadNext()
+    }
+
     // Skip restore when reinit was triggered by an explicit session override change
     // (filter picker apply/clear). The old queue belongs to a different content set.
     if (this._skipSharedQueueRestore) {
@@ -5447,7 +5461,6 @@ export class MediaCard extends LitElement {
     let queue = null, currentIndex = 0, sessionOverride = null, configFields = null, updatedAtSec = 0;
 
     // Cross-device: fetch from media-index
-    let haQueue = null, haIndex = 0, haSessionOverride = null, haConfigFields = null, haUpdatedAt = 0;
     if (this._hasCrossDeviceSync()) {
       try {
         const entityId = this._getMediaIndexEntityId();
@@ -5461,53 +5474,47 @@ export class MediaCard extends LitElement {
         });
         const data = resp?.response;
         if (data?.found && Array.isArray(data.queue) && data.queue.length) {
-          haQueue = data.queue;
-          haIndex = typeof data.current_index === 'number' ? data.current_index : 0;
-          haUpdatedAt = data.updated_at || 0;
-          try { haSessionOverride = data.session_override ? JSON.parse(data.session_override) : null; } catch (_e) {}
-          try { haConfigFields = data.config_fields ? JSON.parse(data.config_fields) : null; } catch (_e) {}
+          queue = data.queue;
+          currentIndex = typeof data.current_index === 'number' ? data.current_index : 0;
+          updatedAtSec = data.updated_at || 0;
+          try { sessionOverride = data.session_override ? JSON.parse(data.session_override) : null; } catch (_e) {}
+          try { configFields = data.config_fields ? JSON.parse(data.config_fields) : null; } catch (_e) {}
         }
       } catch (e) {
         this._log('⚠️ Could not fetch sync state from media_index for reconnect:', e);
       }
     }
 
-    // Same-device localStorage: always read regardless of HA availability.
-    // localStorage is written synchronously on every advance (no debounce), so it is
-    // always at least as fresh as the HA state on the same device.  When the previously-
-    // active card disconnected before its 500 ms HA debounce fired, the HA state will be
-    // stale by up to one advance interval — localStorage has the correct latest position.
-    let lsQueue = null, lsIndex = 0, lsUpdatedAt = 0, lsSessionOverride = null, lsConfigFields = null;
+    // Always read localStorage — for same-device sync it is written immediately on every
+    // navigation while the HA write is debounced (~500ms).  If the user switched views
+    // before the debounce fired, HA holds a stale state and localStorage is the ground
+    // truth.  For cross-device sync the other device's HA write will be newer than this
+    // device's own stale localStorage, so the comparison still picks the right winner.
     try {
       const raw = localStorage.getItem(`ha-media-card:${id}`);
       if (raw) {
         const data = JSON.parse(raw);
         if (Array.isArray(data.queue) && data.queue.length) {
-          lsQueue = data.queue;
-          lsIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
-          lsSessionOverride = data.sessionOverride ?? null;
-          lsConfigFields    = data.configFields    ?? null;
-          lsUpdatedAt       = data.updatedAt ? (data.updatedAt / 1000) : 0; // convert ms → s
+          const lsUpdatedAtSec = data.updatedAt ? (data.updatedAt / 1000) : 0; // convert ms → s
+          if (!queue) {
+            // HA had nothing — use localStorage unconditionally
+            queue        = data.queue;
+            currentIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
+            sessionOverride = data.sessionOverride ?? null;
+            configFields    = data.configFields    ?? null;
+            updatedAtSec    = lsUpdatedAtSec;
+          } else if (lsUpdatedAtSec > updatedAtSec) {
+            // localStorage is fresher than the HA debounced write — prefer it
+            this._log(`📱 localStorage sync state is fresher than HA (${Math.round(lsUpdatedAtSec)}s vs ${Math.round(updatedAtSec)}s) — using localStorage`);
+            queue        = data.queue;
+            currentIndex = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
+            sessionOverride = data.sessionOverride ?? null;
+            configFields    = data.configFields    ?? null;
+            updatedAtSec    = lsUpdatedAtSec;
+          }
         }
       }
     } catch (_e) {}
-
-    // Pick the fresher source.  localStorage wins on same-device tab-switch because it
-    // is synchronous while HA writes are debounced 500 ms and cancelled on disconnect.
-    // On a different device the HA state is authoritative; localStorage will be absent
-    // (or older) so haQueue will be selected automatically.
-    if (haQueue && lsQueue) {
-      if (lsUpdatedAt > haUpdatedAt) {
-        queue = lsQueue; currentIndex = lsIndex; sessionOverride = lsSessionOverride; configFields = lsConfigFields; updatedAtSec = lsUpdatedAt;
-        this._log(`🔗 Reconnect sync: using localStorage (updated ${lsUpdatedAt.toFixed(0)}s) — newer than HA (${haUpdatedAt.toFixed(0)}s)`);
-      } else {
-        queue = haQueue; currentIndex = haIndex; sessionOverride = haSessionOverride; configFields = haConfigFields; updatedAtSec = haUpdatedAt;
-      }
-    } else if (haQueue) {
-      queue = haQueue; currentIndex = haIndex; sessionOverride = haSessionOverride; configFields = haConfigFields; updatedAtSec = haUpdatedAt;
-    } else if (lsQueue) {
-      queue = lsQueue; currentIndex = lsIndex; sessionOverride = lsSessionOverride; configFields = lsConfigFields; updatedAtSec = lsUpdatedAt;
-    }
 
     if (!queue) return;
 
@@ -5545,6 +5552,8 @@ export class MediaCard extends LitElement {
       metadata: null,
     }));
     this.navigationIndex = newIndex;
+    this._reconnectSyncApplied = true; // block _tryRestoreFromSharedQueue from overwriting this state
+    this._suppressLookaheadFill = true;  // prevent independent lookahead fill until first forward navigation
     this._log(`🔗 Shared queue synced on reconnect: ${this.navigationQueue.length} items, index ${newIndex}`);
     if (newPath !== this._currentMediaPath) {
       const item = this.navigationQueue[newIndex];
@@ -5575,6 +5584,7 @@ export class MediaCard extends LitElement {
       this.navigationQueue[this.navigationIndex].metadata = currentMetadata;
     }
     this._log(`🔗 Shared queue restored: ${this.navigationQueue.length} items, index ${this.navigationIndex}`);
+    this._suppressLookaheadFill = true;  // prevent independent lookahead fill until first forward navigation
     // Cross-device reconnect grace period: when we restore at the last (or only) slot
     // the driver may be about to extend the queue and broadcast the next item.  Enter a
     // deferral window equal to the configured advance interval + 3s safety buffer so
@@ -10344,6 +10354,7 @@ export class MediaCard extends LitElement {
     if (this.isNavigationQueuePreloaded) return;
     if (!this.provider) return;
     if (!MediaProvider.isMediaIndexActive(this.config)) return;
+    if (this._suppressLookaheadFill) return; // skip until first _loadNext() after shared-queue restore
     if (this._fillLookaheadRunning) return;
     this._fillLookaheadRunning = true;
     const capturedProvider = this.provider;
