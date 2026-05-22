@@ -6603,7 +6603,14 @@ class MediaCard extends LitElement {
       // Extract filename from path for logging
       const filename = item.metadata?.filename || item.media_content_id?.split('/').pop() || 'unknown';
       this._log('Displaying navigation queue item:', filename, 'at index', nextIndex);
-      
+
+      // Slide the window when navigating into pre-loaded lookahead items:
+      // trim oldest back-history to keep navigationIndex within maxNavQueueSize bounds.
+      while (nextIndex >= this.maxNavQueueSize) {
+        this.navigationQueue.shift();
+        nextIndex--;
+      }
+
       // Store pending index (will apply when media loads)
       this._pendingNavigationIndex = nextIndex;
       // Pre-populate queue so Queue Preview always shows upcoming items
@@ -15060,7 +15067,7 @@ class MediaCard extends LitElement {
       const target = (this._pendingNavigationIndex ?? this.navigationIndex) + this._lookaheadCount;
       let added = 0;
       let consecutiveDupes = 0;
-      while (this.navigationQueue.length < target && this.navigationQueue.length < this.maxNavQueueSize) {
+      while (this.navigationQueue.length < target) {
         const item = await capturedProvider.getNext();
         if (!item) break;
         // Bail if the provider was replaced (e.g. a filter was applied while we were awaiting)
