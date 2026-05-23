@@ -7982,6 +7982,102 @@ class MediaCard extends LitElement {
     return this._heicConverterPromise;
   }
 
+  async _convertHeicBlob(inputBlob) {
+    const toType = this.config?.heic?.output_type || 'image/jpeg';
+    const quality = Number(this.config?.heic?.quality) || 0.92;
+    const libraryUrl = this.config?.heic?.library_url ||
+      'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+
+    if (this.config?.heic?.worker === false || typeof Worker === 'undefined') {
+      const converter = await this._loadHeicConverter();
+      return converter({ blob: inputBlob, toType, quality });
+    }
+
+    let worker = null;
+    let workerUrl = '';
+    try {
+      const workerSource = `
+        self.onmessage = async event => {
+          const { buffer, inputType, libraryUrl, toType, quality } = event.data;
+          try {
+            importScripts(libraryUrl);
+            const converter = self.heic2any || (self.window && self.window.heic2any);
+            if (!converter) throw new Error('heic2any not available in worker');
+            const inputBlob = new Blob([buffer], { type: inputType || 'image/heic' });
+            const outputBlob = await converter({ blob: inputBlob, toType, quality });
+            const finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
+            const outputBuffer = await finalBlob.arrayBuffer();
+            self.postMessage({
+              ok: true,
+              buffer: outputBuffer,
+              type: finalBlob.type || toType,
+              size: finalBlob.size || outputBuffer.byteLength
+            }, [outputBuffer]);
+          } catch (error) {
+            self.postMessage({ ok: false, message: error && error.message ? error.message : String(error) });
+          }
+        };
+      `;
+      workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }));
+      worker = new Worker(workerUrl);
+      this._recordMediaDiagnostic('heic.worker_start', {
+        inputBytes: inputBlob.size || 0,
+        inputType: inputBlob.type || '',
+        libraryUrl
+      });
+
+      const inputBuffer = await inputBlob.arrayBuffer();
+      const response = await new Promise((resolve, reject) => {
+        const timeoutMs = Math.max(5000, Number(this.config?.heic?.worker_timeout_ms) || 30000);
+        const timeout = setTimeout(() => reject(new Error('HEIC worker conversion timed out')), timeoutMs);
+        worker.onmessage = event => {
+          clearTimeout(timeout);
+          resolve(event.data);
+        };
+        worker.onerror = error => {
+          clearTimeout(timeout);
+          reject(new Error(error?.message || 'HEIC worker error'));
+        };
+        worker.postMessage({
+          buffer: inputBuffer,
+          inputType: inputBlob.type,
+          libraryUrl,
+          toType,
+          quality
+        }, [inputBuffer]);
+      });
+
+      if (!response?.ok) {
+        throw new Error(response?.message || 'HEIC worker conversion failed');
+      }
+
+      this._recordMediaDiagnostic('heic.worker_done', {
+        outputBytes: response.size || response.buffer?.byteLength || 0,
+        outputType: response.type || toType
+      });
+      return new Blob([response.buffer], { type: response.type || toType });
+    } catch (error) {
+      this._recordMediaDiagnostic('heic.worker_error', {
+        message: error?.message || String(error)
+      }, { force: true });
+      const converter = await this._loadHeicConverter();
+      return converter({ blob: inputBlob, toType, quality });
+    } finally {
+      try {
+        worker?.terminate?.();
+      } catch (error) {
+        // Ignore worker shutdown failures.
+      }
+      if (workerUrl) {
+        try {
+          URL.revokeObjectURL(workerUrl);
+        } catch (error) {
+          // Ignore stale worker URLs.
+        }
+      }
+    }
+  }
+
   async _prepareHeicDisplayUrl(url, expectedNavigationIndex, expectedGeneration) {
     if (this.config?.heic?.enabled === false || (!this._isHeicMedia(this.currentMedia) && !this._isHeicMedia(url))) {
       return url;
@@ -8006,7 +8102,6 @@ class MediaCard extends LitElement {
     try {
       this._log('🖼️ Converting HEIC image for browser display:', this.currentMedia?.media_content_id || url);
       this._recordMediaDiagnostic('heic.convert_start', { url });
-      const converter = await this._loadHeicConverter();
       if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return '';
 
       const response = await fetch(url, { credentials: 'same-origin' });
@@ -8021,11 +8116,7 @@ class MediaCard extends LitElement {
         inputBytes: inputBlob.size || 0,
         inputType: inputBlob.type || ''
       });
-      outputBlob = await converter({
-        blob: inputBlob,
-        toType: this.config?.heic?.output_type || 'image/jpeg',
-        quality: Number(this.config?.heic?.quality) || 0.92
-      });
+      outputBlob = await this._convertHeicBlob(inputBlob);
       finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
       this._mediaDiagnostics.bytes.heicOutput += finalBlob?.size || 0;
       objectUrl = URL.createObjectURL(finalBlob);
