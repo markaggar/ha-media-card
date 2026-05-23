@@ -6,7 +6,7 @@
 # HA Media Card 🎬
 A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, **intelligent content prioritization** and **TV casting support**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed with VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
 
-It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, Roku Casting, favoriting, editing and deleting photos and related photos support.
+It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card every time you load the card), EXIF metadata extraction, Roku Casting, favoriting, editing and deleting photos and related photos support.
 
 <img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
 
@@ -65,7 +65,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 ### **📺 Cast to TV** (requires Media Index)
 - 📺 **Cast Button** (`show_cast_button: true`): Tap the cast icon to open a native picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
 - **Roku xcast**: Roku TV entities are automatically detected and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) for native image display without transcoding by the TV — no DLNA/DMR required.
-  - **Requirements for Roku**: Roku HA integration configured, [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku device, and Media Index v1.7.1+
+  - **Requirements for Roku**: Roku HA integration configured, [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku device, and Media Index v1.8.0+
   - The xcast channel acts as a Digital Media Renderer (DMR) receiving content pushed from HA. It must be installed from the Roku Channel Store before first use. On a cold-start the card sends the image immediately to wake xcast, then retries 2.5 s later once it has fully launched.
   - **Roku Video Sync**: When casting a video, the card continuously polls the Roku's playback position via ECP and corrects any drift >±2 s, keeping the local clock and the TV perfectly aligned.
   - **Smooth transitions**: Roku is paused immediately when the user manually navigates (no xcast banner gap) and the card waits for Roku to finish before auto-advancing to the next item.
