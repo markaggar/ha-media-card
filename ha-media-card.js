@@ -4978,8 +4978,24 @@ class MediaCard extends LitElement {
     this._livePhotoPlaybackCount = 0;
 
     this._heicObjectUrlCache = new Map();
+    this._heicObjectUrlMeta = new Map();
     this._heicObjectUrlCacheLimit = 4;
     this._heicConverterPromise = null;
+    this._mediaDiagnostics = {
+      counters: {},
+      active: {
+        preloadImages: 0,
+        preloadVideos: 0,
+        livePhotoWarmupVideos: 0
+      },
+      bytes: {
+        heicInput: 0,
+        heicOutput: 0,
+        heicObjectUrls: 0
+      },
+      recent: [],
+      lastSummaryAt: 0
+    };
 
     this._log('💎 Constructor called, cardId:', this._cardId);
   }
@@ -5376,6 +5392,126 @@ class MediaCard extends LitElement {
       
       console.log(prefix, ...sanitizedArgs);
     }
+  }
+
+  _getMediaDiagnosticsConfig() {
+    return this.config?.media_diagnostics || this.config?.diagnostics || {};
+  }
+
+  _isMediaDiagnosticsEnabled() {
+    const diagnostics = this._getMediaDiagnosticsConfig();
+    return diagnostics?.enabled === true ||
+      diagnostics?.media_memory === true ||
+      this.config?.debug_media_memory === true;
+  }
+
+  _sanitizeDiagnosticValue(value) {
+    if (typeof value !== 'string') return value;
+    const sanitized = value.replace(/([?&])authSig=[^&\s]*/gi, '$1authSig=[…]');
+    if (sanitized.length > 160) return `${sanitized.slice(0, 80)}…${sanitized.slice(-50)}`;
+    return sanitized;
+  }
+
+  _recordMediaDiagnostic(event, detail = {}, options = {}) {
+    if (!this._isMediaDiagnosticsEnabled()) return;
+
+    const now = Date.now();
+    const diagnostics = this._mediaDiagnostics || {
+      counters: {},
+      active: {},
+      bytes: {},
+      recent: [],
+      lastSummaryAt: 0
+    };
+    this._mediaDiagnostics = diagnostics;
+    diagnostics.counters[event] = (diagnostics.counters[event] || 0) + 1;
+
+    const sanitizedDetail = {};
+    for (const [key, value] of Object.entries(detail || {})) {
+      sanitizedDetail[key] = this._sanitizeDiagnosticValue(value);
+    }
+
+    diagnostics.recent.push({ at: new Date(now).toISOString(), event, ...sanitizedDetail });
+    const recentLimit = Math.max(10, Number(this._getMediaDiagnosticsConfig()?.recent_limit) || 80);
+    while (diagnostics.recent.length > recentLimit) diagnostics.recent.shift();
+
+    const logEvents = this._getMediaDiagnosticsConfig()?.log_events !== false;
+    if (logEvents || options.force) {
+      console.info(`[${this._cardId}] media-diagnostic ${event}`, sanitizedDetail, this._getMediaDiagnosticsSnapshot());
+    }
+
+    this._publishMediaDiagnosticsSnapshot(event);
+    this._maybeLogMediaDiagnostics(event, options.force === true);
+  }
+
+  _getMediaDiagnosticsSnapshot(reason = 'snapshot') {
+    const perfMemory = typeof performance !== 'undefined' ? performance.memory : null;
+    const bytes = this._mediaDiagnostics?.bytes || {};
+    const active = this._mediaDiagnostics?.active || {};
+
+    return {
+      cardId: this._cardId,
+      reason,
+      at: new Date().toISOString(),
+      media: {
+        type: this.currentMedia?.media_content_type || '',
+        id: this._sanitizeDiagnosticValue(this.currentMedia?.media_content_id || this.mediaUrl || ''),
+        isHeic: this._isHeicMedia?.(this.currentMedia) || this._isHeicMedia?.(this.mediaUrl) || false
+      },
+      config: {
+        preloadEnabled: this.config?.preload?.enabled !== false,
+        preloadVideoMode: this.config?.preload?.video_mode || 'metadata',
+        preloadImageDecode: this.config?.preload?.image_decode !== false,
+        heicEnabled: this.config?.heic?.enabled !== false,
+        heicCacheSize: Math.max(1, Number(this.config?.heic?.cache_size) || this._heicObjectUrlCacheLimit || 1),
+        livePhotoEnabled: this.config?.live_photo?.enabled === true,
+        livePhotoPreloadVideo: this.config?.live_photo?.preload_video !== false,
+        livePhotoPreloadMode: this._getLivePhotoVideoPreloadMode?.() || 'metadata',
+        livePhotoMaxPlays: this.config?.live_photo?.max_plays_per_item ?? 0
+      },
+      active: {
+        ...active,
+        activePrepareType: this._activeMediaPrepare?.type || '',
+        heicObjectUrls: this._heicObjectUrlCache?.size || 0,
+        livePhotoCompanionCache: this._livePhotoCompanionCache?.size || 0,
+        livePhotoCompanionVideoCache: this._livePhotoCompanionVideoCache?.size || 0,
+        livePhotoPhase: this._livePhotoPhase,
+        livePhotoVideoReady: this._livePhotoVideoReady,
+        livePhotoPlaybackCount: this._livePhotoPlaybackCount || 0,
+        shadowImgs: this.shadowRoot?.querySelectorAll?.('img')?.length || 0,
+        shadowVideos: this.shadowRoot?.querySelectorAll?.('video')?.length || 0,
+        livePhotoDomVideos: this.shadowRoot?.querySelectorAll?.('.live-photo-video')?.length || 0
+      },
+      bytes: {
+        heicInput: bytes.heicInput || 0,
+        heicOutput: bytes.heicOutput || 0,
+        heicObjectUrls: Array.from(this._heicObjectUrlMeta?.values?.() || [])
+          .reduce((total, meta) => total + (Number(meta?.size) || 0), 0)
+      },
+      counters: { ...(this._mediaDiagnostics?.counters || {}) },
+      recent: [...(this._mediaDiagnostics?.recent || [])],
+      memory: perfMemory ? {
+        usedJSHeapSize: perfMemory.usedJSHeapSize,
+        totalJSHeapSize: perfMemory.totalJSHeapSize,
+        jsHeapSizeLimit: perfMemory.jsHeapSizeLimit
+      } : null
+    };
+  }
+
+  _publishMediaDiagnosticsSnapshot(reason = 'snapshot') {
+    if (!this._isMediaDiagnosticsEnabled() || typeof window === 'undefined') return;
+    window.__haMediaCardDiagnostics = window.__haMediaCardDiagnostics || {};
+    window.__haMediaCardDiagnostics[this._cardId] = this._getMediaDiagnosticsSnapshot(reason);
+  }
+
+  _maybeLogMediaDiagnostics(reason = 'interval', force = false) {
+    if (!this._isMediaDiagnosticsEnabled()) return;
+    const diagnostics = this._mediaDiagnostics;
+    const interval = Math.max(5000, Number(this._getMediaDiagnosticsConfig()?.summary_interval_ms) || 60000);
+    const now = Date.now();
+    if (!force && now - (diagnostics?.lastSummaryAt || 0) < interval) return;
+    diagnostics.lastSummaryAt = now;
+    console.info(`[${this._cardId}] media-diagnostic summary`, this._getMediaDiagnosticsSnapshot(reason));
   }
 
   /**
@@ -7743,12 +7879,19 @@ class MediaCard extends LitElement {
     if (!element) return;
 
     try {
-      if (element.tagName?.toLowerCase() === 'video') {
+      const tagName = element.tagName?.toLowerCase();
+      this._recordMediaDiagnostic('media_element.release', {
+        tag: tagName || '',
+        hadSrc: !!(element.currentSrc || element.src || element.getAttribute?.('src')),
+        readyState: element.readyState,
+        networkState: element.networkState
+      });
+      if (tagName === 'video') {
         element.pause?.();
         element.removeAttribute('src');
         element.querySelectorAll?.('source')?.forEach(source => source.removeAttribute('src'));
         element.load?.();
-      } else if (element.tagName?.toLowerCase() === 'img') {
+      } else if (tagName === 'img') {
         element.removeAttribute('src');
       }
     } catch (error) {
@@ -7778,16 +7921,24 @@ class MediaCard extends LitElement {
     if (!this._heicObjectUrlCache) return;
 
     for (const objectUrl of this._heicObjectUrlCache.values()) {
-      URL.revokeObjectURL(objectUrl);
+      this._revokeHeicObjectUrl(objectUrl);
     }
 
     this._heicObjectUrlCache.clear();
+    this._heicObjectUrlMeta?.clear();
+    this._recordMediaDiagnostic('heic.object_url.clear_all', {}, { force: true });
   }
 
   _revokeHeicObjectUrl(objectUrl) {
     if (!objectUrl) return;
     try {
       URL.revokeObjectURL(objectUrl);
+      const meta = this._heicObjectUrlMeta?.get(objectUrl);
+      this._heicObjectUrlMeta?.delete(objectUrl);
+      this._recordMediaDiagnostic('heic.object_url.revoke', {
+        size: meta?.size || 0,
+        type: meta?.type || ''
+      });
     } catch (error) {
       // Ignore stale/invalid blob URLs.
     }
@@ -7841,11 +7992,20 @@ class MediaCard extends LitElement {
       // Refresh LRU position so active/recent images are not evicted first.
       this._heicObjectUrlCache.delete(url);
       this._heicObjectUrlCache.set(url, objectUrl);
+      this._recordMediaDiagnostic('heic.cache_hit', {
+        cacheSize: this._heicObjectUrlCache.size,
+        size: this._heicObjectUrlMeta?.get(objectUrl)?.size || 0
+      });
       return objectUrl;
     }
 
+    let inputBlob = null;
+    let outputBlob = null;
+    let finalBlob = null;
+    let objectUrl = '';
     try {
       this._log('🖼️ Converting HEIC image for browser display:', this.currentMedia?.media_content_id || url);
+      this._recordMediaDiagnostic('heic.convert_start', { url });
       const converter = await this._loadHeicConverter();
       if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return '';
 
@@ -7855,17 +8015,33 @@ class MediaCard extends LitElement {
       }
       if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return '';
 
-      const inputBlob = await response.blob();
-      const outputBlob = await converter({
+      inputBlob = await response.blob();
+      this._mediaDiagnostics.bytes.heicInput += inputBlob.size || 0;
+      this._recordMediaDiagnostic('heic.fetch_blob', {
+        inputBytes: inputBlob.size || 0,
+        inputType: inputBlob.type || ''
+      });
+      outputBlob = await converter({
         blob: inputBlob,
         toType: this.config?.heic?.output_type || 'image/jpeg',
         quality: Number(this.config?.heic?.quality) || 0.92
       });
-      const finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
-      const objectUrl = URL.createObjectURL(finalBlob);
+      finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
+      this._mediaDiagnostics.bytes.heicOutput += finalBlob?.size || 0;
+      objectUrl = URL.createObjectURL(finalBlob);
+      this._heicObjectUrlMeta.set(objectUrl, {
+        size: finalBlob?.size || 0,
+        type: finalBlob?.type || '',
+        createdAt: Date.now()
+      });
+      this._recordMediaDiagnostic('heic.object_url.create', {
+        outputBytes: finalBlob?.size || 0,
+        outputType: finalBlob?.type || '',
+        cacheSize: this._heicObjectUrlCache?.size || 0
+      }, { force: true });
 
       if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
-        URL.revokeObjectURL(objectUrl);
+        this._revokeHeicObjectUrl(objectUrl);
         return '';
       }
 
@@ -7877,10 +8053,22 @@ class MediaCard extends LitElement {
         cacheLimit,
         oldObjectUrl => this._revokeHeicObjectUrl(oldObjectUrl)
       );
+      this._recordMediaDiagnostic('heic.cache_store', {
+        cacheSize: this._heicObjectUrlCache.size,
+        cacheLimit
+      });
       return objectUrl;
     } catch (error) {
+      if (objectUrl) this._revokeHeicObjectUrl(objectUrl);
       console.warn('[MediaCard] HEIC conversion failed, falling back to native image support:', error);
+      this._recordMediaDiagnostic('heic.convert_error', {
+        message: error?.message || String(error)
+      }, { force: true });
       return url;
+    } finally {
+      inputBlob = null;
+      outputBlob = null;
+      finalBlob = null;
     }
   }
 
@@ -7888,6 +8076,10 @@ class MediaCard extends LitElement {
     if (!url || this.config?.preload?.enabled === false) return true;
     if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return false;
     this._cancelActiveMediaPrepare('new media prepare');
+    this._recordMediaDiagnostic('preload.prepare_start', {
+      type: isVideo ? 'video' : 'image',
+      url
+    });
 
     if (isVideo) {
       return this._preloadVideoForDisplay(url, expectedNavigationIndex, expectedGeneration);
@@ -7901,6 +8093,8 @@ class MediaCard extends LitElement {
     const abortController = new AbortController();
     const active = { type: 'image', element: image, abortController, generation: expectedGeneration, cancelled: false };
     this._activeMediaPrepare = active;
+    this._mediaDiagnostics.active.preloadImages++;
+    this._recordMediaDiagnostic('preload.image.start', { url });
 
     try {
       await new Promise((resolve, reject) => {
@@ -7914,6 +8108,10 @@ class MediaCard extends LitElement {
           reject(new DOMException('Image preload aborted', 'AbortError'));
         };
         image.onload = () => {
+          this._recordMediaDiagnostic('preload.image.load', {
+            naturalWidth: image.naturalWidth,
+            naturalHeight: image.naturalHeight
+          });
           cleanup();
           resolve();
         };
@@ -7928,21 +8126,39 @@ class MediaCard extends LitElement {
       });
 
       if (this.config?.preload?.image_decode !== false && typeof image.decode === 'function') {
+        this._recordMediaDiagnostic('preload.image.decode_start', {
+          naturalWidth: image.naturalWidth,
+          naturalHeight: image.naturalHeight
+        });
         await image.decode().catch(() => {});
+        this._recordMediaDiagnostic('preload.image.decode_done', {
+          naturalWidth: image.naturalWidth,
+          naturalHeight: image.naturalHeight
+        });
       }
 
-      return this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration);
+      const current = this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration);
+      this._recordMediaDiagnostic('preload.image.done', { current });
+      return current;
     } catch (error) {
       if (error?.name === 'AbortError' || !this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
+        this._recordMediaDiagnostic('preload.image.abort', {
+          message: error?.message || String(error)
+        });
         return false;
       }
       this._log('⚠️ Image preload failed; falling back to normal image load:', error.message || error);
+      this._recordMediaDiagnostic('preload.image.error', {
+        message: error?.message || String(error)
+      }, { force: true });
       return true;
     } finally {
       if (this._activeMediaPrepare === active) {
         this._activeMediaPrepare = null;
       }
       this._releaseMediaElement(image);
+      this._mediaDiagnostics.active.preloadImages = Math.max(0, (this._mediaDiagnostics.active.preloadImages || 0) - 1);
+      this._recordMediaDiagnostic('preload.image.release', {});
     }
   }
 
@@ -7956,6 +8172,8 @@ class MediaCard extends LitElement {
     const eventName = mode === 'canplay' ? 'canplay' : 'loadedmetadata';
     const timeoutMs = Math.max(250, Number(this.config?.preload?.video_timeout_ms) || 3000);
     this._activeMediaPrepare = active;
+    this._mediaDiagnostics.active.preloadVideos++;
+    this._recordMediaDiagnostic('preload.video.start', { url, mode, eventName, timeoutMs });
 
     try {
       await new Promise((resolve, reject) => {
@@ -7968,6 +8186,12 @@ class MediaCard extends LitElement {
           abortController.signal.removeEventListener('abort', onAbort);
         };
         const onReady = () => {
+          this._recordMediaDiagnostic('preload.video.ready', {
+            eventName,
+            readyState: video.readyState,
+            networkState: video.networkState,
+            duration: Number.isFinite(video.duration) ? video.duration : null
+          });
           cleanup();
           resolve();
         };
@@ -7976,11 +8200,19 @@ class MediaCard extends LitElement {
           reject(new DOMException('Video preload aborted', 'AbortError'));
         };
         timeoutId = setTimeout(() => {
+          this._recordMediaDiagnostic('preload.video.timeout', {
+            readyState: video.readyState,
+            networkState: video.networkState
+          });
           cleanup();
           resolve();
         }, timeoutMs);
         video[eventName === 'canplay' ? 'oncanplay' : 'onloadedmetadata'] = onReady;
         video.onerror = () => {
+          this._recordMediaDiagnostic('preload.video.error_event', {
+            readyState: video.readyState,
+            networkState: video.networkState
+          });
           cleanup();
           resolve();
         };
@@ -7992,22 +8224,27 @@ class MediaCard extends LitElement {
         video.load();
       });
 
-      return this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration);
+      const current = this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration);
+      this._recordMediaDiagnostic('preload.video.done', { current });
+      return current;
     } catch (error) {
       if (error?.name === 'AbortError' || !this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
+        this._recordMediaDiagnostic('preload.video.abort', {
+          message: error?.message || String(error)
+        });
         return false;
       }
+      this._recordMediaDiagnostic('preload.video.error', {
+        message: error?.message || String(error)
+      }, { force: true });
       return true;
     } finally {
       if (this._activeMediaPrepare === active) {
         this._activeMediaPrepare = null;
       }
-      try {
-        video.removeAttribute('src');
-        video.load();
-      } catch (error) {
-        // Best-effort cleanup.
-      }
+      this._releaseMediaElement(video);
+      this._mediaDiagnostics.active.preloadVideos = Math.max(0, (this._mediaDiagnostics.active.preloadVideos || 0) - 1);
+      this._recordMediaDiagnostic('preload.video.release', {});
     }
   }
 
@@ -8644,6 +8881,10 @@ class MediaCard extends LitElement {
   }
 
   _clearLivePhotoPlayback() {
+    this._recordMediaDiagnostic('live_photo.clear', {
+      phase: this._livePhotoPhase,
+      playbackCount: this._livePhotoPlaybackCount || 0
+    });
     this._clearLivePhotoTimer();
     this._livePhotoGeneration++;
     this._cleanupLivePhotoVideoElements();
@@ -8655,7 +8896,11 @@ class MediaCard extends LitElement {
   }
 
   _cleanupLivePhotoVideoElements() {
-    this.shadowRoot?.querySelectorAll?.('.live-photo-video')?.forEach(video => {
+    const videos = this.shadowRoot?.querySelectorAll?.('.live-photo-video') || [];
+    if (videos.length) {
+      this._recordMediaDiagnostic('live_photo.cleanup_dom_videos', { count: videos.length });
+    }
+    videos.forEach(video => {
       this._releaseMediaElement(video);
     });
   }
@@ -9000,6 +9245,10 @@ class MediaCard extends LitElement {
       const companion = this._livePhotoCompanionCache.get(itemId);
       this._livePhotoCompanionCache.delete(itemId);
       this._livePhotoCompanionCache.set(itemId, companion);
+      this._recordMediaDiagnostic('live_photo.companion_cache_hit', {
+        itemId,
+        cacheSize: this._livePhotoCompanionCache.size
+      });
       return companion;
     }
 
@@ -9023,12 +9272,22 @@ class MediaCard extends LitElement {
           this._livePhotoCompanionCacheLimit
         );
         this._log('🎞️ Live Photo companion resolved:', mediaContentId);
+        this._recordMediaDiagnostic('live_photo.companion_resolved', {
+          itemId,
+          mediaContentId,
+          cacheSize: this._livePhotoCompanionCache.size
+        });
         return companion;
       } catch (error) {
         this._log('🎞️ Live Photo companion candidate not available:', mediaContentId);
+        this._recordMediaDiagnostic('live_photo.companion_candidate_miss', {
+          itemId,
+          mediaContentId
+        });
       }
     }
 
+    this._recordMediaDiagnostic('live_photo.companion_missing', { itemId });
     return null;
   }
 
@@ -9051,6 +9310,7 @@ class MediaCard extends LitElement {
     this._livePhotoPlaybackItemId = itemId;
     this._livePhotoPlaybackCount = 0;
     const stillMs = Math.max(0.1, Number(this.config.live_photo?.still_duration) || 1) * 1000;
+    this._recordMediaDiagnostic('live_photo.schedule', { itemId, stillMs });
 
     this._warmLivePhotoCompanion(generation, itemId);
 
@@ -9066,11 +9326,22 @@ class MediaCard extends LitElement {
           generation !== this._livePhotoGeneration ||
           itemId !== this._getLivePhotoItemId(this.currentMedia) ||
           this.config?.live_photo?.preload_video === false) {
+        this._recordMediaDiagnostic('live_photo.warmup_skip', {
+          itemId,
+          hasCompanion: !!companion,
+          preloadVideo: this.config?.live_photo?.preload_video !== false
+        });
         return;
       }
+      this._recordMediaDiagnostic('live_photo.warmup_start', { itemId });
       await this._preloadLivePhotoVideo(companion.url, generation, itemId);
+      this._recordMediaDiagnostic('live_photo.warmup_done', { itemId });
     } catch (error) {
       this._log('🎞️ Live Photo warmup skipped:', error?.message || error);
+      this._recordMediaDiagnostic('live_photo.warmup_error', {
+        itemId,
+        message: error?.message || String(error)
+      }, { force: true });
     }
   }
 
@@ -9088,20 +9359,50 @@ class MediaCard extends LitElement {
         video.removeEventListener('canplay', onReady);
         video.removeEventListener('error', onDone);
         this._releaseMediaElement(video);
+        this._mediaDiagnostics.active.livePhotoWarmupVideos = Math.max(0, (this._mediaDiagnostics.active.livePhotoWarmupVideos || 0) - 1);
+        this._recordMediaDiagnostic('live_photo.preload_video.release', { itemId });
         resolve();
       };
       const isCurrent = () =>
         generation === this._livePhotoGeneration &&
         itemId === this._getLivePhotoItemId(this.currentMedia);
-      const onReady = () => cleanup();
-      const onDone = () => cleanup();
-      const timeout = setTimeout(cleanup, 3000);
+      const onReady = () => {
+        this._recordMediaDiagnostic('live_photo.preload_video.ready', {
+          itemId,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          duration: Number.isFinite(video.duration) ? video.duration : null
+        });
+        cleanup();
+      };
+      const onDone = () => {
+        this._recordMediaDiagnostic('live_photo.preload_video.error_event', {
+          itemId,
+          readyState: video.readyState,
+          networkState: video.networkState
+        });
+        cleanup();
+      };
+      const timeout = setTimeout(() => {
+        this._recordMediaDiagnostic('live_photo.preload_video.timeout', {
+          itemId,
+          readyState: video.readyState,
+          networkState: video.networkState
+        });
+        cleanup();
+      }, 3000);
 
       if (!isCurrent()) {
         cleanup();
         return;
       }
 
+      this._mediaDiagnostics.active.livePhotoWarmupVideos++;
+      this._recordMediaDiagnostic('live_photo.preload_video.start', {
+        itemId,
+        preloadMode: this._getLivePhotoVideoPreloadMode(),
+        url
+      });
       video.preload = this._getLivePhotoVideoPreloadMode();
       video.muted = true;
       video.playsInline = true;
@@ -9132,6 +9433,10 @@ class MediaCard extends LitElement {
     this._livePhotoVideoUrl = companion.url;
     this._livePhotoVideoReady = false;
     this._livePhotoPhase = 'video';
+    this._recordMediaDiagnostic('live_photo.video_start', {
+      itemId,
+      url: companion.url
+    }, { force: true });
     this.requestUpdate();
   }
 
@@ -9156,6 +9461,11 @@ class MediaCard extends LitElement {
     if (this._livePhotoPhase !== 'video') return;
     this._livePhotoVideoReady = true;
     const video = e?.target;
+    this._recordMediaDiagnostic('live_photo.video_canplay', {
+      readyState: video?.readyState,
+      networkState: video?.networkState,
+      duration: video && Number.isFinite(video.duration) ? video.duration : null
+    });
     if (video && video.paused) {
       video.play().catch(error => {
         if (error?.name !== 'AbortError') {
@@ -9175,6 +9485,7 @@ class MediaCard extends LitElement {
     this._livePhotoVideoUrl = '';
     this._livePhotoVideoReady = false;
     this._log('🎞️ Live Photo companion video failed - keeping still image visible');
+    this._recordMediaDiagnostic('live_photo.video_error', { itemId }, { force: true });
     this.requestUpdate();
   }
 
@@ -9193,6 +9504,13 @@ class MediaCard extends LitElement {
       this._livePhotoPlaybackCount = 0;
     }
     this._livePhotoPlaybackCount = (this._livePhotoPlaybackCount || 0) + 1;
+    this._recordMediaDiagnostic('live_photo.video_ended', {
+      itemId,
+      playbackCount: this._livePhotoPlaybackCount,
+      duration: video && Number.isFinite(video.duration) ? video.duration : null,
+      readyState: video?.readyState,
+      networkState: video?.networkState
+    }, { force: true });
 
     const maxPlaysRaw = this.config?.live_photo?.max_plays_per_item;
     const maxPlays = maxPlaysRaw === undefined || maxPlaysRaw === null
@@ -9206,6 +9524,10 @@ class MediaCard extends LitElement {
       this._livePhotoVideoReady = false;
       this._hideBottomOverlaysForVideo = false;
       this.requestUpdate();
+      this._recordMediaDiagnostic('live_photo.max_plays_release', {
+        itemId,
+        maxPlays
+      }, { force: true });
       return true;
     }
 
@@ -9226,6 +9548,10 @@ class MediaCard extends LitElement {
         try {
           video.currentTime = 0;
           this._livePhotoVideoReady = true;
+          this._recordMediaDiagnostic('live_photo.replay_reuse', {
+            itemId,
+            playbackCount: this._livePhotoPlaybackCount
+          });
           video.play().catch(error => {
             if (error?.name !== 'AbortError') {
               this._log('🎞️ Live Photo replay failed:', error);
