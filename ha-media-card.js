@@ -7843,6 +7843,31 @@ class MediaCard extends LitElement {
     return cleanPath.endsWith('.heic') || cleanPath.endsWith('.heif');
   }
 
+  _shouldSkipUnsupportedHeicDisplay(url, item = this.currentMedia) {
+    return this.config?.heic?.enabled === false &&
+      (this._isHeicMedia(item) || this._isHeicMedia(url));
+  }
+
+  _skipUnsupportedHeicDisplay(url) {
+    const item = this.currentMedia;
+    const itemId = item?.media_content_id || item?.media_source_uri || item?.path || '';
+    this._log('⏭️ Skipping unsupported HEIC item because HEIC display conversion is disabled:', itemId || url);
+    this._recordMediaDiagnostic('heic.display.skip_disabled', {
+      url,
+      item: itemId
+    }, { force: true });
+    this._removeItemFromQueues(item);
+
+    this._pendingNavigationIndex = null;
+    this._pendingMediaPath = null;
+    this._pendingMetadata = null;
+    this._navigatingAway = false;
+    this._manualNavLoading = false;
+    this._errorState = null;
+
+    setTimeout(() => this._loadNext(), 100);
+  }
+
   _isNavigationCurrent(expectedNavigationIndex, expectedGeneration) {
     if (expectedGeneration !== undefined && expectedGeneration !== this._navigationGeneration) {
       return false;
@@ -8392,6 +8417,11 @@ class MediaCard extends LitElement {
     // _navigatingAway stays true — freezing the slideshow timer permanently.
     const isVideo = this._isVideoFile(url) || this._isCurrentItemVideo(url);
     let displayUrl = url;
+
+    if (!isVideo && this._shouldSkipUnsupportedHeicDisplay(url, this.currentMedia)) {
+      this._skipUnsupportedHeicDisplay(url);
+      return;
+    }
     
     // For images, validate they exist before displaying (MediaIndexProvider only)
     if (!isVideo) {
