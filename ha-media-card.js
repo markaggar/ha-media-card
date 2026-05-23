@@ -9377,6 +9377,30 @@ class MediaCard extends LitElement {
     return candidates;
   }
 
+  async _verifyLivePhotoCompanionUrl(url, itemId, mediaContentId) {
+    if (!url) return false;
+    try {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { Range: 'bytes=0-0' }
+      });
+      const ok = response.ok || response.status === 206;
+      this._recordMediaDiagnostic(ok ? 'live_photo.companion_verify_ok' : 'live_photo.companion_verify_miss', {
+        itemId,
+        mediaContentId,
+        status: response.status
+      });
+      return ok;
+    } catch (error) {
+      this._recordMediaDiagnostic('live_photo.companion_verify_error', {
+        itemId,
+        mediaContentId,
+        message: error?.message || String(error)
+      });
+      return false;
+    }
+  }
+
   async _resolveLivePhotoCompanion(item = this.currentMedia) {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return null;
@@ -9404,6 +9428,10 @@ class MediaCard extends LitElement {
           expires: (60 * 60 * 3)
         });
         const url = this._addCacheBustingTimestamp(resolved.url);
+        if (!await this._verifyLivePhotoCompanionUrl(url, itemId, mediaContentId)) {
+          this._log('🎞️ Live Photo companion candidate did not verify:', mediaContentId);
+          continue;
+        }
         const companion = { media_content_id: mediaContentId, url };
         this._setBoundedMapEntry(
           this._livePhotoCompanionCache,
