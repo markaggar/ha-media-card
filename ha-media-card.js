@@ -9405,13 +9405,14 @@ class MediaCard extends LitElement {
     const itemId = this._getLivePhotoItemId(item);
     if (!itemId || !this.hass) return null;
 
-    if (this._livePhotoCompanionCache.get(itemId)) {
+    if (this._livePhotoCompanionCache.has(itemId)) {
       const companion = this._livePhotoCompanionCache.get(itemId);
       this._livePhotoCompanionCache.delete(itemId);
       this._livePhotoCompanionCache.set(itemId, companion);
       this._recordMediaDiagnostic('live_photo.companion_cache_hit', {
         itemId,
-        cacheSize: this._livePhotoCompanionCache.size
+        cacheSize: this._livePhotoCompanionCache.size,
+        missing: !companion
       });
       return companion;
     }
@@ -9455,6 +9456,12 @@ class MediaCard extends LitElement {
       }
     }
 
+    this._setBoundedMapEntry(
+      this._livePhotoCompanionCache,
+      itemId,
+      null,
+      this._livePhotoCompanionCacheLimit
+    );
     this._recordMediaDiagnostic('live_photo.companion_missing', { itemId });
     return null;
   }
