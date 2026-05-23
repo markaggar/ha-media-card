@@ -4981,6 +4981,7 @@ class MediaCard extends LitElement {
     this._heicObjectUrlMeta = new Map();
     this._heicObjectUrlCacheLimit = 4;
     this._heicConverterPromise = null;
+    this._heicWorkerLibraryPromise = null;
     this._mediaDiagnostics = {
       counters: {},
       active: {
@@ -7982,6 +7983,17 @@ class MediaCard extends LitElement {
     return this._heicConverterPromise;
   }
 
+  async _loadHeicWorkerLibrarySource(libraryUrl) {
+    if (!this._heicWorkerLibraryPromise) {
+      this._heicWorkerLibraryPromise = fetch(libraryUrl, { credentials: 'omit', mode: 'cors' })
+        .then(response => {
+          if (!response.ok) throw new Error(`HEIC worker library fetch failed with ${response.status}`);
+          return response.text();
+        });
+    }
+    return this._heicWorkerLibraryPromise;
+  }
+
   async _convertHeicBlob(inputBlob) {
     const toType = this.config?.heic?.output_type || 'image/jpeg';
     const quality = Number(this.config?.heic?.quality) || 0.92;
@@ -7996,11 +8008,12 @@ class MediaCard extends LitElement {
     let worker = null;
     let workerUrl = '';
     try {
+      const librarySource = await this._loadHeicWorkerLibrarySource(libraryUrl);
       const workerSource = `
+        ${librarySource}
         self.onmessage = async event => {
-          const { buffer, inputType, libraryUrl, toType, quality } = event.data;
+          const { buffer, inputType, toType, quality } = event.data;
           try {
-            importScripts(libraryUrl);
             const converter = self.heic2any || (self.window && self.window.heic2any);
             if (!converter) throw new Error('heic2any not available in worker');
             const inputBlob = new Blob([buffer], { type: inputType || 'image/heic' });
@@ -8041,7 +8054,6 @@ class MediaCard extends LitElement {
         worker.postMessage({
           buffer: inputBuffer,
           inputType: inputBlob.type,
-          libraryUrl,
           toType,
           quality
         }, [inputBuffer]);
