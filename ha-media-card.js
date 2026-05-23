@@ -8010,6 +8010,7 @@ class MediaCard extends LitElement {
     try {
       const librarySource = await this._loadHeicWorkerLibrarySource(libraryUrl);
       const workerSource = `
+        self.window = self;
         ${librarySource}
         self.onmessage = async event => {
           const { buffer, inputType, toType, quality } = event.data;
