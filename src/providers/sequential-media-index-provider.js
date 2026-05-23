@@ -295,7 +295,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
-      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches (1250+ missing files)
+      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches
       // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
       // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
       // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
@@ -399,7 +399,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           // Filter unsupported formats
           const fileName = item.path.split('/').pop() || item.path;
           const extension = fileName.split('.').pop()?.toLowerCase();
-          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
           
           if (!isMedia) {
             this._log(`⏭️ Filtering out unsupported format: ${item.path}`);
@@ -459,8 +459,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           consecutiveAllExcludedBatches++;
           if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
             this._dbCleanupWarningShown = true;
-            const missingCount = consecutiveAllExcludedBatches * this.queueSize;
-            const warningMsg = `⚠️ Media Index: ${missingCount}+ missing files detected in database. Run the cleanup_database service to remove stale entries.`;
+            const excludedCount = consecutiveAllExcludedBatches * this.queueSize;
+            const warningMsg = `⚠️ Media Index: ${excludedCount}+ results excluded — check excluded_paths config or run cleanup_database if files are missing from disk.`;
             console.warn(`[SequentialMediaIndexProvider] ${warningMsg}`);
             this.card?._showToast(warningMsg, 7000);
           }

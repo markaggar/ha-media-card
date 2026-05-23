@@ -654,7 +654,7 @@ export class MediaIndexProvider extends MediaProvider {
           // V4 CODE: Filter out unsupported media formats
           const fileName = item.path.split('/').pop() || item.path;
           const extension = fileName.split('.').pop()?.toLowerCase();
-          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
           
           if (!isMedia) {
             this._log(`⏭️ Filtering out unsupported format: ${item.path}`);

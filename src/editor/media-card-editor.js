@@ -2794,44 +2794,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       color: var(--primary-text-color);
     }
 
-    .integration-callout {
-      background: var(--primary-background-color, #fafafa);
-      padding: 16px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      border: 1px solid var(--divider-color, #e0e0e0);
-    }
-
-    .integration-callout-title {
-      margin-bottom: 12px;
-      font-weight: 600;
-      color: var(--primary-text-color);
-    }
-
-    .integration-callout p {
-      margin: 4px 0 12px 0;
-      font-size: 13px;
-      color: var(--secondary-text-color, #666);
-      line-height: 1.45;
-    }
-
-    .integration-callout a {
-      color: var(--primary-color, #007bff);
-      text-decoration: none;
-      font-weight: 500;
-    }
-
-    .integration-callout a:hover {
-      text-decoration: underline;
-    }
-
-    .integration-callout code {
-      background: var(--code-background-color, rgba(0,0,0,0.1));
-      padding: 1px 4px;
-      border-radius: 3px;
-      font-size: 12px;
-    }
-
     .support-footer {
       margin-top: 24px;
       padding: 16px;
@@ -3285,8 +3247,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   step="1"
                   .value=${this._config.queue_lookahead ?? 10}
                   @input=${(e) => {
-                    const v = parseInt(e.target.value);
-                    if (!isNaN(v) && v >= 1 && v <= 100) {
+                    const v = parseInt(e.target.value, 10);
+                    if (e.target.value === '') {
+                      const { queue_lookahead, ...rest } = this._config;
+                      this._config = rest;
+                      this._fireConfigChanged();
+                    } else if (!isNaN(v) && v >= 1 && v <= 100) {
                       this._config = { ...this._config, queue_lookahead: v };
                       this._fireConfigChanged();
                     }

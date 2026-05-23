@@ -960,7 +960,7 @@ class FolderProvider extends MediaProvider {
         // Extract filename from the full path and get extension  
         const fileName = filePath.split('/').pop() || filePath;
         const extension = this._getFileExtension(fileName);
-        const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+        const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
         // Reduced logging - only log 0.1% of files (1 in 1000)
         if (Math.random() < 0.001) {
           this._log('📄', fileName);
@@ -3689,7 +3689,7 @@ class MediaIndexProvider extends MediaProvider {
           // V4 CODE: Filter out unsupported media formats
           const fileName = item.path.split('/').pop() || item.path;
           const extension = fileName.split('.').pop()?.toLowerCase();
-          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
           
           if (!isMedia) {
             this._log(`⏭️ Filtering out unsupported format: ${item.path}`);
@@ -4110,7 +4110,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
-      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches (1250+ missing files)
+      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches
       // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
       // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
       // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
@@ -4214,7 +4214,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
           // Filter unsupported formats
           const fileName = item.path.split('/').pop() || item.path;
           const extension = fileName.split('.').pop()?.toLowerCase();
-          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
           
           if (!isMedia) {
             this._log(`⏭️ Filtering out unsupported format: ${item.path}`);
@@ -4274,8 +4274,8 @@ class SequentialMediaIndexProvider extends MediaProvider {
           consecutiveAllExcludedBatches++;
           if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
             this._dbCleanupWarningShown = true;
-            const missingCount = consecutiveAllExcludedBatches * this.queueSize;
-            const warningMsg = `⚠️ Media Index: ${missingCount}+ missing files detected in database. Run the cleanup_database service to remove stale entries.`;
+            const excludedCount = consecutiveAllExcludedBatches * this.queueSize;
+            const warningMsg = `⚠️ Media Index: ${excludedCount}+ results excluded — check excluded_paths config or run cleanup_database if files are missing from disk.`;
             console.warn(`[SequentialMediaIndexProvider] ${warningMsg}`);
             this.card?._showToast(warningMsg, 7000);
           }
@@ -22610,44 +22610,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       color: var(--primary-text-color);
     }
 
-    .integration-callout {
-      background: var(--primary-background-color, #fafafa);
-      padding: 16px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      border: 1px solid var(--divider-color, #e0e0e0);
-    }
-
-    .integration-callout-title {
-      margin-bottom: 12px;
-      font-weight: 600;
-      color: var(--primary-text-color);
-    }
-
-    .integration-callout p {
-      margin: 4px 0 12px 0;
-      font-size: 13px;
-      color: var(--secondary-text-color, #666);
-      line-height: 1.45;
-    }
-
-    .integration-callout a {
-      color: var(--primary-color, #007bff);
-      text-decoration: none;
-      font-weight: 500;
-    }
-
-    .integration-callout a:hover {
-      text-decoration: underline;
-    }
-
-    .integration-callout code {
-      background: var(--code-background-color, rgba(0,0,0,0.1));
-      padding: 1px 4px;
-      border-radius: 3px;
-      font-size: 12px;
-    }
-
     .support-footer {
       margin-top: 24px;
       padding: 16px;
@@ -23101,8 +23063,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                   step="1"
                   .value=${this._config.queue_lookahead ?? 10}
                   @input=${(e) => {
-                    const v = parseInt(e.target.value);
-                    if (!isNaN(v) && v >= 1 && v <= 100) {
+                    const v = parseInt(e.target.value, 10);
+                    if (e.target.value === '') {
+                      const { queue_lookahead, ...rest } = this._config;
+                      this._config = rest;
+                      this._fireConfigChanged();
+                    } else if (!isNaN(v) && v >= 1 && v <= 100) {
                       this._config = { ...this._config, queue_lookahead: v };
                       this._fireConfigChanged();
                     }

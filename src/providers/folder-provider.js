@@ -36,7 +36,7 @@ export class FolderProvider extends MediaProvider {
         // Extract filename from the full path and get extension  
         const fileName = filePath.split('/').pop() || filePath;
         const extension = this._getFileExtension(fileName);
-        const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+        const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
         // Reduced logging - only log 0.1% of files (1 in 1000)
         if (Math.random() < 0.001) {
           this._log('📄', fileName);
