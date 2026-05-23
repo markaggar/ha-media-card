@@ -3412,6 +3412,12 @@ export class MediaCard extends LitElement {
   async _prepareMediaForDisplay(url, isVideo, expectedNavigationIndex, expectedGeneration) {
     if (!url || this.config?.preload?.enabled === false) return true;
     if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return false;
+    if (!isVideo &&
+        this.config?.heic?.enabled === false &&
+        (this._isHeicMedia(this.currentMedia) || this._isHeicMedia(url))) {
+      this._recordMediaDiagnostic('preload.image.skip_heic_disabled', { url });
+      return true;
+    }
     this._cancelActiveMediaPrepare('new media prepare');
     this._recordMediaDiagnostic('preload.prepare_start', {
       type: isVideo ? 'video' : 'image',
