@@ -5413,6 +5413,16 @@ class MediaCard extends LitElement {
     return sanitized;
   }
 
+  _getBrowserMemoryDetail() {
+    const memory = typeof performance !== 'undefined' ? performance.memory : null;
+    if (!memory) return {};
+    return {
+      usedJSHeapSize: memory.usedJSHeapSize,
+      totalJSHeapSize: memory.totalJSHeapSize,
+      jsHeapSizeLimit: memory.jsHeapSizeLimit
+    };
+  }
+
   _recordMediaDiagnostic(event, detail = {}, options = {}) {
     if (!this._isMediaDiagnosticsEnabled()) return;
 
@@ -8026,8 +8036,25 @@ class MediaCard extends LitElement {
       'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
 
     if (this.config?.heic?.worker === false || typeof Worker === 'undefined') {
+      this._recordMediaDiagnostic('heic.main_thread_convert_start', {
+        inputBytes: inputBlob?.size || 0,
+        inputType: inputBlob?.type || '',
+        toType,
+        quality,
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
       const converter = await this._loadHeicConverter();
-      return converter({ blob: inputBlob, toType, quality });
+      this._recordMediaDiagnostic('heic.main_thread_converter_ready', {
+        ...this._getBrowserMemoryDetail()
+      });
+      const converted = await converter({ blob: inputBlob, toType, quality });
+      const finalBlob = Array.isArray(converted) ? converted[0] : converted;
+      this._recordMediaDiagnostic('heic.main_thread_convert_done', {
+        outputBytes: finalBlob?.size || 0,
+        outputType: finalBlob?.type || '',
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
+      return converted;
     }
 
     let worker = null;
@@ -8096,10 +8123,23 @@ class MediaCard extends LitElement {
       return new Blob([response.buffer], { type: response.type || toType });
     } catch (error) {
       this._recordMediaDiagnostic('heic.worker_error', {
-        message: error?.message || String(error)
+        message: error?.message || String(error),
+        ...this._getBrowserMemoryDetail()
       }, { force: true });
       const converter = await this._loadHeicConverter();
-      return converter({ blob: inputBlob, toType, quality });
+      this._recordMediaDiagnostic('heic.worker_fallback_main_thread_start', {
+        inputBytes: inputBlob?.size || 0,
+        inputType: inputBlob?.type || '',
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
+      const converted = await converter({ blob: inputBlob, toType, quality });
+      const finalBlob = Array.isArray(converted) ? converted[0] : converted;
+      this._recordMediaDiagnostic('heic.worker_fallback_main_thread_done', {
+        outputBytes: finalBlob?.size || 0,
+        outputType: finalBlob?.type || '',
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
+      return converted;
     } finally {
       try {
         worker?.terminate?.();
@@ -8137,9 +8177,17 @@ class MediaCard extends LitElement {
     let outputBlob = null;
     let finalBlob = null;
     let objectUrl = '';
+    const conversionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const startedAt = Date.now();
     try {
       this._log('🖼️ Converting HEIC image for browser display:', this.currentMedia?.media_content_id || url);
-      this._recordMediaDiagnostic('heic.convert_start', { url });
+      this._mediaDiagnostics.active.heicConversions = (this._mediaDiagnostics.active.heicConversions || 0) + 1;
+      this._recordMediaDiagnostic('heic.convert_start', {
+        conversionId,
+        url,
+        activeHeicConversions: this._mediaDiagnostics.active.heicConversions,
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
       if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) return '';
 
       const response = await fetch(url, { credentials: 'same-origin' });
@@ -8151,12 +8199,21 @@ class MediaCard extends LitElement {
       inputBlob = await response.blob();
       this._mediaDiagnostics.bytes.heicInput += inputBlob.size || 0;
       this._recordMediaDiagnostic('heic.fetch_blob', {
+        conversionId,
         inputBytes: inputBlob.size || 0,
-        inputType: inputBlob.type || ''
-      });
+        inputType: inputBlob.type || '',
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
       outputBlob = await this._convertHeicBlob(inputBlob);
       finalBlob = Array.isArray(outputBlob) ? outputBlob[0] : outputBlob;
       this._mediaDiagnostics.bytes.heicOutput += finalBlob?.size || 0;
+      this._recordMediaDiagnostic('heic.convert_blob_ready', {
+        conversionId,
+        outputBytes: finalBlob?.size || 0,
+        outputType: finalBlob?.type || '',
+        durationMs: Date.now() - startedAt,
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
       objectUrl = URL.createObjectURL(finalBlob);
       this._heicObjectUrlMeta.set(objectUrl, {
         size: finalBlob?.size || 0,
@@ -8164,9 +8221,12 @@ class MediaCard extends LitElement {
         createdAt: Date.now()
       });
       this._recordMediaDiagnostic('heic.object_url.create', {
+        conversionId,
         outputBytes: finalBlob?.size || 0,
         outputType: finalBlob?.type || '',
-        cacheSize: this._heicObjectUrlCache?.size || 0
+        cacheSize: this._heicObjectUrlCache?.size || 0,
+        durationMs: Date.now() - startedAt,
+        ...this._getBrowserMemoryDetail()
       }, { force: true });
 
       if (!this._isNavigationCurrent(expectedNavigationIndex, expectedGeneration)) {
@@ -8183,18 +8243,31 @@ class MediaCard extends LitElement {
         oldObjectUrl => this._revokeHeicObjectUrl(oldObjectUrl)
       );
       this._recordMediaDiagnostic('heic.cache_store', {
+        conversionId,
         cacheSize: this._heicObjectUrlCache.size,
-        cacheLimit
-      });
+        cacheLimit,
+        durationMs: Date.now() - startedAt,
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
       return objectUrl;
     } catch (error) {
       if (objectUrl) this._revokeHeicObjectUrl(objectUrl);
       console.warn('[MediaCard] HEIC conversion failed, falling back to native image support:', error);
       this._recordMediaDiagnostic('heic.convert_error', {
-        message: error?.message || String(error)
+        conversionId,
+        message: error?.message || String(error),
+        durationMs: Date.now() - startedAt,
+        ...this._getBrowserMemoryDetail()
       }, { force: true });
       return url;
     } finally {
+      this._mediaDiagnostics.active.heicConversions = Math.max(0, (this._mediaDiagnostics.active.heicConversions || 0) - 1);
+      this._recordMediaDiagnostic('heic.convert_cleanup', {
+        conversionId,
+        activeHeicConversions: this._mediaDiagnostics.active.heicConversions,
+        durationMs: Date.now() - startedAt,
+        ...this._getBrowserMemoryDetail()
+      }, { force: true });
       inputBlob = null;
       outputBlob = null;
       finalBlob = null;
