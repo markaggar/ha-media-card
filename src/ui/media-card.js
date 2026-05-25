@@ -77,7 +77,7 @@ export class MediaCard extends LitElement {
   }
 
   static getConfigElement() {
-    return document.createElement('media-card-editor');
+    return document.createElement('media-viewer-card-editor');
   }
 
   static getStubConfig() {
