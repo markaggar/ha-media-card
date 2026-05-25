@@ -1390,7 +1390,7 @@ export class MediaCard extends LitElement {
           break;
         
         default:
-          console.warn('[MediaCard] Unknown media source type:', type, '- defaulting to single_media');
+          console.warn('[MediaViewerCard] Unknown media source type:', type, '- defaulting to single_media');
           this.provider = new SingleMediaProvider(this.config, this.hass);
       }
 
@@ -1476,11 +1476,11 @@ export class MediaCard extends LitElement {
           });
         }
       } else {
-        console.error('[MediaCard] Provider initialization failed');
+        console.error('[MediaViewerCard] Provider initialization failed');
         this._errorState = 'Provider initialization failed';
       }
     } catch (error) {
-      console.error('[MediaCard] Error initializing provider:', error);
+      console.error('[MediaViewerCard] Error initializing provider:', error);
       // V5.3: Store error message for display in card UI
       this._errorState = error.message || 'Provider initialization failed';
     } finally {
@@ -2009,7 +2009,7 @@ export class MediaCard extends LitElement {
     // Ensures overlay reflects latest EXIF/location/favorite flags
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
   } catch (error) {
-    console.error('[MediaCard] Error loading next media:', error);
+    console.error('[MediaViewerCard] Error loading next media:', error);
     this._manualNavLoading = false; // Safety: clear on exception
   } finally {
     // V5.6.7: Always clear re-entrance guard
@@ -2150,7 +2150,7 @@ export class MediaCard extends LitElement {
     // Ensures overlay (burst count, location, favorites) reflects latest data
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
-      console.error('[MediaCard] Error loading previous media:', error);
+      console.error('[MediaViewerCard] Error loading previous media:', error);
       this._manualNavLoading = false; // Safety: clear on exception
     } finally {
       // V5.6.7: Always clear re-entrance guard
@@ -2220,12 +2220,12 @@ export class MediaCard extends LitElement {
     
     const item = this._panelQueue[index];
     if (!item) {
-      console.error('[MediaCard] No item at panel index:', index);
+      console.error('[MediaViewerCard] No item at panel index:', index);
       this._navigatingAway = false;
       return;
     }
     
-    console.log('[MediaCard] 📱 Loading panel item', index + 1, '/', this._panelQueue.length, ':', item.filename || item.path, 'Panel mode:', this._panelMode);
+    console.log('[MediaViewerCard] 📱 Loading panel item', index + 1, '/', this._panelQueue.length, ':', item.filename || item.path, 'Panel mode:', this._panelMode);
     
     // Update panel index
     this._panelQueueIndex = index;
@@ -2285,7 +2285,7 @@ export class MediaCard extends LitElement {
     this._pauseCastForNavigation(); // always manual — freeze Roku before new video loads
     
     if (!this.navigationQueue || queueIndex < 0 || queueIndex >= this.navigationQueue.length) {
-      console.error('[MediaCard] Invalid queue position:', queueIndex);
+      console.error('[MediaViewerCard] Invalid queue position:', queueIndex);
       this._navigatingAway = false;
       return;
     }
@@ -3445,7 +3445,7 @@ export class MediaCard extends LitElement {
       this._heicObjectUrlCache.set(url, objectUrl);
       return objectUrl;
     } catch (error) {
-      console.warn('[MediaCard] HEIC conversion failed, falling back to native image support:', error);
+      console.warn('[MediaViewerCard] HEIC conversion failed, falling back to native image support:', error);
       return url;
     }
   }
@@ -3791,7 +3791,7 @@ export class MediaCard extends LitElement {
         await this._setMediaUrl(finalUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
-        console.error('[MediaCard] Failed to resolve media URL:', mediaId, error);
+        console.error('[MediaViewerCard] Failed to resolve media URL:', mediaId, error);
         // Remove from all queues so it can never be landed on again (forward OR backward).
         // _remove404FromQueues adjusts navigationIndex if the removed item was before the
         // current position, keeping forward/backward navigation correct.
@@ -3815,7 +3815,7 @@ export class MediaCard extends LitElement {
         await this._setMediaUrl(resolved.url, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
-        console.warn('[MediaCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
+        console.warn('[MediaViewerCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
         this._remove404FromQueues(this.currentMedia);
         setTimeout(() => this._loadNext(), 100);
       }
@@ -3853,7 +3853,7 @@ export class MediaCard extends LitElement {
         });
         return resolved.url;
       } catch (error) {
-        console.error('[MediaCard] Failed to resolve media path:', mediaPath, error);
+        console.error('[MediaViewerCard] Failed to resolve media path:', mediaPath, error);
         return '';
       }
     }
@@ -3881,7 +3881,7 @@ export class MediaCard extends LitElement {
     // Handle case where target is null (element destroyed/replaced)
     if (!target) {
       errorMessage = 'Media element unavailable';
-      console.warn('[MediaCard] Media error event has null target - element may have been destroyed');
+      console.warn('[MediaViewerCard] Media error event has null target - element may have been destroyed');
     } else if (error) {
       switch (error.code) {
         case error.MEDIA_ERR_ABORTED:
@@ -3903,7 +3903,7 @@ export class MediaCard extends LitElement {
     
     // Only log errors that aren't 404s - 404s are expected when database is out of sync
     if (!is404 && this._debugMode) {
-      console.error('[MediaCard] Media failed to load:', this.mediaUrl, e);
+      console.error('[MediaViewerCard] Media failed to load:', this.mediaUrl, e);
     } else {
       this._log('📭 Media file not found (404) - likely deleted/moved:', this.mediaUrl);
     }
@@ -3912,7 +3912,7 @@ export class MediaCard extends LitElement {
     const isSynologyUrl = this.mediaUrl && this.mediaUrl.includes('/synology_dsm/') && this.mediaUrl.includes('authSig=');
     if (isSynologyUrl) {
       errorMessage = 'Synology DSM authentication expired - try refreshing';
-      console.warn('[MediaCard] Synology DSM URL authentication may have expired:', this.mediaUrl);
+      console.warn('[MediaViewerCard] Synology DSM URL authentication may have expired:', this.mediaUrl);
     }
     
     // Apply pending metadata even on error to avoid stale metadata from previous media
@@ -3953,7 +3953,7 @@ export class MediaCard extends LitElement {
             }
           })
           .catch(err => {
-            console.error('[MediaCard] URL refresh attempt failed:', err);
+            console.error('[MediaViewerCard] URL refresh attempt failed:', err);
             this._showMediaError(errorMessage, isSynologyUrl);
           });
       } else {
@@ -4035,7 +4035,7 @@ export class MediaCard extends LitElement {
     // V4: Log additional context for Synology DSM URLs
     if (this.mediaUrl && this.mediaUrl.includes('/synology_dsm/')) {
       this._log('🔄 Synology DSM URL detected - checking authentication signature');
-      console.warn('[MediaCard] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
+      console.warn('[MediaViewerCard] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
     }
     
     try {
@@ -4092,11 +4092,11 @@ export class MediaCard extends LitElement {
         }
       }
       
-      console.warn('[MediaCard] ⚠️ All URL refresh attempts failed or returned same URL');
+      console.warn('[MediaViewerCard] ⚠️ All URL refresh attempts failed or returned same URL');
       return false;
       
     } catch (error) {
-      console.error('[MediaCard] ❌ URL refresh failed:', error);
+      console.error('[MediaViewerCard] ❌ URL refresh failed:', error);
       return false;
     }
   }
@@ -4185,7 +4185,7 @@ export class MediaCard extends LitElement {
     
     // V4: For non-404 errors, or 404s in single media mode, store error state and show UI
     if (this._debugMode) {
-      console.error('[MediaCard] Showing media error:', errorMessage);
+      console.error('[MediaViewerCard] Showing media error:', errorMessage);
     }
     this._errorState = {
       message: errorMessage,
@@ -7596,7 +7596,7 @@ export class MediaCard extends LitElement {
         });
       });
     } catch (error) {
-      console.warn('[MediaCard] Failed to evaluate entity condition:', condition, error);
+      console.warn('[MediaViewerCard] Failed to evaluate entity condition:', condition, error);
       return false;
     }
   }
@@ -7648,7 +7648,7 @@ export class MediaCard extends LitElement {
         }
       });
     } catch (error) {
-      console.warn('[MediaCard] Failed to evaluate entity styles:', error);
+      console.warn('[MediaViewerCard] Failed to evaluate entity styles:', error);
     }
     
     return { containerStyles: styles.join('; '), iconColor };
@@ -7681,7 +7681,7 @@ export class MediaCard extends LitElement {
             this._entityStyleCache.set(cacheKey, iconValue);
             this._log('🎨 Jinja2 icon:', iconValue, 'for', entityId);
           } catch (error) {
-            console.warn('[MediaCard] Failed to evaluate icon template:', error);
+            console.warn('[MediaViewerCard] Failed to evaluate icon template:', error);
           }
         }
       }
@@ -7704,7 +7704,7 @@ export class MediaCard extends LitElement {
                 this._entityStyleCache.set(cacheKey, value);
                 this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
               } catch (error) {
-                console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+                console.warn('[MediaViewerCard] Failed to evaluate Jinja2 style:', property, error);
               }
             }
             // Static values don't need caching
@@ -7743,7 +7743,7 @@ export class MediaCard extends LitElement {
         });
       });
     } catch (error) {
-      console.warn('[MediaCard] Failed to evaluate Jinja2 template:', template, error);
+      console.warn('[MediaViewerCard] Failed to evaluate Jinja2 template:', template, error);
       return null;
     }
   }
@@ -8078,8 +8078,8 @@ export class MediaCard extends LitElement {
     this.dispatchEvent(event);
     
     const status = this._debugMode ? 'ENABLED' : 'DISABLED';
-    console.log(`🐛 [MediaCard] Debug mode ${status} - will persist across reloads`);
-    console.log(`🐛 [MediaCard] Persisted config.debug_mode:`, this.config.debug_mode);
+    console.log(`🐛 [MediaViewerCard] Debug mode ${status} - will persist across reloads`);
+    console.log(`🐛 [MediaViewerCard] Persisted config.debug_mode:`, this.config.debug_mode);
     
     // Force re-render to update button visual state
     this.requestUpdate();

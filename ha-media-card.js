@@ -11,22 +11,22 @@
 
   // Check if Lit was preloaded globally (for offline support)
   if (window.LitElement && window.html && window.css) {
-    console.log('[Media Card] Using preloaded Lit from window');
+    console.log('[Media Viewer Card] Using preloaded Lit from window');
     LitElement = window.LitElement;
     html = window.html;
     css = window.css;
   } else if (window.__LIT_PRELOAD_PROMISE__) {
     // Preload script is loading Lit - wait for it
-    console.log('[Media Card] Waiting for Lit preload to complete...');
+    console.log('[Media Viewer Card] Waiting for Lit preload to complete...');
     try {
       await window.__LIT_PRELOAD_PROMISE__;
       LitElement = window.LitElement;
       html = window.html;
       css = window.css;
-      console.log('[Media Card] Using preloaded Lit from window');
+      console.log('[Media Viewer Card] Using preloaded Lit from window');
     } catch (e) {
-      console.error('[Media Card] Lit preload failed:', e);
-      console.error('[Media Card] For offline use, check your preload script. See docs/OFFLINE_MODE.md');
+      console.error('[Media Viewer Card] Lit preload failed:', e);
+      console.error('[Media Viewer Card] For offline use, check your preload script. See docs/OFFLINE_MODE.md');
       return;
     }
   } else {
@@ -40,10 +40,10 @@
       window.LitElement = LitElement;
       window.html = html;
       window.css = css;
-      console.log('[Media Card] Loaded Lit from CDN');
+      console.log('[Media Viewer Card] Loaded Lit from CDN');
     } catch (e) {
-      console.error('[Media Card] Failed to load Lit:', e);
-      console.error('[Media Card] For offline use, preload Lit before this card. See docs/OFFLINE_MODE.md');
+      console.error('[Media Viewer Card] Failed to load Lit:', e);
+      console.error('[Media Viewer Card] For offline use, preload Lit before this card. See docs/OFFLINE_MODE.md');
       return; // Can't continue without Lit
     }
   }
@@ -4051,7 +4051,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       };
     }
     
-    console.warn('[MediaCard] Sequential queue empty, no items to return');
+    console.warn('[MediaViewerCard] Sequential queue empty, no items to return');
     return null;
   }
 
@@ -6062,7 +6062,7 @@ class MediaCard extends LitElement {
           break;
         
         default:
-          console.warn('[MediaCard] Unknown media source type:', type, '- defaulting to single_media');
+          console.warn('[MediaViewerCard] Unknown media source type:', type, '- defaulting to single_media');
           this.provider = new SingleMediaProvider(this.config, this.hass);
       }
 
@@ -6148,11 +6148,11 @@ class MediaCard extends LitElement {
           });
         }
       } else {
-        console.error('[MediaCard] Provider initialization failed');
+        console.error('[MediaViewerCard] Provider initialization failed');
         this._errorState = 'Provider initialization failed';
       }
     } catch (error) {
-      console.error('[MediaCard] Error initializing provider:', error);
+      console.error('[MediaViewerCard] Error initializing provider:', error);
       // V5.3: Store error message for display in card UI
       this._errorState = error.message || 'Provider initialization failed';
     } finally {
@@ -6681,7 +6681,7 @@ class MediaCard extends LitElement {
     // Ensures overlay reflects latest EXIF/location/favorite flags
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
   } catch (error) {
-    console.error('[MediaCard] Error loading next media:', error);
+    console.error('[MediaViewerCard] Error loading next media:', error);
     this._manualNavLoading = false; // Safety: clear on exception
   } finally {
     // V5.6.7: Always clear re-entrance guard
@@ -6822,7 +6822,7 @@ class MediaCard extends LitElement {
     // Ensures overlay (burst count, location, favorites) reflects latest data
     this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
     } catch (error) {
-      console.error('[MediaCard] Error loading previous media:', error);
+      console.error('[MediaViewerCard] Error loading previous media:', error);
       this._manualNavLoading = false; // Safety: clear on exception
     } finally {
       // V5.6.7: Always clear re-entrance guard
@@ -6892,12 +6892,12 @@ class MediaCard extends LitElement {
     
     const item = this._panelQueue[index];
     if (!item) {
-      console.error('[MediaCard] No item at panel index:', index);
+      console.error('[MediaViewerCard] No item at panel index:', index);
       this._navigatingAway = false;
       return;
     }
     
-    console.log('[MediaCard] 📱 Loading panel item', index + 1, '/', this._panelQueue.length, ':', item.filename || item.path, 'Panel mode:', this._panelMode);
+    console.log('[MediaViewerCard] 📱 Loading panel item', index + 1, '/', this._panelQueue.length, ':', item.filename || item.path, 'Panel mode:', this._panelMode);
     
     // Update panel index
     this._panelQueueIndex = index;
@@ -6957,7 +6957,7 @@ class MediaCard extends LitElement {
     this._pauseCastForNavigation(); // always manual — freeze Roku before new video loads
     
     if (!this.navigationQueue || queueIndex < 0 || queueIndex >= this.navigationQueue.length) {
-      console.error('[MediaCard] Invalid queue position:', queueIndex);
+      console.error('[MediaViewerCard] Invalid queue position:', queueIndex);
       this._navigatingAway = false;
       return;
     }
@@ -8117,7 +8117,7 @@ class MediaCard extends LitElement {
       this._heicObjectUrlCache.set(url, objectUrl);
       return objectUrl;
     } catch (error) {
-      console.warn('[MediaCard] HEIC conversion failed, falling back to native image support:', error);
+      console.warn('[MediaViewerCard] HEIC conversion failed, falling back to native image support:', error);
       return url;
     }
   }
@@ -8463,7 +8463,7 @@ class MediaCard extends LitElement {
         await this._setMediaUrl(finalUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
-        console.error('[MediaCard] Failed to resolve media URL:', mediaId, error);
+        console.error('[MediaViewerCard] Failed to resolve media URL:', mediaId, error);
         // Remove from all queues so it can never be landed on again (forward OR backward).
         // _remove404FromQueues adjusts navigationIndex if the removed item was before the
         // current position, keeping forward/backward navigation correct.
@@ -8487,7 +8487,7 @@ class MediaCard extends LitElement {
         await this._setMediaUrl(resolved.url, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
-        console.warn('[MediaCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
+        console.warn('[MediaViewerCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
         this._remove404FromQueues(this.currentMedia);
         setTimeout(() => this._loadNext(), 100);
       }
@@ -8525,7 +8525,7 @@ class MediaCard extends LitElement {
         });
         return resolved.url;
       } catch (error) {
-        console.error('[MediaCard] Failed to resolve media path:', mediaPath, error);
+        console.error('[MediaViewerCard] Failed to resolve media path:', mediaPath, error);
         return '';
       }
     }
@@ -8553,7 +8553,7 @@ class MediaCard extends LitElement {
     // Handle case where target is null (element destroyed/replaced)
     if (!target) {
       errorMessage = 'Media element unavailable';
-      console.warn('[MediaCard] Media error event has null target - element may have been destroyed');
+      console.warn('[MediaViewerCard] Media error event has null target - element may have been destroyed');
     } else if (error) {
       switch (error.code) {
         case error.MEDIA_ERR_ABORTED:
@@ -8575,7 +8575,7 @@ class MediaCard extends LitElement {
     
     // Only log errors that aren't 404s - 404s are expected when database is out of sync
     if (!is404 && this._debugMode) {
-      console.error('[MediaCard] Media failed to load:', this.mediaUrl, e);
+      console.error('[MediaViewerCard] Media failed to load:', this.mediaUrl, e);
     } else {
       this._log('📭 Media file not found (404) - likely deleted/moved:', this.mediaUrl);
     }
@@ -8584,7 +8584,7 @@ class MediaCard extends LitElement {
     const isSynologyUrl = this.mediaUrl && this.mediaUrl.includes('/synology_dsm/') && this.mediaUrl.includes('authSig=');
     if (isSynologyUrl) {
       errorMessage = 'Synology DSM authentication expired - try refreshing';
-      console.warn('[MediaCard] Synology DSM URL authentication may have expired:', this.mediaUrl);
+      console.warn('[MediaViewerCard] Synology DSM URL authentication may have expired:', this.mediaUrl);
     }
     
     // Apply pending metadata even on error to avoid stale metadata from previous media
@@ -8625,7 +8625,7 @@ class MediaCard extends LitElement {
             }
           })
           .catch(err => {
-            console.error('[MediaCard] URL refresh attempt failed:', err);
+            console.error('[MediaViewerCard] URL refresh attempt failed:', err);
             this._showMediaError(errorMessage, isSynologyUrl);
           });
       } else {
@@ -8707,7 +8707,7 @@ class MediaCard extends LitElement {
     // V4: Log additional context for Synology DSM URLs
     if (this.mediaUrl && this.mediaUrl.includes('/synology_dsm/')) {
       this._log('🔄 Synology DSM URL detected - checking authentication signature');
-      console.warn('[MediaCard] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
+      console.warn('[MediaViewerCard] Synology DSM URL refresh needed:', this.mediaUrl.substring(0, 100) + '...');
     }
     
     try {
@@ -8764,11 +8764,11 @@ class MediaCard extends LitElement {
         }
       }
       
-      console.warn('[MediaCard] ⚠️ All URL refresh attempts failed or returned same URL');
+      console.warn('[MediaViewerCard] ⚠️ All URL refresh attempts failed or returned same URL');
       return false;
       
     } catch (error) {
-      console.error('[MediaCard] ❌ URL refresh failed:', error);
+      console.error('[MediaViewerCard] ❌ URL refresh failed:', error);
       return false;
     }
   }
@@ -8857,7 +8857,7 @@ class MediaCard extends LitElement {
     
     // V4: For non-404 errors, or 404s in single media mode, store error state and show UI
     if (this._debugMode) {
-      console.error('[MediaCard] Showing media error:', errorMessage);
+      console.error('[MediaViewerCard] Showing media error:', errorMessage);
     }
     this._errorState = {
       message: errorMessage,
@@ -12268,7 +12268,7 @@ class MediaCard extends LitElement {
         });
       });
     } catch (error) {
-      console.warn('[MediaCard] Failed to evaluate entity condition:', condition, error);
+      console.warn('[MediaViewerCard] Failed to evaluate entity condition:', condition, error);
       return false;
     }
   }
@@ -12320,7 +12320,7 @@ class MediaCard extends LitElement {
         }
       });
     } catch (error) {
-      console.warn('[MediaCard] Failed to evaluate entity styles:', error);
+      console.warn('[MediaViewerCard] Failed to evaluate entity styles:', error);
     }
     
     return { containerStyles: styles.join('; '), iconColor };
@@ -12353,7 +12353,7 @@ class MediaCard extends LitElement {
             this._entityStyleCache.set(cacheKey, iconValue);
             this._log('🎨 Jinja2 icon:', iconValue, 'for', entityId);
           } catch (error) {
-            console.warn('[MediaCard] Failed to evaluate icon template:', error);
+            console.warn('[MediaViewerCard] Failed to evaluate icon template:', error);
           }
         }
       }
@@ -12376,7 +12376,7 @@ class MediaCard extends LitElement {
                 this._entityStyleCache.set(cacheKey, value);
                 this._log('🎨 Jinja2 style:', property, '→', value, 'for', entityId);
               } catch (error) {
-                console.warn('[MediaCard] Failed to evaluate Jinja2 style:', property, error);
+                console.warn('[MediaViewerCard] Failed to evaluate Jinja2 style:', property, error);
               }
             }
             // Static values don't need caching
@@ -12415,7 +12415,7 @@ class MediaCard extends LitElement {
         });
       });
     } catch (error) {
-      console.warn('[MediaCard] Failed to evaluate Jinja2 template:', template, error);
+      console.warn('[MediaViewerCard] Failed to evaluate Jinja2 template:', template, error);
       return null;
     }
   }
@@ -12750,8 +12750,8 @@ class MediaCard extends LitElement {
     this.dispatchEvent(event);
     
     const status = this._debugMode ? 'ENABLED' : 'DISABLED';
-    console.log(`🐛 [MediaCard] Debug mode ${status} - will persist across reloads`);
-    console.log(`🐛 [MediaCard] Persisted config.debug_mode:`, this.config.debug_mode);
+    console.log(`🐛 [MediaViewerCard] Debug mode ${status} - will persist across reloads`);
+    console.log(`🐛 [MediaViewerCard] Persisted config.debug_mode:`, this.config.debug_mode);
     
     // Force re-render to update button visual state
     this.requestUpdate();
@@ -21831,11 +21831,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
     // ALWAYS log - bypassing debug check for diagnosis
 
-    console.log('[MediaCard] Adding media files to browser:', mediaContent.children.length, 'items');
+    console.log('[MediaViewerCard] Adding media files to browser:', mediaContent.children.length, 'items');
     
     // Log first few items for debugging (especially for Reolink integration)
     if (mediaContent.children && mediaContent.children.length > 0) {
-      console.log('[MediaCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
+      console.log('[MediaViewerCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
     }
     
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
@@ -21848,7 +21848,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = !isFolder && this._isMediaFile(fileName);
-      console.log(`[MediaCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
+      console.log(`[MediaViewerCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
       return isMedia;
     });
     
@@ -21948,13 +21948,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Filter items to display based on media type configuration
     const itemsToShow = (mediaContent.children || []).filter(item => {
       if (item.can_expand) {
-        console.log(`[MediaCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
+        console.log(`[MediaViewerCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
         return true;
       }
       
       // Check media_class first (works for Reolink, Immich, and other API-based sources)
       if (item.media_class === 'image' || item.media_class === 'video') {
-        console.log(`[MediaCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
+        console.log(`[MediaViewerCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
         return true;
       }
       
@@ -21963,18 +21963,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         const fileName = this._getItemDisplayName(item);
         const fileType = this._detectFileType(fileName);
         const included = fileType === this._config.media_type;
-        console.log(`[MediaCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
+        console.log(`[MediaViewerCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
         return included;
       }
       
       // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = this._isMediaFile(fileName);
-      console.log(`[MediaCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
+      console.log(`[MediaViewerCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
       return isMedia;
     });
     
-    console.log(`[MediaCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
+    console.log(`[MediaViewerCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
     
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
@@ -22421,7 +22421,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _handleMediaPicked(mediaContentId) {
-    console.log('[MediaCard] Media picked:', mediaContentId);
+    console.log('[MediaViewerCard] Media picked:', mediaContentId);
     
     const mediaSourceType = this._config.media_source_type || 'single_media';
     
@@ -22474,7 +22474,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Check for Reolink video source
     if (mediaContentId.includes('media-source://reolink/')) {
       detectedType = 'video';
-      console.log('[MediaCard] Detected Reolink video source');
+      console.log('[MediaViewerCard] Detected Reolink video source');
     } else {
       // Try extension detection for filesystem sources
       const extension = mediaContentId.split('.').pop()?.toLowerCase();
@@ -22487,11 +22487,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     if (detectedType) {
       this._config.media_type = detectedType;
-      console.log('[MediaCard] Auto-detected media type:', detectedType);
+      console.log('[MediaViewerCard] Auto-detected media type:', detectedType);
     }
     
     this._fireConfigChanged();
-    console.log('[MediaCard] Config updated (media selected):', this._config);
+    console.log('[MediaViewerCard] Config updated (media selected):', this._config);
   }
 
   static styles = css`
@@ -23619,7 +23619,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
               <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
               <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
-                <li>Click "Show code editor" (bottom-left of the Media Card configuration)</li>
+                <li>Click "Show code editor" (bottom-left of the Media Viewer Card configuration)</li>
                 <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
               </ol>
               <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
@@ -24104,7 +24104,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </a>
  
           <a href="https://buymeacoffee.com/markaggar" target="_blank" rel="noopener noreferrer">
-            Made with AI and <span class="love-icon">❤️</span> in Seattle. <strong>Enjoying Media Card? Buy me a coffee!</strong> <span class="coffee-icon">☕</span>
+            Made with AI and <span class="love-icon">❤️</span> in Seattle. <strong>Enjoying Media Viewer Card? Buy me a coffee!</strong> <span class="coffee-icon">☕</span>
           </a>
         </div>
       </div>

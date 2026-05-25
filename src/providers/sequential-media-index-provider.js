@@ -236,7 +236,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       };
     }
     
-    console.warn('[MediaCard] Sequential queue empty, no items to return');
+    console.warn('[MediaViewerCard] Sequential queue empty, no items to return');
     return null;
   }
 
