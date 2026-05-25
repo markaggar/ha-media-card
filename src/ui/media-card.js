@@ -1117,7 +1117,7 @@ export class MediaCard extends LitElement {
     
     // Log configured exclusions at INFO level (always shown, helps users verify patterns)
     if (this._excludedPathPatterns.length > 0) {
-      console.log(`📁 [MediaCard:${this._cardId}] Path exclusions configured:`);
+      console.log(`📁 [MediaViewerCard:${this._cardId}] Path exclusions configured:`);
       for (const compiled of this._excludedPathPatterns) {
         const description = MediaProvider.describeExclusionPattern(compiled.pattern, compiled.isRecursive);
         console.log(`   • ${compiled.pattern} (${description})`);
