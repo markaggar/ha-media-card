@@ -5886,7 +5886,10 @@ class MediaCard extends LitElement {
     
     // V5.4: Monitor media_index entity state for auto-recovery after HA restart
     // If card is in error state and media_index entity exists and is available, retry init
-    if (hass && this._errorState && this.config?.media_index?.entity_id) {
+    // Only recover from init-level failures (string _errorState). Object _errorState means a
+    // media-file error (from _showMediaError) — re-initializing on those would loop forever
+    // when the restored queue brings back the same corrupt/unsupported file.
+    if (hass && typeof this._errorState === 'string' && this.config?.media_index?.entity_id) {
       const entityId = this.config.media_index.entity_id;
       const entityState = hass.states[entityId];
       
@@ -8638,6 +8641,11 @@ class MediaCard extends LitElement {
             this._remove404FromQueues(this.currentMedia);
             setTimeout(() => this._loadNext(), 100);
           }
+        } else if (error?.code === 3 /* MEDIA_ERR_DECODE */ && this.config.media_source_type !== 'single_media') {
+          // Corrupt or partially unplayable file - browser decoder gave up.
+          // Silently skip rather than entering error state (which would loop via hass auto-recovery).
+          this._log('⏭️ Video decode error (corrupt/unsupported format) - skipping to next media');
+          setTimeout(() => this._loadNext(), 100);
         } else {
           this._showMediaError(errorMessage, isSynologyUrl);
         }
@@ -8654,6 +8662,10 @@ class MediaCard extends LitElement {
           this._remove404FromQueues(this.currentMedia);
           setTimeout(() => this._loadNext(), 100);
         }
+      } else if (error?.code === 3 /* MEDIA_ERR_DECODE */ && this.config.media_source_type !== 'single_media') {
+        // Decode error on retry - still a corrupt/unsupported file, skip silently.
+        this._log('⏭️ Video decode error after retry (corrupt/unsupported format) - skipping to next media');
+        setTimeout(() => this._loadNext(), 100);
       } else {
         // Show error for non-404 errors or single media mode
         this._log(`Max auto-retries reached for URL:`, currentUrl.substring(0, 50) + '...');
