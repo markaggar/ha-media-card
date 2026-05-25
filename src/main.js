@@ -5,9 +5,11 @@ if (!customElements.get('media-viewer-card')) {
 if (!customElements.get('media-viewer-card-editor')) {
   customElements.define('media-viewer-card-editor', MediaCardEditor);
 }
-// Backward-compat alias so existing configs using type: custom:media-card keep working
+// Backward-compat alias so existing configs using type: custom:media-card keep working.
+// Must be a subclass — the registry rejects registering the same constructor twice.
+class MediaCardAlias extends MediaCard {}
 if (!customElements.get('media-card')) {
-  customElements.define('media-card', MediaCard);
+  customElements.define('media-card', MediaCardAlias);
 }
 
 // Register with Home Assistant
