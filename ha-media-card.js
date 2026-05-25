@@ -5787,12 +5787,11 @@ class MediaCard extends LitElement {
     // remain plain data safe for YAML serialization by the card editor).
     this._excludedPathPatterns = MediaProvider.compileExcludedPathPatterns(config.excluded_paths);
     
-    // Log configured exclusions at INFO level (always shown, helps users verify patterns)
     if (this._excludedPathPatterns.length > 0) {
-      console.log(`📁 [MediaViewerCard:${this._cardId}] Path exclusions configured:`);
+      this._log('📁 Path exclusions configured:');
       for (const compiled of this._excludedPathPatterns) {
         const description = MediaProvider.describeExclusionPattern(compiled.pattern, compiled.isRecursive);
-        console.log(`   • ${compiled.pattern} (${description})`);
+        this._log(`   • ${compiled.pattern} (${description})`);
       }
     }
     
