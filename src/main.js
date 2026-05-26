@@ -7,8 +7,10 @@ if (!customElements.get('media-card-editor')) {
 }
 
 // Register with Home Assistant
-window.customCards = window.customCards || [];
-if (!window.customCards.some(card => card.type === 'media-card')) {
+if (!Array.isArray(window.customCards)) {
+  window.customCards = [];
+}
+if (!window.customCards.some(card => card?.type === 'media-card')) {
   window.customCards.push({
     type: 'media-card',
     name: 'Media Card',
