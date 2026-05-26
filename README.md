@@ -41,7 +41,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 ### **Intelligent Navigation**
 - ⏸️ **Manual Queue Navigation**: Manually pause/resume, group pause (hold pause button), advance forward and back in a queue.
 - ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return
-- 🌪️ **Runtime Media Filter Picker**: Temporarily override the card's media source, media filters video playback and auto-advance settings without changing the card's config. Filter settings propograte to all other cards using the same 
+- 🌪️ **Runtime Media Filter Picker**: Temporarily override the card's media source, media filters video playback and auto-advance settings without changing the card's config. Filter settings propograte to all other cards using the same shared queue_id
 - 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation. Tap an already selected item to favorite, or long-press any thumbnail to open a quick-action mini-menu: **Clear** from queue, **Move to _Junk**, or **Move to _Edit**
 - ⚡ **Rolling Lookahead Queue**: Upcoming items are silently pre-fetched in the background while the current item plays, so tapping forward is instant with no visible fetch delay
 - 🔗 **Cross-Device Shared Queue**: Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
