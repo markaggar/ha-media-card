@@ -16024,9 +16024,19 @@ class MediaCard extends LitElement {
   
   _handlePointerDown(e) {
     if (!this.config.hold_action) return;
+
+    // Prevent the browser/WebView from triggering native long-press gestures (e.g. Fully Kiosk's
+    // configured long-press action). Without this, Fully Kiosk fires pointercancel at ~460-560ms
+    // to steal the touch for its own gesture, preventing our hold timer from completing and then
+    // doing its own navigation — causing HA router state corruption and a UI lockup.
+    e.preventDefault();
     
+    this._activePointerId = e.pointerId;
+    this._log(`🖐️ PointerDown: type=${e.pointerType} id=${e.pointerId} (preventDefault called)`);
+
     // Start hold timer (500ms like standard HA cards)
     this._holdTimeout = setTimeout(() => {
+      this._log(`🖐️ Hold timer fired — executing hold_action`);
       this._performAction(this.config.hold_action);
       this._holdTriggered = true;
     }, 500);
@@ -16041,6 +16051,14 @@ class MediaCard extends LitElement {
   }
 
   _handleSwipeTouchEnd(e) {
+    // Fallback: clear hold timer on touchend in case pointerup doesn't fire.
+    // This guards against edge cases in WebViews where preventDefault() on pointerdown
+    // could suppress pointerup (implementation-dependent, though not spec-compliant).
+    if (this._holdTimeout && !this._holdTriggered) {
+      clearTimeout(this._holdTimeout);
+      this._holdTimeout = null;
+    }
+
     if (this._swipeTouchStartX === null) return;
     const deltaX = e.changedTouches[0].clientX - this._swipeTouchStartX;
     const deltaY = e.changedTouches[0].clientY - this._swipeTouchStartY;
@@ -16069,6 +16087,7 @@ class MediaCard extends LitElement {
   }
   
   _handlePointerUp(e) {
+    this._log(`🖐️ PointerUp: type=${e.pointerType} id=${e.pointerId} holdTriggered=${this._holdTriggered}`);
     if (this._holdTimeout) {
       clearTimeout(this._holdTimeout);
       this._holdTimeout = null;
@@ -16076,6 +16095,7 @@ class MediaCard extends LitElement {
   }
   
   _handlePointerCancel(e) {
+    this._log(`🖐️ PointerCancel: type=${e.pointerType} id=${e.pointerId}`);
     if (this._holdTimeout) {
       clearTimeout(this._holdTimeout);
       this._holdTimeout = null;
@@ -16337,14 +16357,33 @@ class MediaCard extends LitElement {
       console.warn('No navigation_path specified for navigate action');
       return;
     }
-    
+
+    // Dispatch a synthetic pointercancel before navigating to release active touch tracking.
+    // Without this, WebView-based browsers (e.g. Fully Kiosk) can lock up touch input after
+    // a hold-action navigate because the WebView sees pointerdown but never pointerup/cancel.
+    // Dispatching pointercancel signals the end of the pointer interaction before the DOM changes.
+    this._log(`🧭 Navigate: dispatching synthetic pointercancel before view change (pointerId=${this._activePointerId})`);
+    try {
+      const cancelEvent = new PointerEvent('pointercancel', {
+        bubbles: true,
+        cancelable: false,
+        pointerId: this._activePointerId ?? 1,
+        pointerType: 'touch',
+      });
+      this.dispatchEvent(cancelEvent);
+    } catch (err) {
+      this._log('⚠️ Could not dispatch synthetic pointercancel:', err.message);
+    }
+
     window.history.pushState(null, '', action.navigation_path);
-    const event = new Event('location-changed', {
-      bubbles: true,
-      composed: true,
-    });
-    event.detail = { replace: false };
-    this.dispatchEvent(event);
+    // Dispatch on window (not this element) — this is the standard HA navigation pattern.
+    // Dispatching on the element with bubbles:true can cause the event to be handled multiple
+    // times in some WebView implementations, leading to double-navigation.
+    window.dispatchEvent(new CustomEvent('location-changed', {
+      bubbles: false,
+      composed: false,
+      detail: { replace: false },
+    }));
   }
   
   _performUrlOpen(action) {
@@ -16564,6 +16603,12 @@ class MediaCard extends LitElement {
       max-height: 100%;
       object-fit: contain;
       transition: opacity var(--transition-duration, 300ms) ease-in-out;
+      /* Prevent Android WebView's native long-press image gesture (save/share/copy),
+         which fires pointercancel at ~500-600ms and blocks hold_action from working. */
+      -webkit-user-drag: none;
+      -webkit-touch-callout: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
     
     .media-container .image-layer.active {
@@ -19121,6 +19166,8 @@ class MediaCard extends LitElement {
           <img 
             src="${displayUrl}" 
             alt="${this.currentMedia.title || 'Media'}"
+            draggable="false"
+            @pointerdown=${(e) => e.preventDefault()}
             @error=${this._onMediaError}
             @load=${this._onMediaLoaded}
           />
@@ -19131,6 +19178,8 @@ class MediaCard extends LitElement {
               class="image-layer ${this._frontLayerActive ? 'active' : 'inactive'}"
               src="${this._frontLayerUrl}" 
               alt="${this.currentMedia.title || 'Media'}"
+              draggable="false"
+              @pointerdown=${(e) => e.preventDefault()}
               @error=${this._onMediaError}
               @load=${this._onMediaLoaded}
             />
@@ -19140,6 +19189,8 @@ class MediaCard extends LitElement {
               class="image-layer ${!this._frontLayerActive ? 'active' : 'inactive'}"
               src="${this._backLayerUrl}" 
               alt="${this.currentMedia.title || 'Media'}"
+              draggable="false"
+              @pointerdown=${(e) => e.preventDefault()}
               @error=${this._onMediaError}
               @load=${this._onMediaLoaded}
             />
