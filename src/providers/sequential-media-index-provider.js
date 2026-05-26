@@ -284,7 +284,15 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         if (typeof configValue === 'string' && configValue.includes('.')) {
           // Entity ID — look up current state
           const state = this.hass?.states[configValue];
-          return state?.state?.split(' ')[0] || null;
+          const raw = state?.state;
+          if (!raw || raw === 'unknown' || raw === 'unavailable') return null;
+          // Strip time component from ISO-8601 (T separator) or datetime strings (space separator)
+          const dateOnly = raw.split(/[T ]/)[0];
+          return /^\d{4}-\d{2}-\d{2}$/.test(dateOnly) ? dateOnly : null;
+        }
+        // Static value — validate it looks like YYYY-MM-DD before passing to backend
+        if (typeof configValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(configValue.split(/[T ]/)[0])) {
+          return configValue.split(/[T ]/)[0];
         }
         return configValue;
       };

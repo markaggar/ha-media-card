@@ -79,7 +79,7 @@ function transformSource(file) {
 const body = sourceFiles.map(transformSource).join('\n');
 const bannerStart = '/** ';
 const bundle = `${bannerStart}
- * Media Card v${version}
+ * Media Viewer Card v${version}
  */
 
 ${litLoader}${body}
