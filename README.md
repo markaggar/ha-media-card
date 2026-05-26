@@ -8,7 +8,7 @@ A powerful custom Home Assistant Dashboard card that displays images and videos 
 
 It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Viewer Card - Reduced scanning overhead (Media Index does this periodically instead of Media Viewer Card every time you load the card), EXIF metadata extraction, Roku Casting, favoriting, editing and deleting photos and related photos support. Also, the repo has some helpful NAS utilities for fixing videos and adding missing GPS data from related media items.
 
-<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
+<img width="691" height="925" alt="Media Viewer Card displaying a photo with metadata" src="docs/media-card.gif" />
 
 ## ✨ Key Features  
 
@@ -22,7 +22,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
 - **🎞️ Photo Transitions**: Configurable crossfade transitions between images (0-1000ms) for smooth slideshow experience
 - **📱 Kiosk Mode**: Automatically activate/deactivate kiosk mode (full screen) (perfect for wall-mounted tablets)
-- 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media cards)
+- 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media viewer cards)
 - 🎞️ **Live Photo Playback**([YAML-only config beta](docs/guides/yaml-only-features.md#live-photo-playback)): Pair still images with iCloud-style companion videos and play them as still → motion → pause loops
 ### **Overlay System**
 - 🕐 **Clock/Date Overlay**: Real-time clock and date display with configurable formats (12h/24h, long/short date)
@@ -91,7 +91,7 @@ shared queue and easily revert to card config.
 
 - **[Examples](docs/guides/examples.md)** - Real-world configurations for common use cases
 
-- **[Offline Mode Guide](docs/OFFLINE_MODE.md)** - Configure Media Card for clients on isolated networks without internet access
+- **[Offline Mode Guide](docs/OFFLINE_MODE.md)** - Configure Media Viewer Card for clients on isolated networks without internet access
    
 **Features & Advanced Usage**
 
@@ -113,14 +113,14 @@ shared queue and easily revert to card config.
 
 **Built with ❤️ using GitHub Copilot + Claude Sonnet**
 
-⭐ **Enjoying the Media Card?** Give it a star on GitHub!
+⭐ **Enjoying Media Viewer Card?** Give it a star on GitHub!
 
  
 ## 📋 **Special Considerations**
 
 ### �️ Kiosk Mode Integration
 
-Media Viewer Card includes seamless integration with the popular [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) HACS integration for full-screen dashboard experiences. When kiosk mode is enabled, the media card provides visual hints and exit controls for a professional display setup.
+Media Viewer Card includes seamless integration with the popular [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) HACS integration for full-screen dashboard experiences. When kiosk mode is enabled, the card provides visual hints and exit controls for a professional display setup.
 
 #### 🛠️ **Setup Requirements**
 
@@ -152,9 +152,9 @@ kiosk_mode:
   hide_sidebar: '{{ is_state("input_boolean.kiosk_mode", "on") }}'
 ```
 
-###### ⚙️ **Media Card Configuration**
+###### ⚙️ **Media Viewer Card Configuration**
 
-Add kiosk mode settings to your media card:
+Add kiosk mode settings to your card:
 
 ```yaml
 type: custom:media-card
