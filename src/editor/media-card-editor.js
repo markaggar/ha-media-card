@@ -1339,6 +1339,20 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _showCastButtonChanged(ev) {
+    this._config = ev.target.checked
+      ? { ...this._config, show_cast_button: true }
+      : (() => { const c = { ...this._config }; delete c.show_cast_button; return c; })();
+    this._fireConfigChanged();
+  }
+
+  _showFilterButtonChanged(ev) {
+    this._config = ev.target.checked
+      ? { ...this._config, show_filter_button: true }
+      : (() => { const c = { ...this._config }; delete c.show_filter_button; return c; })();
+    this._fireConfigChanged();
+  }
+
   _actionButtonsEnableQueuePreviewChanged(ev) {
     this._config = {
       ...this._config,
@@ -1989,11 +2003,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
     // ALWAYS log - bypassing debug check for diagnosis
 
-    console.log('[MediaCard] Adding media files to browser:', mediaContent.children.length, 'items');
+    console.log('[MediaViewerCard] Adding media files to browser:', mediaContent.children.length, 'items');
     
     // Log first few items for debugging (especially for Reolink integration)
     if (mediaContent.children && mediaContent.children.length > 0) {
-      console.log('[MediaCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
+      console.log('[MediaViewerCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
     }
     
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
@@ -2006,7 +2020,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = !isFolder && this._isMediaFile(fileName);
-      console.log(`[MediaCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
+      console.log(`[MediaViewerCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
       return isMedia;
     });
     
@@ -2106,13 +2120,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Filter items to display based on media type configuration
     const itemsToShow = (mediaContent.children || []).filter(item => {
       if (item.can_expand) {
-        console.log(`[MediaCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
+        console.log(`[MediaViewerCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
         return true;
       }
       
       // Check media_class first (works for Reolink, Immich, and other API-based sources)
       if (item.media_class === 'image' || item.media_class === 'video') {
-        console.log(`[MediaCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
+        console.log(`[MediaViewerCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
         return true;
       }
       
@@ -2121,18 +2135,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         const fileName = this._getItemDisplayName(item);
         const fileType = this._detectFileType(fileName);
         const included = fileType === this._config.media_type;
-        console.log(`[MediaCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
+        console.log(`[MediaViewerCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
         return included;
       }
       
       // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = this._isMediaFile(fileName);
-      console.log(`[MediaCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
+      console.log(`[MediaViewerCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
       return isMedia;
     });
     
-    console.log(`[MediaCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
+    console.log(`[MediaViewerCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
     
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
@@ -2579,7 +2593,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   }
 
   _handleMediaPicked(mediaContentId) {
-    console.log('[MediaCard] Media picked:', mediaContentId);
+    console.log('[MediaViewerCard] Media picked:', mediaContentId);
     
     const mediaSourceType = this._config.media_source_type || 'single_media';
     
@@ -2632,7 +2646,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     // Check for Reolink video source
     if (mediaContentId.includes('media-source://reolink/')) {
       detectedType = 'video';
-      console.log('[MediaCard] Detected Reolink video source');
+      console.log('[MediaViewerCard] Detected Reolink video source');
     } else {
       // Try extension detection for filesystem sources
       const extension = mediaContentId.split('.').pop()?.toLowerCase();
@@ -2645,11 +2659,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     
     if (detectedType) {
       this._config.media_type = detectedType;
-      console.log('[MediaCard] Auto-detected media type:', detectedType);
+      console.log('[MediaViewerCard] Auto-detected media type:', detectedType);
     }
     
     this._fireConfigChanged();
-    console.log('[MediaCard] Config updated (media selected):', this._config);
+    console.log('[MediaViewerCard] Config updated (media selected):', this._config);
   }
 
   static styles = css`
@@ -3222,6 +3236,33 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Automatically advance to next media every N seconds (0 = disabled)</div>
             </div>
           </div>
+          ${MediaProvider.isMediaIndexActive(this._config) ? html`
+            <div class="config-row">
+              <label>Queue Lookahead</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  .value=${this._config.queue_lookahead ?? 10}
+                  @input=${(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (e.target.value === '') {
+                      const { queue_lookahead, ...rest } = this._config;
+                      this._config = rest;
+                      this._fireConfigChanged();
+                    } else if (!isNaN(v) && v >= 1 && v <= 100) {
+                      this._config = { ...this._config, queue_lookahead: v };
+                      this._fireConfigChanged();
+                    }
+                  }}
+                  placeholder="10"
+                />
+                <div class="help-text">Items to pre-fetch ahead of current position in Queue Preview (1–100, MediaIndex only)</div>
+              </div>
+            </div>
+          ` : ''}
         ` : ''}
 
         ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
@@ -3750,7 +3791,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
               <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
               <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
-                <li>Click "Show code editor" (bottom-left of the Media Card configuration)</li>
+                <li>Click "Show code editor" (bottom-left of the Media Viewer Card configuration)</li>
                 <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
               </ol>
               <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
@@ -4052,6 +4093,30 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Hide the Through the Years action button; the feature remains accessible via the clock/date overlay</div>
               </div>
             </div>
+
+            <div class="config-row">
+              <label>Cast to TV Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_cast_button === true}
+                  @change=${this._showCastButtonChanged}
+                />
+                <div class="help-text">Show a cast icon to mirror this card to any media_player entity in real time. Roku uses media_index.roku_ecp_cast (requires media_index). Other players (LG, Chromecast, etc.) use media_player.play_media directly.</div>
+              </div>
+            </div>
+
+            <div class="config-row">
+              <label>Filter &amp; Playback Button</label>
+              <div>
+                <input
+                  type="checkbox"
+                  .checked=${this._config.show_filter_button === true}
+                  @change=${this._showFilterButtonChanged}
+                />
+                <div class="help-text">Show a filter icon to temporarily override folder, media type, date range, mode, favorites, and video playback settings for the current session. Settings reset when the page reloads.</div>
+              </div>
+            </div>
           </div>
         ` : ''}
 
@@ -4211,7 +4276,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </a>
  
           <a href="https://buymeacoffee.com/markaggar" target="_blank" rel="noopener noreferrer">
-            Made with AI and <span class="love-icon">❤️</span> in Seattle. <strong>Enjoying Media Card? Buy me a coffee!</strong> <span class="coffee-icon">☕</span>
+            Made with AI and <span class="love-icon">❤️</span> in Seattle. <strong>Enjoying Media Viewer Card? Buy me a coffee!</strong> <span class="coffee-icon">☕</span>
           </a>
         </div>
       </div>

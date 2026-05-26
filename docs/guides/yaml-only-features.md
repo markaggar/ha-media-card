@@ -141,28 +141,233 @@ debug_queue_mode: true    # Enables full WebSocket payload logging
 
 ---
 
+## Live Photo Playback
+
+### `live_photo`
+
+Pairs a still image with a companion video (iCloud-style Live Photos). When enabled, the card shows the still briefly, overlays the companion video once, then waits before replaying. The motion loop does not advance the slideshow — normal `auto_advance_seconds` controls when the card moves to the next photo.
+
+Companion video discovery tries each combination of `video_suffixes` × `video_extensions` appended to the still image's base name (e.g. `IMG_1234_HEVC.MOV`, `IMG_1234.mov`, etc.).
+
+```yaml
+live_photo:
+  enabled: true
+  still_duration: 1           # Seconds to show the still before playing motion
+  repeat_delay: 10            # Seconds to wait after motion ends before replaying
+  hide_companion_videos: true # Exclude companion videos from the normal slideshow queue
+  video_suffixes:
+    - "_HEVC"
+    - "-HEVC"
+    - ""
+  video_extensions:
+    - MOV
+    - mov
+    - mp4
+    - MP4
+    - m4v
+    - M4V
+  still_extensions:
+    - JPG
+    - jpg
+    - JPEG
+    - jpeg
+    - PNG
+    - png
+    - WEBP
+    - webp
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `live_photo.enabled` | boolean | `false` | Enable still + companion video pairing |
+| `live_photo.still_duration` | number | `1` | Seconds to show the still before playing companion video |
+| `live_photo.repeat_delay` | number | `10` | Seconds to wait after companion video ends before replaying |
+| `live_photo.hide_companion_videos` | boolean | `true` | Hide companion videos from the normal slideshow queue |
+| `live_photo.video_suffixes` | list | `["_HEVC", "-HEVC", ""]` | Suffixes tried when locating the companion video |
+| `live_photo.video_extensions` | list | `["MOV", "mov", "mp4", "MP4", "m4v", "M4V"]` | Extensions tried when locating the companion video |
+| `live_photo.still_extensions` | list | `["JPG", "jpg", ...]` | Still-image extensions used when identifying a video as a companion |
+
+---
+
+## iCloud Photos Preset
+
+### `icloud_photos`
+
+A convenience preset that configures the card for an iCloud Photos sync folder in one block. When `icloud_photos.enabled: true`, the card automatically sets `media_source_type: folder`, enables recursion, allows all media types, and applies Live Photo defaults. Individual settings in `folder` and `live_photo` override the preset.
+
+The card does **not** authenticate to iCloud. Use a server-side add-on (e.g. [AncilTech iCloud Photo Sync](https://github.com/anciltech/ha-icloud-photo-sync)) to sync photos into `/media/icloud_photos`, then point the card at that folder.
+
+```yaml
+icloud_photos:
+  enabled: true
+  album: Favorites          # Optional sub-folder below the sync root
+  media_source_path: media-source://media_source/local/icloud_photos
+live_photo:
+  still_duration: 1
+  repeat_delay: 10
+heic:
+  enabled: true
+auto_advance_seconds: 60
+video_muted: true
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `icloud_photos.enabled` | boolean | `false` | Apply iCloud Photos display defaults |
+| `icloud_photos.media_source_path` | string | `media-source://media_source/local/icloud_photos` | Root folder written by the sync backend |
+| `icloud_photos.album` | string | `""` | Album sub-folder below the sync root |
+
+---
+
+## HEIC/HEIF Browser Conversion
+
+### `heic`
+
+Converts `.heic` and `.heif` files in the browser before display using the [`heic2any`](https://github.com/alexcorvi/heic2any) library. Enabled by default. Server-side JPEG conversion (e.g. via the iCloud sync add-on) is faster for always-on dashboards; this option is a useful fallback when unconverted originals reach the card.
+
+```yaml
+heic:
+  enabled: true
+  library_url: https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js
+  output_type: image/jpeg
+  quality: 0.92
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `heic.enabled` | boolean | `true` | Convert HEIC/HEIF images before display |
+| `heic.library_url` | string | CDN URL above | URL for the converter script; host a local copy for offline dashboards |
+| `heic.output_type` | string | `image/jpeg` | Output MIME type |
+| `heic.quality` | number | `0.92` | JPEG quality (0–1) |
+
+To disable HEIC conversion entirely (e.g. if your browser natively supports HEIC):
+
+```yaml
+heic:
+  enabled: false
+```
+
+---
+
+## Media Preloading
+
+### `preload`
+
+Controls off-DOM media preparation before the card switches to a new item. Enabled by default. Preloading helps avoid partially-painted images on slow hardware and lets rapid manual navigation discard stale in-flight loads immediately.
+
+```yaml
+preload:
+  enabled: true
+  image_decode: true
+  video_mode: metadata      # metadata | canplay | none
+  video_timeout_ms: 3000
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `preload.enabled` | boolean | `true` | Prepare media off-DOM before display |
+| `preload.image_decode` | boolean | `true` | Call `image.decode()` before showing the image |
+| `preload.video_mode` | string | `metadata` | Wait for `loadedmetadata`, `canplay`, or skip (`none`) |
+| `preload.video_timeout_ms` | number | `3000` | Max milliseconds to wait for video preparation before displaying anyway |
+
+---
+
+## Sequential Mode — Date Range Filter
+
+The visual editor exposes start/end date inputs, but values can also be **Home Assistant entity IDs**. When an entity ID is used, the card reads the entity's current state as the date (stripping any time component). This lets you drive the date range from input helpers or sensors.
+
+```yaml
+folder:
+  mode: sequential
+  use_media_index_for_discovery: true
+  sequential:
+    order_by: date_taken
+    order_direction: desc
+filters:
+  date_range:
+    start: input_datetime.photo_filter_start   # HA entity ID
+    end: "2025-12-31"                          # or a static YYYY-MM-DD string
+```
+
+---
+
 ## Full Example with YAML-Only Options
 
 ```yaml
 type: custom:media-card
+
+# ── Media source ──────────────────────────────────────────────────────────────
 media_source_type: folder
 folder:
   path: media-source://media_source/media/Photo/PhotoLibrary/
   mode: sequential
   recursive: true
   use_media_index_for_discovery: true
+  scan_depth: 4                        # Max subfolder depth (filesystem scan mode)
+  estimated_total_photos: 5000         # Improves probability sampling
   priority_new_files: false
   new_files_threshold_seconds: 3600
   sequential:
     order_by: date_taken
     order_direction: desc
+
+# ── Filtering ─────────────────────────────────────────────────────────────────
 excluded_paths:
   - "Burst/**"
   - "**/Thumbnails/**"
   - "**/.thumbnails/**"
+
+filters:
+  date_range:
+    start: "2023-01-01"                # YYYY-MM-DD string or HA entity ID
+    end: input_datetime.photo_end_date # entity state is read at query time
+
+# ── Live Photo playback ───────────────────────────────────────────────────────
+live_photo:
+  enabled: false
+  still_duration: 1
+  repeat_delay: 10
+  hide_companion_videos: true
+  video_suffixes:
+    - "_HEVC"
+    - "-HEVC"
+    - ""
+  video_extensions:
+    - MOV
+    - mov
+    - mp4
+    - MP4
+    - m4v
+    - M4V
+
+# ── iCloud Photos preset (overrides folder/live_photo defaults when enabled) ──
+icloud_photos:
+  enabled: false
+  media_source_path: media-source://media_source/local/icloud_photos
+  album: ""                            # Optional sub-folder, e.g. "Favorites"
+
+# ── HEIC/HEIF browser conversion ─────────────────────────────────────────────
+heic:
+  enabled: true
+  library_url: https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js
+  output_type: image/jpeg
+  quality: 0.92
+
+# ── Media preloading ──────────────────────────────────────────────────────────
+preload:
+  enabled: true
+  image_decode: true
+  video_mode: metadata                 # metadata | canplay | none
+  video_timeout_ms: 3000
+
+# ── Slideshow / queue ─────────────────────────────────────────────────────────
 auto_select_burst_favorite: false
 slideshow_window: 100
+mute_preference_timeout: 300
+
+# ── Debug ─────────────────────────────────────────────────────────────────────
 debug_mode: false
+debug_queue_mode: false
 ```
 
 > **Tip:** `auto_select_burst_favorite` and `metadata.show_burst_info` are also configurable from the visual editor under the **Metadata** section.

@@ -25,7 +25,7 @@ export const MediaUtils = {
     
     if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(extension)) {
       return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic'].includes(extension)) {
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension)) {
       return 'image';
     }
     

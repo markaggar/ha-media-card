@@ -1,4 +1,6 @@
 {
-  "name": "Media Card",
-  "homeassistant": "2021.12.0"
+  "name": "Media Viewer Card",
+  "homeassistant": "2021.12.0",
+  "filename": "ha-media-card.js",
+  "content_in_root": true
 }

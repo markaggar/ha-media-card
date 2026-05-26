@@ -25,6 +25,16 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     // Prevents further navigation attempts and unnecessary service calls
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
+    this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+
+    // Resume from a saved cursor when the user clears a runtime filter — the card stores
+    // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
+    // initialize() queries from where the user left off instead of from the very beginning.
+    if (card?._pendingProviderCursor) {
+      this.lastSeenValue = card._pendingProviderCursor.lastSeenValue;
+      this.lastSeenId    = card._pendingProviderCursor.lastSeenId;
+      card._pendingProviderCursor = null;
+    }
   }
 
   _log(...args) {
@@ -141,7 +151,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       this.lastSeenValue = null;
       this.reachedEnd = false;
       this.hasMore = true;
-      this.excludedFiles.clear(); // Clear excluded files when looping back
+      // Don't clear 404 exclusions on loop-back — files missing from disk stay missing.
+      // Keeping them in excludedFiles lets _queryOrderedFiles() skip past them efficiently
+      // on the next pass instead of re-fetching the same stale DB entries.
       
       const items = await this._queryOrderedFiles();
       if (items && items.length > 0) {
@@ -162,6 +174,18 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       while (item && this._isExcluded(item.path)) {
         this._log(`⏭️ Skipping excluded file in getNext: ${item.path}`);
         if (this.queue.length === 0) {
+          if (this.hasMore && !this.reachedEnd) {
+            // Queue drained by 404-skipping before the top-of-function low-water refill fired.
+            // Fetch the next batch now rather than returning null and triggering a cursor reset.
+            this._log('⚠️ Queue empty while skipping excluded files — fetching next batch...');
+            const moreItems = await this._queryOrderedFiles();
+            if (moreItems && moreItems.length > 0) {
+              this.queue.push(...moreItems);
+              item = this.queue.shift();
+              if (!item) break;
+              continue;
+            }
+          }
           this._log('⚠️ Queue exhausted while skipping excluded files');
           return null;
         }
@@ -212,7 +236,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       };
     }
     
-    console.warn('[MediaCard] Sequential queue empty, no items to return');
+    console.warn('[MediaViewerCard] Sequential queue empty, no items to return');
     return null;
   }
 
@@ -253,11 +277,33 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       let allFilteredItems = [];
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
       let iteration = 0;
+
+      // Resolve date range filters from config (supports static dates or HA entity IDs)
+      const _resolveDateFilter = (configValue) => {
+        if (!configValue) return null;
+        if (typeof configValue === 'string' && configValue.includes('.')) {
+          // Entity ID — look up current state
+          const state = this.hass?.states[configValue];
+          const raw = state?.state;
+          if (!raw || raw === 'unknown' || raw === 'unavailable') return null;
+          // Strip time component from ISO-8601 (T separator) or datetime strings (space separator)
+          const dateOnly = raw.split(/[T ]/)[0];
+          return /^\d{4}-\d{2}-\d{2}$/.test(dateOnly) ? dateOnly : null;
+        }
+        // Static value — validate it looks like YYYY-MM-DD before passing to backend
+        if (typeof configValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(configValue.split(/[T ]/)[0])) {
+          return configValue.split(/[T ]/)[0];
+        }
+        return configValue;
+      };
+      const dateFrom = _resolveDateFilter(this.config.filters?.date_range?.start);
+      const dateTo = _resolveDateFilter(this.config.filters?.date_range?.end);
       // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
       // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
+      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches
       // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
       // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
       // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
@@ -278,7 +324,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           // V5 FEATURE: Priority new files - prepend recently indexed files to results
           // Note: Recently indexed = newly discovered by scanner, not necessarily new files
           priority_new_files: this.config.folder?.priority_new_files || false,
-          new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600
+          new_files_threshold_seconds: this.config.folder?.new_files_threshold_seconds || 3600,
+          ...(dateFrom ? { date_from: dateFrom } : {}),
+          ...(dateTo ? { date_to: dateTo } : {}),
         };
         
         // Add compound cursor for pagination (if we've seen items before)
@@ -359,7 +407,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           // Filter unsupported formats
           const fileName = item.path.split('/').pop() || item.path;
           const extension = fileName.split('.').pop()?.toLowerCase();
-          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
           
           if (!isMedia) {
             this._log(`⏭️ Filtering out unsupported format: ${item.path}`);
@@ -417,6 +465,13 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         const validFromThisBatch = filteredItems.length;
         if (validFromThisBatch === 0 && response.items.length > 0) {
           consecutiveAllExcludedBatches++;
+          if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
+            this._dbCleanupWarningShown = true;
+            const excludedCount = consecutiveAllExcludedBatches * this.queueSize;
+            const warningMsg = `⚠️ Media Index: ${excludedCount}+ results excluded — check excluded_paths config or run cleanup_database if files are missing from disk.`;
+            console.warn(`[SequentialMediaIndexProvider] ${warningMsg}`);
+            this.card?._showToast(warningMsg, 7000);
+          }
           if (consecutiveAllExcludedBatches >= MAX_CONSECUTIVE_EXCLUDED) {
             this._log(`⚠️ Stopping after ${MAX_CONSECUTIVE_EXCLUDED} consecutive fully-excluded batches - excluded_paths may be too broad`);
             break;

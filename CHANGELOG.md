@@ -5,6 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.11.0 - 2026-05-18
+
+### Added
+
+- **Double-Tap Video Zone to Seek ±10s**: Double-tapping the left or right navigation zone on a video now seeks −10 s or +10 s respectively. A single tap continues to navigate backward or forward in the queue.
+
+- **Group Pause Now Pauses / Resumes Video on All Cards**: Long-pressing the pause button (600 ms) broadcasts a group pause event to all peer cards sharing the same `shared_queue_id`. Video cards now honour this by pausing or resuming the `<video>` element in addition to stopping the slideshow timer.
+
+- **Runtime Filter/Playback Picker** (`show_filter_button: true`): Opt-in action button that opens a frosted-glass dialog for temporarily overriding the card's media source settings without editing YAML. All overrides are session-only and discarded on page reload or when the visual editor saves new config.
+  - **Controls**: Folder path (with built-in folder browser), Media Type (All / Images / Videos), Date Range (from / to), Favorites Only toggle, Video Options (Play to completion, Unmuted), Mode (Random / Sequential)
+  - **Folder browser**: The Browse button opens a nested folder-picker overlay that uses the same `media_source/browse_media` HA API as the config editor, starting from the `media_index` entity's `media_source_uri` attribute if available. Navigate into subfolders with a history stack; "Use This Folder" sets the value and closes the browser.
+  - **Button states**: Shows `mdi:filter-outline` when no override is active; `mdi:filter-settings` highlighted when an override is active.
+  - **Apply** merges overrides onto the base config and reinitialises the provider. **Clear** restores the original YAML config. **Cancel** / outside-tap dismisses without changes.
+  - Enable in the visual editor under **Cast to TV Button → Filter & Playback Button**, or in YAML: `show_filter_button: true`
+
+- **Cast to TV** (`show_cast_button: true`): New feature — tap the cast icon to open a picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
+  - **Roku xcast**: Roku `media_player` entities are automatically identified and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) — native image and video display on the TV without transcoding. Roku devices appear first in the picker with a green left-border accent. **Requires**: [Media Index](https://github.com/markaggar/ha-media-index) v1.8.0+, Roku HA integration, and the [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku.
+  - **Generic media players**: Cast via `media_player.play_media` to any DLNA DMR entity — for most TVs (LG, Samsung, etc.) this requires the [DLNA Digital Media Renderer](https://www.home-assistant.io/integrations/dlna_dmr/) integration configured with the TV's IP address, not the native TV integration entity
+  - **Video sync**: After pushing a video to Roku, the card polls its playback position every 5 s and snaps any drift >±2 s back into alignment; corrector skips during navigation, seeks, and for 10 s after each seek
+  - **Slideshow sync**: In auto-advance mode the card waits for Roku to finish the video before advancing — an ECP end-watcher fires instead of the local timer
+  - **Smooth manual navigation**: Roku is paused instantly when the user taps forward / back, freezing the current frame on the TV during the load gap (no xcast banner flash); the ECP push reliably follows every navigation
+  - **Reliable startup**: Image pushed immediately on cast activation to wake xcast, then retried after 2.5 s — cold-start xcast is handled gracefully
+  - **Clean session end**: Stopping cast (button tap or navigating away from the dashboard) sends `keypress/Home` to the Roku, returning its home screen instead of leaving a frozen image
+
+- **Swipe Gesture Navigation**: Swipe left to advance and swipe right to go back on touch screens
+  - Works on both images and video — the `touchstart` on the video element no longer blocks swipe detection in the parent container
+  - Minimum 50 px horizontal travel required; gesture is cancelled if vertical movement exceeds horizontal so intentional scroll is not intercepted
+
+- **iCloud Live Photo Playback**: Pairs a still image with its iCloud-style companion video and plays them as a still → motion → pause loop on every slideshow cycle. The motion segment does not advance the slideshow — normal `auto_advance_seconds` controls when the card moves on. Configure with the `live_photo` block (`enabled`, `still_duration`, `repeat_delay`, `hide_companion_videos`). Integrated with the iCloud Photos preset so a single config block enables everything.
+  - **HEIC/HEIF browser fallback** (`heic.enabled: true`): The card loads `heic2any` and converts `.heic`/`.heif` files to JPEG in the browser before display. Intended as a fallback when server-side JPEG conversion is not yet available; server-side conversion is faster for always-on dashboards. CDN URL is configurable for offline deployments.
+  - **Companion video prewarming**: Companion videos are eagerly fetched into a `<video>` element at the start of each still phase so playback starts without buffering delay.
+  - Same-basename companion videos (e.g. `IMG_1234.mp4` alongside `IMG_1234.heic`) are skipped from the main slideshow queue so they do not appear as standalone items.
+
+- **iCloud Photos Preset** (`icloud_photos.enabled: true`): Convenience preset that configures folder mode, recursion, mixed media type, and Live Photo defaults in one block. The card editor shows an iCloud Photos Sync panel in folder mode with a direct link to the [AncilTech iCloud Photo Sync add-on](https://github.com/anciltech/ha-icloud-photo-sync) and the recommended `media-source://media_source/local/icloud_photos` path.
+
+- **Date Range Filters for Sequential Mode**: `get_ordered_files` (sequential/ordered provider) now accepts `filters.date_range.start` and `filters.date_range.end`
+  - Values can be `YYYY-MM-DD` strings or HA entity IDs (the card reads the entity state and strips any time component)
+  - Passed to the backend as `date_from` / `date_to` on every page fetch, including cursor-based continuation pages
+
+- **Rolling Lookahead Queue**: The card silently pre-loads upcoming items while the current item is playing so tapping forward is instant rather than waiting for a network fetch on every step. The fill runs in the background and is cancelled automatically when the media source or runtime filter changes.
+
+- **Queue Panel Mini-Menu**: Long-pressing any thumbnail in the queue panel — including the currently active item — opens a quick-action mini-menu. Actions: **Clear** (remove from queue), **Move to _Junk**, **Move to _Edit**. Videos in the queue panel now show a still-frame preview in the delete and edit confirmation dialogs, matching the behavior already used in the thumbnail strip.
+
+- **Orientation in Media Info Pane**: The File Info section of the info overlay now shows an Orientation field. Displays EXIF / video rotation metadata from the database (Normal, Rotated 90° CW, Rotated 90° CCW, Rotated 180°), or infers Portrait, Landscape, or Square from pixel dimensions when rotation is not recorded.
+
+### Fixed
+
+- **Follower shows wrong images after leader applies a filter (cross-device sync)**: Two compounding bugs caused the follower card to diverge entirely from the leader after a filter change via the filter picker.
+  - **Bug 1 (root cause)**: The backend `update_sync_state` service was trimming the broadcast queue to its last 20 items (`queue[-20:]`) while leaving `current_index` pointing into the original full queue. For a 146-item result `current_index=1` mapped to the 2nd-to-last group of photos rather than item 1 — so every sync event navigated the follower to a completely different image.
+  - **Bug 2**: When `_applySharedQueueUpdate` detected a filter change it discarded the incoming queue and reinitialised from scratch (index 0), ignoring where the leader currently was. The new `_pendingFilterChangeRestore` mechanism stashes the leader's queue and current index before the reinit, then `_tryRestoreFromSharedQueue` checks it first (before the `_skipSharedQueueRestore` guard) so the follower lands on the leader's exact position immediately after the filter-change reinit.
+
+- **Unresolvable media-source items removed from queue on first failure**: When the card resolves a batch of media-source URIs (e.g. after a server restart), stale or expired items that return a network error are now silently removed from the provider queue immediately rather than stalling the slideshow. Back-navigation also skips removed positions so history stays consistent.
+
+- **Touch interactions on video not working (swipe, hold, double-tap)**: All three gestures were broken when the user's finger landed on the `<video>` element
+  - Swipe: `touchstart` on the video called `stopPropagation()`, so the `.media-container` swipe handler never recorded a start position
+  - Hold (long-press): `pointerdown` on the video called `stopPropagation()`, so the hold timer in the parent container was never started
+  - Double-tap: the video's `click` handler called `stopPropagation()`, so a `dblclick` on the container never fired — fixed by binding `@dblclick` directly on the `<video>` element
+
+- **Sequential mode DESC order returning oldest files first**: The `get_ordered_files` sort expression incorrectly wrapped an already-integer `date_taken` Unix timestamp in SQLite's `unixepoch()`, which treats the integer as a Julian Day Number and produces large negative values — causing 2018 photos to rank above 2026 photos in descending order.
+
+- **Chrome follower pauses after every video navigation (autoplay policy false-positive)**: `_onVideoLoadedMetadata` ran a 50 ms `setTimeout` that briefly set `video.muted = false` then immediately back to the configured muted value in order to force the browser to refresh its mute-button UI. When the video was already playing (typical for followers that receive a sync navigation event), unmuting a live playing element triggered Chrome's autoplay policy: "Unmuting failed and the element was paused instead." The card saw the resulting `pause` event, found no `_navigatingAway` flag, and halted the slideshow with "Video manually paused." Fix: skip the mute-toggle entirely when the video is already playing (`if (!video || !video.paused) return`).
+
+- **Local filter change overwritten by stale sync event from previous driver**: Two compounding bugs caused a filter applied by the local user to be immediately cleared by an in-flight sync event from whichever device had just been driving.
+  - **Bug 1**: When the user applied a filter the card was still in follower mode (`_crossDeviceFollowerUntil` active), so `_writeSharedQueueState` suppressed the filter broadcast — the new filter never reached other devices, and the old driver's next sync event immediately overwrote it.
+  - **Bug 2**: `_applySharedQueueUpdate` had no timestamp guard on the sessionOverride mismatch branch — any event from the old driver with a different (or null) override triggered `_clearSessionOverride`, discarding the just-applied filter.
+  - Fix: the Apply (and now Clear) button handlers stamp `_localFilterAppliedAt = Date.now()` and call `_claimDriverRole()` before applying the override, so the sync write goes through immediately. Incoming sync events whose `updatedAt` timestamp predates `_localFilterAppliedAt` are rejected as stale.
+
+- **Error flash ("No images found" / "No videos found") during filter-change reinit**: `_reinitWithClear()` sets `currentMedia = null` and `provider = null` synchronously before the async provider init. Lit's reactive system immediately re-rendered on the `!currentMedia` branch and showed the no-media error banner for the entire async gap between clearing the provider and loading the first item. Fix: render a blank card (`<ha-card><div class="card"></div></ha-card>`) when both `currentMedia` and `provider` are null, interpreted as a reinit in progress rather than a genuine "no media found" state.
+
+- **Follower card stays in follower-wait mode instead of immediately adopting driver's position after filter clear**: Two interacting bugs prevented the follower from jumping to the driver's exact position when a filter-clear sync event arrived.
+  - **Bug 1**: `_initializeProvider()` unconditionally cleared `_pendingFilterChangeRestore = null` at the top of every init, before `_tryRestoreFromSharedQueue()` could use it. The stash (set by `_applySharedQueueUpdate` to hold the driver's queue+index) was erased mid-flight on every filter-change reinit.
+  - **Bug 2**: The filter-picker Clear button did not call `_claimDriverRole()` before `_clearSessionOverride()`. If the clearing device was in follower mode (`_crossDeviceFollowerUntil` active), `_writeSharedQueueState` suppressed the broadcast and other devices were not notified promptly.
+  - Fix: `_initializeProvider` now only clears `_pendingFilterChangeRestore` when `_skipSharedQueueRestore = false` (non-filter-change reinit). The Clear button handler mirrors the Apply button handler by stamping `_localFilterAppliedAt` and calling `_claimDriverRole()` first.
+
+- **Corrupt video causing infinite reload loop**: A video returning `MEDIA_ERR_DECODE` (corrupt/unsupported file) triggered `_showMediaError`, which set `_errorState` to an object. Every subsequent `hass` setter update (including routine sync state writes) re-evaluated the auto-recovery guard, which was truthy for any `_errorState` value — causing the provider to reinitialise, restore the same failing video, and loop indefinitely.
+  - Fix 1: Auto-recovery only fires when `typeof this._errorState === 'string'` (init-level failures), not for object-valued media-file errors set by `_showMediaError`.
+  - Fix 2: `MEDIA_ERR_DECODE` in folder/index mode now silently calls `_loadNext()` (100 ms defer) instead of showing the error overlay, so corrupt files are skipped transparently.
+
+- **Hold action (`hold_action: navigate`) locking up Fully Kiosk dashboard**: Holding on the image area in Fully Kiosk Browser triggered the WebView's native "long-press to save/copy image" gesture (~500–600 ms), which generated `pointercancel` and raced with the card's 500 ms hold timer. The native gesture then navigated the HA router independently, leaving the router in an inconsistent state (`browser path ≠ panel path`). After two such collisions the entire dashboard became unresponsive to taps (scroll still worked).
+  - Root cause: Android WebView's built-in image-drag gesture fires `pointercancel` at the `<img>` element's target phase, before the parent container's bubble-phase `preventDefault()` could suppress it.
+  - Fix 1: Added `e.preventDefault()` at the media-container `pointerdown` handler to claim the touch and suppress Fully Kiosk's competing gesture.
+  - Fix 2: Added `draggable="false"` and a direct `@pointerdown` on each `<img>` element calling `e.preventDefault()` at target phase — ensuring suppression before any gesture timer is committed.
+  - Fix 3: Added CSS `-webkit-user-drag: none; -webkit-touch-callout: none; user-select: none` on `.image-layer` to reinforce at render time.
+  - Fix 4: Changed `location-changed` dispatch from `this.dispatchEvent(bubbles:true)` to `window.dispatchEvent(bubbles:false)` — the standard HA navigation pattern, preventing double-handling in some WebViews.
+  - Fix 5: Added `touchend`-based fallback in `_handleSwipeTouchEnd` to clear the hold timer in case WebView-specific `pointerup` suppression occurs.
+
+- **HACS card not appearing in Lovelace add-card picker on some installs**: `window.customCards = window.customCards || []` preserved non-array truthy values (e.g. an object set by another script), causing `.some()` to throw and blocking card registration. Fixed by using `Array.isArray()` guard and optional chaining (`card?.type`) on each entry. Added `filename` and `content_in_root` fields to `hacs.json` to improve HACS resource auto-registration consistency.
+
+### Changed
+
+- **Renamed custom element to `media-viewer-card`**: The primary registered element is now `media-viewer-card` (editor: `media-viewer-card-editor`). A backward-compatible alias `media-card` is registered via an empty subclass so all existing YAML configs (`type: custom:media-card`) continue to work without changes. HACS display name updated to "Media Viewer Card".
+
 ## v5.10.0 - 2026-04-22
 
 ### Added

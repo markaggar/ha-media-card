@@ -52,6 +52,26 @@ media_type: all
 auto_advance_duration: 5
 ```
 
+**iCloud Photos with Live Photos**
+```yaml
+type: custom:media-card
+icloud_photos:
+  enabled: true
+  album: Favorites
+media_type: all
+auto_advance_seconds: 60
+live_photo:
+  enabled: true
+  still_duration: 1
+  repeat_delay: 10
+  hide_companion_videos: true
+heic:
+  enabled: true
+  quality: 0.92
+video_loop: false
+video_muted: true
+```
+
 ## Core Configuration
 
 ### Media Source Selection
@@ -65,6 +85,82 @@ auto_advance_duration: 5
 | `folder.path` | string | Required for folder | Path to folder (media-source:// URI) |
 | `folder.mode` | string | `random` | Display mode: `random`, `sequential` |
 | `folder.recursive` | boolean | `false` | Include subfolders in scan |
+
+### iCloud Photos Preset
+
+The card can own the display side of an iCloud Photos setup when a server-side sync backend is already writing files into Home Assistant media storage. The preset points the card at the synced folder, enables folder mode, allows photos and videos, and turns on Live Photo pairing.
+
+```yaml
+type: custom:media-card
+icloud_photos:
+  enabled: true
+  media_source_path: media-source://media_source/local/icloud_photos
+  album: Favorites
+media_type: all
+auto_advance_seconds: 60
+live_photo:
+  still_duration: 1
+  repeat_delay: 10
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `icloud_photos.enabled` | boolean | `false` | Enable iCloud Photos display defaults |
+| `icloud_photos.media_source_path` | string | `media-source://media_source/local/icloud_photos` | Root folder populated by the sync backend |
+| `icloud_photos.album` | string | `""` | Optional album folder below the sync root |
+| `icloud_photos.sync_backend` | string | `icloudpd` | Descriptive backend name for the server-side sync source |
+
+The card does not perform Apple authentication in the browser. Use a Home Assistant add-on or integration to sync iCloud Photos into `/media/icloud_photos`, then use this preset as the single card-level display configuration. The card editor also shows an iCloud Photos Sync panel in folder mode with the recommended add-on link and media-source path.
+
+Recommended add-on install path:
+
+1. In Home Assistant, go to `Settings -> Add-ons -> Add-on Store`.
+2. Open the top-right menu, choose `Repositories`, and add `https://github.com/anciltech/ha-icloud-photo-sync`.
+3. Install `iCloud Photo Sync`, configure the album and `/media/icloud_photos` destination, then run the add-on's documented Apple initialise step from an HAOS shell.
+4. Use `media-source://media_source/local/icloud_photos` as the card folder path, or append the album folder created by the sync.
+
+This downloader is installed through the Home Assistant Add-on Store repository flow, not HACS. HACS remains the normal path for installing the frontend card itself.
+
+### HEIC/HEIF Display Fallback
+
+Browsers do not consistently display Apple HEIC/HEIF files. The card can treat `.heic` and `.heif` files as images and convert them in the browser before rendering. This is intended as a fallback for synced iCloud photos that do not have a JPEG conversion available yet; server-side JPEG conversion is still faster for always-on dashboards.
+
+```yaml
+type: custom:media-card
+media_type: all
+heic:
+  enabled: true
+  library_url: https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js
+  output_type: image/jpeg
+  quality: 0.92
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `heic.enabled` | boolean | `true` | Convert HEIC/HEIF images in the browser before display |
+| `heic.library_url` | string | `https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js` | URL for the `heic2any` converter script; host a local copy if the dashboard must work offline |
+| `heic.output_type` | string | `image/jpeg` | Converted image MIME type |
+| `heic.quality` | number | `0.92` | JPEG output quality passed to the converter |
+
+### Preload Options
+
+The card can prepare the selected photo or video before switching the visible layer. This helps limited hardware avoid partially painted large images and lets manual navigation obsolete stale work when a new button press arrives.
+
+```yaml
+type: custom:media-card
+preload:
+  enabled: true
+  image_decode: true
+  video_mode: metadata
+  video_timeout_ms: 3000
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `preload.enabled` | boolean | `true` | Prepare media before assigning it to the visible image/video layer |
+| `preload.image_decode` | boolean | `true` | Ask the browser to decode images off-DOM before display |
+| `preload.video_mode` | string | `metadata` | Video preparation mode: `metadata`, `canplay`, or `none` |
+| `preload.video_timeout_ms` | number | `3000` | Maximum time to wait for video preparation before displaying normally |
 
 ### Display Options
 
@@ -299,6 +395,8 @@ Overlay buttons for quick access to card features:
 | `action_buttons.enable_pause` | boolean | `true` | Show pause/resume button |
 | `action_buttons.enable_fullscreen` | boolean | `false` | Show fullscreen button |
 | `show_refresh_button` | boolean | `false` | Show manual refresh button |
+| `show_cast_button` | boolean | `false` | Show cast button to mirror the card to any `media_player` entity. Roku uses ECP via media_index; other players use `media_player.play_media`. |
+| `show_filter_button` | boolean | `false` | Show filter/playback picker button. Opens a dialog to temporarily override folder, media type, date range, favorites, mode, and video settings for the current session (resets on page reload). Includes a built-in folder browser. |
 | `debug_button` | boolean | `false` | Show debug mode toggle button |
 
 ### Media Index Action Buttons
@@ -413,6 +511,43 @@ When `auto_refresh_seconds > 0` and a video finishes playing:
 - Slideshow automatically advances to next item
 - Respects manual pause - won't advance if user paused video
 - Works with all slideshow behaviors
+
+## Live Photo Options
+
+Live Photos downloaded from iCloud are usually represented as a still image plus a companion video file. When enabled, the card treats the still image as the slideshow item, resolves the matching companion video, keeps the still image visible, overlays the motion clip after a short delay, then returns to the still. This motion loop does not advance the slideshow; normal `auto_advance_seconds` timing still controls when the card moves to the next photo.
+
+```yaml
+live_photo:
+  enabled: true
+  still_duration: 1
+  repeat_delay: 10
+  video_suffixes:
+    - "_HEVC"
+    - "-HEVC"
+    - ""
+  video_extensions:
+    - MOV
+    - mov
+    - mp4
+    - MP4
+  still_extensions:
+    - JPG
+    - jpg
+    - JPEG
+    - jpeg
+  hide_companion_videos: true
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `live_photo.enabled` | boolean | `false` | Enable still+video pairing and playback |
+| `live_photo.still_duration` | number | `1` | Seconds to show the still before playing the companion video |
+| `live_photo.repeat_delay` | number | `10` | Seconds to wait after the companion video ends before playing it again |
+| `live_photo.pause_duration` | number | `10` | Backward-compatible alias for `repeat_delay` |
+| `live_photo.video_suffixes` | list | `["_HEVC", "-HEVC", ""]` | Suffixes to try when finding companion videos |
+| `live_photo.video_extensions` | list | `["MOV", "mov", "mp4", "MP4", "m4v", "M4V"]` | Companion video extensions to try |
+| `live_photo.still_extensions` | list | `["JPG", "jpg", "JPEG", "jpeg", "PNG", "png", "WEBP", "webp"]` | Still-image extensions used to identify plain same-basename companion videos |
+| `live_photo.hide_companion_videos` | boolean | `true` | Hide obvious companion videos from the normal slideshow queue |
 
 ## Interactive Actions
 
