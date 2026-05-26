@@ -18,14 +18,17 @@ Common issues and solutions for the Media Card.
    - Mobile: Force close browser app and reopen
    
 2. **Verify File Location**
-   - File should be at: `/config/www/cards/ha-media-card.js`
+   - **Manual install:** `/config/www/cards/ha-media-card.js`
+   - **HACS install:** `/config/www/community/ha-media-card/ha-media-card.js`
    - Check file permissions (Home Assistant must have read access)
    
 3. **Check Lovelace Resource**
    - Go to Settings → Dashboards → Resources
-   - Verify resource URL: `/local/cards/ha-media-card.js`
+   - Verify resource URL:
+     - **Manual install:** `/local/cards/ha-media-card.js`
+     - **HACS install:** `/hacsfiles/ha-media-card/ha-media-card.js`
    - Resource type: **JavaScript Module**
-   - Delete and re-add if incorrect
+   - Delete and re-add if incorrect (HACS can fail to add this automatically on some installs)
    
 4. **Restart Home Assistant**
    - Settings → System → Restart

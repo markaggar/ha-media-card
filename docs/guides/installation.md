@@ -131,8 +131,12 @@ If you see media displayed (or a message about no files found), the card is work
 ### Card Not Appearing in Add Card Menu
 
 **Solution:**
-1. Verify file path is correct: `/config/www/cards/ha-media-card.js`
-2. Check resource URL in Lovelace: `/local/cards/ha-media-card.js`
+1. Verify file path is correct:
+   - Manual install: `/config/www/cards/ha-media-card.js`
+   - HACS install: `/config/www/community/ha-media-card/ha-media-card.js`
+2. Check resource URL in Lovelace:
+   - Manual install: `/local/cards/ha-media-card.js`
+   - HACS install: `/hacsfiles/ha-media-card/ha-media-card.js`
 3. Restart Home Assistant
 4. Clear browser cache with hard refresh (Ctrl+Shift+R)
 

@@ -24176,8 +24176,10 @@ if (!customElements.get('media-card')) {
 }
 
 // Register with Home Assistant
-window.customCards = window.customCards || [];
-if (!window.customCards.some(card => card.type === 'media-viewer-card')) {
+if (!Array.isArray(window.customCards)) {
+  window.customCards = [];
+}
+if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
   window.customCards.push({
     type: 'media-viewer-card',
     name: 'Media Viewer Card',

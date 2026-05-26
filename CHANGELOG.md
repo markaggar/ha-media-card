@@ -79,6 +79,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Bug 2**: The filter-picker Clear button did not call `_claimDriverRole()` before `_clearSessionOverride()`. If the clearing device was in follower mode (`_crossDeviceFollowerUntil` active), `_writeSharedQueueState` suppressed the broadcast and other devices were not notified promptly.
   - Fix: `_initializeProvider` now only clears `_pendingFilterChangeRestore` when `_skipSharedQueueRestore = false` (non-filter-change reinit). The Clear button handler mirrors the Apply button handler by stamping `_localFilterAppliedAt` and calling `_claimDriverRole()` first.
 
+- **Corrupt video causing infinite reload loop**: A video returning `MEDIA_ERR_DECODE` (corrupt/unsupported file) triggered `_showMediaError`, which set `_errorState` to an object. Every subsequent `hass` setter update (including routine sync state writes) re-evaluated the auto-recovery guard, which was truthy for any `_errorState` value — causing the provider to reinitialise, restore the same failing video, and loop indefinitely.
+  - Fix 1: Auto-recovery only fires when `typeof this._errorState === 'string'` (init-level failures), not for object-valued media-file errors set by `_showMediaError`.
+  - Fix 2: `MEDIA_ERR_DECODE` in folder/index mode now silently calls `_loadNext()` (100 ms defer) instead of showing the error overlay, so corrupt files are skipped transparently.
+
+- **Hold action (`hold_action: navigate`) locking up Fully Kiosk dashboard**: Holding on the image area in Fully Kiosk Browser triggered the WebView's native "long-press to save/copy image" gesture (~500–600 ms), which generated `pointercancel` and raced with the card's 500 ms hold timer. The native gesture then navigated the HA router independently, leaving the router in an inconsistent state (`browser path ≠ panel path`). After two such collisions the entire dashboard became unresponsive to taps (scroll still worked).
+  - Root cause: Android WebView's built-in image-drag gesture fires `pointercancel` at the `<img>` element's target phase, before the parent container's bubble-phase `preventDefault()` could suppress it.
+  - Fix 1: Added `e.preventDefault()` at the media-container `pointerdown` handler to claim the touch and suppress Fully Kiosk's competing gesture.
+  - Fix 2: Added `draggable="false"` and a direct `@pointerdown` on each `<img>` element calling `e.preventDefault()` at target phase — ensuring suppression before any gesture timer is committed.
+  - Fix 3: Added CSS `-webkit-user-drag: none; -webkit-touch-callout: none; user-select: none` on `.image-layer` to reinforce at render time.
+  - Fix 4: Changed `location-changed` dispatch from `this.dispatchEvent(bubbles:true)` to `window.dispatchEvent(bubbles:false)` — the standard HA navigation pattern, preventing double-handling in some WebViews.
+  - Fix 5: Added `touchend`-based fallback in `_handleSwipeTouchEnd` to clear the hold timer in case WebView-specific `pointerup` suppression occurs.
+
+- **HACS card not appearing in Lovelace add-card picker on some installs**: `window.customCards = window.customCards || []` preserved non-array truthy values (e.g. an object set by another script), causing `.some()` to throw and blocking card registration. Fixed by using `Array.isArray()` guard and optional chaining (`card?.type`) on each entry. Added `filename` and `content_in_root` fields to `hacs.json` to improve HACS resource auto-registration consistency.
+
+### Changed
+
+- **Renamed custom element to `media-viewer-card`**: The primary registered element is now `media-viewer-card` (editor: `media-viewer-card-editor`). A backward-compatible alias `media-card` is registered via an empty subclass so all existing YAML configs (`type: custom:media-card`) continue to work without changes. HACS display name updated to "Media Viewer Card".
+
 ## v5.10.0 - 2026-04-22
 
 ### Added
