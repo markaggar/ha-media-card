@@ -1,10 +1,10 @@
-# Running Media Card Offline
+# Running Media Viewer Card Offline
 
 For Home Assistant client devices on isolated networks without internet access.
 
 ## How It Works
 
-Media Card checks for preloaded Lit globals (`window.LitElement`, `window.html`, `window.css`) before loading from CDN. If you preload Lit locally, Media Card uses it - no CDN access needed.
+Media Viewer Card checks for preloaded Lit globals (`window.LitElement`, `window.html`, `window.css`) before loading from CDN. If you preload Lit locally, Media Viewer Card uses it - no CDN access needed.
 
 ## The Solution
 
@@ -39,7 +39,7 @@ window.__LIT_PRELOAD_PROMISE__ = (async () => {
   window.LitElement = m.LitElement;
   window.html = m.html;
   window.css = m.css;
-  console.log('[Media Card] Lit preloaded from local file');
+  console.log('[Media Viewer Card] Lit preloaded from local file');
 })();
 ```
 
@@ -65,11 +65,11 @@ resources:
 1. Hard refresh browser: **Ctrl+Shift+R**
 2. Open DevTools: **F12**
 3. Check Console for:
-   - `[Media Card] Lit preloaded from local file`
-   - `[Media Card] Using preloaded Lit from window` (or `Waiting for Lit preload to complete...` then `Using preloaded Lit`)
+   - `[Media Viewer Card] Lit preloaded from local file`
+   - `[Media Viewer Card] Using preloaded Lit from window` (or `Waiting for Lit preload to complete...` then `Using preloaded Lit`)
    - `MEDIA-CARD v5.6.10 Loaded`
 
-Done! All Media Card features work offline.
+Done! All Media Viewer Card features work offline.
 
 ## Troubleshooting
 
