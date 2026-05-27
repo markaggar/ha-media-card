@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete guide to all configuration options for the Media Card.
+Complete guide to all configuration options for the Media Viewer Card.
 
 ## Quick Reference
 
