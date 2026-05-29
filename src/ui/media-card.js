@@ -11353,6 +11353,10 @@ export class MediaCard extends LitElement {
   _handlePointerDown(e) {
     if (!this.config.hold_action) return;
 
+    // Don't intercept pointer events that originate inside the info overlay — the user
+    // may be trying to select/copy text, and hold-to-select would otherwise trigger navigation.
+    if (e.target.closest('.info-overlay')) return;
+
     // Prevent the browser/WebView from triggering native long-press gestures (e.g. Fully Kiosk's
     // configured long-press action). Without this, Fully Kiosk fires pointercancel at ~460-560ms
     // to steal the touch for its own gesture, preventing our hold timer from completing and then
