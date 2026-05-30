@@ -13,7 +13,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this.queue = []; // Internal queue of items from database
     this.queueSize = config.slideshow_window || 100;
     this.excludedFiles = new Set(); // Track excluded files
-    
+
     // Sequential mode configuration
     this.orderBy = config.folder?.sequential?.order_by || 'date_taken';
     this.orderDirection = config.folder?.sequential?.order_direction || 'desc';
@@ -26,6 +26,15 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
     this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+
+    // Resume from a saved cursor when the user clears a runtime filter — the card stores
+    // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
+    // initialize() queries from where the user left off instead of from the very beginning.
+    if (card?._pendingProviderCursor) {
+      this.lastSeenValue = card._pendingProviderCursor.lastSeenValue;
+      this.lastSeenId    = card._pendingProviderCursor.lastSeenId;
+      card._pendingProviderCursor = null;
+    }
   }
 
   _log(...args) {
@@ -35,7 +44,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
   }
-  
+
   /**
    * Convert a date value to Unix timestamp (seconds).
    * Handles: Unix timestamps, Date objects, ISO strings, EXIF date strings
@@ -46,18 +55,18 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     if (value === null || value === undefined) {
       return null;
     }
-    
+
     // Already a numeric timestamp
     if (typeof value === 'number') {
       // If it looks like milliseconds (13+ digits), convert to seconds
       return value > 9999999999 ? Math.floor(value / 1000) : value;
     }
-    
+
     // Date object
     if (value instanceof Date) {
       return Math.floor(value.getTime() / 1000);
     }
-    
+
     // String - try to parse
     if (typeof value === 'string') {
       // Try ISO format or other parseable date strings
@@ -65,7 +74,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       if (!isNaN(parsed)) {
         return Math.floor(parsed / 1000);
       }
-      
+
       // Try EXIF format: "2022:07:09 00:15:41"
       const exifMatch = value.match(/^(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
       if (exifMatch) {
@@ -75,10 +84,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           return Math.floor(date.getTime() / 1000);
         }
       }
-      
+
       this._log(`⚠️ Could not parse date string to timestamp: ${value}`);
     }
-    
+
     return null;
   }
 
@@ -86,23 +95,23 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this._log('Initializing...');
     this._log('Order by:', this.orderBy, this.orderDirection);
     this._log('Recursive:', this.recursive);
-    
+
     // Check if media_index is configured
     if (!MediaProvider.isMediaIndexActive(this.config)) {
       console.warn('[SequentialMediaIndexProvider] Media index not configured');
       return false;
     }
-    
+
     // Initial query to fill queue
     const items = await this._queryOrderedFiles();
-    
+
     if (!items || items.length === 0) {
       console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
       return false;
     }
-    
+
     this.queue = items;
-    
+
     // V5.6.8: Store reference to first item for periodic refresh comparison
     if (items.length > 0) {
       const firstItem = items[0];
@@ -110,7 +119,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       this._firstItemDateAtStart = firstItem.date_taken || firstItem.modified_time || 0;
       this._log('📝 Reference point for periodic refresh:', this._firstItemAtStart);
     }
-    
+
     this._log('✅ Initialized with', this.queue.length, 'items');
     return true;
   }
@@ -128,7 +137,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         this.reachedEnd = true;
       }
     }
-    
+
     // If queue is empty and hasMore is false, we've reached the end
     // (hasMore=false means last query returned fewer items than requested)
     if (this.queue.length === 0 && !this.hasMore) {
@@ -137,7 +146,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         this._log('🛑 Reached end of sequence, auto-loop disabled, returning null');
         return null;
       }
-      
+
       this._log('🔄 Reached end of sequence (queue empty, hasMore=false), looping back to start...');
       this.lastSeenValue = null;
       this.reachedEnd = false;
@@ -145,7 +154,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       // Don't clear 404 exclusions on loop-back — files missing from disk stay missing.
       // Keeping them in excludedFiles lets _queryOrderedFiles() skip past them efficiently
       // on the next pass instead of re-fetching the same stale DB entries.
-      
+
       const items = await this._queryOrderedFiles();
       if (items && items.length > 0) {
         this.queue = items;
@@ -155,11 +164,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         return null;
       }
     }
-    
+
     // Return next item from queue (skip excluded files)
     if (this.queue.length > 0) {
       let item = this.queue.shift();
-      
+
       // V5.6.8: Skip excluded files (404s) - keep checking until we find a non-excluded file
       // Use _isExcluded for normalized path comparison
       while (item && this._isExcluded(item.path)) {
@@ -182,22 +191,22 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         }
         item = this.queue.shift();
       }
-      
+
       if (!item) {
         this._log('⚠️ No valid (non-excluded) items left in queue');
         return null;
       }
-      
+
       // V5.6.8: Cursor is now managed by _queryOrderedFiles() after client-side sort
       // DO NOT update cursor here - it would overwrite the correct end-of-batch cursor
       // with the cursor of the item being returned, causing duplicate fetches
-      
+
       // Extract metadata using MediaProvider helper (V5 architecture)
       const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
-      
+
       // V5 URI WORKFLOW: Use media_source_uri from Media Index when available
       const mediaId = item.media_source_uri || item.path;
-      
+
       return {
         // V5: Use URI for media_content_id (Media Index v1.1.0+ provides media_source_uri)
         media_content_id: mediaId,
@@ -226,8 +235,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         }
       };
     }
-    
-    console.warn('[MediaCard] Sequential queue empty, no items to return');
+
+    console.warn('[MediaViewerCard] Sequential queue empty, no items to return');
     return null;
   }
 
@@ -241,7 +250,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
 
     try {
       this._log('🔍 Querying media_index for ordered files...');
-      
+
       // V5.2: Pass folder path as-is - Media Index v1.1.0+ handles URI ↔ path conversion
       // Config can be:
       //   - media-source://media_source/local/folder (Media Index will convert using media_source_uri mapping)
@@ -250,7 +259,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       let folderFilter = null;
       if (this.config.folder?.path) {
         let path = this.config.folder.path;
-        
+
         // Skip Immich and other integration paths - media_index only works with filesystem/media_source paths
         if (path.startsWith('media-source://immich')) {
           this._log('⚠️ Immich path detected - media_index incompatible, skipping folder filter');
@@ -261,7 +270,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           this._log('🔍 Filtering by folder (URI or path):', folderFilter);
         }
       }
-      
+
       // V5.6.8: Use local cursor for this query session (don't modify this.lastSeenValue until getNext)
       let localCursor = this.lastSeenValue;
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
@@ -275,7 +284,15 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         if (typeof configValue === 'string' && configValue.includes('.')) {
           // Entity ID — look up current state
           const state = this.hass?.states[configValue];
-          return state?.state?.split(' ')[0] || null;
+          const raw = state?.state;
+          if (!raw || raw === 'unknown' || raw === 'unavailable') return null;
+          // Strip time component from ISO-8601 (T separator) or datetime strings (space separator)
+          const dateOnly = raw.split(/[T ]/)[0];
+          return /^\d{4}-\d{2}-\d{2}$/.test(dateOnly) ? dateOnly : null;
+        }
+        // Static value — validate it looks like YYYY-MM-DD before passing to backend
+        if (typeof configValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(configValue.split(/[T ]/)[0])) {
+          return configValue.split(/[T ]/)[0];
         }
         return configValue;
       };
@@ -286,16 +303,16 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
       let consecutiveAllExcludedBatches = 0;
       const MAX_CONSECUTIVE_EXCLUDED = 20; // Give up after 20 fully-excluded batches in a row
-      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches (1250+ missing files)
+      const DB_CLEANUP_WARNING_THRESHOLD = 5; // Warn user after 5 consecutive fully-excluded batches
       // Overall iteration cap: limits worst-case WebSocket calls when excluded_paths leaves
       // only a few valid items per batch (not all-excluded, so consecutive counter keeps resetting).
       // 20 iterations × queueSize items/batch gives a reasonable upper bound on backend load.
       const MAX_ITERATIONS = 20;
-      
+
       // Keep fetching batches until we have enough valid items OR database is exhausted
       while (allFilteredItems.length < this.queueSize && consecutiveAllExcludedBatches < MAX_CONSECUTIVE_EXCLUDED && iteration < MAX_ITERATIONS) {
         iteration++;
-        
+
         // Build service data
         const serviceData = {
           count: this.queueSize,
@@ -311,7 +328,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           ...(dateFrom ? { date_from: dateFrom } : {}),
           ...(dateTo ? { date_to: dateTo } : {}),
         };
-        
+
         // Add compound cursor for pagination (if we've seen items before)
         // Using (after_value, after_id) handles duplicate sort values correctly
         if (localCursor !== null) {
@@ -321,7 +338,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           }
           this._log('🔍 Using cursor:', `after_value=${localCursor}, after_id=${localCursorId}`, `(iteration ${iteration})`);
         }
-      
+
       // Build WebSocket call
         const wsCall = {
           type: 'call_service',
@@ -330,7 +347,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           service_data: serviceData,
           return_response: true
         };
-        
+
         // Target specific media_index entity if configured
         if (this.config.media_index?.entity_id) {
           wsCall.target = {
@@ -340,14 +357,14 @@ export class SequentialMediaIndexProvider extends MediaProvider {
             this._log('🎯 Targeting entity:', this.config.media_index.entity_id);
           }
         }
-        
+
         // Debug logging
         if (this.config?.debug_queue_mode) {
           console.warn('[SequentialMediaIndexProvider] 📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
         }
-        
+
         const wsResponse = await this.hass.callWS(wsCall);
-        
+
         if (this.config?.debug_queue_mode) {
           console.warn('[SequentialMediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
         }
@@ -360,18 +377,18 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           this.hasMore = false;
           break; // Exit loop - no more items available
         }
-        
+
         this._log('✅ Received', response.items.length, 'items from media_index', `(iteration ${iteration})`);
         if (iteration === 1) {
           this._log(`📝 Currently ${this.excludedFiles.size} files in exclusion list`);
         }
-        
+
         // Check if we got fewer items than requested (indicates end of sequence)
         if (response.items.length < this.queueSize) {
           this._log('📝 Received fewer items than requested - at end of sequence');
           this.hasMore = false;
         }
-        
+
         // Filter excluded files, unsupported formats, AND duplicates from previous batches
         const filteredItems = response.items.filter(item => {
           // V5.6.8: Skip duplicates (same item returned in overlapping batches)
@@ -379,48 +396,48 @@ export class SequentialMediaIndexProvider extends MediaProvider {
             this._log(`⏭️ Skipping duplicate from overlapping batch: ${item.path}`);
             return false;
           }
-          
+
           // V5.6.8: Use _isExcluded for normalized path comparison
           const isExcluded = this._isExcluded(item.path);
           if (isExcluded) {
             this._log(`⏭️ Filtering out excluded file: ${item.path}`);
             return false;
           }
-          
+
           // Filter unsupported formats
           const fileName = item.path.split('/').pop() || item.path;
           const extension = fileName.split('.').pop()?.toLowerCase();
-          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(extension);
-          
+          const isMedia = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif'].includes(extension);
+
           if (!isMedia) {
             this._log(`⏭️ Filtering out unsupported format: ${item.path}`);
             return false;
           }
-          
+
           // Track this path as seen
           seenPaths.add(item.path);
           return true;
         });
-        
+
         if (filteredItems.length < response.items.length) {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining in this batch)`);
         }
-        
+
         // Add filtered items to our accumulated result
         allFilteredItems.push(...filteredItems);
-        
+
         // Update compound cursor using the LAST item in the batch
         // The backend now uses (sort_field, id) compound ordering, so using the last item
         // guarantees we advance past ALL items in this batch, even with duplicate sort values
         if (response.items.length > 0) {
           const lastItem = response.items[response.items.length - 1];
-          
+
           // Update the sort value cursor
           // V5.6.8: Use _toUnixTimestamp to ensure date fields are numeric (fixes ISO string errors)
           switch(this.orderBy) {
             case 'date_taken':
-              localCursor = this._toUnixTimestamp(lastItem.date_taken) || 
-                            this._toUnixTimestamp(lastItem.modified_time) || 
+              localCursor = this._toUnixTimestamp(lastItem.date_taken) ||
+                            this._toUnixTimestamp(lastItem.modified_time) ||
                             this._toUnixTimestamp(lastItem.created_time);
               break;
             case 'filename':
@@ -435,13 +452,13 @@ export class SequentialMediaIndexProvider extends MediaProvider {
             default:
               localCursor = lastItem.path;
           }
-          
+
           // Update the id cursor for tie-breaking
           localCursorId = lastItem.id;
-          
+
           this._log(`📍 Updated compound cursor: value=${localCursor}, id=${localCursorId}`);
         }
-        
+
         // Track consecutive fully-excluded batches (all items filtered out)
         // This is the only escape valve now - keeps going through large excluded folders
         // but stops if config excludes literally everything in the database
@@ -450,8 +467,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           consecutiveAllExcludedBatches++;
           if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
             this._dbCleanupWarningShown = true;
-            const missingCount = consecutiveAllExcludedBatches * this.queueSize;
-            const warningMsg = `⚠️ Media Index: ${missingCount}+ missing files detected in database. Run the cleanup_database service to remove stale entries.`;
+            const excludedCount = consecutiveAllExcludedBatches * this.queueSize;
+            const warningMsg = `⚠️ Media Index: ${excludedCount}+ results excluded — check excluded_paths config or run cleanup_database if files are missing from disk.`;
             console.warn(`[SequentialMediaIndexProvider] ${warningMsg}`);
             this.card?._showToast(warningMsg, 7000);
           }
@@ -462,28 +479,28 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         } else {
           consecutiveAllExcludedBatches = 0; // Reset on any progress
         }
-        
+
         // If we got enough items OR database is exhausted, exit loop
         if (allFilteredItems.length >= this.queueSize || !this.hasMore) {
           break;
         }
-        
+
         this._log(`🔄 Need more items (have ${allFilteredItems.length}, need ${this.queueSize}) - fetching next batch...`);
       }
 
       if (iteration >= MAX_ITERATIONS && allFilteredItems.length < this.queueSize) {
         this._log(`⚠️ Stopped after ${MAX_ITERATIONS} iterations with only ${allFilteredItems.length} items - excluded_paths may be excluding most of the database`);
       }
-      
+
       // Now process all accumulated items
       if (allFilteredItems.length === 0) {
         this._log('⚠️ No valid items after filtering across all batches');
         this.hasMore = false;
         return null;
       }
-      
+
       this._log(`📊 Total items after ${iteration} iteration(s): ${allFilteredItems.length}`);
-        
+
       // CLIENT-SIDE SAFETY: Re-sort items to handle null date_taken gracefully
       // Backend should already sort correctly, but this prevents issues if:
       // - Videos have null date_taken but recent modified_time
@@ -494,25 +511,25 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           // Use date_taken, fallback to modified_time, then created_time
           const dateA = a.date_taken || a.modified_time || a.created_time || 0;
           const dateB = b.date_taken || b.modified_time || b.created_time || 0;
-          
+
           // Apply direction
           return this.orderDirection === 'desc' ? dateB - dateA : dateA - dateB;
         });
         this._log('🔄 Applied client-side sort by date_taken with fallback to modified_time/created_time');
-        
+
         // V5.6.8: CRITICAL - Update cursor based on LAST item in SORTED array
         // The cursor must reflect the actual last item we're returning, not the backend's order
         // Use _toUnixTimestamp to ensure numeric values (fixes ISO string errors)
         if (allFilteredItems.length > 0) {
           const lastSortedItem = allFilteredItems[allFilteredItems.length - 1];
-          localCursor = this._toUnixTimestamp(lastSortedItem.date_taken) || 
-                        this._toUnixTimestamp(lastSortedItem.modified_time) || 
+          localCursor = this._toUnixTimestamp(lastSortedItem.date_taken) ||
+                        this._toUnixTimestamp(lastSortedItem.modified_time) ||
                         this._toUnixTimestamp(lastSortedItem.created_time);
           localCursorId = lastSortedItem.id;
           this._log(`📍 Updated cursor AFTER client-side sort: value=${localCursor}, id=${localCursorId}`);
         }
       }
-      
+
       // Transform items to include resolved URLs
       const items = await Promise.all(allFilteredItems.map(async (item) => {
         // V5 URI: Use media_source_uri for URL resolution when available
@@ -540,19 +557,19 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           is_favorited: item.is_favorited || false
         };
       }));
-      
+
       this._log(`QUERY RESULT: Received ${items.length} ordered items`);
       if (this.config?.debug_mode) {
         items.slice(0, 3).forEach((item, idx) => {
           this._log(`Item ${idx}: path="${item.path}", ${this.orderBy}=${item[this.orderBy]}`);
         });
       }
-      
+
       // V5.6.8: Update class-level cursor so subsequent refills don't re-fetch same items
       // This is critical for proper pagination when queue.length < 10 triggers immediate refill
       this.lastSeenValue = localCursor;
       this.lastSeenId = localCursorId;
-      
+
       return items;
     } catch (error) {
       console.error('[SequentialMediaIndexProvider] ❌ Error querying media_index:', error);
@@ -636,7 +653,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
 
     try {
       this._log('🔍 Checking for files newer than:', dateThreshold);
-      
+
       // Build query similar to _queryOrderedFiles but with date filter
       let folderFilter = null;
       if (this.config.folder?.path) {
@@ -645,7 +662,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           folderFilter = path;
         }
       }
-      
+
       const serviceData = {
         count: 100, // Check first 100 new files
         folder: folderFilter,
@@ -655,7 +672,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         order_direction: this.orderDirection,
         date_taken_after: dateThreshold // Filter for files newer than threshold
       };
-      
+
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
@@ -663,17 +680,17 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         service_data: serviceData,
         return_response: true
       };
-      
+
       if (this.config.media_index?.entity_id) {
         wsCall.target = {
           entity_id: this.config.media_index.entity_id
         };
       }
-      
+
       this._log('🔍 Service call:', wsCall);
       const response = await this.hass.callWS(wsCall);
       this._log('📥 Response:', response);
-      
+
       if (response?.response?.items && Array.isArray(response.response.items)) {
         const items = response.response.items;
         this._log(`✅ Found ${items.length} files newer than ${dateThreshold}`);
@@ -691,20 +708,20 @@ export class SequentialMediaIndexProvider extends MediaProvider {
   // Rescan by resetting cursor and checking if first item changed
   async rescanForNewFiles(currentMediaId = null) {
     this._log('🔄 Rescanning database for new files...');
-    
+
     // V5.6.5: Use provided currentMediaId for comparison (prevents false positives on wrap)
     // Fall back to queue[0] if not provided
     const previousFirstItem = currentMediaId || (this.queue.length > 0 ? this.queue[0].media_content_id : null);
-    
+
     // Reset cursor to beginning
     this.lastSeenValue = null;
     this.lastSeenId = null;  // V5.6.8: Also reset the secondary cursor
     this.hasMore = true;
     this.reachedEnd = false;
-    
+
     // Re-query from start
     const items = await this._queryOrderedFiles();
-    
+
     if (!items || items.length === 0) {
       this._log('⚠️ Rescan returned no items');
       return {
@@ -713,23 +730,23 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         newFirstItem: previousFirstItem
       };
     }
-    
+
     // Replace queue with fresh results
     this.queue = items;
     const newFirstItem = this.queue[0].media_content_id;
     const queueChanged = previousFirstItem !== newFirstItem;
-    
+
     this._log(`📊 Rescan complete - first item changed: ${queueChanged}`);
     this._log(`   Previous: ${previousFirstItem}`);
     this._log(`   New: ${newFirstItem}`);
-    
+
     return {
       queueChanged,
       previousFirstItem,
       newFirstItem
     };
   }
-  
+
   /**
    * V5.6.8: Check for new files since the start of the slideshow
    * Called periodically by media-card to detect files added to the library.
@@ -741,16 +758,16 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       this._log('⚠️ Media index not configured - cannot check for new files');
       return [];
     }
-    
+
     // Remember the first item we saw when slideshow started
     // This is stored when queue is first populated
     if (!this._firstItemAtStart) {
       this._log('📝 No reference point - cannot check for new files');
       return [];
     }
-    
+
     this._log('🔍 Checking for files newer than session start...');
-    
+
     try {
       // Query from the beginning (no cursor) to get current newest files
       let folderFilter = null;
@@ -760,7 +777,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           folderFilter = path;
         }
       }
-      
+
       const serviceData = {
         count: this.queueSize, // Get same batch size as normal query
         folder: folderFilter,
@@ -770,7 +787,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         order_direction: this.orderDirection
         // No cursor - query from beginning
       };
-      
+
       const wsCall = {
         type: 'call_service',
         domain: 'media_index',
@@ -778,30 +795,30 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         service_data: serviceData,
         return_response: true
       };
-      
+
       if (this.config.media_index?.entity_id) {
         wsCall.target = {
           entity_id: this.config.media_index.entity_id
         };
       }
-      
+
       const wsResponse = await this.hass.callWS(wsCall);
       const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
-      
+
       if (!response || !response.items || !Array.isArray(response.items)) {
         this._log('⚠️ No items in periodic check response');
         return [];
       }
-      
+
       // Find items that are newer than our reference point
       const newItems = [];
       for (const item of response.items) {
         // Stop when we hit the item we started with (or older)
-        if (item.media_content_id === this._firstItemAtStart || 
+        if (item.media_content_id === this._firstItemAtStart ||
             item.path === this._firstItemAtStart) {
           break;
         }
-        
+
         // Also stop if date is older than reference (for safety)
         if (this._firstItemDateAtStart) {
           const itemDate = item.date_taken || item.modified_time || 0;
@@ -809,11 +826,11 @@ export class SequentialMediaIndexProvider extends MediaProvider {
             break;
           }
         }
-        
+
         // Transform item like _queryOrderedFiles does
         const pathMetadata = MediaProvider.extractMetadataFromPath(item.path, this.config);
         const mediaId = item.media_source_uri || item.path;
-        
+
         newItems.push({
           media_content_id: mediaId,
           media_content_type: item.file_type === 'video' ? 'video' : 'image',
@@ -839,10 +856,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           }
         });
       }
-      
+
       this._log(`🔍 Periodic check found ${newItems.length} new files`);
       return newItems;
-      
+
     } catch (error) {
       console.error('[SequentialMediaIndexProvider] ❌ Error in checkForNewFiles:', error);
       return [];

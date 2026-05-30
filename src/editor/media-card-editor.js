@@ -19,7 +19,7 @@ export class MediaCardEditor extends LitElement {
   setConfig(config) {
     // Migrate v4 config to v5 if needed
     const migratedConfig = this._migrateV4toV5(config);
-    
+
     // Sanitize numeric config values (convert "auto" or other strings to valid numbers/undefined)
     const sanitizedConfig = { ...migratedConfig };
     if (sanitizedConfig.auto_advance_seconds !== undefined && typeof sanitizedConfig.auto_advance_seconds !== 'number') {
@@ -28,17 +28,17 @@ export class MediaCardEditor extends LitElement {
     if (sanitizedConfig.auto_refresh_seconds !== undefined && typeof sanitizedConfig.auto_refresh_seconds !== 'number') {
       sanitizedConfig.auto_refresh_seconds = undefined;
     }
-    
+
     // Check if legacy fields exist before cleanup
-    const hasLegacyFields = sanitizedConfig.auto_advance_duration !== undefined || 
+    const hasLegacyFields = sanitizedConfig.auto_advance_duration !== undefined ||
                            sanitizedConfig.auto_advance_interval !== undefined;
-    
+
     // Clean up legacy auto-advance fields to prevent conflicts
     delete sanitizedConfig.auto_advance_duration;
     delete sanitizedConfig.auto_advance_interval;
-    
+
     this._config = sanitizedConfig;
-    
+
     // If legacy fields were removed, automatically save the cleaned config
     if (hasLegacyFields) {
       this._log('🧹 Detected legacy auto-advance fields, automatically saving cleaned config');
@@ -60,7 +60,7 @@ export class MediaCardEditor extends LitElement {
     if (config.is_folder) {
       // V5 uses 'folder' as media_source_type, with folder-specific config
       result.media_source_type = 'folder';
-      
+
       // Create folder config object from v4 settings
       result.folder = {
         path: config.media_path || config.folder_path || '/media',
@@ -68,7 +68,7 @@ export class MediaCardEditor extends LitElement {
         recursive: config.recursive !== false, // Default true
         use_media_index_for_discovery: config.subfolder_queue?.enabled ? true : undefined
       };
-      
+
       // Preserve subfolder_queue settings if they exist
       if (config.subfolder_queue?.enabled) {
         result.folder.subfolder_queue = config.subfolder_queue;
@@ -145,15 +145,15 @@ export class MediaCardEditor extends LitElement {
 
   async _resolveMediaPath(mediaPath) {
     if (!mediaPath || !this.hass) return '';
-    
+
     if (mediaPath.startsWith('http')) {
       return mediaPath;
     }
-    
+
     if (mediaPath.startsWith('/media/')) {
       mediaPath = 'media-source://media_source' + mediaPath;
     }
-    
+
     if (mediaPath.startsWith('media-source://')) {
       try {
         const resolved = await this.hass.callWS({
@@ -167,7 +167,7 @@ export class MediaCardEditor extends LitElement {
         return '';
       }
     }
-    
+
     return mediaPath;
   }
 
@@ -184,11 +184,11 @@ export class MediaCardEditor extends LitElement {
   _mediaPathChanged(ev) {
     const newPath = ev.target.value;
     const mediaSourceType = this._config.media_source_type || 'single_media';
-    
+
     // Update both legacy media_path and nested structure
     if (mediaSourceType === 'single_media') {
-      this._config = { 
-        ...this._config, 
+      this._config = {
+        ...this._config,
         media_path: newPath,
         single_media: {
           ...this._config.single_media,
@@ -196,8 +196,8 @@ export class MediaCardEditor extends LitElement {
         }
       };
     } else if (mediaSourceType === 'folder') {
-      this._config = { 
-        ...this._config, 
+      this._config = {
+        ...this._config,
         media_path: newPath,
         folder: {
           ...this._config.folder,
@@ -208,16 +208,16 @@ export class MediaCardEditor extends LitElement {
       // Fallback to legacy
       this._config = { ...this._config, media_path: newPath };
     }
-    
+
     this._fireConfigChanged();
   }
 
   // V5 Mode and Backend handlers
   _handleModeChange(ev) {
     const newMode = ev.target.value;
-    
+
     if (newMode === 'single_media') {
-      this._config = { 
+      this._config = {
         type: this._config.type, // Preserve card type
         media_source_type: 'single_media',
         single_media: {
@@ -237,20 +237,20 @@ export class MediaCardEditor extends LitElement {
       // Get path from media_index entity if available and convert to media-source format
       let folderPath = this._config.media_path || null;
       const mediaIndexEntityId = this._config.media_index?.entity_id;
-      
+
       if (!folderPath && mediaIndexEntityId && this.hass?.states[mediaIndexEntityId]) {
         const entity = this.hass.states[mediaIndexEntityId];
-        
+
         // V5.3: Prioritize media_source_uri (correct URI format for custom media_dirs)
         // Falls back to constructing URI from filesystem path if needed
         if (entity.attributes?.media_source_uri) {
           folderPath = entity.attributes.media_source_uri;
           this._log('📁 Auto-populated folder path from media_source_uri:', folderPath);
         } else {
-          const filesystemPath = entity.attributes?.media_path || 
-                                 entity.attributes?.folder_path || 
+          const filesystemPath = entity.attributes?.media_path ||
+                                 entity.attributes?.folder_path ||
                                  entity.attributes?.base_path || null;
-          
+
           if (filesystemPath) {
             // Convert filesystem path to media-source URI
             // e.g., /media/Photo/PhotoLibrary -> media-source://media_source/media/Photo/PhotoLibrary
@@ -260,8 +260,8 @@ export class MediaCardEditor extends LitElement {
           }
         }
       }
-      
-      this._config = { 
+
+      this._config = {
         type: this._config.type, // Preserve card type
         media_source_type: 'folder',
         folder: {
@@ -279,18 +279,18 @@ export class MediaCardEditor extends LitElement {
         media_index: this._config.media_index // Keep root-level for metadata/actions
       };
     }
-    
+
     this._fireConfigChanged();
   }
 
   _handleFolderModeChange(ev) {
     const mode = ev.target.value;
-    
+
     const folderConfig = {
       ...this._config.folder,
       mode: mode
     };
-    
+
     // Add sequential defaults when switching to sequential mode
     if (mode === 'sequential') {
       folderConfig.sequential = {
@@ -301,7 +301,7 @@ export class MediaCardEditor extends LitElement {
       // Remove sequential config when switching to random
       delete folderConfig.sequential;
     }
-    
+
     this._config = {
       ...this._config,
       folder: folderConfig
@@ -420,16 +420,16 @@ export class MediaCardEditor extends LitElement {
   // Filter event handlers
   _handleFavoritesFilterChanged(ev) {
     const favoritesEnabled = ev.target.checked;
-    
+
     // Ensure filters object exists
     const filters = { ...this._config.filters };
-    
+
     if (favoritesEnabled) {
       filters.favorites = true;
     } else {
       delete filters.favorites;
     }
-    
+
     // Remove filters object if empty
     if (Object.keys(filters).length === 0) {
       const newConfig = { ...this._config };
@@ -441,30 +441,30 @@ export class MediaCardEditor extends LitElement {
         filters: filters
       };
     }
-    
+
     this._fireConfigChanged();
   }
 
   _handleDateRangeStartChanged(ev) {
     const startDate = ev.target.value || null;
-    
+
     // Ensure filters and date_range objects exist
     const filters = { ...this._config.filters };
     const dateRange = { ...filters.date_range };
-    
+
     if (startDate) {
       dateRange.start = startDate;
     } else {
       delete dateRange.start;
     }
-    
+
     // Update or remove date_range
     if (dateRange.start || dateRange.end) {
       filters.date_range = dateRange;
     } else {
       delete filters.date_range;
     }
-    
+
     // Update or remove filters
     if (Object.keys(filters).length === 0) {
       const newConfig = { ...this._config };
@@ -476,30 +476,30 @@ export class MediaCardEditor extends LitElement {
         filters: filters
       };
     }
-    
+
     this._fireConfigChanged();
   }
 
   _handleDateRangeEndChanged(ev) {
     const endDate = ev.target.value || null;
-    
+
     // Ensure filters and date_range objects exist
     const filters = { ...this._config.filters };
     const dateRange = { ...filters.date_range };
-    
+
     if (endDate) {
       dateRange.end = endDate;
     } else {
       delete dateRange.end;
     }
-    
+
     // Update or remove date_range
     if (dateRange.start || dateRange.end) {
       filters.date_range = dateRange;
     } else {
       delete filters.date_range;
     }
-    
+
     // Update or remove filters
     if (Object.keys(filters).length === 0) {
       const newConfig = { ...this._config };
@@ -511,7 +511,7 @@ export class MediaCardEditor extends LitElement {
         filters: filters
       };
     }
-    
+
     this._fireConfigChanged();
   }
 
@@ -520,7 +520,7 @@ export class MediaCardEditor extends LitElement {
     const dateRange = filters.date_range || {};
     const start = dateRange.start;
     const end = dateRange.end;
-    
+
     if (start && end) {
       return `📅 Showing media from ${start} to ${end}`;
     } else if (start) {
@@ -534,7 +534,7 @@ export class MediaCardEditor extends LitElement {
   _parsePriorityFolders(text) {
     // NOT USED - keeping for backward compatibility
     if (!text || text.trim() === '') return [];
-    
+
     return text.split('\n')
       .map(line => line.trim())
       .filter(line => line.length > 0)
@@ -576,7 +576,7 @@ export class MediaCardEditor extends LitElement {
     this._log('_handleRootMediaIndexEntityChange called with:', entityId);
     this._log('Current media_source_type:', this._config.media_source_type);
     this._log('this.hass exists:', !!this.hass);
-    
+
     if (entityId) {
       // Enable media_index at root level (works for both single_media and folder)
       this._config = {
@@ -586,18 +586,18 @@ export class MediaCardEditor extends LitElement {
           entity_id: entityId
         }
       };
-      
+
       // Auto-populate folder path from entity if available
       if (this.hass && this.hass.states[entityId]) {
         const entity = this.hass.states[entityId];
         this._log('Media Index entity FULL:', entity);
         this._log('Media Index entity attributes:', entity.attributes);
         this._log('Available attribute keys:', Object.keys(entity.attributes));
-        
+
         // V5.3: Prioritize media_source_uri (correct URI format for custom media_dirs)
         // Falls back to constructing URI from filesystem path if needed
         let folderPath = null;
-        
+
         if (entity.attributes?.media_source_uri) {
           // Use media_source_uri directly (already in correct format)
           folderPath = entity.attributes.media_source_uri;
@@ -605,12 +605,12 @@ export class MediaCardEditor extends LitElement {
         } else {
           // Fallback: construct URI from filesystem path attributes
           const mediaFolder = entity.attributes?.media_path ||   // media_index uses this
-                             entity.attributes?.media_folder || 
+                             entity.attributes?.media_folder ||
                              entity.attributes?.folder_path ||
                              entity.attributes?.base_path;
-          
+
           this._log('Extracted media folder:', mediaFolder);
-          
+
           if (mediaFolder) {
             // Convert filesystem path to media-source URI format
             const normalizedPath = mediaFolder.startsWith('/') ? mediaFolder : '/' + mediaFolder;
@@ -618,12 +618,12 @@ export class MediaCardEditor extends LitElement {
             this._log('Constructed URI from media_path:', mediaFolder, '→', folderPath);
           }
         }
-        
+
         this._log('Is in folder mode?', this._config.media_source_type === 'folder');
-        
+
         if (folderPath) {
           this._log('Auto-populating path from media_index entity:', folderPath);
-          
+
           // For folder mode: set folder.path
           if (this._config.media_source_type === 'folder') {
             this._log('Setting folder.path to:', folderPath);
@@ -649,7 +649,7 @@ export class MediaCardEditor extends LitElement {
       delete newConfig.media_index;
       this._config = newConfig;
     }
-    
+
     this._log('Final config before fire:', this._config);
     this._fireConfigChanged();
   }
@@ -657,7 +657,7 @@ export class MediaCardEditor extends LitElement {
   // Legacy handler - can be removed later
   _handleMediaIndexEntityChange(ev) {
     const entityId = ev.target.value;
-    
+
     if (entityId) {
       // Enable media_index backend
       this._config = {
@@ -680,18 +680,18 @@ export class MediaCardEditor extends LitElement {
         }
       };
     }
-    
+
     this._fireConfigChanged();
   }
 
   // Legacy handler - can be removed later
   _handleMediaIndexToggle(ev) {
     const enabled = ev.target.checked;
-    this._config = { 
-      ...this._config, 
-      use_media_index: enabled 
+    this._config = {
+      ...this._config,
+      use_media_index: enabled
     };
-    
+
     if (!enabled) {
       delete this._config.media_index;
       // Re-enable File System Scanning if in Folder Hierarchy mode
@@ -713,20 +713,20 @@ export class MediaCardEditor extends LitElement {
         };
       }
     }
-    
+
     this._fireConfigChanged();
   }
 
   _handleMediaIndexEntityChange(ev) {
     const entityId = ev.target.value;
-    
+
     // Get the media folder from the entity's attributes
     let mediaFolder = '';
     if (this.hass && entityId && this.hass.states[entityId]) {
       const entity = this.hass.states[entityId];
       mediaFolder = entity.attributes.media_folder || '';
     }
-    
+
     this._config = {
       ...this._config,
       media_index: {
@@ -741,7 +741,7 @@ export class MediaCardEditor extends LitElement {
 
   _getMediaIndexEntities() {
     if (!this.hass) return [];
-    
+
     return Object.keys(this.hass.states)
       .filter(entityId => entityId.startsWith('sensor.media_index_'))
       .map(entityId => {
@@ -757,17 +757,17 @@ export class MediaCardEditor extends LitElement {
   _parseMediaIndexPath(entityId) {
     // Parse entity_id like "sensor.media_index_media_photo_photolibrary_total_files"
     // to extract path "media-source://media_source/media/Photo/PhotoLibrary"
-    
+
     if (!entityId || !entityId.startsWith('sensor.media_index_')) {
       return null;
     }
-    
+
     // Try to get the path from the entity's friendly_name attribute
     // Format: "Media Index (/media/Photo/PhotoLibrary) Total Files"
     if (this.hass && this.hass.states[entityId]) {
       const entity = this.hass.states[entityId];
       const friendlyName = entity.attributes.friendly_name;
-      
+
       if (friendlyName) {
         // Extract path from friendly name using regex: /media/...
         const match = friendlyName.match(/\((\/.+?)\)/);
@@ -779,29 +779,29 @@ export class MediaCardEditor extends LitElement {
         }
       }
     }
-    
+
     // Fallback: parse entity_id (but this has capitalization issues)
     let pathPart = entityId
       .replace('sensor.media_index_', '')
       .replace(/_total_files$/, '')
       .replace(/_file_count$/, '');
-    
+
     this._log('🔍 Parsing Media Index path (fallback):', pathPart);
-    
+
     // Split by underscore and capitalize each part
-    const parts = pathPart.split('_').map(part => 
+    const parts = pathPart.split('_').map(part =>
       part.charAt(0).toUpperCase() + part.slice(1)
     );
-    
+
     this._log('🔍 Path parts (fallback):', parts);
-    
+
     // Build path: media-source://media_source/Part1/Part2/Part3
     if (parts.length > 0) {
       const fullPath = `media-source://media_source/${parts.join('/')}`;
       this._log('🔍 Built path (fallback):', fullPath);
       return fullPath;
     }
-    
+
     return null;
   }
 
@@ -921,7 +921,7 @@ export class MediaCardEditor extends LitElement {
     const value = Math.max(250, parseInt(ev.target.value, 10) || 3000);
     this._updateNestedConfig('preload', { video_timeout_ms: value });
   }
-  
+
   _blendWithBackgroundChanged(ev) {
     this._config = { ...this._config, blend_with_background: ev.target.checked };
     this._fireConfigChanged();
@@ -952,7 +952,7 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, video_max_duration: duration };
     this._fireConfigChanged();
   }
-  
+
   _videoThumbnailTimeChanged(ev) {
     const time = parseFloat(ev.target.value) || 1;
     this._config = { ...this._config, video_thumbnail_time: time };
@@ -968,10 +968,10 @@ export class MediaCardEditor extends LitElement {
     this._config = { ...this._config, show_position_indicator: ev.target.checked };
     this._fireConfigChanged();
   }
-  
+
   _positionIndicatorPositionChanged(ev) {
-    this._config = { 
-      ...this._config, 
+    this._config = {
+      ...this._config,
       position_indicator: {
         ...this._config.position_indicator,
         position: ev.target.value
@@ -1033,7 +1033,7 @@ export class MediaCardEditor extends LitElement {
   _displayEntitiesCycleIntervalChanged(ev) {
     const value = parseInt(ev.target.value, 10);
     if (isNaN(value) || value < 1 || value > 60) return;
-    
+
     this._config = {
       ...this._config,
       display_entities: {
@@ -1047,7 +1047,7 @@ export class MediaCardEditor extends LitElement {
   _displayEntitiesTransitionDurationChanged(ev) {
     const value = parseInt(ev.target.value, 10);
     if (isNaN(value) || value < 0 || value > 2000) return;
-    
+
     this._config = {
       ...this._config,
       display_entities: {
@@ -1061,7 +1061,7 @@ export class MediaCardEditor extends LitElement {
   _displayEntitiesRecentChangeWindowChanged(ev) {
     const value = parseInt(ev.target.value, 10);
     if (isNaN(value) || value < 0 || value > 300) return;
-    
+
     this._config = {
       ...this._config,
       display_entities: {
@@ -1444,7 +1444,7 @@ export class MediaCardEditor extends LitElement {
   _subfolderScanDepthChanged(ev) {
     const value = ev.target.value;
     const depth = value === '' ? null : Math.max(0, Math.min(10, parseInt(value) || 0));
-    
+
     this._config = {
       ...this._config,
       subfolder_queue: {
@@ -1459,7 +1459,7 @@ export class MediaCardEditor extends LitElement {
   _priorityFoldersChanged(ev) {
     const value = ev.target.value;
     const folders = value.split(',').map(f => f.trim()).filter(f => f);
-    
+
     this._config = {
       ...this._config,
       subfolder_queue: {
@@ -1473,7 +1473,7 @@ export class MediaCardEditor extends LitElement {
 
   _equalProbabilityModeChanged(ev) {
     const enabled = ev.target.checked;
-    
+
     this._config = {
       ...this._config,
       subfolder_queue: {
@@ -1487,7 +1487,7 @@ export class MediaCardEditor extends LitElement {
 
   _estimatedLibrarySizeChanged(ev) {
     const value = parseInt(ev.target.value) || 0;
-    
+
     this._config = {
       ...this._config,
       subfolder_queue: {
@@ -1509,7 +1509,7 @@ export class MediaCardEditor extends LitElement {
 
   _queueSizeChanged(ev) {
     const value = parseInt(ev.target.value) || 0;
-    
+
     this._config = {
       ...this._config,
       subfolder_queue: {
@@ -1558,7 +1558,7 @@ export class MediaCardEditor extends LitElement {
   _renderActionConfig(actionType) {
     const action = this._config[actionType];
     if (!action || action.action === 'none') return '';
-    
+
     return html`
       <div style="margin-top: 8px; padding: 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--secondary-background-color);">
         ${action.action === 'more-info' || action.action === 'toggle' ? html`
@@ -1573,7 +1573,7 @@ export class MediaCardEditor extends LitElement {
             />
           </div>
         ` : ''}
-        
+
         ${action.action === 'call-service' || action.action === 'perform-action' ? html`
           <div style="margin-bottom: 8px;">
             <label style="display: block; font-size: 12px; margin-bottom: 4px;">Service:</label>
@@ -1609,7 +1609,7 @@ export class MediaCardEditor extends LitElement {
             </div>
           </div>
         ` : ''}
-        
+
         ${action.action === 'navigate' ? html`
           <div style="margin-bottom: 8px;">
             <label style="display: block; font-size: 12px; margin-bottom: 4px;">Navigation Path:</label>
@@ -1622,7 +1622,7 @@ export class MediaCardEditor extends LitElement {
             />
           </div>
         ` : ''}
-        
+
         ${action.action === 'url' ? html`
           <div style="margin-bottom: 8px;">
             <label style="display: block; font-size: 12px; margin-bottom: 4px;">URL:</label>
@@ -1635,7 +1635,7 @@ export class MediaCardEditor extends LitElement {
             />
           </div>
         ` : ''}
-        
+
         <div style="margin-top: 8px;">
           <label style="display: block; font-size: 12px; margin-bottom: 4px;">Confirmation Message (optional):</label>
           <textarea
@@ -1646,9 +1646,9 @@ export class MediaCardEditor extends LitElement {
             style="width: 100%; font-size: 12px; resize: vertical;"
           ></textarea>
           <div style="font-size: 11px; color: var(--secondary-text-color); margin-top: 4px;">
-            Supported templates: <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{filename}}</code>, 
-            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{date}}</code>, 
-            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{location}}</code>, 
+            Supported templates: <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{filename}}</code>,
+            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{date}}</code>,
+            <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{location}}</code>,
             <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 2px 4px; border-radius: 3px;">{{folder}}</code>
           </div>
         </div>
@@ -1755,7 +1755,7 @@ export class MediaCardEditor extends LitElement {
     return inputBooleanEntities.map(entityId => {
       const state = this.hass.states[entityId];
       const friendlyName = state.attributes.friendly_name || entityId;
-      
+
       return html`
         <option value="${entityId}">${friendlyName}</option>
       `;
@@ -1764,8 +1764,8 @@ export class MediaCardEditor extends LitElement {
 
   _renderValidationStatus() {
     if (!this._config.media_path) return '';
-    
-    if (this._config.media_path.startsWith('media-source://') || 
+
+    if (this._config.media_path.startsWith('media-source://') ||
         this._config.media_path.startsWith('/')) {
       return html`
         <div class="validation-status validation-success">
@@ -1783,11 +1783,11 @@ export class MediaCardEditor extends LitElement {
 
   _renderFolderModeStatus() {
     if (!this._config.is_folder || !this._config.folder_mode) return '';
-    
+
     const mode = this._config.folder_mode;
     const modeText = mode === 'latest' ? 'Show Latest File' : 'Show Random Files';
     const modeIcon = mode === 'latest' ? '📅' : '🎲';
-    
+
     return html`
       <div class="folder-mode-status">
         <span>${modeIcon}</span>
@@ -1803,39 +1803,39 @@ export class MediaCardEditor extends LitElement {
     }
 
     this._log('Opening media browser...');
-    
+
     // Determine the starting path for the browser
     let startPath = '';
-    
+
     // V5.3: FIRST priority - Check Media Index entity for media_source_uri attribute
     // This ensures custom media_dirs mappings work correctly
     if (this._config.media_index?.entity_id) {
       const entityId = this._config.media_index.entity_id;
       const entity = this.hass.states[entityId];
-      
+
       this._log('🔍 Media Index entity:', entityId);
       this._log('🔍 Entity attributes:', entity?.attributes);
-      
+
       // Media Index v1.4.0+ provides media_source_uri attribute
       if (entity && entity.attributes.media_source_uri) {
         startPath = entity.attributes.media_source_uri;
         this._log('Starting browser from Media Index URI (attribute):', startPath);
       }
     }
-    
+
     // Second priority - try to get path from current config structure (v5)
     if (!startPath) {
       const mediaSourceType = this._config.media_source_type || 'single_media';
       let configuredPath = '';
-      
+
       if (mediaSourceType === 'single_media') {
         configuredPath = this._config.single_media?.path || this._config.media_path || '';
       } else if (mediaSourceType === 'folder') {
         configuredPath = this._config.folder?.path || this._config.media_path || '';
       }
-      
+
       this._log('🔍 Configured path:', configuredPath);
-      
+
       if (configuredPath) {
         // If we have a path, start browsing from that location (or its parent)
         if (mediaSourceType === 'single_media' && configuredPath.includes('/')) {
@@ -1851,12 +1851,12 @@ export class MediaCardEditor extends LitElement {
         }
       }
     }
-    
+
     // Third priority - fallback to other Media Index attributes if no URI found
     if (!startPath && this._config.media_index?.entity_id) {
       const entityId = this._config.media_index.entity_id;
       const entity = this.hass.states[entityId];
-      
+
       if (entity && entity.attributes.media_folder) {
         startPath = entity.attributes.media_folder;
         this._log('Starting browser from Media Index folder (attribute):', startPath);
@@ -1869,7 +1869,7 @@ export class MediaCardEditor extends LitElement {
         }
       }
     }
-    
+
     // Try to browse media and create our own simple dialog
     try {
       const mediaContent = await this._fetchMediaContents(this.hass, startPath);
@@ -1879,7 +1879,7 @@ export class MediaCardEditor extends LitElement {
       }
     } catch (error) {
       this._log('Could not fetch media contents for path:', startPath, 'Error:', error);
-      
+
       // If starting from a specific folder failed, try from root
       if (startPath !== '') {
         this._log('Retrying from root...');
@@ -1894,7 +1894,7 @@ export class MediaCardEditor extends LitElement {
         }
       }
     }
-    
+
     // Final fallback: use a simple prompt with helpful guidance
     const helpText = `Enter the path to your media file:
 
@@ -1908,7 +1908,7 @@ Your current path: ${configuredPath}
 Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
     const mediaPath = prompt(helpText, configuredPath);
-    
+
     if (mediaPath && mediaPath.trim()) {
       this._log('Media path entered:', mediaPath);
       this._handleMediaPicked(mediaPath.trim());
@@ -1919,7 +1919,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _showCustomMediaBrowser(mediaContent) {
     this._log('Creating custom media browser with', mediaContent.children.length, 'items');
-    
+
     // Force remove any existing dialogs first
     const existingDialogs = document.querySelectorAll('[data-media-browser-dialog="true"]');
     existingDialogs.forEach(d => {
@@ -1928,12 +1928,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       }
       d.remove();
     });
-    
+
     // Use native <dialog> element with showModal() for top-layer rendering
     // This guarantees the dialog appears above everything, including HA's card editor
     const dialog = document.createElement('dialog');
     dialog.setAttribute('data-media-browser-dialog', 'true');
-    
+
     dialog.style.cssText = `
       border: none !important;
       border-radius: 8px !important;
@@ -1947,7 +1947,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
       font-family: system-ui, -apple-system, sans-serif !important;
     `;
-    
+
     // Style the backdrop
     const styleEl = document.createElement('style');
     styleEl.textContent = `
@@ -2048,7 +2048,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
     dialog.appendChild(title);
     dialog.appendChild(fileList);
     dialog.appendChild(buttonContainer);
-    
+
     // Append to document.body and show as modal (uses browser's top-layer)
     document.body.appendChild(dialog);
     dialog.showModal();
@@ -2058,13 +2058,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
   async _addMediaFilesToBrowser(container, mediaContent, dialog, currentPath = '') {
     // ALWAYS log - bypassing debug check for diagnosis
 
-    console.log('[MediaCard] Adding media files to browser:', mediaContent.children.length, 'items');
-    
+    console.log('[MediaViewerCard] Adding media files to browser:', mediaContent.children.length, 'items');
+
     // Log first few items for debugging (especially for Reolink integration)
     if (mediaContent.children && mediaContent.children.length > 0) {
-      console.log('[MediaCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
+      console.log('[MediaViewerCard] 📋 First 3 items in browser:', JSON.stringify(mediaContent.children.slice(0, 3), null, 2));
     }
-    
+
     const itemsToCheck = (mediaContent.children || []).slice(0, 50);
     const hasMediaFiles = itemsToCheck.some(item => {
       const isFolder = item.can_expand;
@@ -2075,12 +2075,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = !isFolder && this._isMediaFile(fileName);
-      console.log(`[MediaCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
+      console.log(`[MediaViewerCard]   Item check: ${fileName} | can_expand=${item.can_expand} | media_class=${item.media_class} | isMedia=${isMedia}`);
       return isMedia;
     });
-    
+
     const hasSubfolders = itemsToCheck.some(item => item.can_expand);
-    
+
     // Add "Up to Parent" button if we're not at root level (empty string = root)
     if (currentPath && currentPath !== '') {
       this._log('Adding parent navigation button for current path:', currentPath);
@@ -2099,20 +2099,20 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         pointer-events: auto !important;
         font-weight: 500 !important;
       `;
-      
+
       parentButton.innerHTML = '<span style="font-size: 24px;">⬆️</span><span>Up to Parent Folder</span>';
-      
+
       parentButton.onclick = async () => {
         this._log('Navigating to parent from:', currentPath);
         try {
           // Calculate parent path properly handling media-source:// protocol
           let parentPath = '';
-          
+
           if (currentPath.includes('://')) {
             // Handle media-source:// URIs
             const protocolEnd = currentPath.indexOf('://') + 3;
             const pathAfterProtocol = currentPath.substring(protocolEnd);
-            
+
             if (pathAfterProtocol.includes('/')) {
               // Has path segments after protocol - go up one level
               const segments = pathAfterProtocol.split('/');
@@ -2130,9 +2130,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             pathParts.pop();
             parentPath = pathParts.join('/');
           }
-          
+
           this._log('Parent path:', parentPath);
-          
+
           // Fetch parent content
           const parentContent = await this._fetchMediaContents(this.hass, parentPath);
           container.innerHTML = '';
@@ -2162,47 +2162,47 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         parentButton.style.transform = 'translateY(0)';
         parentButton.style.boxShadow = 'none';
       };
-      
+
       container.appendChild(parentButton);
     }
-    
+
     // If we're in a folder (not root) with media files OR subfolders, add special folder options at the top
     if ((currentPath && currentPath !== '') && (hasMediaFiles || hasSubfolders)) {
       this._log('Adding folder options for path:', currentPath);
       this._addFolderOptions(container, dialog, currentPath);
     }
-    
+
     // Filter items to display based on media type configuration
     const itemsToShow = (mediaContent.children || []).filter(item => {
       if (item.can_expand) {
-        console.log(`[MediaCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
+        console.log(`[MediaViewerCard] ✅ Including folder: ${this._getItemDisplayName(item)}`);
         return true;
       }
-      
+
       // Check media_class first (works for Reolink, Immich, and other API-based sources)
       if (item.media_class === 'image' || item.media_class === 'video') {
-        console.log(`[MediaCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
+        console.log(`[MediaViewerCard] ✅ media_class check: ${this._getItemDisplayName(item)} | media_class=${item.media_class}`);
         return true;
       }
-      
+
       // If media type filtering is configured, check file type
       if (this._config.media_type && this._config.media_type !== 'all') {
         const fileName = this._getItemDisplayName(item);
         const fileType = this._detectFileType(fileName);
         const included = fileType === this._config.media_type;
-        console.log(`[MediaCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
+        console.log(`[MediaViewerCard] ${included ? '✅' : '❌'} Media type filter (${this._config.media_type}): ${fileName} → ${fileType}`);
         return included;
       }
-      
+
       // Fallback to extension check for filesystem sources
       const fileName = this._getItemDisplayName(item);
       const isMedia = this._isMediaFile(fileName);
-      console.log(`[MediaCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
+      console.log(`[MediaViewerCard] ${isMedia ? '✅' : '❌'} Extension check: ${fileName} | media_class=${item.media_class} | media_content_id=${item.media_content_id}`);
       return isMedia;
     });
-    
-    console.log(`[MediaCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
-    
+
+    console.log(`[MediaViewerCard] 📊 Filter results: ${itemsToShow.length} items to show (from ${mediaContent.children.length} total)`);
+
     for (const item of itemsToShow) {
       const fileItem = document.createElement('div');
       fileItem.style.cssText = `
@@ -2247,7 +2247,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         overflow: hidden !important;
         background: var(--secondary-background-color, #f5f5f5) !important;
       `;
-      
+
       const name = document.createElement('span');
       name.textContent = this._getItemDisplayName(item);
       name.style.cssText = `
@@ -2265,13 +2265,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         folderIcon.textContent = '📁';
         folderIcon.style.fontSize = '24px';
         thumbnailContainer.appendChild(folderIcon);
-        
+
         fileItem.onclick = async () => {
           this._log('Folder clicked:', item.media_content_id);
           try {
             const subContent = await this._fetchMediaContents(this.hass, item.media_content_id);
             container.innerHTML = '';
-            
+
             // Add back button
             const backButton = document.createElement('div');
             backButton.style.cssText = `
@@ -2286,9 +2286,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               margin-bottom: 8px !important;
               pointer-events: auto !important;
             `;
-            
+
             backButton.innerHTML = '<span style="font-size: 24px;">⬅️</span><span style="font-weight: 500; color: var(--primary-text-color);">Back</span>';
-            
+
             backButton.onclick = () => {
               this._log('Back button clicked');
               container.innerHTML = '';
@@ -2307,7 +2307,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               backButton.style.color = 'var(--primary-text-color)';
               backButton.style.transform = 'translateY(0)';
             };
-            
+
             container.appendChild(backButton);
             this._addMediaFilesToBrowser(container, subContent, dialog, item.media_content_id);
           } catch (error) {
@@ -2320,7 +2320,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         const ext = this._getFileExtension(this._getItemDisplayName(item));
         const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext);
         const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
-        
+
         if (isImage) {
           // Create image thumbnail with proper loading
           this._createImageThumbnail(thumbnailContainer, item);
@@ -2354,7 +2354,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
   _addFolderOptions(container, dialog, folderPath) {
     this._log('Adding folder selection option for:', folderPath);
-    
+
     // Simple "Use This Folder" button
     const useFolderButton = document.createElement('div');
     useFolderButton.style.cssText = `
@@ -2383,9 +2383,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
     useFolderButton.onclick = () => {
       this._log('Use This Folder clicked for:', folderPath);
-      
+
       const mediaSourceType = this._config.media_source_type || 'single_media';
-      
+
       if (mediaSourceType === 'folder') {
         // Already in folder mode - just update the path
         this._config = {
@@ -2404,7 +2404,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           'OK = Switch to Folder mode (random/sequential slideshow)\n' +
           'Cancel = Stay in Single Media mode (shows folder as single item)'
         );
-        
+
         if (switchToFolder) {
           this._config = {
             ...this._config,
@@ -2426,9 +2426,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           };
         }
       }
-      
+
       this._fireConfigChanged();
-      
+
       if (dialog) {
         if (dialog.open) dialog.close();
         if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
@@ -2500,10 +2500,10 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
     try {
       let thumbnailUrl = null;
-      
+
       // Check if this is an Immich source
       const isImmich = item.media_content_id && item.media_content_id.includes('media-source://immich');
-      
+
       // Try multiple approaches for getting the thumbnail
       // Skip item.thumbnail for Immich - those URLs lack authentication
       if (item.thumbnail && !isImmich) {
@@ -2513,7 +2513,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         thumbnailUrl = item.thumbnail_url;
         if (shouldLog) this._log('✅ Using provided thumbnail_url:', thumbnailUrl);
       }
-      
+
       // Try Home Assistant thumbnail API (or for Immich, always use this)
       if (!thumbnailUrl) {
         try {
@@ -2521,18 +2521,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           // Immich integration doesn't properly auth thumbnail endpoints
           let resolveId = item.media_content_id;
           if (shouldLog) this._log('  📍 Original media_content_id:', resolveId);
-          
+
           if (resolveId && resolveId.includes('media-source://immich') && resolveId.includes('/thumbnail/')) {
             resolveId = resolveId.replace('/thumbnail/', '/fullsize/');
             if (shouldLog) this._log('  🔧 Immich thumbnail → fullsize:', resolveId);
           }
-          
+
           const thumbnailResponse = await this.hass.callWS({
             type: "media_source/resolve_media",
             media_content_id: resolveId,
             expires: 3600
           });
-          
+
           if (thumbnailResponse && thumbnailResponse.url) {
             thumbnailUrl = thumbnailResponse.url;
             if (shouldLog) this._log('  ✅ Got thumbnail from resolve_media API:', thumbnailUrl);
@@ -2541,7 +2541,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           if (shouldLog) this._log('  ❌ Thumbnail resolve_media API failed:', error);
         }
       }
-      
+
       // Try direct resolution
       if (!thumbnailUrl) {
         thumbnailUrl = await this._resolveMediaPath(item.media_content_id);
@@ -2549,7 +2549,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           this._log('✅ Got thumbnail from direct resolution:', thumbnailUrl);
         }
       }
-      
+
       if (thumbnailUrl) {
         const thumbnail = document.createElement('img');
         thumbnail.style.cssText = `
@@ -2560,9 +2560,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           opacity: 0 !important;
           transition: opacity 0.3s ease !important;
         `;
-        
+
         let timeoutId;
-        
+
         thumbnail.onload = () => {
           container.innerHTML = '';
           thumbnail.style.opacity = '1';
@@ -2570,15 +2570,15 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           if (timeoutId) clearTimeout(timeoutId);
           if (shouldLog) this._log('✅ Thumbnail loaded successfully');
         };
-        
+
         thumbnail.onerror = () => {
           this._showThumbnailFallback(container, '🖼️', 'Image thumbnail failed to load');
           if (timeoutId) clearTimeout(timeoutId);
           if (shouldLog) this._log('❌ Thumbnail failed to load');
         };
-        
+
         thumbnail.src = thumbnailUrl;
-        
+
         // Timeout fallback (5 seconds)
         timeoutId = setTimeout(() => {
           if (thumbnail.style.opacity === '0') {
@@ -2586,11 +2586,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             if (shouldLog) this._log('⏰ Thumbnail timeout');
           }
         }, 5000);
-        
+
       } else {
         this._showThumbnailFallback(container, '🖼️', 'No thumbnail URL available');
       }
-      
+
     } catch (error) {
       console.error('Error creating image thumbnail:', error);
       this._showThumbnailFallback(container, '🖼️', 'Thumbnail error: ' + error.message);
@@ -2609,7 +2609,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       border-radius: 4px !important;
       position: relative !important;
     `;
-    
+
     videoIcon.innerHTML = `
       <span style="font-size: 24px;">🎬</span>
       <div style="
@@ -2624,7 +2624,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         text-transform: uppercase !important;
       ">VIDEO</div>
     `;
-    
+
     container.appendChild(videoIcon);
   }
 
@@ -2640,21 +2640,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       background: rgba(0, 0, 0, 0.05) !important;
       border-radius: 4px !important;
     `;
-    
+
     fallbackIcon.innerHTML = `<span style="font-size: 24px; opacity: 0.7;">${icon}</span>`;
     fallbackIcon.title = reason;
-    
+
     container.appendChild(fallbackIcon);
   }
 
   _handleMediaPicked(mediaContentId) {
-    console.log('[MediaCard] Media picked:', mediaContentId);
-    
+    console.log('[MediaViewerCard] Media picked:', mediaContentId);
+
     const mediaSourceType = this._config.media_source_type || 'single_media';
-    
+
     // For single_media: just set the file in single_media.path
     if (mediaSourceType === 'single_media') {
-      this._config = { 
+      this._config = {
         ...this._config,
         single_media: {
           ...this._config.single_media,
@@ -2669,13 +2669,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         'OK = Use the parent folder instead\n' +
         'Cancel = Use this file (will switch to Single Media mode)'
       );
-      
+
       if (confirmFile) {
         // Extract parent folder from file path
         const pathParts = mediaContentId.split('/');
         pathParts.pop(); // Remove filename
         const folderPath = pathParts.join('/');
-        
+
         this._config = {
           ...this._config,
           folder: {
@@ -2694,14 +2694,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         };
       }
     }
-    
+
     // Auto-detect media type from extension or media-source protocol
     let detectedType = null;
-    
+
     // Check for Reolink video source
     if (mediaContentId.includes('media-source://reolink/')) {
       detectedType = 'video';
-      console.log('[MediaCard] Detected Reolink video source');
+      console.log('[MediaViewerCard] Detected Reolink video source');
     } else {
       // Try extension detection for filesystem sources
       const extension = mediaContentId.split('.').pop()?.toLowerCase();
@@ -2711,14 +2711,14 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         detectedType = 'image';
       }
     }
-    
+
     if (detectedType) {
       this._config.media_type = detectedType;
-      console.log('[MediaCard] Auto-detected media type:', detectedType);
+      console.log('[MediaViewerCard] Auto-detected media type:', detectedType);
     }
-    
+
     this._fireConfigChanged();
-    console.log('[MediaCard] Config updated (media selected):', this._config);
+    console.log('[MediaViewerCard] Config updated (media selected):', this._config);
   }
 
   static styles = css`
@@ -2728,7 +2728,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       grid-gap: 16px;
       padding: 0;
     }
-    
+
     .config-row {
       display: grid;
       grid-template-columns: 120px 1fr;
@@ -2736,13 +2736,13 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       align-items: center;
       margin-bottom: 16px;
     }
-    
+
     label {
       font-weight: 500;
       color: var(--primary-text-color);
       font-size: 14px;
     }
-    
+
     input, select {
       padding: 8px 12px;
       border: 1px solid var(--divider-color);
@@ -2754,17 +2754,17 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       width: 100%;
       box-sizing: border-box;
     }
-    
+
     input::placeholder {
       color: var(--secondary-text-color);
       opacity: 0.6;
     }
-    
+
     input:focus, select:focus {
       outline: none;
       border-color: var(--primary-color);
     }
-    
+
     input[type="checkbox"] {
       width: auto;
       margin: 0;
@@ -2798,21 +2798,21 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       cursor: text;
       user-select: text;
     }
-    
+
     .section {
       border: 1px solid var(--divider-color);
       border-radius: 8px;
       padding: 16px;
       margin: 16px 0;
     }
-    
+
     .section-title {
       font-weight: 600;
       font-size: 16px;
       margin-bottom: 16px;
       color: var(--primary-text-color);
     }
-    
+
     .help-text {
       font-size: 12px;
       color: var(--secondary-text-color);
@@ -2847,44 +2847,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
       align-items: center;
       gap: 8px;
       color: var(--primary-text-color);
-    }
-
-    .integration-callout {
-      background: var(--primary-background-color, #fafafa);
-      padding: 16px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      border: 1px solid var(--divider-color, #e0e0e0);
-    }
-
-    .integration-callout-title {
-      margin-bottom: 12px;
-      font-weight: 600;
-      color: var(--primary-text-color);
-    }
-
-    .integration-callout p {
-      margin: 4px 0 12px 0;
-      font-size: 13px;
-      color: var(--secondary-text-color, #666);
-      line-height: 1.45;
-    }
-
-    .integration-callout a {
-      color: var(--primary-color, #007bff);
-      text-decoration: none;
-      font-weight: 500;
-    }
-
-    .integration-callout a:hover {
-      text-decoration: underline;
-    }
-
-    .integration-callout code {
-      background: var(--code-background-color, rgba(0,0,0,0.1));
-      padding: 1px 4px;
-      border-radius: 3px;
-      font-size: 12px;
     }
 
     .support-footer {
@@ -2934,7 +2896,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
     return html`
       <div class="card-config">
-        
+
         <!-- Mode Selection Dropdown (2 options: single_media or folder) -->
         <div class="config-row">
           <label>Media Source Type</label>
@@ -2944,8 +2906,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <option value="folder">Folder</option>
             </select>
             <div class="help-text">
-              ${mediaSourceType === 'single_media' 
-                ? 'Display a single image/video (with optional periodic refresh)' 
+              ${mediaSourceType === 'single_media'
+                ? 'Display a single image/video (with optional periodic refresh)'
                 : 'Display media from a folder (random or sequential)'}
             </div>
           </div>
@@ -2957,11 +2919,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <strong>🚀 Media Index Integration (Optional)</strong>
           </div>
           <p style="margin: 4px 0 16px 0; font-size: 13px; color: var(--secondary-text-color, #666);">
-            Enable EXIF metadata display (date, location, camera info) and action buttons (favorite, delete, edit). 
+            Enable EXIF metadata display (date, location, camera info) and action buttons (favorite, delete, edit).
             ${isFolderMode ? 'Also provides faster database-backed queries for folder scanning. ' : ''}
             Download via HACS or <a href="https://github.com/markaggar/ha-media-index" target="_blank" style="color: var(--primary-color, #007bff);">GitHub</a>
           </p>
-          
+
           <div style="margin-left: 0;">
             <label style="display: block; margin-bottom: 4px; font-weight: 500;">Media Index Entity:</label>
             <select
@@ -2971,19 +2933,19 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             >
               <option value="">(None - No metadata or action buttons)</option>
               ${this._getMediaIndexEntities().map(entity => html`
-                <option 
+                <option
                   value="${entity.entity_id}"
                   .selected=${mediaIndexEntityId === entity.entity_id}
                 >${entity.friendly_name}</option>
               `)}
             </select>
             <div style="font-size: 12px; color: var(--secondary-text-color, #666); margin-top: 4px;">
-              ${hasMediaIndex 
-                ? `✅ Metadata and action buttons enabled${isFolderMode ? ' + database queries for folder scanning' : ''}` 
+              ${hasMediaIndex
+                ? `✅ Metadata and action buttons enabled${isFolderMode ? ' + database queries for folder scanning' : ''}`
                 : '❌ Metadata and action buttons disabled'}
             </div>
           </div>
-          
+
           <!-- Use Media Index for Discovery (folder mode only) -->
           ${hasMediaIndex && isFolderMode ? html`
             <div style="margin-left: 0; margin-top: 16px;">
@@ -3013,7 +2975,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             <p style="margin: 4px 0 16px 0; font-size: 13px; color: var(--secondary-text-color, #666);">
               Filter media items by favorites, date ranges, or other criteria. Uses Media Index database for fast queries.
             </p>
-            
+
             <!-- Favorites Filter -->
             <div class="config-row">
               <label style="display: flex; align-items: center; gap: 8px; font-weight: 500;">
@@ -3037,7 +2999,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <p style="margin: 4px 0 12px 0; font-size: 12px; color: var(--secondary-text-color, #666);">
                 Filter by EXIF date_taken (falls back to created_time). Leave empty for no limit.
               </p>
-              
+
               <div class="config-row">
                 <label>Start Date</label>
                 <div>
@@ -3085,8 +3047,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <option value="sequential">Sequential</option>
               </select>
               <div class="help-text">
-                ${folderMode === 'random' 
-                  ? 'Show files in random order' 
+                ${folderMode === 'random'
+                  ? 'Show files in random order'
                   : 'Show files in sequential order'}
               </div>
             </div>
@@ -3104,8 +3066,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 placeholder="100"
               />
               <div class="help-text">
-                ${folderMode === 'random' 
-                  ? 'Number of random items to fetch from media index (smaller = faster refresh of new files)' 
+                ${folderMode === 'random'
+                  ? 'Number of random items to fetch from media index (smaller = faster refresh of new files)'
                   : 'Maximum files to scan (performance limit for recursive scans)'}
               </div>
             </div>
@@ -3123,8 +3085,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <span>Show recently discovered files first</span>
               </label>
               <div class="help-text">
-                ${folderMode === 'random' 
-                  ? 'Display newly discovered files before random selection' 
+                ${folderMode === 'random'
+                  ? 'Display newly discovered files before random selection'
                   : 'Display newly discovered files at the start of the sequence'}
               </div>
             </div>
@@ -3133,7 +3095,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="config-row">
                 <label>Discovery Window</label>
                 <div>
-                  <select 
+                  <select
                     @change=${this._handleNewFilesThresholdChanged}
                     .value=${folderConfig.new_files_threshold_seconds || 3600}
                   >
@@ -3179,7 +3141,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           ${folderConfig.recursive !== false && !hasMediaIndex ? html`
             <div style="margin-left: 20px; padding: 12px; background: var(--secondary-background-color); border-left: 3px solid var(--primary-color); border-radius: 4px;">
               <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">📂 Subfolder Scanning Options</div>
-              
+
               <div class="config-row">
                 <label>Scan Depth</label>
                 <div>
@@ -3347,6 +3309,33 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Automatically advance to next media every N seconds (0 = disabled)</div>
             </div>
           </div>
+          ${MediaProvider.isMediaIndexActive(this._config) ? html`
+            <div class="config-row">
+              <label>Queue Lookahead</label>
+              <div>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  step="1"
+                  .value=${this._config.queue_lookahead ?? 10}
+                  @input=${(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (e.target.value === '') {
+                      const { queue_lookahead, ...rest } = this._config;
+                      this._config = rest;
+                      this._fireConfigChanged();
+                    } else if (!isNaN(v) && v >= 1 && v <= 100) {
+                      this._config = { ...this._config, queue_lookahead: v };
+                      this._fireConfigChanged();
+                    }
+                  }}
+                  placeholder="10"
+                />
+                <div class="help-text">Items to pre-fetch ahead of current position in Queue Preview (1–100, MediaIndex only)</div>
+              </div>
+            </div>
+          ` : ''}
         ` : ''}
 
         <div class="section">
@@ -3510,7 +3499,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         ${this._config.media_type === 'video' || this._config.media_type === 'all' ? html`
           <div class="section">
             <div class="section-title">🎬 Video Options</div>
-            
+
             <div class="config-row">
               <label>Autoplay</label>
               <div>
@@ -3522,7 +3511,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Start playing automatically when loaded</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Loop</label>
               <div>
@@ -3534,7 +3523,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Restart video when it ends</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Muted</label>
               <div>
@@ -3546,7 +3535,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Start video without sound</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Max Video Duration</label>
               <div>
@@ -3560,7 +3549,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Maximum time to play videos in seconds (0 = play to completion)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Video Thumbnail Time</label>
               <div>
@@ -3580,7 +3569,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <div class="section">
           <div class="section-title">🖼️ Image Options</div>
-          
+
           <div class="config-row">
             <label>Image Scaling</label>
             <div>
@@ -3593,7 +3582,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">How images should be scaled</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Max Height (pixels)</label>
             <div>
@@ -3609,7 +3598,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Maximum height in pixels (100-5000, applies in default mode)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Card Height (pixels)</label>
             <div>
@@ -3625,7 +3614,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Default Zoom Level</label>
             <div>
@@ -3653,7 +3642,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Blend card seamlessly with dashboard background (uncheck for card-style appearance)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Edge Fade Strength (Beta)</label>
             <div>
@@ -3669,7 +3658,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Fade image edges into background (0 = off, 1-100 = fade strength). Beta: May show faint lines on some images.</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Refresh Button</label>
             <div>
@@ -3681,7 +3670,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show manual refresh button on the card</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Auto-Refresh Interval</label>
             <div>
@@ -3721,7 +3710,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         ${mediaSourceType === 'folder' ? html`
           <div class="section">
             <div class="section-title">🧭 Navigation Options</div>
-            
+
             <div class="config-row">
               <label>Enable Navigation Zones</label>
               <div>
@@ -3733,7 +3722,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show clickable left/right zones for navigation (25% left, 25% right)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Show Position Indicator</label>
               <div>
@@ -3745,7 +3734,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Display "X of Y" counter in bottom right corner</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Show Dots Indicator</label>
               <div>
@@ -3757,7 +3746,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show dot indicators in bottom center (for ≤15 items)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Keyboard Navigation</label>
               <div>
@@ -3769,7 +3758,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Enable left/right arrow keys for navigation</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Auto-Advance on Navigate</label>
               <div>
@@ -3787,7 +3776,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         <!-- V5.6: Transition Settings -->
         <div class="section">
           <div class="section-title">🎨 Transitions</div>
-          
+
           <div class="config-row">
             <label>Transition Duration</label>
             <div>
@@ -3807,7 +3796,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <div class="section">
           <div class="section-title">📋 Metadata Display</div>
-          
+
           <div class="config-row">
             <label>Title</label>
             <div>
@@ -3820,7 +3809,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Displayed above the media</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Show Folder Name</label>
             <div>
@@ -3832,7 +3821,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display the parent folder name</div>
             </div>
           </div>
-          
+
           ${this._config.metadata?.show_folder !== false ? html`
             <div class="config-row">
               <label>Show Root Folder</label>
@@ -3846,7 +3835,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           ` : ''}
-          
+
           <div class="config-row">
             <label>Show File Name</label>
             <div>
@@ -3858,7 +3847,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display the media file name</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Show Date</label>
             <div>
@@ -3870,7 +3859,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display the file date (if available in filename)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Show Time</label>
             <div>
@@ -3882,7 +3871,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display the file time with seconds (if available)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Show Location</label>
             <div>
@@ -3894,7 +3883,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Display geocoded location from EXIF data (requires media_index integration)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Show Rating/Favorite</label>
             <div>
@@ -3963,11 +3952,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           </div>
         </div>
-        
+
         <!-- Display Entities Section -->
         <div class="section">
           <div class="section-title">📊 Display Entities</div>
-          
+
           <div class="config-row">
             <label>Enable Display Entities</label>
             <div>
@@ -3979,7 +3968,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show Home Assistant entity states with fade transitions</div>
             </div>
           </div>
-          
+
           ${this._config.display_entities?.enabled ? html`
             <div class="config-row">
               <label>Cycle Interval (seconds)</label>
@@ -3996,7 +3985,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Time to display each entity before cycling to next (default: 10)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Transition Duration (ms)</label>
               <div>
@@ -4012,7 +4001,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Fade animation speed (0 = instant, default: 500)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Recent Change Window (seconds)</label>
               <div>
@@ -4028,12 +4017,12 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Prioritize recently changed entities (0 = disabled, default: 60)</div>
               </div>
             </div>
-            
+
             <div style="grid-column: 1 / -1; padding: 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--primary-color); margin-top: 8px;">
               <div style="font-weight: 500; margin-bottom: 8px; color: var(--primary-text-color);">⚠️ Entity Configuration Required</div>
               <div style="margin-bottom: 8px; color: var(--primary-text-color);">To add entities to display, you must edit this card's YAML configuration:</div>
               <ol style="margin: 8px 0; padding-left: 20px; color: var(--secondary-text-color); line-height: 1.6;">
-                <li>Click "Show code editor" (bottom-left of the Media Card configuration)</li>
+                <li>Click "Show code editor" (bottom-left of the Media Viewer Card configuration)</li>
                 <li>Add an <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">entities:</code> array under <code style="background: var(--code-editor-background-color, rgba(0,0,0,0.2)); padding: 2px 6px; border-radius: 3px; font-family: monospace;">display_entities:</code></li>
               </ol>
               <div style="font-size: 13px; font-family: monospace; background: var(--code-editor-background-color, rgba(0,0,0,0.15)); padding: 12px; border-radius: 4px; margin: 8px 0; line-height: 1.5; color: var(--primary-text-color);">
@@ -4051,11 +4040,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           ` : ''}
         </div>
-        
+
         <!-- Clock/Date Section -->
         <div class="section">
           <div class="section-title">🕐 Clock/Date</div>
-          
+
           <div class="config-row">
             <label>Enable Clock/Date</label>
             <div>
@@ -4067,7 +4056,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Show clock and/or date overlay (perfect for kiosk mode)</div>
             </div>
           </div>
-          
+
           ${this._config.clock?.enabled ? html`
             <div class="config-row">
               <label>Show Time</label>
@@ -4080,7 +4069,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Display the current time</div>
               </div>
             </div>
-            
+
             ${this._config.clock?.show_time !== false ? html`
               <div class="config-row">
                 <label>Time Format</label>
@@ -4093,7 +4082,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 </div>
               </div>
             ` : ''}
-            
+
             <div class="config-row">
               <label>Show Date</label>
               <div>
@@ -4105,7 +4094,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Display the current date</div>
               </div>
             </div>
-            
+
             ${this._config.clock?.show_date !== false ? html`
               <div class="config-row">
                 <label>Date Format</label>
@@ -4118,7 +4107,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 </div>
               </div>
             ` : ''}
-            
+
             <div class="config-row">
               <label>Show Background</label>
               <div>
@@ -4132,11 +4121,11 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
             </div>
           ` : ''}
         </div>
-        
+
         <!-- Overlay Positioning (consolidated section) -->
         <div class="section">
           <div class="section-title">📍 Overlay Positioning</div>
-          
+
           <div class="config-row">
             <label>Metadata Position</label>
             <div>
@@ -4151,7 +4140,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Where to display the metadata overlay (filename, date, location)</div>
             </div>
           </div>
-          
+
           ${this._config.display_entities?.enabled ? html`
             <div class="config-row">
               <label>Display Entities Position</label>
@@ -4168,7 +4157,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           ` : ''}
-          
+
           ${this._config.clock?.enabled ? html`
             <div class="config-row">
               <label>Clock Position</label>
@@ -4185,7 +4174,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               </div>
             </div>
           ` : ''}
-          
+
           <div class="config-row">
             <label>Action Buttons Position</label>
             <div>
@@ -4200,7 +4189,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Position for action buttons (fullscreen, pause, refresh, favorite, etc.)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Position Indicator Corner</label>
             <div>
@@ -4220,7 +4209,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         <!-- Fullscreen Button (always available) -->
         <div class="section">
           <div class="section-title">🖼️ Fullscreen</div>
-          
+
           <div class="config-row">
             <label>Fullscreen Button</label>
             <div>
@@ -4237,7 +4226,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         ${hasMediaIndex ? html`
           <div class="section">
             <div class="section-title">⭐ Action Buttons</div>
-            
+
             <div class="config-row">
               <label>Favorite Button</label>
               <div>
@@ -4249,7 +4238,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show heart icon to favorite images (requires media_index)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Delete Button</label>
               <div>
@@ -4261,7 +4250,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show trash icon to delete images (requires media_index)</div>
               </div>
             </div>
-            
+
             ${this._config.action_buttons?.enable_delete !== false ? html`
               <div class="config-row">
                 <label>Delete Confirmation</label>
@@ -4275,7 +4264,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 </div>
               </div>
             ` : ''}
-            
+
             <div class="config-row">
               <label>Edit Button</label>
               <div>
@@ -4287,7 +4276,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">Show pencil icon to mark images for editing (requires media_index)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Burst Review Button</label>
               <div>
@@ -4311,7 +4300,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">View other media items from the same date/time as current media item (requires media_index)</div>
               </div>
             </div>
-            
+
             <div class="config-row">
               <label>Through the Years Button</label>
               <div>
@@ -4323,7 +4312,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 <div class="help-text">View media items from today's date across all years in your library (requires media_index)</div>
               </div>
             </div>
-            
+
             <div class="config-row" style="display: ${this._config.action_buttons?.enable_on_this_day === true ? 'flex' : 'none'}">
               <label style="padding-left: 20px;">Hide Button (Clock Only)</label>
               <div>
@@ -4364,7 +4353,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <div class="section">
           <div class="section-title">📋 Queue Preview</div>
-          
+
           <div class="config-row">
             <label>Queue Button</label>
             <div>
@@ -4376,7 +4365,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">View navigation queue (sequential: past and upcoming, random: recent history)</div>
             </div>
           </div>
-          
+
           ${this._config.action_buttons?.enable_queue_preview === true ? html`
             <div class="config-row">
               <label>Auto-open Queue on Load</label>
@@ -4394,7 +4383,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <div class="section">
           <div class="section-title">👆 Interactions</div>
-          
+
           <div class="config-row">
             <label>Tap Action</label>
             <div>
@@ -4412,7 +4401,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               ${this._renderActionConfig('tap_action')}
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Hold Action</label>
             <div>
@@ -4430,7 +4419,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               ${this._renderActionConfig('hold_action')}
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Double Tap Action</label>
             <div>
@@ -4471,7 +4460,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
         <div class="section">
           <div class="section-title">🖼️ Kiosk Mode</div>
-          
+
           <div class="config-row">
             <label>Kiosk Control Entity</label>
             <div>
@@ -4482,7 +4471,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Entity to toggle when exiting kiosk mode (requires kiosk-mode integration)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Auto-Enable Kiosk</label>
             <div>
@@ -4494,7 +4483,7 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Automatically turn on kiosk entity when card loads (requires kiosk entity)</div>
             </div>
           </div>
-          
+
           <div class="config-row">
             <label>Show Exit Hint</label>
             <div>
@@ -4516,9 +4505,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           <a href="https://github.com/markaggar/ha-media-card/issues" target="_blank" rel="noopener noreferrer">
             Report an issue or request a feature on GitHub
           </a>
- 
+
           <a href="https://buymeacoffee.com/markaggar" target="_blank" rel="noopener noreferrer">
-            Made with AI and <span class="love-icon">❤️</span> in Seattle. <strong>Enjoying Media Card? Buy me a coffee!</strong> <span class="coffee-icon">☕</span>
+            Made with AI and <span class="love-icon">❤️</span> in Seattle. <strong>Enjoying Media Viewer Card? Buy me a coffee!</strong> <span class="coffee-icon">☕</span>
           </a>
         </div>
       </div>

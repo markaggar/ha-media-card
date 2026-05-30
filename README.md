@@ -3,35 +3,32 @@
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange?logo=buy-me-a-coffee)](https://buymeacoffee.com/markaggar)
 
-# HA Media Card 🎬
-A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, **intelligent content prioritization** and **TV casting support**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed with VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5.
+# HA Media Viewer Card 🎬
+A powerful custom Home Assistant Dashboard card that displays images and videos with **smart slideshow behavior**, **hierarchical folder scanning**, **rich metadata displays**, **intelligent content prioritization** and **TV casting support**. Features include **multi-level folder management**, **precision navigation controls**, **video completion detection**, and a **built-in media browser** for easy file selection. Perfect for displaying family photos, security camera snapshots, or any media files from your Home Assistant media folders with performance optimization. 100% developed with VS Code using GitHub Copilot with Claude Sonnet 4.0/4.5/4.6.
 
-It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Card - Reduced scanning overhead (Media Index does this periodically instead of Media Card everytime you load the card), EXIF metadata extraction, Roku Casting, favoriting, editing and deleting photos and related photos support.
+It is highly recommended you also install the [Media Index Integration](https://github.com/markaggar/ha-media-index) that is required for many of the cool features of Media Viewer Card - Reduced scanning overhead (Media Index does this periodically instead of Media Viewer Card every time you load the card), EXIF metadata extraction, Roku Casting, favoriting, editing and deleting photos and related photos support. Also, the repo has some helpful NAS utilities for fixing videos and adding missing GPS data from related media items.
 
-<img width="691" height="925" alt="Media Card displaying a photo with metadata" src="docs/media-card.gif" />
+<img width="691" height="925" alt="Media Viewer Card displaying a photo with metadata" src="docs/media-card.gif" />
 
 ## ✨ Key Features  
 
 ### **Smart Media Display** 
 - 🎬 **Mixed Media**: Display images and videos together seamlessly  
-- 🎯 **Media Modes** - Single Media and Folder modes
+- 🎯 **Media Modes**: Single Media and Folder modes
 - 📂 **Multiple Folder Modes**: Sequential or Random selection of media from folders with optional file system recursion
 - 🔄 **Auto-Advance/Refresh**: Configurable intervals for dynamic content
 - 🎥 **Video Controls**: Autoplay, loop, mute and limit video length
-- 🎞️ **Live Photo Playback**: Pair still images with iCloud-style companion videos and play them as still → motion → pause loops
-- ☁️ **iCloud Photos Preset**: Point the card at a server-side iCloud sync folder with photo, video, and Live Photo display defaults in one config area
-- ☁️ **iCloud Sync Onboarding**: The card editor links to the AncilTech iCloud Photo Sync add-on and shows the media-source path to use after sync
 - 🖼️ **Aspect Ratio Control**: Optimize display for any layout (panel, card, fullscreen)
 - **✨ Image Zoom**: Click to zoom into any point of an image, click again to reset (configurable zoom level 1.5-5x)
 - **🎞️ Photo Transitions**: Configurable crossfade transitions between images (0-1000ms) for smooth slideshow experience
 - **📱 Kiosk Mode**: Automatically activate/deactivate kiosk mode (full screen) (perfect for wall-mounted tablets)
-- 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media cards)
+- 🎭 **Manual Fullscreen Mode**: Dedicated button for immersive viewing of images (great for dashboards with small media viewer cards)
+- 🎞️ **Live Photo Playback**([YAML-only config beta](docs/guides/yaml-only-features.md#live-photo-playback)): Pair still images with iCloud-style companion videos and play them as still → motion → pause loops
 ### **Overlay System**
 - 🕐 **Clock/Date Overlay**: Real-time clock and date display with configurable formats (12h/24h, long/short date)
 - 📊 **Display Entities**: Show Home Assistant entity states as overlay with automatic rotation and fade transitions
   - Support for icons, labels, and custom styling per entity
-  - **Jinja2 & JavaScript template conditions** for dynamic visibility
-  - **Dual template styling** (Jinja2 or JavaScript) for colors, fonts, sizes
+  - Jinja2 & JavaScript template conditions and styling for dynamic visibility
   - Friendly state names for binary sensors (e.g., "Detected/Clear" for motion instead of "on/off")
   - Recent changes tracking to prioritize entities that changed recently
 - 🎨 **Global Opacity Control**: Single setting controls all overlay backgrounds (0-100%)
@@ -39,33 +36,36 @@ It is highly recommended you also install the [Media Index Integration](https://
 ### **Metadata Visibility & Management with Media Index**
 - ❤️ **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
 - ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location. For Live Photos, the still image is the master item; delete moves the still and companion video together.
-- 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location and camera information
+- 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location, camera information, and orientation (with fallback to Portrait / Landscape / Square from pixel dimensions)
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 ### **Intelligent Navigation**
-- ⏸️ **Manual Queue Navigation**: Manually pause/resume, advance forward and back in a queue.
-- 🔗 **Cross-Device Shared Queue** (`shared_queue_id`): Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
-- 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation
+- ⏸️ **Manual Queue Navigation**: Manually pause/resume, group pause (hold pause button), advance forward and back in a queue.
+- ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return
+- 🌪️ **Runtime Media Filter Picker**: Temporarily override the card's media source, media filters video playback and auto-advance settings without changing the card's config. Filter settings propograte to all other cards using the same shared queue_id
+- 📋 **Queue Preview Panel**: View upcoming and previous items in your slideshow queue with thumbnail navigation. Tap an already selected item to favorite, or long-press any thumbnail to open a quick-action mini-menu: **Clear** from queue, **Move to _Junk**, or **Move to _Edit**
+- ⚡ **Rolling Lookahead Queue**: Upcoming items are silently pre-fetched in the background while the current item plays, so tapping forward is instant with no visible fetch delay
+- 🔗 **Cross-Device Shared Queue**: Keep multiple cards — on different views, tablets, phones, or any device — locked to the same image with shared history and pause state. Same-window sync is instant via browser events; cross-browser and cross-device sync uses Home Assistant events (requires Media Index).
 - ⌨️ **Keyboard Shortcuts**: Arrow keys, space, and more
-- 📲 **Touch Screen Support**: Swipe left/right, pause etc.
-- 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
+- 📲 **Touch Screen Support**: Swipe left/right to navigate, long-press to pause; double-tap the left or right video zone to seek ±10 s
 ### **Media Discovery Features** (requires Media Index)
-- 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot
+- 📸 **Burst Review**: Review rapid-fire photos taken at the same moment to select the best shot. Media Index can pre-index burst photos and the card will indicate if a photo is part of burst set and if configured replace it with a favorite from the burst set
 - 📅 **Same Date**: View other media items from the same date as the current photo
 - 📆 **Through the Years**: See photos from today's or the media item's date across all years in your library (with adjustable ±N day window)
-- 💾 **Burst Metadata Persistence**: Save favorite selections from burst reviews to file metadata for future reference
-- 🎞️ **Enhanced Thumbnails**: Adaptive sizing based on aspect ratio, video film strip icons, favorite badges, optimized pagination
 ### **Advanced Capabilities**
 - 🖱️ **Point-and-click file and folder selection** with real image thumbnails. No more typing paths!
 - 🔍 **Media Index Integration**: Database-backed selection with enhanced metadata
 - 🌲 **Hierarchical Scanning**: Handle thousands of files across nested folders efficiently with near immediate display of images
 - 🎯 **Priority Folders**: Boost visibility of recent photos or favorites (3x, 2x multipliers)
-- ⏯️ **Smart Pause/Resume**: Slideshow automatically pauses when you pause a video, navigate away, or switch tabs. Resumes right where you left off when you return
-### **📺 Cast to TV** (requires Media Index)
-- 📺 **Cast Button** (`show_cast_button: true`): Tap the cast icon to open a native picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
-- **Roku xcast**: Roku TV entities are automatically detected and cast via the [xcast ECP protocol](https://channelstore.roku.com/details/687485) for native image display without transcoding by the TV — no DLNA/DMR required.
-  - **Requirements for Roku**: Roku HA integration configured, [xcast channel](https://channelstore.roku.com/details/687485) installed on the Roku device, and Media Index v1.7.1+
-  - The xcast channel acts as a Digital Media Renderer (DMR) receiving content pushed from HA. It must be installed from the Roku Channel Store before first use. On a cold-start the card sends the image immediately to wake xcast, then retries 2.5 s later once it has fully launched.
-- **Generic media players** (LG WebOS, Chromecast, etc.): Cast via `media_player.play_media` — requires the player to support DMR/HTTP URLs.
+- 👆 **Interactive Actions**: Tap, hold, and double-tap customization with optional custom confirmation messages
+shared queue and easily revert to card config.
+### **📺 Media Casting to TVs** (requires Media Index for Roku devices)
+- 📺 **Cast Button**: Tap the cast icon to open a native picker showing all `media_player` entities. Every time the card advances, the same item is pushed to the TV in real time.
+- **Roku casting**: Roku TV entities are automatically detected and cast via the [XCast Receiver Channel](https://channelstore.roku.com/details/8e073e71c92242f5e6a7340b9e8a51bf:710180ecd32804143a50a14909be74d0/xcast-receiver) for native image display without transcoding by the TV — no DLNA/DMR required.
+  - **Requirements for Roku**: Roku HA integration configured, XCast Receiver Channel installed on the Roku device, and Media Index v1.8.0+
+  - The XCast Receiver channel acts as a Digital Media Renderer (DMR) receiving content pushed from HA. It must be installed from the Roku Channel Store before first use. On a cold-start the card sends the image immediately to wake xcast, then retries 3s later once it has fully launched.
+  - **Roku Video Sync**: When casting a video, the card continuously polls the Roku's playback position via ECP and corrects any drift >±2 s, keeping the local clock and the TV perfectly aligned.
+  - **Smooth transitions**: Roku is paused immediately when the user manually navigates (no xcast banner gap) and the card waits for Roku to finish before auto-advancing to the next item.
+- **Generic media players** (LG WebOS DNLA DMR, Chromecast, etc.): Cast via `media_player.play_media` — requires the player to support DMR/HTTP URLs or have a DNLA-DMR instance installed via the DLNA-DMR [integration](https://www.home-assistant.io/integrations/dlna_dmr/).
 - **Stop cast**: Tap the cast button again or navigate away to stop. For Roku, this sends a `keypress/Home` ECP command so the TV returns to its home screen instead of showing a frozen image.
 
 ## Installation 
@@ -91,13 +91,17 @@ It is highly recommended you also install the [Media Index Integration](https://
 
 - **[Examples](docs/guides/examples.md)** - Real-world configurations for common use cases
 
-- **[Offline Mode Guide](docs/OFFLINE_MODE.md)** - Configure Media Card for clients on isolated networks without internet access
+- **[Offline Mode Guide](docs/OFFLINE_MODE.md)** - Configure Media Viewer Card for clients on isolated networks without internet access
    
 **Features & Advanced Usage**
 
 - **[Features Guide](docs/guides/features.md)** - Detailed explanation of all capabilities
 
 - **[Display Entities Guide](docs/guides/display-entities.md)** - Complete guide to entity overlays with examples
+
+- **[Filtering Guide](docs/FILTER_USAGE_GUIDE.md)** - Guide to using filters and dynamic entities
+
+- **[YAML-only usage guide](docs/guides/yaml-only-features.md)** - Guide to usage of YAML-only features
 
 - **[Troubleshooting](docs/guides/troubleshooting.md)** - Solutions to common issues
    
@@ -109,14 +113,14 @@ It is highly recommended you also install the [Media Index Integration](https://
 
 **Built with ❤️ using GitHub Copilot + Claude Sonnet**
 
-⭐ **Enjoying the Media Card?** Give it a star on GitHub!
+⭐ **Enjoying Media Viewer Card?** Give it a star on GitHub!
 
  
 ## 📋 **Special Considerations**
 
 ### �️ Kiosk Mode Integration
 
-The Media Card includes seamless integration with the popular [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) HACS integration for full-screen dashboard experiences. When kiosk mode is enabled, the media card provides visual hints and exit controls for a professional display setup.
+Media Viewer Card includes seamless integration with the popular [Kiosk Mode](https://github.com/NemesisRE/kiosk-mode) HACS integration for full-screen dashboard experiences. When kiosk mode is enabled, the card provides visual hints and exit controls for a professional display setup.
 
 #### 🛠️ **Setup Requirements**
 
@@ -148,9 +152,9 @@ kiosk_mode:
   hide_sidebar: '{{ is_state("input_boolean.kiosk_mode", "on") }}'
 ```
 
-###### ⚙️ **Media Card Configuration**
+###### ⚙️ **Media Viewer Card Configuration**
 
-Add kiosk mode settings to your media card:
+Add kiosk mode settings to your card:
 
 ```yaml
 type: custom:media-card
@@ -259,6 +263,6 @@ For detailed development guidelines, see [`.github/copilot-instructions.md`](.gi
 
 ---
 
-**Enjoy your new Media Card!** 🎉
+**Enjoy your new Media Viewer Card!** 🎉
 
 If you find this card useful, please consider giving it a ⭐ on GitHub!

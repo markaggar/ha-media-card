@@ -29,22 +29,22 @@ const litLoader = `// Async wrapper for dynamic Lit loading (supports offline mo
 
   // Check if Lit was preloaded globally (for offline support)
   if (window.LitElement && window.html && window.css) {
-    console.log('[Media Card] Using preloaded Lit from window');
+    console.log('[Media Viewer Card] Using preloaded Lit from window');
     LitElement = window.LitElement;
     html = window.html;
     css = window.css;
   } else if (window.__LIT_PRELOAD_PROMISE__) {
     // Preload script is loading Lit - wait for it
-    console.log('[Media Card] Waiting for Lit preload to complete...');
+    console.log('[Media Viewer Card] Waiting for Lit preload to complete...');
     try {
       await window.__LIT_PRELOAD_PROMISE__;
       LitElement = window.LitElement;
       html = window.html;
       css = window.css;
-      console.log('[Media Card] Using preloaded Lit from window');
+      console.log('[Media Viewer Card] Using preloaded Lit from window');
     } catch (e) {
-      console.error('[Media Card] Lit preload failed:', e);
-      console.error('[Media Card] For offline use, check your preload script. See docs/OFFLINE_MODE.md');
+      console.error('[Media Viewer Card] Lit preload failed:', e);
+      console.error('[Media Viewer Card] For offline use, check your preload script. See docs/OFFLINE_MODE.md');
       return;
     }
   } else {
@@ -58,10 +58,10 @@ const litLoader = `// Async wrapper for dynamic Lit loading (supports offline mo
       window.LitElement = LitElement;
       window.html = html;
       window.css = css;
-      console.log('[Media Card] Loaded Lit from CDN');
+      console.log('[Media Viewer Card] Loaded Lit from CDN');
     } catch (e) {
-      console.error('[Media Card] Failed to load Lit:', e);
-      console.error('[Media Card] For offline use, preload Lit before this card. See docs/OFFLINE_MODE.md');
+      console.error('[Media Viewer Card] Failed to load Lit:', e);
+      console.error('[Media Viewer Card] For offline use, preload Lit before this card. See docs/OFFLINE_MODE.md');
       return; // Can't continue without Lit
     }
   }
@@ -79,7 +79,7 @@ function transformSource(file) {
 const body = sourceFiles.map(transformSource).join('\n');
 const bannerStart = '/** ';
 const bundle = `${bannerStart}
- * Media Card v${version}
+ * Media Viewer Card v${version}
  */
 
 ${litLoader}${body}

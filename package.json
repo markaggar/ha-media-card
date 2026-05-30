@@ -1,5 +1,5 @@
 {
-  "name": "ha-media-card",
+  "name": "ha-media-viewer-card",
   "version": "5.11.0",
   "description": "Home Assistant dashboard card for displaying media with slideshow, favorites, and metadata",
   "type": "module",
