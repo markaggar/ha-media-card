@@ -549,6 +549,8 @@ live_photo:
 | `live_photo.still_extensions` | list | `["JPG", "jpg", "JPEG", "jpeg", "PNG", "png", "WEBP", "webp"]` | Still-image extensions used to identify plain same-basename companion videos |
 | `live_photo.hide_companion_videos` | boolean | `true` | Hide obvious companion videos from the normal slideshow queue |
 
+When Media Index action buttons are used with Live Photos, the still image is treated as the master asset. Favorite/edit actions target the still image even while the companion video overlay is playing. Delete actions remove both the still image and resolved companion video. The edit action means "move the still image to `_Edit` for later review/editing"; it does not apply image adjustments in the browser. Companion videos are suppressed from the current card queues when the still is moved for edit so they do not immediately appear as orphaned videos.
+
 ## Interactive Actions
 
 | Option | Type | Default | Description |

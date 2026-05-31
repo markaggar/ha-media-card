@@ -35,7 +35,7 @@ It is highly recommended you also install the [Media Index Integration](https://
 - 📍 **Flexible Positioning**: 6 positions for all overlays (corners + center-top/center-bottom)
 ### **Metadata Visibility & Management with Media Index**
 - ❤️ **Favorite Button**: 'Heart' your favorite photos and videos, with Ratings written back to photos (video ratings are in the Media Index DB only due to technical limitations)
-- ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location.
+- ✏️ **Edit and Delete Buttons**: Move photos to _Edit or _Junk folders for further editing or review. Media Index provides a service to restore files in the _Edit folder to their original location. For Live Photos, the still image is the master item; delete moves the still and companion video together.
 - 📊 **Metadata Panel Button**: Popup shows full image metadata, including date/time, location, camera information, and orientation (with fallback to Portrait / Landscape / Square from pixel dimensions)
 - 🏷️ **Metadata Display**: Selectively overlay key metadata elements - EXIF date, time and location, and folder and file name
 ### **Intelligent Navigation**
