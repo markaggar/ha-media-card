@@ -3270,8 +3270,8 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
         </div>
 
         ${isFolderMode ? html`
-          <div class="integration-callout">
-            <div class="integration-callout-title">iCloud Photos Sync</div>
+          <div class="section">
+            <div class="section-title">iCloud Photos Sync</div>
             <p>
               To display iCloud Photos here, install the
               <a href="https://github.com/anciltech/ha-icloud-photo-sync" target="_blank" rel="noopener noreferrer">AncilTech iCloud Photo Sync add-on</a>
