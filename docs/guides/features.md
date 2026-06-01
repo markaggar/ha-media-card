@@ -109,8 +109,6 @@ Overlay buttons provide quick access to card features:
 - **Same Date**: See photos from the same date
 - **Through Years**: View photos from this date across all years
 
-For Live Photos, the still image is the master media item. Favorite/edit actions apply to the still image even while the companion video overlay is playing; delete moves both the still and companion video to _Junk. Edit moves the still to _Edit for later review rather than applying browser-side image adjustments.
-
 **Navigation Buttons**
 - **Queue Preview**: Show upcoming/previous items with thumbnails
 
