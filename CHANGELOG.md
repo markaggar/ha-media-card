@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Queue-Preserving Provider Reinit**: When a session override changes only provider-scope settings (favorites, mode, sort order) but not queue-scope settings (folder, media type, date range), the card now reinitialises the provider in the background while preserving the current navigation queue, history, and displayed item. Previously any provider change caused a full queue reset with a blank-card flash.
 
+- **Card picker suggestion for Media Index entities**: When a user selects a `sensor.media_index_*` entity in the HA card picker (HA 2026.6+), Media Viewer Card now appears in the Community suggestions list with two pre-configured variants: "Random slideshow" and "Sequential slideshow". The suggestion is detected via the entity's `scan_status` attribute, which is unique to the Media Index integration sensor.
+
 ### Fixed
 
 - **"Play to Completion" ignored when base config has `video_max_duration`**: The filter picker pre-populates the max duration field from the base config. Submitting the dialog with "Play to Completion" checked passed both `video_play_to_end: true` and `video_max_duration_secs: 60` (or whatever the base value was). The old precedence order let the non-zero `video_max_duration_secs` branch win, so play-to-completion was silently discarded and the video was still interrupted at the base `video_max_duration`. Fixed: `video_play_to_end: true` now always takes precedence over `video_max_duration_secs`.

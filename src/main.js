@@ -22,7 +22,33 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
     name: 'Media Viewer Card',
     description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
     preview: true,
-    documentationURL: 'https://github.com/markaggar/ha-media-card'
+    documentationURL: 'https://github.com/markaggar/ha-media-card',
+    getEntitySuggestion(hass, entityId) {
+      // Only suggest for media_index sensor entities, identified by the scan_status attribute
+      // which is unique to the Media Index integration sensor.
+      if (entityId.split('.')[0] !== 'sensor') return null;
+      const attrs = hass.states[entityId]?.attributes || {};
+      if (attrs.scan_status === undefined) return null;
+      return [
+        {
+          label: 'Random slideshow',
+          config: {
+            type: 'custom:media-viewer-card',
+            media_source_type: 'media_index',
+            media_index: { entity_id: entityId },
+          },
+        },
+        {
+          label: 'Sequential slideshow',
+          config: {
+            type: 'custom:media-viewer-card',
+            media_source_type: 'media_index',
+            media_index: { entity_id: entityId },
+            folder: { mode: 'sequential' },
+          },
+        },
+      ];
+    },
   });
 }
 
