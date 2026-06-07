@@ -29,22 +29,31 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
       if (entityId.split('.')[0] !== 'sensor') return null;
       const attrs = hass.states[entityId]?.attributes || {};
       if (attrs.scan_status === undefined) return null;
+
+      // Resolve the folder path: prefer media_source_uri (already a media-source:// URI),
+      // fall back to constructing one from the filesystem media_path.
+      let folderPath = attrs.media_source_uri || null;
+      if (!folderPath && attrs.media_path) {
+        const p = attrs.media_path.startsWith('/') ? attrs.media_path : '/' + attrs.media_path;
+        folderPath = `media-source://media_source${p}`;
+      }
+      if (!folderPath) return null;
+
       return [
         {
           label: 'Random slideshow',
           config: {
             type: 'custom:media-viewer-card',
-            media_source_type: 'media_index',
-            media_index: { entity_id: entityId },
+            media_source_type: 'folder',
+            folder: { path: folderPath, mode: 'random', recursive: true },
           },
         },
         {
           label: 'Sequential slideshow',
           config: {
             type: 'custom:media-viewer-card',
-            media_source_type: 'media_index',
-            media_index: { entity_id: entityId },
-            folder: { mode: 'sequential' },
+            media_source_type: 'folder',
+            folder: { path: folderPath, mode: 'sequential', recursive: true },
           },
         },
       ];
