@@ -3904,6 +3904,22 @@ export class MediaCard extends LitElement {
 
     // V5.6.7: Clear navigation flag to prevent slideshow getting stuck on 404 errors
     this._navigatingAway = false;
+
+    // If the failing image was the hidden pending layer, reset _pendingLayerSwap so the
+    // next navigation gets a proper crossfade instead of being treated as "rapid navigation".
+    if (this._pendingLayerSwap && target?.classList?.contains('image-layer') && target.classList.contains('inactive')) {
+      this._log('🧹 [XFADE] Clearing stale _pendingLayerSwap from failed hidden-layer load — next transition will crossfade normally');
+      this._pendingLayerSwap = false;
+      if (this._frontLayerActive) {
+        // Front is active → back was the hidden pending layer
+        this._backLayerUrl = '';
+        this._backLayerNavigationIndex = null;
+      } else {
+        // Back is active → front was the hidden pending layer
+        this._frontLayerUrl = '';
+        this._frontLayerNavigationIndex = null;
+      }
+    }
     
     // V4 comprehensive error handling
     const error = target?.error;
@@ -6389,7 +6405,7 @@ export class MediaCard extends LitElement {
       // V5.6.7: If we got here, the loaded image is for the current navigation position
       // Just swap immediately - no need to compare URLs since we already validated the navigation index
       this._pendingLayerSwap = false;
-      
+
       // Swap layers to trigger crossfade
       this._frontLayerActive = !this._frontLayerActive;
       this._log(`🔄 Layer swap triggered - now showing layer: ${this._frontLayerActive ? 'front' : 'back'}`);
@@ -11000,7 +11016,21 @@ export class MediaCard extends LitElement {
   _handleThumbnailError(e, item) {
     // Handle 404s for queue thumbnails - mark item as invalid and hide it
     this._log('📭 Thumbnail failed to load (404):', item?.filename || item?.media_content_id || item?.path);
-    
+
+    // HEIC/HEIF thumbnails: the browser cannot render .heic URLs directly as <img> even though
+    // the main card converts them for display.  Treat the same as video thumbnail failures —
+    // hide the element and show a placeholder, but keep the item in the queue so the user can
+    // still navigate to it and it can be displayed via HEIC conversion in the main view.
+    const itemPath = (item?.path || item?.filename || item?.media_content_id || '').toLowerCase();
+    if (item && (itemPath.endsWith('.heic') || itemPath.endsWith('.heif'))) {
+      this._log(`⚠️ HEIC thumbnail failed to render — keeping item in queue: ${item.filename || item.path}`);
+      const target = e.target;
+      if (target) target.style.display = 'none';
+      item._thumbnailFailed = true;
+      this.requestUpdate();
+      return;
+    }
+
     // V5.8: Never remove video items from the navigation queue on thumbnail failure.
     // Video thumbnails can fail transiently (e.g. Reolink NVR returns 400 for concurrent requests)
     // even when the video itself is perfectly playable. The main video error handler
@@ -15355,7 +15385,12 @@ export class MediaCard extends LitElement {
                   ></video>
                   <div class="video-icon-overlay">🎞️</div>
                 `;
-                })() : html`
+                })() : item._thumbnailFailed ? html`
+                  <div class="thumbnail-failed-placeholder">
+                    <span class="tfp-icon">🖼️</span>
+                    <span class="tfp-time">${item.filename || ''}</span>
+                  </div>
+                ` : html`
                   <img 
                     src="${item._resolvedUrl}" 
                     alt="${item.filename || 'Thumbnail'}"
