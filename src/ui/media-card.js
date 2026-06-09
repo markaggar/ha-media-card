@@ -11538,7 +11538,8 @@ export class MediaCard extends LitElement {
 
     // Don't intercept pointer events that originate inside the info overlay — the user
     // may be trying to select/copy text, and hold-to-select would otherwise trigger navigation.
-    if (e.target.closest('.info-overlay')) return;
+    // Guard against Text/Comment nodes which don't have .closest().
+    if (e.target instanceof Element && e.target.closest('.info-overlay')) return;
 
     // Prevent the browser/WebView from triggering native long-press gestures (e.g. Fully Kiosk's
     // configured long-press action). Without this, Fully Kiosk fires pointercancel at ~460-560ms
@@ -15154,10 +15155,14 @@ export class MediaCard extends LitElement {
         // Check the card-level persistent cache first — this survives queue refills,
         // so we never re-fire a WebSocket call for a URL we have already resolved.
         const cacheKey = item.media_source_uri || item.media_content_id || item.path;
-        const cached = cacheKey && this._thumbnailUrlCache?.get(cacheKey);
-        if (cached) {
-          item._resolvedUrl = cached;
-          return;
+        const _cachedEntry = cacheKey && this._thumbnailUrlCache?.get(cacheKey);
+        if (_cachedEntry) {
+          if (Date.now() < _cachedEntry.expiresAt) {
+            item._resolvedUrl = _cachedEntry.url;
+            return;
+          }
+          // Stale — evict so we re-resolve with a fresh signed URL.
+          this._thumbnailUrlCache.delete(cacheKey);
         }
 
         item._resolving = true;
@@ -15175,9 +15180,14 @@ export class MediaCard extends LitElement {
           });
           item._resolvedUrl = resolved.url;
 
-          // Persist in card-level cache (capped at 2000 entries, evict oldest).
+          // Persist in card-level cache with TTL (capped at 2000 entries, evict oldest).
+          // The resolve_media response includes an `expires` field (Unix timestamp in
+          // seconds); use it when present, otherwise fall back to a 1-hour TTL.
           if (this._thumbnailUrlCache && cacheKey) {
-            this._thumbnailUrlCache.set(cacheKey, resolved.url);
+            const expiresAt = resolved.expires
+              ? resolved.expires * 1000
+              : Date.now() + 3600 * 1000;
+            this._thumbnailUrlCache.set(cacheKey, { url: resolved.url, expiresAt });
             if (this._thumbnailUrlCache.size > 2000) {
               this._thumbnailUrlCache.delete(this._thumbnailUrlCache.keys().next().value);
             }
