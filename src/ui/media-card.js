@@ -163,6 +163,7 @@ export class MediaCard extends LitElement {
     this._localConfigFields = null;       // extracted blocking fields from current base config
     this._initGeneration = 0;             // incremented on each _initializeProvider call; stale inits check this and bail
     this._pendingFilterChangeRestore = null; // stashed {queue, currentIndex, metadata} to adopt after filter-change reinit
+    this._pendingProviderStateRestore = null; // stashed navigation/display state to preserve the current queue across provider-only override changes
     this._reconnectSyncApplied = false;       // set by _syncFromSharedQueueOnReconnect to block _tryRestoreFromSharedQueue from clobbering fresher state
     this._suppressLookaheadFill = false;         // set after any shared-queue restore; cleared on first _loadNext() to prevent each card independently pre-filling with different random items
     this._videoEndFollowerTimer = null;          // safety timer set when a cross-device follower defers its video-end advance to the leader
@@ -286,9 +287,14 @@ export class MediaCard extends LitElement {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
     this._isSafari = /Safari/.test(ua) && !/Chrome/.test(ua) && !/Chromium/.test(ua);
     
-    // V5.6: Video thumbnail cache (session-scoped)
+    // V5.6: Video thumbnail cache (session-scoped, capped at 300 entries)
     this._videoThumbnailCache = new Map();
     this._thumbnailObserver = null;
+
+    // Persistent resolved-URL cache: survives queue refills so _renderThumbnailStrip
+    // doesn't re-fire callWS for items it has already resolved this session.
+    // Keyed by media_content_id / media_source_uri / path. Capped at 2000 entries.
+    this._thumbnailUrlCache = new Map();
     
     // V5.6.7: Track panel content to prevent unnecessary thumbnail re-renders
     this._lastPanelItemsHash = null;
@@ -1401,6 +1407,31 @@ export class MediaCard extends LitElement {
       this._log('Provider initialized:', success);
       
       if (success) {
+        if (this._pendingProviderStateRestore) {
+          const restore = this._pendingProviderStateRestore;
+          this._pendingProviderStateRestore = null;
+          this.navigationQueue = Array.isArray(restore.navigationQueue) ? [...restore.navigationQueue] : [];
+          this.navigationIndex = typeof restore.navigationIndex === 'number' ? restore.navigationIndex : -1;
+          this.isNavigationQueuePreloaded = restore.isNavigationQueuePreloaded === true;
+          this._maxQueueSize = restore.maxQueueSize || 0;
+          this.history = Array.isArray(restore.history) ? [...restore.history] : [];
+          this.historyPosition = typeof restore.historyPosition === 'number' ? restore.historyPosition : -1;
+          this.currentMedia = restore.currentMedia || null;
+          this._currentMediaPath = restore.currentMediaPath || null;
+          this._currentMetadata = restore.currentMetadata || null;
+          this._pendingMetadata = restore.pendingMetadata || null;
+          this.mediaUrl = restore.mediaUrl || '';
+          this._frontLayerUrl = restore.frontLayerUrl || '';
+          this._backLayerUrl = restore.backLayerUrl || '';
+          this._frontLayerActive = restore.frontLayerActive !== false;
+          this.isLoading = false;
+          this.requestUpdate();
+          if (!this._isPaused) {
+            this._setupAutoRefresh();
+          }
+          return;
+        }
+
         // Shared queue takes priority over local history when configured — it holds the
         // freshest cross-card state (what the other card was showing when this view was hidden).
         const restoredFromShared = await this._tryRestoreFromSharedQueue();
@@ -2668,13 +2699,7 @@ export class MediaCard extends LitElement {
             // V5.6.4: If user interacted (pause, seek, click), let video play to completion
             if (this._videoUserInteracted && !this._videoHasEnded) {
               this._log('🎬 User interacted with video - playing to completion (ignoring timer/max_duration)');
-              // Cross-device keepalive: the driver must write sync on every timer tick while
-              // watching a video to completion. Without this, follower cards see sinceLastSync
-              // grow beyond refreshSeconds and reclaim driver via the gone-away takeover check,
-              // advancing the whole group away from the video the user chose to watch.
-              if (this._hasCrossDeviceSync() && !(Date.now() < (this._crossDeviceFollowerUntil || 0))) {
-                this._writeSharedQueueState();
-              }
+              this._writeVideoKeepaliveSync('Video still playing to completion');
               return;
             }
             
@@ -2688,6 +2713,7 @@ export class MediaCard extends LitElement {
             else if (maxDuration && maxDuration > 0) {
               if (elapsedSeconds < maxDuration) {
                 this._log(`🎬 Timer #${this._videoTimerCount}: elapsed≈${elapsedSeconds}s < max ${maxDuration}s - CONTINUING`);
+                this._writeVideoKeepaliveSync('Video still playing before max duration');
                 return; // Keep playing
               } else {
                 this._log(`🎬 Timer #${this._videoTimerCount}: elapsed≈${elapsedSeconds}s ≥ max ${maxDuration}s - INTERRUPTING`);
@@ -2697,6 +2723,7 @@ export class MediaCard extends LitElement {
             // Priority 3: No max_video_duration and not ended - let video play
             else {
               this._log('🎬 Video playing to completion - IGNORING TIMER');
+              this._writeVideoKeepaliveSync('Video still playing to completion');
               return; // Let it play to completion
             }
           }
@@ -3442,6 +3469,13 @@ export class MediaCard extends LitElement {
       }
 
       this._heicObjectUrlCache.set(url, objectUrl);
+      // Cap at 30 entries — each blob URL holds a decoded JPEG (3–8 MB).
+      // Maps iterate in insertion order so the first key is always the oldest.
+      if (this._heicObjectUrlCache.size > 30) {
+        const oldestUrl = this._heicObjectUrlCache.keys().next().value;
+        URL.revokeObjectURL(this._heicObjectUrlCache.get(oldestUrl));
+        this._heicObjectUrlCache.delete(oldestUrl);
+      }
       return objectUrl;
     } catch (error) {
       console.warn('[MediaViewerCard] HEIC conversion failed, falling back to native image support:', error);
@@ -3870,6 +3904,22 @@ export class MediaCard extends LitElement {
 
     // V5.6.7: Clear navigation flag to prevent slideshow getting stuck on 404 errors
     this._navigatingAway = false;
+
+    // If the failing image was the hidden pending layer, reset _pendingLayerSwap so the
+    // next navigation gets a proper crossfade instead of being treated as "rapid navigation".
+    if (this._pendingLayerSwap && target?.classList?.contains('image-layer') && target.classList.contains('inactive')) {
+      this._log('🧹 [XFADE] Clearing stale _pendingLayerSwap from failed hidden-layer load — next transition will crossfade normally');
+      this._pendingLayerSwap = false;
+      if (this._frontLayerActive) {
+        // Front is active → back was the hidden pending layer
+        this._backLayerUrl = '';
+        this._backLayerNavigationIndex = null;
+      } else {
+        // Back is active → front was the hidden pending layer
+        this._frontLayerUrl = '';
+        this._frontLayerNavigationIndex = null;
+      }
+    }
     
     // V4 comprehensive error handling
     const error = target?.error;
@@ -4315,6 +4365,12 @@ export class MediaCard extends LitElement {
           expires: 60
         });
         this._livePhotoCompanionVideoCache.set(itemId, true);
+        // Cap positive entries at 200 — they are never evicted by the TTL path.
+        if (this._livePhotoCompanionVideoCache.size > 200) {
+          this._livePhotoCompanionVideoCache.delete(
+            this._livePhotoCompanionVideoCache.keys().next().value
+          );
+        }
         this._log('🎞️ Live Photo still found for companion video:', mediaContentId);
         return true;
       } catch (error) {
@@ -4337,7 +4393,16 @@ export class MediaCard extends LitElement {
     const hasCompanionSuffix = suffixes
       .filter(suffix => suffix && String(suffix).length > 0)
       .some(suffix => baseName.endsWith(String(suffix).toLowerCase()));
-    return hasCompanionSuffix || await this._hasLivePhotoStillForVideo(item);
+    if (hasCompanionSuffix) return true;
+
+    // Only probe for a matching still if this is a .mov file.
+    // Live Photo companions from iPhone are always .mov — regular .mp4 files
+    // that happen to share a base name with a .jpg are NOT Live Photo companions.
+    const itemId = this._getLivePhotoItemId(item);
+    const ext = itemId.split('?')[0].split('.').pop().toLowerCase();
+    if (ext !== 'mov') return false;
+
+    return await this._hasLivePhotoStillForVideo(item);
   }
 
   _removeItemFromQueues(item) {
@@ -6340,7 +6405,7 @@ export class MediaCard extends LitElement {
       // V5.6.7: If we got here, the loaded image is for the current navigation position
       // Just swap immediately - no need to compare URLs since we already validated the navigation index
       this._pendingLayerSwap = false;
-      
+
       // Swap layers to trigger crossfade
       this._frontLayerActive = !this._frontLayerActive;
       this._log(`🔄 Layer swap triggered - now showing layer: ${this._frontLayerActive ? 'front' : 'back'}`);
@@ -8564,6 +8629,99 @@ export class MediaCard extends LitElement {
     };
   }
 
+  _extractQueueScopeFields(cfg) {
+    if (!cfg) return null;
+    const n = v => (v === undefined || v === 'all' ? null : (v ?? null));
+    return {
+      folder_path: n(cfg.folder?.path),
+      media_type:  n(cfg.media_type),
+      date_from:   n(cfg.filters?.date_range?.start),
+      date_to:     n(cfg.filters?.date_range?.end),
+    };
+  }
+
+  _extractProviderScopeFields(cfg) {
+    if (!cfg) return null;
+    const n = v => (v === undefined ? null : (v ?? null));
+    return {
+      favorites: n(cfg.filters?.favorites),
+      mode:      n(cfg.folder?.mode),
+      order_by:  n(cfg.folder?.sequential?.order_by),
+      order_dir: n(cfg.folder?.sequential?.order_direction),
+    };
+  }
+
+  _fieldSetsDiffer(a, b) {
+    const keys = new Set([...(a ? Object.keys(a) : []), ...(b ? Object.keys(b) : [])]);
+    for (const key of keys) {
+      const av = a?.[key] ?? null;
+      const bv = b?.[key] ?? null;
+      if (String(av) !== String(bv)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _sessionOverrideChangesQueue(prevCfg, nextCfg) {
+    return this._fieldSetsDiffer(
+      this._extractQueueScopeFields(prevCfg),
+      this._extractQueueScopeFields(nextCfg)
+    );
+  }
+
+  _sessionOverrideChangesProvider(prevCfg, nextCfg) {
+    return this._fieldSetsDiffer(
+      this._extractProviderScopeFields(prevCfg),
+      this._extractProviderScopeFields(nextCfg)
+    );
+  }
+
+  _applyRuntimeConfigWithoutQueueReset() {
+    this.requestUpdate();
+    if (!this._isPaused) {
+      this._setupAutoRefresh();
+    }
+  }
+
+  _reinitProviderPreservingQueue(skipSharedQueueRestore = false) {
+    if (!this.navigationQueue?.length || this.navigationIndex < 0 || !this.currentMedia) {
+      this._reinitWithClear(skipSharedQueueRestore);
+      return;
+    }
+
+    this._fillLookaheadRunning = false;
+    this._skipSharedQueueRestore = skipSharedQueueRestore;
+    this._pendingProviderStateRestore = {
+      navigationQueue: [...this.navigationQueue],
+      navigationIndex: this.navigationIndex,
+      isNavigationQueuePreloaded: this.isNavigationQueuePreloaded,
+      maxQueueSize: this._maxQueueSize,
+      history: Array.isArray(this.history) ? [...this.history] : [],
+      historyPosition: this.historyPosition,
+      currentMedia: this.currentMedia,
+      currentMediaPath: this._currentMediaPath,
+      currentMetadata: this._currentMetadata,
+      pendingMetadata: this._pendingMetadata,
+      mediaUrl: this.mediaUrl,
+      frontLayerUrl: this._frontLayerUrl,
+      backLayerUrl: this._backLayerUrl,
+      frontLayerActive: this._frontLayerActive,
+    };
+
+    if (this.provider?.dispose) this.provider.dispose();
+    this.provider = null;
+    this._initializeProvider();
+    this.requestUpdate();
+  }
+
+  _writeVideoKeepaliveSync(reason = 'Video still playing') {
+    if (!this._hasCrossDeviceSync()) return;
+    if (Date.now() < (this._crossDeviceFollowerUntil || 0)) return;
+    this._log(`🎬 ${reason} — refreshing shared queue keepalive`);
+    this._writeSharedQueueState();
+  }
+
   /**
    * Compare two configFields objects. Returns array of differing entries
    * [{key, label, mine, theirs}], or empty array if identical.
@@ -8589,6 +8747,7 @@ export class MediaCard extends LitElement {
     if (!this._baseConfig) this._baseConfig = this.config;
     this._sessionOverride = overrides;
 
+    const previousConfig = this.config;
     const base = this._baseConfig;
     const merged = { ...base };
 
@@ -8632,11 +8791,11 @@ export class MediaCard extends LitElement {
     }
     merged.filters = mergedFilters;
 
-    // Video play-to-end / max duration (explicit max_duration_secs > 0 takes precedence)
-    if (overrides.video_max_duration_secs != null && overrides.video_max_duration_secs > 0) {
-      merged.video_max_duration = overrides.video_max_duration_secs;
-    } else if (overrides.video_play_to_end === true || overrides.video_max_duration_secs === 0) {
+    // Video play-to-end / max duration (play_to_end takes precedence over max_duration_secs)
+    if (overrides.video_play_to_end === true || overrides.video_max_duration_secs === 0) {
       merged.video_max_duration = 0;
+    } else if (overrides.video_max_duration_secs != null && overrides.video_max_duration_secs > 0) {
+      merged.video_max_duration = overrides.video_max_duration_secs;
     } else if (overrides.video_play_to_end === false && base.video_max_duration !== undefined) {
       merged.video_max_duration = base.video_max_duration;
     } else {
@@ -8681,10 +8840,22 @@ export class MediaCard extends LitElement {
     }
 
     this.config = merged;
-    // Save the sequential provider cursor before reinit so clearing the filter can
-    // resume from approximately this position instead of restarting from index 0.
-    this._preFilterCursor = this._getSequentialProviderCursor();
-    this._reinitWithClear(true); // skip shared-queue restore — user explicitly chose new content
+    const queueScopeChanged = this._sessionOverrideChangesQueue(previousConfig, merged);
+    const providerScopeChanged = this._sessionOverrideChangesProvider(previousConfig, merged);
+
+    if (queueScopeChanged) {
+      // Save the sequential provider cursor before the first queue-affecting override
+      // so clearing the filter can resume from approximately the pre-filter position.
+      if (!this._preFilterCursor) {
+        this._preFilterCursor = this._getSequentialProviderCursor();
+      }
+      this._reinitWithClear(true); // skip shared-queue restore — user explicitly chose new content
+    } else if (providerScopeChanged) {
+      this._reinitProviderPreservingQueue(true);
+    } else {
+      this._applyRuntimeConfigWithoutQueueReset();
+    }
+
     // Broadcast the new filter to all cards in the shared queue group.
     if (!this._suppressFilterBroadcast) {
       this._writeSharedQueueState();
@@ -8694,16 +8865,29 @@ export class MediaCard extends LitElement {
 
   /** Restore the original YAML config and reinitialise the provider. */
   _clearSessionOverride() {
-    if (this._baseConfig) this.config = this._baseConfig;
+    const previousConfig = this.config;
+    const restoredConfig = this._baseConfig || this.config;
+    this.config = restoredConfig;
     this._baseConfig = null;
     this._sessionOverride = null;
-    // Restore the pre-filter sequential cursor so the new provider queries from
-    // where we left off rather than starting at the beginning of the sequence.
-    if (this._preFilterCursor) {
-      this._pendingProviderCursor = this._preFilterCursor;
-      this._preFilterCursor = null;
+
+    const queueScopeChanged = this._sessionOverrideChangesQueue(previousConfig, restoredConfig);
+    const providerScopeChanged = this._sessionOverrideChangesProvider(previousConfig, restoredConfig);
+
+    if (queueScopeChanged) {
+      // Restore the pre-filter sequential cursor so the new provider queries from
+      // where we left off rather than starting at the beginning of the sequence.
+      if (this._preFilterCursor) {
+        this._pendingProviderCursor = this._preFilterCursor;
+        this._preFilterCursor = null;
+      }
+      this._reinitWithClear(true); // skip shared-queue restore — user explicitly cleared override
+    } else if (providerScopeChanged) {
+      this._reinitProviderPreservingQueue(true);
+    } else {
+      this._applyRuntimeConfigWithoutQueueReset();
     }
-    this._reinitWithClear(true); // skip shared-queue restore — user explicitly cleared override
+
     // Broadcast the filter clear to all cards in the shared queue group.
     if (!this._suppressFilterBroadcast) {
       this._writeSharedQueueState();
@@ -8764,7 +8948,7 @@ export class MediaCard extends LitElement {
     const currentFavs    = activeOverride.favorites    ?? (baseCfg.filters?.favorites === true);
     const currentMode    = activeOverride.mode         ?? (baseCfg.folder?.mode || 'random');
     const currentPlayToEnd = activeOverride.video_play_to_end ??
-                             (baseCfg.video_max_duration === 0 ? true : false);
+                             (baseCfg.video_max_duration === 0 || (currentType === 'video' && baseCfg.video_max_duration == null));
     const currentUnmuted  = activeOverride.video_unmuted ??
                              (baseCfg.video_muted === false ? true : false);
 
@@ -8918,14 +9102,25 @@ export class MediaCard extends LitElement {
 
     // Play-to-end toggle shows/hides the max duration row
     dialog.querySelector('#fp-play-to-end').addEventListener('change', ev => {
+      dialog.dataset.playToEndTouched = 'true';
       const maxDurRow = dialog.querySelector('#fp-max-dur-row');
       if (maxDurRow) maxDurRow.style.display = ev.target.checked ? 'none' : '';
+    });
+
+    dialog.querySelector('#fp-max-duration').addEventListener('input', () => {
+      dialog.dataset.playToEndTouched = 'true';
     });
 
     // Show/hide video section when media type radio changes
     dialog.querySelector('#fp-media-type').addEventListener('change', ev => {
       const videoSection = dialog.querySelector('#fp-video-section');
       if (videoSection) videoSection.style.display = ev.target.value === 'image' ? 'none' : '';
+      if (ev.target.value === 'video' && dialog.dataset.playToEndTouched !== 'true') {
+        const playToEndToggle = dialog.querySelector('#fp-play-to-end');
+        const maxDurRow = dialog.querySelector('#fp-max-dur-row');
+        playToEndToggle.checked = true;
+        if (maxDurRow) maxDurRow.style.display = 'none';
+      }
     });
 
     // Show/hide sequential sort options when mode changes
@@ -9181,6 +9376,7 @@ export class MediaCard extends LitElement {
             const rokuRemaining = videoDuration - ((r.position_ms ?? 0) / 1000);
             if (rokuRemaining <= 1.5) this._sendCastPreEndPause(entityId);
           }
+          this._writeVideoKeepaliveSync('Cast still playing');
           return; // still playing, keep waiting
         }
 
@@ -10807,9 +11003,12 @@ export class MediaCard extends LitElement {
     const videoElement = e.target;
     const cacheKey = item.media_content_id || item.path;
     
-    // Mark as loaded in cache (video element stays rendered)
+    // Mark as loaded in cache (video element stays rendered, capped at 300 entries)
     this._videoThumbnailCache.set(cacheKey, true);
-    
+    if (this._videoThumbnailCache.size > 300) {
+      this._videoThumbnailCache.delete(this._videoThumbnailCache.keys().next().value);
+    }
+
     // Mark as loaded for CSS styling
     videoElement.dataset.loaded = 'true';
   }
@@ -10817,7 +11016,21 @@ export class MediaCard extends LitElement {
   _handleThumbnailError(e, item) {
     // Handle 404s for queue thumbnails - mark item as invalid and hide it
     this._log('📭 Thumbnail failed to load (404):', item?.filename || item?.media_content_id || item?.path);
-    
+
+    // HEIC/HEIF thumbnails: the browser cannot render .heic URLs directly as <img> even though
+    // the main card converts them for display.  Treat the same as video thumbnail failures —
+    // hide the element and show a placeholder, but keep the item in the queue so the user can
+    // still navigate to it and it can be displayed via HEIC conversion in the main view.
+    const itemPath = (item?.path || item?.filename || item?.media_content_id || '').toLowerCase();
+    if (item && (itemPath.endsWith('.heic') || itemPath.endsWith('.heif'))) {
+      this._log(`⚠️ HEIC thumbnail failed to render — keeping item in queue: ${item.filename || item.path}`);
+      const target = e.target;
+      if (target) target.style.display = 'none';
+      item._thumbnailFailed = true;
+      this.requestUpdate();
+      return;
+    }
+
     // V5.8: Never remove video items from the navigation queue on thumbnail failure.
     // Video thumbnails can fail transiently (e.g. Reolink NVR returns 400 for concurrent requests)
     // even when the video itself is perfectly playable. The main video error handler
@@ -11352,6 +11565,11 @@ export class MediaCard extends LitElement {
   
   _handlePointerDown(e) {
     if (!this.config.hold_action) return;
+
+    // Don't intercept pointer events that originate inside the info overlay — the user
+    // may be trying to select/copy text, and hold-to-select would otherwise trigger navigation.
+    // Guard against Text/Comment nodes which don't have .closest().
+    if (e.target instanceof Element && e.target.closest('.info-overlay')) return;
 
     // Prevent the browser/WebView from triggering native long-press gestures (e.g. Fully Kiosk's
     // configured long-press action). Without this, Fully Kiosk fires pointercancel at ~460-560ms
@@ -14964,6 +15182,19 @@ export class MediaCard extends LitElement {
     
     displayItems.forEach(async (item) => {
       if (!item._resolvedUrl && !item._resolving) {
+        // Check the card-level persistent cache first — this survives queue refills,
+        // so we never re-fire a WebSocket call for a URL we have already resolved.
+        const cacheKey = item.media_source_uri || item.media_content_id || item.path;
+        const _cachedEntry = cacheKey && this._thumbnailUrlCache?.get(cacheKey);
+        if (_cachedEntry) {
+          if (Date.now() < _cachedEntry.expiresAt) {
+            item._resolvedUrl = _cachedEntry.url;
+            return;
+          }
+          // Stale — evict so we re-resolve with a fresh signed URL.
+          this._thumbnailUrlCache.delete(cacheKey);
+        }
+
         item._resolving = true;
         pendingResolutions++;
         
@@ -14978,6 +15209,19 @@ export class MediaCard extends LitElement {
             expires: 3600
           });
           item._resolvedUrl = resolved.url;
+
+          // Persist in card-level cache with TTL (capped at 2000 entries, evict oldest).
+          // The resolve_media response includes an `expires` field (Unix timestamp in
+          // seconds); use it when present, otherwise fall back to a 1-hour TTL.
+          if (this._thumbnailUrlCache && cacheKey) {
+            const expiresAt = resolved.expires
+              ? resolved.expires * 1000
+              : Date.now() + 3600 * 1000;
+            this._thumbnailUrlCache.set(cacheKey, { url: resolved.url, expiresAt });
+            if (this._thumbnailUrlCache.size > 2000) {
+              this._thumbnailUrlCache.delete(this._thumbnailUrlCache.keys().next().value);
+            }
+          }
           
           // Only request update once after all thumbnails resolve
           pendingResolutions--;
@@ -15141,7 +15385,12 @@ export class MediaCard extends LitElement {
                   ></video>
                   <div class="video-icon-overlay">🎞️</div>
                 `;
-                })() : html`
+                })() : item._thumbnailFailed ? html`
+                  <div class="thumbnail-failed-placeholder">
+                    <span class="tfp-icon">🖼️</span>
+                    <span class="tfp-time">${item.filename || ''}</span>
+                  </div>
+                ` : html`
                   <img 
                     src="${item._resolvedUrl}" 
                     alt="${item.filename || 'Thumbnail'}"

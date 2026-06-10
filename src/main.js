@@ -22,7 +22,42 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
     name: 'Media Viewer Card',
     description: 'Display images and videos from local media folders with slideshow, favorites, and metadata',
     preview: true,
-    documentationURL: 'https://github.com/markaggar/ha-media-card'
+    documentationURL: 'https://github.com/markaggar/ha-media-card',
+    getEntitySuggestion(hass, entityId) {
+      // Only suggest for media_index sensor entities, identified by the scan_status attribute
+      // which is unique to the Media Index integration sensor.
+      if (entityId.split('.')[0] !== 'sensor') return null;
+      const attrs = hass.states[entityId]?.attributes || {};
+      if (attrs.scan_status === undefined) return null;
+
+      // Resolve the folder path: prefer media_source_uri (already a media-source:// URI),
+      // fall back to constructing one from the filesystem media_path.
+      let folderPath = attrs.media_source_uri || null;
+      if (!folderPath && attrs.media_path) {
+        const p = attrs.media_path.startsWith('/') ? attrs.media_path : '/' + attrs.media_path;
+        folderPath = `media-source://media_source${p}`;
+      }
+      if (!folderPath) return null;
+
+      return [
+        {
+          label: 'Random slideshow',
+          config: {
+            type: 'custom:media-viewer-card',
+            media_source_type: 'folder',
+            folder: { path: folderPath, mode: 'random', recursive: true },
+          },
+        },
+        {
+          label: 'Sequential slideshow',
+          config: {
+            type: 'custom:media-viewer-card',
+            media_source_type: 'folder',
+            folder: { path: folderPath, mode: 'sequential', recursive: true },
+          },
+        },
+      ];
+    },
   });
 }
 

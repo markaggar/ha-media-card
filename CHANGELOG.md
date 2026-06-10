@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.11.1 - 2026-06-06
+
+### Added
+
+- **Queue-Preserving Provider Reinit**: When a session override changes only provider-scope settings (favorites, mode, sort order) but not queue-scope settings (folder, media type, date range), the card now reinitialises the provider in the background while preserving the current navigation queue, history, and displayed item. Previously any provider change caused a full queue reset with a blank-card flash.
+
+- **Card picker suggestion for Media Index entities**: When a user selects a `sensor.media_index_*` entity in the HA card picker (HA 2026.6+), Media Viewer Card now appears in the Community suggestions list with two pre-configured variants: "Random slideshow" and "Sequential slideshow". The suggestion is detected via the entity's `scan_status` attribute, which is unique to the Media Index integration sensor.
+
+### Fixed
+
+- **Crossfade transition skipped after a failed image load**: When a HEIC (or any image) failed to load on the hidden layer, `_pendingLayerSwap` was left `true`. The next navigation detected an in-flight swap and took the "rapid navigation" fast-path — clearing both layers and showing the new image instantly without a crossfade. Fixed: `_onMediaError` now resets `_pendingLayerSwap` and clears the stale layer URL when the failing element was the hidden pending layer.
+
+- **HEIC items removed from queue panel on thumbnail error**: The browser cannot render `.heic` URLs directly as `<img>` elements, so every HEIC thumbnail fired `_handleThumbnailError`, which marked the item `_invalid` and removed it from `navigationQueue`. This prevented navigation back to already-displayed HEIC images. Fixed: HEIC/HEIF items in `_handleThumbnailError` now receive the same treatment as video thumbnail failures — the element is hidden and a `🖼️` placeholder is shown, but the item stays in the queue. The filter picker pre-populates the max duration field from the base config. Submitting the dialog with "Play to Completion" checked passed both `video_play_to_end: true` and `video_max_duration_secs: 60` (or whatever the base value was). The old precedence order let the non-zero `video_max_duration_secs` branch win, so play-to-completion was silently discarded and the video was still interrupted at the base `video_max_duration`. Fixed: `video_play_to_end: true` now always takes precedence over `video_max_duration_secs`.
+
+- **`.mp4` files wrongly hidden as Live Photo companion videos**: `_shouldHideLivePhotoCompanionVideo` called `_hasLivePhotoStillForVideo` (an HTTP HEAD probe) for all video types. On Android phones (e.g. Pixel) that save both `IMG_1234.mp4` and `IMG_1234.JPG` in the same folder, every `.mp4` was matched and removed from the queue. Fixed: the HTTP still-probe is now restricted to `.mov` files only. iPhone Live Photo companions are always `.mov`; the explicit `_HEVC`/`-HEVC` suffix check (fast, no network) still applies to all video types.
+
+- **Hold action fired when pointer originates inside info overlay**: Long-pressing on text in the info overlay triggered the card's hold action (e.g. navigate), preventing text selection. Fixed by skipping the hold timer when `pointerdown` originates on an element inside `.info-overlay`.
+
+- **Thumbnail strip redundant WebSocket calls on queue refill**: The thumbnail strip re-resolved media source URIs via `callWS` on every queue refill, even for items that had been resolved in the current session. Added a persistent `_thumbnailUrlCache` (Map, capped at 2000 entries, oldest-first eviction) that survives queue refills so each URI is only resolved once per session.
+
+- **HEIC blob URL memory leak**: `_heicObjectUrlCache` was unbounded — each decoded HEIC stored a blob URL holding a 3–8 MB JPEG in memory indefinitely. The cache is now capped at 30 entries with `URL.revokeObjectURL` called on eviction.
+
+- **Live Photo companion video cache unbounded growth**: `_livePhotoCompanionVideoCache` positive entries were never evicted. Capped at 200 entries (oldest-first).
+
+- **Video thumbnail cache unbounded growth**: `_videoThumbnailCache` was unbounded. Capped at 300 entries (oldest-first).
+
 ## v5.11.0 - 2026-05-18
 
 ### Added
