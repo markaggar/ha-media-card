@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Card picker suggestion for Media Index entities**: When a user selects a `sensor.media_index_*` entity in the HA card picker (HA 2026.6+), Media Viewer Card now appears in the Community suggestions list with two pre-configured variants: "Random slideshow" and "Sequential slideshow". The suggestion is detected via the entity's `scan_status` attribute, which is unique to the Media Index integration sensor.
 
+- **Refresh button now has two behaviors in folder mode**: Tapping the refresh button reloads the current image/video in place (evicts the cached `authSig` URL and re-fetches it, then adds a cache-bust timestamp). Holding the button for 600 ms triggers a full queue rebuild — picking up any new or deleted files in the folder — then reloads the current image. A tooltip hints at the hold gesture (`Tap: reload image · Hold: rebuild queue`). In non-folder modes the button behavior is unchanged (tap = image reload).
+
 ### Fixed
 
 - **Crossfade transition skipped after a failed image load**: When a HEIC (or any image) failed to load on the hidden layer, `_pendingLayerSwap` was left `true`. The next navigation detected an in-flight swap and took the "rapid navigation" fast-path — clearing both layers and showing the new image instantly without a crossfade. Fixed: `_onMediaError` now resets `_pendingLayerSwap` and clears the stale layer URL when the failing element was the hidden pending layer.

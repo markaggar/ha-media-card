@@ -318,6 +318,10 @@ export class MediaCard extends LitElement {
     this._frontLayerGeneration = 0;   // Increment when front layer URL changes (prevents stale setTimeout clearing new URLs)
     this._backLayerGeneration = 0;    // Increment when back layer URL changes (prevents stale setTimeout clearing new URLs)
     
+    // Refresh button hold state (tap = image refresh, hold = queue refresh in folder mode)
+    this._refreshHoldTimer = null;
+    this._refreshHoldFired = false;
+
     // Auto-hide action buttons for touch screens
     this._showButtonsExplicitly = false; // true = show via touch tap (independent of hover)
     this._hideButtonsTimer = null;
@@ -7103,8 +7107,29 @@ export class MediaCard extends LitElement {
         ${enableRefresh ? html`
           <button
             class="action-btn refresh-btn"
+            @pointerdown=${() => {
+              if (this.config?.media_source_type === 'folder') {
+                this._refreshHoldTimer = setTimeout(() => {
+                  this._refreshHoldFired = true;
+                  this._refreshHoldTimer = null;
+                  this._handleRefreshHold();
+                }, 600);
+              }
+            }}
+            @pointerup=${() => {
+              if (this._refreshHoldTimer) {
+                clearTimeout(this._refreshHoldTimer);
+                this._refreshHoldTimer = null;
+              }
+            }}
+            @pointercancel=${() => {
+              if (this._refreshHoldTimer) {
+                clearTimeout(this._refreshHoldTimer);
+                this._refreshHoldTimer = null;
+              }
+            }}
             @click=${this._handleRefreshClick}
-            title="Refresh">
+            title="${this.config?.media_source_type === 'folder' ? 'Tap: reload image · Hold: rebuild queue' : 'Refresh'}">
             <ha-icon icon="mdi:refresh"></ha-icon>
           </button>
         ` : ''}
@@ -8207,92 +8232,64 @@ export class MediaCard extends LitElement {
   }
   
   // Handle refresh button click - reload current media
-  async _handleRefreshClick(e) {
-    e.stopPropagation();
-    
-    // Restart timer on touch (gives user full time to choose next action)
-    if (this._showButtonsExplicitly) {
-      this._startActionButtonsHideTimer();
-    }
-    
-    this._log('🔄 Refresh button clicked');
-    
-    // Check if in folder mode - if so, trigger full queue refresh then force-reload current image
-    if (this.config?.media_source_type === 'folder') {
-      this._log('🔄 Folder mode detected - triggering full queue refresh');
-      await this._refreshQueue();
-
-      // Force the current image/video to reload from source after queue refresh.
-      // _refreshQueue skips _resolveMediaUrl when the current file hasn't changed,
-      // so we do it here explicitly regardless.
-      const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
-      if (currentMediaId) {
-        // Evict cached authSig URL so a fresh one is fetched
-        const cacheKeyForRefresh = currentMediaId.startsWith('/media/')
-          ? 'media-source://media_source' + currentMediaId
-          : currentMediaId;
-        this._thumbnailUrlCache?.delete(cacheKeyForRefresh);
-
-        await this._resolveMediaUrl();
-
-        // Add cache-busting timestamp to force browser to discard cached bytes
-        if (!(this.config?.auto_refresh_seconds > 0)) {
-          const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
-          if (timestampedUrl !== this.mediaUrl) {
-            this.mediaUrl = timestampedUrl;
-          }
-        }
-
-        this._mediaLoadedLogged = false;
-        this.requestUpdate();
-        this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
-      }
-      return;
-    }
-    
-    // Single media mode - reload current media URL
-    this._log('🔄 Single media mode - reloading current media');
-    
-    // Get the current media content ID
+  // Shared helper: evict cached URL and force-reload the currently displayed image/video.
+  // Used by both tap-refresh and after queue-refresh.
+  async _refreshCurrentImage() {
     const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
-    
     if (!currentMediaId) {
       this._log('⚠️ No current media to refresh');
       return;
     }
-    
-    try {
-      // Re-resolve the media URL to get a fresh authSig and cache-busting timestamp.
-      // Evict any cached resolved URL so _resolveMediaUrl fetches a brand-new authSig.
-      this._log('🔄 Re-resolving media URL:', currentMediaId);
-      const cacheKeyForRefresh = currentMediaId.startsWith('/media/')
-        ? 'media-source://media_source' + currentMediaId
-        : currentMediaId;
-      this._thumbnailUrlCache?.delete(cacheKeyForRefresh);
-      await this._resolveMediaUrl();
-      
-      // Add cache-busting timestamp to force browser reload
-      // Note: _resolveMediaUrl already adds timestamp if auto_refresh_seconds > 0,
-      // but we force it here regardless of config for manual refresh
-      if (this.config?.auto_refresh_seconds > 0) {
-        // Already has timestamp from _resolveMediaUrl, don't add duplicate
-        this._log('Cache-busting timestamp already added by _resolveMediaUrl');
-      } else {
-        // No auto-refresh configured, add timestamp now
-        const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
-        if (timestampedUrl !== this.mediaUrl) {
-          this._log('Added cache-busting timestamp:', timestampedUrl);
-          this.mediaUrl = timestampedUrl;
-        }
-      }
-      
-      // Force reload by updating the img/video src
-      this._mediaLoadedLogged = false; // Allow load success log again
-      this.requestUpdate();
-      
-      // Refresh metadata from media_index in background so overlay stays current
-      this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+    // Evict cached authSig URL so _resolveMediaUrl fetches a brand-new one
+    const cacheKey = currentMediaId.startsWith('/media/')
+      ? 'media-source://media_source' + currentMediaId
+      : currentMediaId;
+    this._thumbnailUrlCache?.delete(cacheKey);
 
+    await this._resolveMediaUrl();
+
+    // Force cache-bust timestamp unless auto_refresh already added one
+    if (!(this.config?.auto_refresh_seconds > 0)) {
+      const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
+      if (timestampedUrl !== this.mediaUrl) {
+        this.mediaUrl = timestampedUrl;
+      }
+    }
+
+    this._mediaLoadedLogged = false;
+    this.requestUpdate();
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+  }
+
+  // Hold action on refresh button (folder mode only): rebuild the queue to pick up new files
+  // then reload the current image.
+  async _handleRefreshHold() {
+    this._log('🔄 Refresh button held — rebuilding queue');
+    await this._refreshQueue();
+    // _refreshQueue resets to position 0 and calls _resolveMediaUrl if the first item changed.
+    // Force a reload of the current (possibly same) image regardless.
+    await this._refreshCurrentImage();
+    this._log('✅ Queue rebuilt and image refreshed');
+  }
+
+  async _handleRefreshClick(e) {
+    e.stopPropagation();
+
+    // If hold already fired, this click is the pointer-up at end of hold — ignore it.
+    if (this._refreshHoldFired) {
+      this._refreshHoldFired = false;
+      return;
+    }
+
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+
+    this._log('🔄 Refresh button tapped — reloading current image');
+
+    try {
+      await this._refreshCurrentImage();
       this._log('✅ Media refreshed successfully');
     } catch (error) {
       console.error('Failed to refresh media:', error);
