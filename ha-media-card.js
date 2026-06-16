@@ -23657,18 +23657,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
-            <label>Refresh Button</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.show_refresh_button || false}
-                @change=${this._refreshButtonChanged}
-              />
-              <div class="help-text">Show manual refresh button on the card</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
             <label>Auto-Refresh Interval</label>
             <div>
               <input
@@ -24215,9 +24203,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        <!-- Fullscreen Button (always available) -->
+        <!-- Fullscreen & Refresh Buttons (always available) -->
         <div class="section">
-          <div class="section-title">🖼️ Fullscreen</div>
+          <div class="section-title">🖼️ Fullscreen &amp; Refresh</div>
           
           <div class="config-row">
             <label>Fullscreen Button</label>
@@ -24228,6 +24216,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._actionButtonsEnableFullscreenChanged}
               />
               <div class="help-text">Show fullscreen button to automatically pause and initiate full screen mode (see Kiosk mode for automatic full screen options)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Refresh Button</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.show_refresh_button || false}
+                @change=${this._refreshButtonChanged}
+              />
+              <div class="help-text">Show manual refresh button on the card</div>
             </div>
           </div>
         </div>
