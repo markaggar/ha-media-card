@@ -7917,6 +7917,12 @@ class MediaCard extends LitElement {
       return url;
     }
     
+    // Respect disable_cache_busting option — skip automatic timestamp to allow browser caching.
+    // forceAdd (manual refresh) still bypasses this so the user always gets fresh content.
+    if (!forceAdd && this.config?.disable_cache_busting) {
+      return url;
+    }
+    
     // For auto-refresh: only add if refresh configured
     // For manual refresh: always add (forceAdd = true)
     const refreshSeconds = this.config.auto_refresh_seconds || 0;
@@ -21001,6 +21007,11 @@ class MediaCardEditor extends LitElement {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
     this._fireConfigChanged();
   }
+
+  _disableCacheBustingChanged(ev) {
+    this._config = { ...this._config, disable_cache_busting: ev.target.checked };
+    this._fireConfigChanged();
+  }
   
   _blendWithBackgroundChanged(ev) {
     this._config = { ...this._config, blend_with_background: ev.target.checked };
@@ -23588,6 +23599,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 step="1"
               />
               <div class="help-text">Check for new files every N seconds (0 = disabled). Single media: reloads image URL. Folder mode: checks for new files and refreshes queue if at newest position.</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Disable Cache Busting</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.disable_cache_busting || false}
+                @change=${this._disableCacheBustingChanged}
+              />
+              <div class="help-text">Allow browser to cache images (do not append timestamp to URLs). Useful for slideshow folders with static files where bandwidth matters. Note: manual refresh always bypasses browser cache regardless of this setting.</div>
             </div>
           </div>
 

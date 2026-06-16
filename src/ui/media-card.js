@@ -3237,6 +3237,12 @@ export class MediaCard extends LitElement {
       return url;
     }
     
+    // Respect disable_cache_busting option — skip automatic timestamp to allow browser caching.
+    // forceAdd (manual refresh) still bypasses this so the user always gets fresh content.
+    if (!forceAdd && this.config?.disable_cache_busting) {
+      return url;
+    }
+    
     // For auto-refresh: only add if refresh configured
     // For manual refresh: always add (forceAdd = true)
     const refreshSeconds = this.config.auto_refresh_seconds || 0;
