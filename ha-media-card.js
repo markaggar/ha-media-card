@@ -12897,10 +12897,36 @@ class MediaCard extends LitElement {
     
     this._log('🔄 Refresh button clicked');
     
-    // Check if in folder mode - if so, trigger full queue refresh
+    // Check if in folder mode - if so, trigger full queue refresh then force-reload current image
     if (this.config?.media_source_type === 'folder') {
       this._log('🔄 Folder mode detected - triggering full queue refresh');
       await this._refreshQueue();
+
+      // Force the current image/video to reload from source after queue refresh.
+      // _refreshQueue skips _resolveMediaUrl when the current file hasn't changed,
+      // so we do it here explicitly regardless.
+      const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
+      if (currentMediaId) {
+        // Evict cached authSig URL so a fresh one is fetched
+        const cacheKeyForRefresh = currentMediaId.startsWith('/media/')
+          ? 'media-source://media_source' + currentMediaId
+          : currentMediaId;
+        this._thumbnailUrlCache?.delete(cacheKeyForRefresh);
+
+        await this._resolveMediaUrl();
+
+        // Add cache-busting timestamp to force browser to discard cached bytes
+        if (!(this.config?.auto_refresh_seconds > 0)) {
+          const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
+          if (timestampedUrl !== this.mediaUrl) {
+            this.mediaUrl = timestampedUrl;
+          }
+        }
+
+        this._mediaLoadedLogged = false;
+        this.requestUpdate();
+        this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+      }
       return;
     }
     
