@@ -3817,15 +3817,42 @@ export class MediaCard extends LitElement {
     // If media-source:// format, resolve through HA API
     if (mediaId.startsWith('media-source://')) {
       try {
-        // V5: Copy V4's approach - just pass through to HA without modification
-        const resolved = await this.hass.callWS({
-          type: "media_source/resolve_media",
-          media_content_id: mediaId,
-          expires: (60 * 60 * 3) // 3 hours
-        });
+        let resolvedUrl;
+
+        // When disable_cache_busting is on, reuse the authSig URL from _thumbnailUrlCache
+        // so the browser can cache the image bytes between navigation visits.
+        // On normal mode we always re-resolve so a fresh authSig (and optional timestamp) is used.
+        if (this.config?.disable_cache_busting) {
+          const cached = this._thumbnailUrlCache?.get(mediaId);
+          if (cached && Date.now() < cached.expiresAt) {
+            resolvedUrl = cached.url;
+            this._log('🔗 Reusing cached authSig URL for', mediaId);
+          }
+        }
+
+        if (!resolvedUrl) {
+          // V5: Copy V4's approach - just pass through to HA without modification
+          const resolved = await this.hass.callWS({
+            type: "media_source/resolve_media",
+            media_content_id: mediaId,
+            expires: (60 * 60 * 3) // 3 hours
+          });
+          resolvedUrl = resolved.url;
+
+          // Cache for reuse when disable_cache_busting is enabled.
+          if (this._thumbnailUrlCache) {
+            const expiresAt = resolved.expires
+              ? resolved.expires * 1000
+              : Date.now() + 3 * 3600 * 1000;
+            this._thumbnailUrlCache.set(mediaId, { url: resolvedUrl, expiresAt });
+            if (this._thumbnailUrlCache.size > 2000) {
+              this._thumbnailUrlCache.delete(this._thumbnailUrlCache.keys().next().value);
+            }
+          }
+        }
         
         // Add timestamp for auto-refresh (camera snapshots, etc.)
-        const finalUrl = this._addCacheBustingTimestamp(resolved.url);
+        const finalUrl = this._addCacheBustingTimestamp(resolvedUrl);
         
         await this._setMediaUrl(finalUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
@@ -3846,12 +3873,36 @@ export class MediaCard extends LitElement {
       const mediaSourceId = 'media-source://media_source' + mediaId;
       this._log('Converting /media/ to media-source://', mediaSourceId);
       try {
-        const resolved = await this.hass.callWS({
-          type: "media_source/resolve_media",
-          media_content_id: mediaSourceId,
-          expires: (60 * 60 * 3)
-        });
-        await this._setMediaUrl(resolved.url, expectedIndex, expectedGeneration);
+        let resolvedUrl;
+
+        if (this.config?.disable_cache_busting) {
+          const cached = this._thumbnailUrlCache?.get(mediaSourceId);
+          if (cached && Date.now() < cached.expiresAt) {
+            resolvedUrl = cached.url;
+            this._log('🔗 Reusing cached authSig URL for', mediaSourceId);
+          }
+        }
+
+        if (!resolvedUrl) {
+          const resolved = await this.hass.callWS({
+            type: "media_source/resolve_media",
+            media_content_id: mediaSourceId,
+            expires: (60 * 60 * 3)
+          });
+          resolvedUrl = resolved.url;
+
+          if (this._thumbnailUrlCache) {
+            const expiresAt = resolved.expires
+              ? resolved.expires * 1000
+              : Date.now() + 3 * 3600 * 1000;
+            this._thumbnailUrlCache.set(mediaSourceId, { url: resolvedUrl, expiresAt });
+            if (this._thumbnailUrlCache.size > 2000) {
+              this._thumbnailUrlCache.delete(this._thumbnailUrlCache.keys().next().value);
+            }
+          }
+        }
+
+        await this._setMediaUrl(resolvedUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
         console.warn('[MediaViewerCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
@@ -8185,8 +8236,13 @@ export class MediaCard extends LitElement {
     }
     
     try {
-      // Re-resolve the media URL to get a fresh authSig and cache-busting timestamp
+      // Re-resolve the media URL to get a fresh authSig and cache-busting timestamp.
+      // Evict any cached resolved URL so _resolveMediaUrl fetches a brand-new authSig.
       this._log('🔄 Re-resolving media URL:', currentMediaId);
+      const cacheKeyForRefresh = currentMediaId.startsWith('/media/')
+        ? 'media-source://media_source' + currentMediaId
+        : currentMediaId;
+      this._thumbnailUrlCache?.delete(cacheKeyForRefresh);
       await this._resolveMediaUrl();
       
       // Add cache-busting timestamp to force browser reload
