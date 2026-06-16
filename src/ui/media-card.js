@@ -1084,6 +1084,13 @@ export class MediaCard extends LitElement {
       }
     }
     
+    // card_height_fill: when card_height is set, fill container with cover cropping
+    if (config.card_height && config.card_height > 0 && config.card_height_fill) {
+      this.setAttribute('data-card-height-fill', 'true');
+    } else {
+      this.removeAttribute('data-card-height-fill');
+    }
+
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
@@ -12466,6 +12473,21 @@ export class MediaCard extends LitElement {
       height: auto;
       object-fit: contain;
       margin: auto;
+    }
+
+    /* Fixed height fill mode: image/video fills container, cropped to fit (object-fit: cover) */
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) img,
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) .image-layer,
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      max-height: none;
+      object-fit: cover;
+      transform: none;
+      margin: 0;
     }
     
     /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */

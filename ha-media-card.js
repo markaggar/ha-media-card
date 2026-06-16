@@ -1,5 +1,5 @@
 /** 
- * Media Viewer Card v5.11.1
+ * Media Viewer Card v5.12.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -5764,6 +5764,13 @@ class MediaCard extends LitElement {
       }
     }
     
+    // card_height_fill: when card_height is set, fill container with cover cropping
+    if (config.card_height && config.card_height > 0 && config.card_height_fill) {
+      this.setAttribute('data-card-height-fill', 'true');
+    } else {
+      this.removeAttribute('data-card-height-fill');
+    }
+
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
@@ -17147,6 +17154,21 @@ class MediaCard extends LitElement {
       object-fit: contain;
       margin: auto;
     }
+
+    /* Fixed height fill mode: image/video fills container, cropped to fit (object-fit: cover) */
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) img,
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) .image-layer,
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      max-height: none;
+      object-fit: cover;
+      transform: none;
+      margin: 0;
+    }
     
     /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
     :host(:not([data-aspect-mode]):not([data-card-height])) .media-container {
@@ -21065,6 +21087,16 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _cardHeightFillChanged(ev) {
+    if (ev.target.checked) {
+      this._config = { ...this._config, card_height_fill: true };
+    } else {
+      const { card_height_fill, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
@@ -23608,6 +23640,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
             </div>
           </div>
+
+          <div class="config-row">
+            <label>Fill Height</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.card_height_fill === true}
+                @change=${this._cardHeightFillChanged}
+              />
+              <div class="help-text">Fill card height with image, cropping to fit (cover). Requires Card Height to be set.</div>
+            </div>
+          </div>
           
           <div class="config-row">
             <label>Default Zoom Level</label>
@@ -24584,7 +24628,7 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
 }
 
 console.info(
-  '%c  MEDIA-VIEWER-CARD  %c  v5.11.1 Loaded  ',
+  '%c  MEDIA-VIEWER-CARD  %c  v5.12.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

@@ -845,6 +845,16 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _cardHeightFillChanged(ev) {
+    if (ev.target.checked) {
+      this._config = { ...this._config, card_height_fill: true };
+    } else {
+      const { card_height_fill, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
@@ -3386,6 +3396,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 placeholder="Auto (no fixed height)"
               />
               <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Fill Height</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.card_height_fill === true}
+                @change=${this._cardHeightFillChanged}
+              />
+              <div class="help-text">Fill card height with image, cropping to fit (cover). Requires Card Height to be set.</div>
             </div>
           </div>
           
