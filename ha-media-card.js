@@ -11795,6 +11795,9 @@ class MediaCard extends LitElement {
           <button
             class="action-btn refresh-btn"
             @pointerdown=${() => {
+              // Clear stale state from any prior hold that did not emit click
+              // (e.g. pointer canceled or released off-target).
+              this._refreshHoldFired = false;
               if (this.config?.media_source_type === 'folder') {
                 this._refreshHoldTimer = setTimeout(() => {
                   this._refreshHoldFired = true;
@@ -12935,8 +12938,12 @@ class MediaCard extends LitElement {
 
     await this._resolveMediaUrl();
 
-    // Force cache-bust timestamp unless auto_refresh already added one
-    if (!(this.config?.auto_refresh_seconds > 0)) {
+    // For manual refresh we still need explicit cache-busting when
+    // disable_cache_busting is enabled, because _resolveMediaUrl intentionally
+    // skips automatic timestamps in that mode.
+    const shouldForceManualTimestamp = this.config?.disable_cache_busting === true
+      || !(this.config?.auto_refresh_seconds > 0);
+    if (shouldForceManualTimestamp) {
       const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
       if (timestampedUrl !== this.mediaUrl) {
         this.mediaUrl = timestampedUrl;
