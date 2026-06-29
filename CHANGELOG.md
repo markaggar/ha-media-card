@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`disable_cache_busting` config option**: New boolean option (default `false`) that prevents the card from appending a `?t=<timestamp>` query parameter to image URLs, allowing the browser to serve repeated views of the same image from its cache. Useful for slideshow folders with static files where bandwidth or load time matters. For `media-source://` and `/media/` paths the resolved `authSig` URL is also cached and reused (keyed by `media_content_id`, TTL driven by HA's `expires` field, shared with the thumbnail URL cache) so the URL stays stable between navigation visits and the browser cache can actually be used. Manual refresh always evicts the cached URL entry and fetches a fresh `authSig`. Exposed as a toggle in the visual editor under the Auto-Refresh Interval field.
 
+- **Refresh action button tap/hold behavior (folder mode)**: The refresh button now has two explicit actions in folder mode. Tap refresh reloads only the current image/video in place (fresh URL/auth token and metadata refresh), while holding for 600 ms performs a full queue rebuild to pick up newly added or removed files, then refreshes the current display. Tooltip text now hints at this gesture (`Tap: reload image · Hold: rebuild queue`).
+
 ## v5.11.1 - 2026-06-06
 
 ### Added
@@ -20,8 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Queue-Preserving Provider Reinit**: When a session override changes only provider-scope settings (favorites, mode, sort order) but not queue-scope settings (folder, media type, date range), the card now reinitialises the provider in the background while preserving the current navigation queue, history, and displayed item. Previously any provider change caused a full queue reset with a blank-card flash.
 
 - **Card picker suggestion for Media Index entities**: When a user selects a `sensor.media_index_*` entity in the HA card picker (HA 2026.6+), Media Viewer Card now appears in the Community suggestions list with two pre-configured variants: "Random slideshow" and "Sequential slideshow". The suggestion is detected via the entity's `scan_status` attribute, which is unique to the Media Index integration sensor.
-
-- **Refresh button now has two behaviors in folder mode**: Tapping the refresh button reloads the current image/video in place (evicts the cached `authSig` URL and re-fetches it, then adds a cache-bust timestamp). Holding the button for 600 ms triggers a full queue rebuild — picking up any new or deleted files in the folder — then reloads the current image. A tooltip hints at the hold gesture (`Tap: reload image · Hold: rebuild queue`). In non-folder modes the button behavior is unchanged (tap = image reload).
 
 ### Fixed
 
