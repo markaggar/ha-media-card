@@ -845,6 +845,16 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _cardHeightFillChanged(ev) {
+    if (ev.target.checked) {
+      this._config = { ...this._config, card_height_fill: true };
+    } else {
+      const { card_height_fill, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
@@ -864,6 +874,11 @@ export class MediaCardEditor extends LitElement {
 
   _refreshButtonChanged(ev) {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _disableCacheBustingChanged(ev) {
+    this._config = { ...this._config, disable_cache_busting: ev.target.checked };
     this._fireConfigChanged();
   }
   
@@ -3383,6 +3398,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
             </div>
           </div>
+
+          <div class="config-row">
+            <label>Fill Height</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.card_height_fill === true}
+                @change=${this._cardHeightFillChanged}
+              />
+              <div class="help-text">Fill card height with image, cropping to fit (cover). Requires Card Height to be set.</div>
+            </div>
+          </div>
           
           <div class="config-row">
             <label>Default Zoom Level</label>
@@ -3429,18 +3456,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
-            <label>Refresh Button</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.show_refresh_button || false}
-                @change=${this._refreshButtonChanged}
-              />
-              <div class="help-text">Show manual refresh button on the card</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
             <label>Auto-Refresh Interval</label>
             <div>
               <input
@@ -3453,6 +3468,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 step="1"
               />
               <div class="help-text">Check for new files every N seconds (0 = disabled). Single media: reloads image URL. Folder mode: checks for new files and refreshes queue if at newest position.</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Disable Cache Busting</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.disable_cache_busting || false}
+                @change=${this._disableCacheBustingChanged}
+              />
+              <div class="help-text">Allow browser to cache images (do not append timestamp to URLs). Useful for slideshow folders with static files where bandwidth matters. Note: manual refresh always bypasses browser cache regardless of this setting.</div>
             </div>
           </div>
 
@@ -3975,9 +4002,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        <!-- Fullscreen Button (always available) -->
+        <!-- Fullscreen & Refresh Buttons (always available) -->
         <div class="section">
-          <div class="section-title">🖼️ Fullscreen</div>
+          <div class="section-title">🖼️ Fullscreen &amp; Refresh</div>
           
           <div class="config-row">
             <label>Fullscreen Button</label>
@@ -3988,6 +4015,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._actionButtonsEnableFullscreenChanged}
               />
               <div class="help-text">Show fullscreen button to automatically pause and initiate full screen mode (see Kiosk mode for automatic full screen options)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Refresh Button</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.show_refresh_button || false}
+                @change=${this._refreshButtonChanged}
+              />
+              <div class="help-text">Show manual refresh button on the card</div>
             </div>
           </div>
         </div>

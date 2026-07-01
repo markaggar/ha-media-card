@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.12.0 - 2026-06-15
+
+### Added
+
+- **`card_height_fill` config option**: New boolean option (default `false`) that, when used together with `card_height`, switches the image/video scaling from `contain` (letterboxed, shows full image) to `cover` (fills the fixed-height container, cropping the edges). Useful when you want a fixed-height card that always looks fully "filled" — e.g. a 400 px banner card — without black bars for portrait images. Exposed as a "Fill Height" checkbox in the visual editor beneath the Card Height field (under Image Options). Has no effect unless `card_height` is also set.
+
+- **`disable_cache_busting` config option**: New boolean option (default `false`) that prevents the card from appending a `?t=<timestamp>` query parameter to image URLs, allowing the browser to serve repeated views of the same image from its cache. Useful for slideshow folders with static files where bandwidth or load time matters. For `media-source://` and `/media/` paths the resolved `authSig` URL is also cached and reused (keyed by `media_content_id`, TTL driven by HA's `expires` field, shared with the thumbnail URL cache) so the URL stays stable between navigation visits and the browser cache can actually be used. Manual refresh always evicts the cached URL entry and fetches a fresh `authSig`. Exposed as a toggle in the visual editor under the Auto-Refresh Interval field.
+
+- **Refresh action button tap/hold behavior (folder mode)**: The refresh button now has two explicit actions in folder mode. Tap refresh reloads only the current image/video in place (fresh URL/auth token and metadata refresh), while holding for 600 ms performs a full queue rebuild to pick up newly added or removed files, then refreshes the current display. Tooltip text now hints at this gesture (`Tap: reload image · Hold: rebuild queue`).
+
 ## v5.11.1 - 2026-06-06
 
 ### Added

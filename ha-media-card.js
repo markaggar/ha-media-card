@@ -1,5 +1,5 @@
 /** 
- * Media Viewer Card v5.11.1
+ * Media Viewer Card v5.12.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -4998,6 +4998,10 @@ class MediaCard extends LitElement {
     this._frontLayerGeneration = 0;   // Increment when front layer URL changes (prevents stale setTimeout clearing new URLs)
     this._backLayerGeneration = 0;    // Increment when back layer URL changes (prevents stale setTimeout clearing new URLs)
     
+    // Refresh button hold state (tap = image refresh, hold = queue refresh in folder mode)
+    this._refreshHoldTimer = null;
+    this._refreshHoldFired = false;
+
     // Auto-hide action buttons for touch screens
     this._showButtonsExplicitly = false; // true = show via touch tap (independent of hover)
     this._hideButtonsTimer = null;
@@ -5760,6 +5764,13 @@ class MediaCard extends LitElement {
       }
     }
     
+    // card_height_fill: when card_height is set, fill container with cover cropping
+    if (config.card_height && config.card_height > 0 && config.card_height_fill) {
+      this.setAttribute('data-card-height-fill', 'true');
+    } else {
+      this.removeAttribute('data-card-height-fill');
+    }
+
     // V5: Set media source type attribute for CSS targeting
     const mediaSourceType = this.config.media_source_type || 'single_media';
     this.setAttribute('data-media-source-type', mediaSourceType);
@@ -7917,6 +7928,12 @@ class MediaCard extends LitElement {
       return url;
     }
     
+    // Respect disable_cache_busting option — skip automatic timestamp to allow browser caching.
+    // forceAdd (manual refresh) still bypasses this so the user always gets fresh content.
+    if (!forceAdd && this.config?.disable_cache_busting) {
+      return url;
+    }
+    
     // For auto-refresh: only add if refresh configured
     // For manual refresh: always add (forceAdd = true)
     const refreshSeconds = this.config.auto_refresh_seconds || 0;
@@ -8491,15 +8508,42 @@ class MediaCard extends LitElement {
     // If media-source:// format, resolve through HA API
     if (mediaId.startsWith('media-source://')) {
       try {
-        // V5: Copy V4's approach - just pass through to HA without modification
-        const resolved = await this.hass.callWS({
-          type: "media_source/resolve_media",
-          media_content_id: mediaId,
-          expires: (60 * 60 * 3) // 3 hours
-        });
+        let resolvedUrl;
+
+        // When disable_cache_busting is on, reuse the authSig URL from _thumbnailUrlCache
+        // so the browser can cache the image bytes between navigation visits.
+        // On normal mode we always re-resolve so a fresh authSig (and optional timestamp) is used.
+        if (this.config?.disable_cache_busting) {
+          const cached = this._thumbnailUrlCache?.get(mediaId);
+          if (cached && Date.now() < cached.expiresAt) {
+            resolvedUrl = cached.url;
+            this._log('🔗 Reusing cached authSig URL for', mediaId);
+          }
+        }
+
+        if (!resolvedUrl) {
+          // V5: Copy V4's approach - just pass through to HA without modification
+          const resolved = await this.hass.callWS({
+            type: "media_source/resolve_media",
+            media_content_id: mediaId,
+            expires: (60 * 60 * 3) // 3 hours
+          });
+          resolvedUrl = resolved.url;
+
+          // Cache for reuse when disable_cache_busting is enabled.
+          if (this._thumbnailUrlCache) {
+            const expiresAt = resolved.expires
+              ? resolved.expires * 1000
+              : Date.now() + 3 * 3600 * 1000;
+            this._thumbnailUrlCache.set(mediaId, { url: resolvedUrl, expiresAt });
+            if (this._thumbnailUrlCache.size > 2000) {
+              this._thumbnailUrlCache.delete(this._thumbnailUrlCache.keys().next().value);
+            }
+          }
+        }
         
         // Add timestamp for auto-refresh (camera snapshots, etc.)
-        const finalUrl = this._addCacheBustingTimestamp(resolved.url);
+        const finalUrl = this._addCacheBustingTimestamp(resolvedUrl);
         
         await this._setMediaUrl(finalUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
@@ -8520,12 +8564,36 @@ class MediaCard extends LitElement {
       const mediaSourceId = 'media-source://media_source' + mediaId;
       this._log('Converting /media/ to media-source://', mediaSourceId);
       try {
-        const resolved = await this.hass.callWS({
-          type: "media_source/resolve_media",
-          media_content_id: mediaSourceId,
-          expires: (60 * 60 * 3)
-        });
-        await this._setMediaUrl(resolved.url, expectedIndex, expectedGeneration);
+        let resolvedUrl;
+
+        if (this.config?.disable_cache_busting) {
+          const cached = this._thumbnailUrlCache?.get(mediaSourceId);
+          if (cached && Date.now() < cached.expiresAt) {
+            resolvedUrl = cached.url;
+            this._log('🔗 Reusing cached authSig URL for', mediaSourceId);
+          }
+        }
+
+        if (!resolvedUrl) {
+          const resolved = await this.hass.callWS({
+            type: "media_source/resolve_media",
+            media_content_id: mediaSourceId,
+            expires: (60 * 60 * 3)
+          });
+          resolvedUrl = resolved.url;
+
+          if (this._thumbnailUrlCache) {
+            const expiresAt = resolved.expires
+              ? resolved.expires * 1000
+              : Date.now() + 3 * 3600 * 1000;
+            this._thumbnailUrlCache.set(mediaSourceId, { url: resolvedUrl, expiresAt });
+            if (this._thumbnailUrlCache.size > 2000) {
+              this._thumbnailUrlCache.delete(this._thumbnailUrlCache.keys().next().value);
+            }
+          }
+        }
+
+        await this._setMediaUrl(resolvedUrl, expectedIndex, expectedGeneration);
         this.requestUpdate();
       } catch (error) {
         console.warn('[MediaViewerCard] Failed to resolve /media/ path, skipping:', mediaId, error.message);
@@ -11726,8 +11794,32 @@ class MediaCard extends LitElement {
         ${enableRefresh ? html`
           <button
             class="action-btn refresh-btn"
+            @pointerdown=${() => {
+              // Clear stale state from any prior hold that did not emit click
+              // (e.g. pointer canceled or released off-target).
+              this._refreshHoldFired = false;
+              if (this.config?.media_source_type === 'folder') {
+                this._refreshHoldTimer = setTimeout(() => {
+                  this._refreshHoldFired = true;
+                  this._refreshHoldTimer = null;
+                  this._handleRefreshHold();
+                }, 600);
+              }
+            }}
+            @pointerup=${() => {
+              if (this._refreshHoldTimer) {
+                clearTimeout(this._refreshHoldTimer);
+                this._refreshHoldTimer = null;
+              }
+            }}
+            @pointercancel=${() => {
+              if (this._refreshHoldTimer) {
+                clearTimeout(this._refreshHoldTimer);
+                this._refreshHoldTimer = null;
+              }
+            }}
             @click=${this._handleRefreshClick}
-            title="Refresh">
+            title="${this.config?.media_source_type === 'folder' ? 'Tap: reload image · Hold: rebuild queue' : 'Refresh'}">
             <ha-icon icon="mdi:refresh"></ha-icon>
           </button>
         ` : ''}
@@ -12830,61 +12922,68 @@ class MediaCard extends LitElement {
   }
   
   // Handle refresh button click - reload current media
-  async _handleRefreshClick(e) {
-    e.stopPropagation();
-    
-    // Restart timer on touch (gives user full time to choose next action)
-    if (this._showButtonsExplicitly) {
-      this._startActionButtonsHideTimer();
-    }
-    
-    this._log('🔄 Refresh button clicked');
-    
-    // Check if in folder mode - if so, trigger full queue refresh
-    if (this.config?.media_source_type === 'folder') {
-      this._log('🔄 Folder mode detected - triggering full queue refresh');
-      await this._refreshQueue();
-      return;
-    }
-    
-    // Single media mode - reload current media URL
-    this._log('🔄 Single media mode - reloading current media');
-    
-    // Get the current media content ID
+  // Shared helper: evict cached URL and force-reload the currently displayed image/video.
+  // Used by both tap-refresh and after queue-refresh.
+  async _refreshCurrentImage() {
     const currentMediaId = this.currentMedia?.media_content_id || this._currentMediaPath;
-    
     if (!currentMediaId) {
       this._log('⚠️ No current media to refresh');
       return;
     }
-    
-    try {
-      // Re-resolve the media URL to get a fresh authSig and cache-busting timestamp
-      this._log('🔄 Re-resolving media URL:', currentMediaId);
-      await this._resolveMediaUrl();
-      
-      // Add cache-busting timestamp to force browser reload
-      // Note: _resolveMediaUrl already adds timestamp if auto_refresh_seconds > 0,
-      // but we force it here regardless of config for manual refresh
-      if (this.config?.auto_refresh_seconds > 0) {
-        // Already has timestamp from _resolveMediaUrl, don't add duplicate
-        this._log('Cache-busting timestamp already added by _resolveMediaUrl');
-      } else {
-        // No auto-refresh configured, add timestamp now
-        const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
-        if (timestampedUrl !== this.mediaUrl) {
-          this._log('Added cache-busting timestamp:', timestampedUrl);
-          this.mediaUrl = timestampedUrl;
-        }
-      }
-      
-      // Force reload by updating the img/video src
-      this._mediaLoadedLogged = false; // Allow load success log again
-      this.requestUpdate();
-      
-      // Refresh metadata from media_index in background so overlay stays current
-      this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+    // Evict cached authSig URL so _resolveMediaUrl fetches a brand-new one
+    const cacheKey = currentMediaId.startsWith('/media/')
+      ? 'media-source://media_source' + currentMediaId
+      : currentMediaId;
+    this._thumbnailUrlCache?.delete(cacheKey);
 
+    await this._resolveMediaUrl();
+
+    // For manual refresh we still need explicit cache-busting when
+    // disable_cache_busting is enabled, because _resolveMediaUrl intentionally
+    // skips automatic timestamps in that mode.
+    const shouldForceManualTimestamp = this.config?.disable_cache_busting === true
+      || !(this.config?.auto_refresh_seconds > 0);
+    if (shouldForceManualTimestamp) {
+      const timestampedUrl = this._addCacheBustingTimestamp(this.mediaUrl, true);
+      if (timestampedUrl !== this.mediaUrl) {
+        this.mediaUrl = timestampedUrl;
+      }
+    }
+
+    this._mediaLoadedLogged = false;
+    this.requestUpdate();
+    this._refreshMetadata().catch(err => this._log('⚠️ Metadata refresh failed:', err));
+  }
+
+  // Hold action on refresh button (folder mode only): rebuild the queue to pick up new files
+  // then reload the current image.
+  async _handleRefreshHold() {
+    this._log('🔄 Refresh button held — rebuilding queue');
+    await this._refreshQueue();
+    // _refreshQueue resets to position 0 and calls _resolveMediaUrl if the first item changed.
+    // Force a reload of the current (possibly same) image regardless.
+    await this._refreshCurrentImage();
+    this._log('✅ Queue rebuilt and image refreshed');
+  }
+
+  async _handleRefreshClick(e) {
+    e.stopPropagation();
+
+    // If hold already fired, this click is the pointer-up at end of hold — ignore it.
+    if (this._refreshHoldFired) {
+      this._refreshHoldFired = false;
+      return;
+    }
+
+    // Restart timer on touch (gives user full time to choose next action)
+    if (this._showButtonsExplicitly) {
+      this._startActionButtonsHideTimer();
+    }
+
+    this._log('🔄 Refresh button tapped — reloading current image');
+
+    try {
+      await this._refreshCurrentImage();
       this._log('✅ Media refreshed successfully');
     } catch (error) {
       console.error('Failed to refresh media:', error);
@@ -17062,6 +17161,21 @@ class MediaCard extends LitElement {
       object-fit: contain;
       margin: auto;
     }
+
+    /* Fixed height fill mode: image/video fills container, cropped to fit (object-fit: cover) */
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) img,
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) .image-layer,
+    :host([data-card-height][data-card-height-fill]:not([data-aspect-mode])) video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      max-height: none;
+      object-fit: cover;
+      transform: none;
+      margin: 0;
+    }
     
     /* Default mode (no aspect-mode, no card-height): Center images and apply max-height */
     :host(:not([data-aspect-mode]):not([data-card-height])) .media-container {
@@ -20980,6 +21094,16 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _cardHeightFillChanged(ev) {
+    if (ev.target.checked) {
+      this._config = { ...this._config, card_height_fill: true };
+    } else {
+      const { card_height_fill, ...rest } = this._config;
+      this._config = rest;
+    }
+    this._fireConfigChanged();
+  }
+
   _autoRefreshChanged(ev) {
     const seconds = parseInt(ev.target.value) || 0;
     this._config = { ...this._config, auto_refresh_seconds: seconds };
@@ -20999,6 +21123,11 @@ class MediaCardEditor extends LitElement {
 
   _refreshButtonChanged(ev) {
     this._config = { ...this._config, show_refresh_button: ev.target.checked };
+    this._fireConfigChanged();
+  }
+
+  _disableCacheBustingChanged(ev) {
+    this._config = { ...this._config, disable_cache_busting: ev.target.checked };
     this._fireConfigChanged();
   }
   
@@ -23518,6 +23647,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               <div class="help-text">Fixed card height in pixels (100-5000, takes precedence over max height)</div>
             </div>
           </div>
+
+          <div class="config-row">
+            <label>Fill Height</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.card_height_fill === true}
+                @change=${this._cardHeightFillChanged}
+              />
+              <div class="help-text">Fill card height with image, cropping to fit (cover). Requires Card Height to be set.</div>
+            </div>
+          </div>
           
           <div class="config-row">
             <label>Default Zoom Level</label>
@@ -23564,18 +23705,6 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
           
           <div class="config-row">
-            <label>Refresh Button</label>
-            <div>
-              <input
-                type="checkbox"
-                .checked=${this._config.show_refresh_button || false}
-                @change=${this._refreshButtonChanged}
-              />
-              <div class="help-text">Show manual refresh button on the card</div>
-            </div>
-          </div>
-          
-          <div class="config-row">
             <label>Auto-Refresh Interval</label>
             <div>
               <input
@@ -23588,6 +23717,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 step="1"
               />
               <div class="help-text">Check for new files every N seconds (0 = disabled). Single media: reloads image URL. Folder mode: checks for new files and refreshes queue if at newest position.</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Disable Cache Busting</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.disable_cache_busting || false}
+                @change=${this._disableCacheBustingChanged}
+              />
+              <div class="help-text">Allow browser to cache images (do not append timestamp to URLs). Useful for slideshow folders with static files where bandwidth matters. Note: manual refresh always bypasses browser cache regardless of this setting.</div>
             </div>
           </div>
 
@@ -24110,9 +24251,9 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
           </div>
         </div>
 
-        <!-- Fullscreen Button (always available) -->
+        <!-- Fullscreen & Refresh Buttons (always available) -->
         <div class="section">
-          <div class="section-title">🖼️ Fullscreen</div>
+          <div class="section-title">🖼️ Fullscreen &amp; Refresh</div>
           
           <div class="config-row">
             <label>Fullscreen Button</label>
@@ -24123,6 +24264,18 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
                 @change=${this._actionButtonsEnableFullscreenChanged}
               />
               <div class="help-text">Show fullscreen button to automatically pause and initiate full screen mode (see Kiosk mode for automatic full screen options)</div>
+            </div>
+          </div>
+
+          <div class="config-row">
+            <label>Refresh Button</label>
+            <div>
+              <input
+                type="checkbox"
+                .checked=${this._config.show_refresh_button || false}
+                @change=${this._refreshButtonChanged}
+              />
+              <div class="help-text">Show manual refresh button on the card</div>
             </div>
           </div>
         </div>
@@ -24482,7 +24635,7 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
 }
 
 console.info(
-  '%c  MEDIA-VIEWER-CARD  %c  v5.11.1 Loaded  ',
+  '%c  MEDIA-VIEWER-CARD  %c  v5.12.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
