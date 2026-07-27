@@ -8025,7 +8025,10 @@ class MediaCard extends LitElement {
         // backend processes GPS extraction and geocoding asynchronously after initial indexing.
         // This is particularly relevant for newly-indexed videos where the backend may not have
         // finished extracting EXIF GPS data at the time the item first appeared in the queue.
-        const isVideoPath = targetPath && /\.(mp4|mov|m4v|webm|mkv|avi|ogg)$/i.test(targetPath.split('?')[0]);
+        const LOCATION_RETRY_DELAY_FIRST = 15000;  // 15 s — covers fast async processing
+        const LOCATION_RETRY_DELAY_SECOND = 60000; // 60 s — covers slower background scans
+        const cleanPath = targetPath ? targetPath.split('?')[0] : '';
+        const isVideoPath = cleanPath && MediaUtils.detectFileType(cleanPath) === 'video';
         const missingGps = freshMetadata &&
           !freshMetadata.has_coordinates &&
           !freshMetadata.location_city &&
@@ -8036,7 +8039,7 @@ class MediaCard extends LitElement {
           const retryCount = this._locationRetryCount.get(targetPath) || 0;
           if (retryCount < 2) {
             this._locationRetryCount.set(targetPath, retryCount + 1);
-            const delay = retryCount === 0 ? 15000 : 60000; // 15 s then 60 s
+            const delay = retryCount === 0 ? LOCATION_RETRY_DELAY_FIRST : LOCATION_RETRY_DELAY_SECOND;
             // Cancel any existing timer for this specific path before scheduling a new one
             clearTimeout(this._locationRetryTimers.get(targetPath));
             const timer = setTimeout(async () => {
