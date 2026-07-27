@@ -158,7 +158,7 @@ export class MediaCard extends LitElement {
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
     this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
     this._locationRetryCount = new Map(); // Track location metadata retry attempts per media path (for videos missing GPS)
-    this._locationRetryTimer = null; // setTimeout handle for pending location metadata retry
+    this._locationRetryTimers = new Map(); // setTimeout handles for pending location metadata retries, keyed by media path
     this._errorState = null; // V4 error state tracking
     this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
     this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
@@ -1704,6 +1704,8 @@ export class MediaCard extends LitElement {
     // Clear suppress-lookahead flag on first forward navigation after a shared-queue restore.
     // This ensures _fillLookahead() is a no-op during init but works normally thereafter.
     this._suppressLookaheadFill = false;
+    // Clear any pending location retry timers from the previous item
+    this._clearLocationRetryTimers();
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadNext
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -2064,6 +2066,8 @@ export class MediaCard extends LitElement {
 }
 
   async _loadPrevious() {
+    // Clear any pending location retry timers from the previous item
+    this._clearLocationRetryTimers();
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadPrevious
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -3347,8 +3351,10 @@ export class MediaCard extends LitElement {
           if (retryCount < 2) {
             this._locationRetryCount.set(targetPath, retryCount + 1);
             const delay = retryCount === 0 ? 15000 : 60000; // 15 s then 60 s
-            clearTimeout(this._locationRetryTimer);
-            this._locationRetryTimer = setTimeout(async () => {
+            // Cancel any existing timer for this specific path before scheduling a new one
+            clearTimeout(this._locationRetryTimers.get(targetPath));
+            const timer = setTimeout(async () => {
+              this._locationRetryTimers.delete(targetPath);
               const stillActive = this._pendingMediaPath === targetPath ||
                                   this._currentMediaPath === targetPath;
               if (stillActive) {
@@ -3356,12 +3362,21 @@ export class MediaCard extends LitElement {
                 await this._refreshMetadata();
               }
             }, delay);
+            this._locationRetryTimers.set(targetPath, timer);
           }
         }
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
     }
+  }
+
+  // Clear all pending location retry timers (called on navigation to prevent stale timers)
+  _clearLocationRetryTimers() {
+    for (const timer of this._locationRetryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this._locationRetryTimers.clear();
   }
 
   // V5.6.6: Check if file exists via provider (delegates to media_index service if available)
