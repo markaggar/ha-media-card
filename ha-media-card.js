@@ -860,9 +860,9 @@ class MediaIndexHelper {
       location_country_code: item.location_country_code,
       location_name: item.location_name,
       
-      // Geocoding status
-      has_coordinates: item.has_coordinates || false,
-      is_geocoded: item.is_geocoded || false,
+      // Geocoding status — compute from raw data to handle DB flag inconsistencies
+      has_coordinates: !!(item.latitude && item.longitude),
+      is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
       
       // Camera info
       camera_make: item.camera_make,
@@ -1294,11 +1294,12 @@ class FolderProvider extends MediaProvider {
                 location_city: exif.location_city,
                 location_state: exif.location_state,
                 location_country: exif.location_country,
+                location_country_code: exif.location_country_code,
                 location_name: exif.location_name,
                 latitude: exif.latitude,
                 longitude: exif.longitude,
-                has_coordinates: exif.has_coordinates || false,
-                is_geocoded: exif.is_geocoded || false
+                has_coordinates: !!(exif.latitude && exif.longitude),
+                is_geocoded: !!(exif.is_geocoded || exif.location_city || exif.location_state || exif.location_country)
               };
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);
             } else {
@@ -3542,9 +3543,10 @@ class MediaIndexProvider extends MediaProvider {
           location_city: item.location_city,
           location_state: item.location_state,
           location_country: item.location_country,
+          location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: item.has_coordinates || false,
-          is_geocoded: item.is_geocoded || false,
+          has_coordinates: !!(item.latitude && item.longitude),
+          is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
           is_favorited: item.is_favorited || false,
@@ -3725,10 +3727,11 @@ class MediaIndexProvider extends MediaProvider {
             location_city: item.location_city,
             location_state: item.location_state,
             location_country: item.location_country,
+            location_country_code: item.location_country_code,
             location_name: item.location_name,
-            // Geocoding status
-            has_coordinates: item.has_coordinates || false,
-            is_geocoded: item.is_geocoded || false,
+            // Geocoding status — compute from raw data to handle DB flag inconsistencies
+            has_coordinates: !!(item.latitude && item.longitude),
+            is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
             // Favorite status
@@ -4041,9 +4044,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
           location_city: item.location_city,
           location_state: item.location_state,
           location_country: item.location_country,
+          location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: item.has_coordinates || false,
-          is_geocoded: item.is_geocoded || false,
+          has_coordinates: !!(item.latitude && item.longitude),
+          is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
           is_favorited: item.is_favorited || false
@@ -4364,9 +4368,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
           location_city: item.location_city,
           location_state: item.location_state,
           location_country: item.location_country,
+          location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: item.has_coordinates || false,
-          is_geocoded: item.is_geocoded || false,
+          has_coordinates: !!(item.latitude && item.longitude),
+          is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
           is_favorited: item.is_favorited || false
@@ -4662,9 +4667,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
             location_city: item.location_city,
             location_state: item.location_state,
             location_country: item.location_country,
+            location_country_code: item.location_country_code,
             location_name: item.location_name,
-            has_coordinates: item.has_coordinates || false,
-            is_geocoded: item.is_geocoded || false,
+            has_coordinates: !!(item.latitude && item.longitude),
+            is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
             is_favorited: item.is_favorited || false
@@ -4837,6 +4843,8 @@ class MediaCard extends LitElement {
     this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
     this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
+    this._locationRetryCount = new Map(); // Track location metadata retry attempts per media path (for videos missing GPS)
+    this._locationRetryTimer = null; // setTimeout handle for pending location metadata retry
     this._errorState = null; // V4 error state tracking
     this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
     this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
@@ -6355,9 +6363,10 @@ class MediaCard extends LitElement {
             location_city: rawItem.location_city,
             location_state: rawItem.location_state,
             location_country: rawItem.location_country,
+            location_country_code: rawItem.location_country_code,
             location_name: rawItem.location_name,
-            has_coordinates: rawItem.has_coordinates || false,
-            is_geocoded: rawItem.is_geocoded || false,
+            has_coordinates: !!(rawItem.latitude && rawItem.longitude),
+            is_geocoded: !!(rawItem.is_geocoded || rawItem.location_city || rawItem.location_state || rawItem.location_country),
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,
             is_favorited: rawItem.is_favorited || false,
@@ -8007,6 +8016,34 @@ class MediaCard extends LitElement {
         // When a favorite from a burst group is confirmed by the DB, there is nothing
         // further to do on the card side — the backend already filtered out non-favorites
         // before they reached the queue (auto_select_burst_favorite param to get_random_items).
+
+        // For video files missing GPS/location data, schedule automatic retries in case the
+        // backend processes GPS extraction and geocoding asynchronously after initial indexing.
+        // This is particularly relevant for newly-indexed videos where the backend may not have
+        // finished extracting EXIF GPS data at the time the item first appeared in the queue.
+        const isVideoPath = targetPath && /\.(mp4|mov|m4v|webm|mkv|avi|ogg)$/i.test(targetPath.split('?')[0]);
+        const missingGps = freshMetadata &&
+          !freshMetadata.has_coordinates &&
+          !freshMetadata.location_city &&
+          !freshMetadata.location_country &&
+          !freshMetadata.location_name;
+
+        if (isVideoPath && missingGps && MediaProvider.isMediaIndexActive(this.config)) {
+          const retryCount = this._locationRetryCount.get(targetPath) || 0;
+          if (retryCount < 2) {
+            this._locationRetryCount.set(targetPath, retryCount + 1);
+            const delay = retryCount === 0 ? 15000 : 60000; // 15 s then 60 s
+            clearTimeout(this._locationRetryTimer);
+            this._locationRetryTimer = setTimeout(async () => {
+              const stillActive = this._pendingMediaPath === targetPath ||
+                                  this._currentMediaPath === targetPath;
+              if (stillActive) {
+                this._log('\uD83D\uDD04 Retrying location metadata fetch for video:', targetPath);
+                await this._refreshMetadata();
+              }
+            }, delay);
+          }
+        }
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
@@ -11372,7 +11409,7 @@ class MediaCard extends LitElement {
     
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
-      if (metadata.location_city || metadata.location_country) {
+      if (metadata.location_city || metadata.location_country || metadata.location_country_code || metadata.location_name) {
         // Get server's country from Home Assistant config (ISO code like "US")
         const serverCountryCode = this.hass?.config?.country || null;
         
@@ -11452,16 +11489,19 @@ class MediaCard extends LitElement {
           locationText += locationText ? `, ${metadata.location_state}` : metadata.location_state;
         }
         
-        // Only show country if we have a server country AND it doesn't match
+        // Only show country if we have a server country AND it doesn't match.
+        // Fall back to location_country_code (ISO code) when location_country full name is absent.
         // Compare ISO code and all country name variations
-        if (metadata.location_country) {
+        const countryDisplay = metadata.location_country || metadata.location_country_code;
+        if (countryDisplay) {
           const countryMatches = serverCountryCode && (
-            metadata.location_country === serverCountryCode ||
-            (serverCountryNames && serverCountryNames.includes(metadata.location_country))
+            countryDisplay === serverCountryCode ||
+            metadata.location_country_code === serverCountryCode ||
+            (serverCountryNames && serverCountryNames.includes(countryDisplay))
           );
           
           if (!countryMatches) {
-            locationText += locationText ? `, ${metadata.location_country}` : metadata.location_country;
+            locationText += locationText ? `, ${countryDisplay}` : countryDisplay;
           }
         }
         
@@ -11471,6 +11511,9 @@ class MediaCard extends LitElement {
           // Has GPS but no city/state/country text yet - geocoding pending
           parts.push(`📍 Loading location...`);
         }
+      } else if (metadata.has_coordinates) {
+        // Has GPS coordinates but no geocoded location data yet — geocoding pending
+        parts.push(`📍 Loading location...`);
       }
     }
     

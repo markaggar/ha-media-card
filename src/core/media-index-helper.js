@@ -121,9 +121,9 @@ export class MediaIndexHelper {
       location_country_code: item.location_country_code,
       location_name: item.location_name,
       
-      // Geocoding status
-      has_coordinates: item.has_coordinates || false,
-      is_geocoded: item.is_geocoded || false,
+      // Geocoding status — compute from raw data to handle DB flag inconsistencies
+      has_coordinates: !!(item.latitude && item.longitude),
+      is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
       
       // Camera info
       camera_make: item.camera_make,
