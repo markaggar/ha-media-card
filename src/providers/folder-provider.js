@@ -370,11 +370,12 @@ export class FolderProvider extends MediaProvider {
                 location_city: exif.location_city,
                 location_state: exif.location_state,
                 location_country: exif.location_country,
+                location_country_code: exif.location_country_code,
                 location_name: exif.location_name,
                 latitude: exif.latitude,
                 longitude: exif.longitude,
-                has_coordinates: exif.has_coordinates || false,
-                is_geocoded: exif.is_geocoded || false
+                has_coordinates: !!(exif.latitude && exif.longitude),
+                is_geocoded: !!(exif.is_geocoded || exif.location_city || exif.location_state || exif.location_country)
               };
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);
             } else {
