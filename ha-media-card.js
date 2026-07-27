@@ -8029,10 +8029,13 @@ class MediaCard extends LitElement {
         const LOCATION_RETRY_DELAY_SECOND = 60000; // 60 s — covers slower background scans
         const cleanPath = targetPath ? targetPath.split('?')[0] : '';
         const isVideoPath = cleanPath && MediaUtils.detectFileType(cleanPath) === 'video';
+        // Only retry when ALL location fields are absent — skip if any partial data is available
         const missingGps = freshMetadata &&
           !freshMetadata.has_coordinates &&
           !freshMetadata.location_city &&
+          !freshMetadata.location_state &&
           !freshMetadata.location_country &&
+          !freshMetadata.location_country_code &&
           !freshMetadata.location_name;
 
         if (isVideoPath && missingGps && MediaProvider.isMediaIndexActive(this.config)) {
@@ -8044,6 +8047,9 @@ class MediaCard extends LitElement {
             clearTimeout(this._locationRetryTimers.get(targetPath));
             const timer = setTimeout(async () => {
               this._locationRetryTimers.delete(targetPath);
+              // Navigation guard: _clearLocationRetryTimers() cancels in-flight timers via
+              // clearTimeout on navigation, so this callback only fires for the current item.
+              // As an extra safety check, verify the path still matches the active media.
               const stillActive = this._pendingMediaPath === targetPath ||
                                   this._currentMediaPath === targetPath;
               if (stillActive) {
