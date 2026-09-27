@@ -1695,7 +1695,7 @@ export class MediaCard extends LitElement {
             location_country: rawItem.location_country,
             location_country_code: rawItem.location_country_code,
             location_name: rawItem.location_name,
-            has_coordinates: !!(rawItem.latitude && rawItem.longitude),
+            has_coordinates: rawItem.latitude != null && rawItem.longitude != null,
             is_geocoded: !!(rawItem.is_geocoded || rawItem.location_city || rawItem.location_state || rawItem.location_country),
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,

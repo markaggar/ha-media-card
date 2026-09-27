@@ -869,7 +869,7 @@ class MediaIndexHelper {
           location_name: exif.location_name,
           
           // Geocoding status - infer from presence of data
-          has_coordinates: !!(exif.latitude && exif.longitude),
+          has_coordinates: exif.latitude != null && exif.longitude != null,
           is_geocoded: !!(exif.location_city || exif.location_state || exif.location_country),
           
           // Camera info (from nested exif object)
@@ -926,7 +926,7 @@ class MediaIndexHelper {
       location_name: item.location_name,
       
       // Geocoding status — compute from raw data to handle DB flag inconsistencies
-      has_coordinates: !!(item.latitude && item.longitude),
+      has_coordinates: item.latitude != null && item.longitude != null,
       is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
       
       // Camera info
@@ -1177,16 +1177,16 @@ class FolderProvider extends MediaProvider {
         const success = await this.mediaIndexProvider.initialize();
           
         if (!success) {
-          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
-          const filters = this.config.filters || {};
-          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end ||
-            filters.time_range?.start || filters.time_range?.end || filters.time_start || filters.time_end;
-            
-          if (hasFilters) {
-            console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
-            console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
-            // Not a hard error — mediaIndexProvider.emptyReason is already 'filtered', which the
-            // card uses to show a friendly "no matches" message with filter controls still available.
+          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled.
+          // Rely on the provider's own emptyReason (not a locally re-derived hasFilters check) so
+          // a legitimate empty result — filtered or an empty collection — never gets converted
+          // into a fatal error; only a real service failure (emptyReason still null) should throw.
+          const emptyReason = this.mediaIndexProvider.emptyReason;
+          if (emptyReason === 'filtered' || emptyReason === 'empty_collection') {
+            console.error(`[FolderProvider] ❌ Media Index returned no items (${emptyReason})`);
+            if (emptyReason === 'filtered') {
+              console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
+            }
             return false;
           } else {
             console.error('[FolderProvider] ❌ Media Index initialization failed');
@@ -1375,7 +1375,7 @@ class FolderProvider extends MediaProvider {
                 location_name: exif.location_name,
                 latitude: exif.latitude,
                 longitude: exif.longitude,
-                has_coordinates: !!(exif.latitude && exif.longitude),
+                has_coordinates: exif.latitude != null && exif.longitude != null,
                 is_geocoded: !!(exif.is_geocoded || exif.location_city || exif.location_state || exif.location_country)
               };
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);
@@ -3718,7 +3718,7 @@ class MediaIndexProvider extends MediaProvider {
           location_country: item.location_country,
           location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: !!(item.latitude && item.longitude),
+          has_coordinates: item.latitude != null && item.longitude != null,
           is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
@@ -3953,7 +3953,7 @@ class MediaIndexProvider extends MediaProvider {
             location_country_code: item.location_country_code,
             location_name: item.location_name,
             // Geocoding status — compute from raw data to handle DB flag inconsistencies
-            has_coordinates: !!(item.latitude && item.longitude),
+            has_coordinates: item.latitude != null && item.longitude != null,
             is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
@@ -4160,7 +4160,13 @@ class SequentialMediaIndexProvider extends MediaProvider {
     // Initial query to fill queue
     const items = await this._queryOrderedFiles();
     
-    if (!items || items.length === 0) {
+    if (items === null) {
+      // Service call failed (malformed/unavailable response, or an exception) - a real error
+      console.error('[SequentialMediaIndexProvider] ❌ Media Index service call failed');
+      return false;
+    }
+    
+    if (items.length === 0) {
       const filters = this.config.filters || {};
       const timeRange = this._getTimeRangeFilter(filters);
       const hasFilters = !!(filters.favorites || filters.date_range?.start || filters.date_range?.end ||
@@ -4297,7 +4303,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
           location_country: item.location_country,
           location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: !!(item.latitude && item.longitude),
+          has_coordinates: item.latitude != null && item.longitude != null,
           is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
@@ -4345,6 +4351,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
       let localCursor = this.lastSeenValue;
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
+      // Set when the WebSocket response itself is malformed/unavailable — a real service
+      // failure, as opposed to a well-formed response that simply matched zero items.
+      let serviceFailure = false;
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
       let iteration = 0;
 
@@ -4446,6 +4455,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
         if (!response || !response.items || !Array.isArray(response.items)) {
           this._log('⚠️ No items in response - database exhausted');
           this.hasMore = false;
+          // Only the very first page returning a malformed response indicates a real
+          // service failure; on later pages this is the normal end-of-results signal.
+          if (iteration === 1) serviceFailure = true;
           break; // Exit loop - no more items available
         }
         
@@ -4575,7 +4587,9 @@ class SequentialMediaIndexProvider extends MediaProvider {
       if (allFilteredItems.length === 0) {
         this._log('⚠️ No valid items after filtering across all batches');
         this.hasMore = false;
-        return null;
+        // null = real service failure; [] = well-formed response that matched nothing
+        // (lets initialize() distinguish a filtered/empty result from a genuine failure).
+        return serviceFailure ? null : [];
       }
       
       this._log(`📊 Total items after ${iteration} iteration(s): ${allFilteredItems.length}`);
@@ -4630,7 +4644,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
           location_country: item.location_country,
           location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: !!(item.latitude && item.longitude),
+          has_coordinates: item.latitude != null && item.longitude != null,
           is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
@@ -4929,7 +4943,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
             location_country: item.location_country,
             location_country_code: item.location_country_code,
             location_name: item.location_name,
-            has_coordinates: !!(item.latitude && item.longitude),
+            has_coordinates: item.latitude != null && item.longitude != null,
             is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
@@ -6641,7 +6655,7 @@ class MediaCard extends LitElement {
             location_country: rawItem.location_country,
             location_country_code: rawItem.location_country_code,
             location_name: rawItem.location_name,
-            has_coordinates: !!(rawItem.latitude && rawItem.longitude),
+            has_coordinates: rawItem.latitude != null && rawItem.longitude != null,
             is_geocoded: !!(rawItem.is_geocoded || rawItem.location_city || rawItem.location_state || rawItem.location_country),
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,

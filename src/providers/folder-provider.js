@@ -188,16 +188,16 @@ export class FolderProvider extends MediaProvider {
         const success = await this.mediaIndexProvider.initialize();
           
         if (!success) {
-          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
-          const filters = this.config.filters || {};
-          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end ||
-            filters.time_range?.start || filters.time_range?.end || filters.time_start || filters.time_end;
-            
-          if (hasFilters) {
-            console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
-            console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
-            // Not a hard error — mediaIndexProvider.emptyReason is already 'filtered', which the
-            // card uses to show a friendly "no matches" message with filter controls still available.
+          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled.
+          // Rely on the provider's own emptyReason (not a locally re-derived hasFilters check) so
+          // a legitimate empty result — filtered or an empty collection — never gets converted
+          // into a fatal error; only a real service failure (emptyReason still null) should throw.
+          const emptyReason = this.mediaIndexProvider.emptyReason;
+          if (emptyReason === 'filtered' || emptyReason === 'empty_collection') {
+            console.error(`[FolderProvider] ❌ Media Index returned no items (${emptyReason})`);
+            if (emptyReason === 'filtered') {
+              console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
+            }
             return false;
           } else {
             console.error('[FolderProvider] ❌ Media Index initialization failed');
@@ -386,7 +386,7 @@ export class FolderProvider extends MediaProvider {
                 location_name: exif.location_name,
                 latitude: exif.latitude,
                 longitude: exif.longitude,
-                has_coordinates: !!(exif.latitude && exif.longitude),
+                has_coordinates: exif.latitude != null && exif.longitude != null,
                 is_geocoded: !!(exif.is_geocoded || exif.location_city || exif.location_state || exif.location_country)
               };
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);

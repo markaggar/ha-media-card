@@ -123,7 +123,13 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     // Initial query to fill queue
     const items = await this._queryOrderedFiles();
     
-    if (!items || items.length === 0) {
+    if (items === null) {
+      // Service call failed (malformed/unavailable response, or an exception) - a real error
+      console.error('[SequentialMediaIndexProvider] ❌ Media Index service call failed');
+      return false;
+    }
+    
+    if (items.length === 0) {
       const filters = this.config.filters || {};
       const timeRange = this._getTimeRangeFilter(filters);
       const hasFilters = !!(filters.favorites || filters.date_range?.start || filters.date_range?.end ||
@@ -260,7 +266,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           location_country: item.location_country,
           location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: !!(item.latitude && item.longitude),
+          has_coordinates: item.latitude != null && item.longitude != null,
           is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
@@ -308,6 +314,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       let localCursor = this.lastSeenValue;
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
+      // Set when the WebSocket response itself is malformed/unavailable — a real service
+      // failure, as opposed to a well-formed response that simply matched zero items.
+      let serviceFailure = false;
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
       let iteration = 0;
 
@@ -409,6 +418,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         if (!response || !response.items || !Array.isArray(response.items)) {
           this._log('⚠️ No items in response - database exhausted');
           this.hasMore = false;
+          // Only the very first page returning a malformed response indicates a real
+          // service failure; on later pages this is the normal end-of-results signal.
+          if (iteration === 1) serviceFailure = true;
           break; // Exit loop - no more items available
         }
         
@@ -538,7 +550,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       if (allFilteredItems.length === 0) {
         this._log('⚠️ No valid items after filtering across all batches');
         this.hasMore = false;
-        return null;
+        // null = real service failure; [] = well-formed response that matched nothing
+        // (lets initialize() distinguish a filtered/empty result from a genuine failure).
+        return serviceFailure ? null : [];
       }
       
       this._log(`📊 Total items after ${iteration} iteration(s): ${allFilteredItems.length}`);
@@ -593,7 +607,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           location_country: item.location_country,
           location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: !!(item.latitude && item.longitude),
+          has_coordinates: item.latitude != null && item.longitude != null,
           is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
@@ -892,7 +906,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
             location_country: item.location_country,
             location_country_code: item.location_country_code,
             location_name: item.location_name,
-            has_coordinates: !!(item.latitude && item.longitude),
+            has_coordinates: item.latitude != null && item.longitude != null,
             is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,

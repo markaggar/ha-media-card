@@ -605,7 +605,7 @@ export class MediaIndexProvider extends MediaProvider {
           location_country: item.location_country,
           location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: !!(item.latitude && item.longitude),
+          has_coordinates: item.latitude != null && item.longitude != null,
           is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
@@ -840,7 +840,7 @@ export class MediaIndexProvider extends MediaProvider {
             location_country_code: item.location_country_code,
             location_name: item.location_name,
             // Geocoding status — compute from raw data to handle DB flag inconsistencies
-            has_coordinates: !!(item.latitude && item.longitude),
+            has_coordinates: item.latitude != null && item.longitude != null,
             is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
