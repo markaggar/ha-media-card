@@ -95,22 +95,31 @@ const MediaUtils = {
     return (hours * 60) + minutes;
   },
 
-  parseTimestamp(value) {
+  getTimeOfDayMinutes(value) {
     if (value === null || value === undefined || value === '') return null;
 
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      const timeMatch = trimmed.match(/(?:T|\s|^)(\d{2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?$/);
+      if (timeMatch) {
+        return (Number(timeMatch[1]) * 60) + Number(timeMatch[2]);
+      }
+    }
+
     if (typeof value === 'number') {
-      return new Date(value > 9999999999 ? value : value * 1000);
+      const date = new Date(value > 9999999999 ? value : value * 1000);
+      return (date.getHours() * 60) + date.getMinutes();
     }
 
     if (value instanceof Date) {
-      return new Date(value.getTime());
+      return (value.getHours() * 60) + value.getMinutes();
     }
 
     if (typeof value === 'string') {
       const normalized = value.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
       const parsed = new Date(normalized);
       if (!isNaN(parsed.getTime())) {
-        return parsed;
+        return (parsed.getHours() * 60) + parsed.getMinutes();
       }
     }
 
@@ -120,14 +129,12 @@ const MediaUtils = {
   matchesTimeOfDayRange(value, timeStart, timeEnd) {
     if (!timeStart && !timeEnd) return true;
 
-    const timestamp = MediaUtils.parseTimestamp(value);
-    if (!timestamp) return false;
-
     const startMinutes = MediaUtils.parseTimeOfDay(timeStart);
     const endMinutes = MediaUtils.parseTimeOfDay(timeEnd);
-    const currentMinutes = (timestamp.getHours() * 60) + timestamp.getMinutes();
+    const currentMinutes = MediaUtils.getTimeOfDayMinutes(value);
 
     if (startMinutes === null && endMinutes === null) return true;
+    if (currentMinutes === null) return false;
     if (startMinutes === null) return currentMinutes <= endMinutes;
     if (endMinutes === null) return currentMinutes >= startMinutes;
     if (startMinutes === endMinutes) return true;
@@ -3240,14 +3247,14 @@ class MediaIndexProvider extends MediaProvider {
       if (startMinutes === endMinutes) {
         activeMinutes = 1440;
       } else if (startMinutes < endMinutes) {
-        activeMinutes = endMinutes - startMinutes;
+        activeMinutes = (endMinutes - startMinutes) + 1;
       } else {
-        activeMinutes = (1440 - startMinutes) + endMinutes;
+        activeMinutes = (1440 - startMinutes) + endMinutes + 1;
       }
     } else if (startMinutes !== null) {
       activeMinutes = 1440 - startMinutes;
     } else if (endMinutes !== null) {
-      activeMinutes = endMinutes;
+      activeMinutes = endMinutes + 1;
     }
 
     const coverage = Math.max(activeMinutes / 1440, 0.1);
@@ -21005,16 +21012,14 @@ class MediaCardEditor extends LitElement {
     return '';
   }
 
-  _handleTimeRangeStartChanged(ev) {
-    const startTime = ev.target.value || null;
-
+  _updateTimeRangeConfig(key, value) {
     const filters = { ...this._config.filters };
     const timeRange = { ...filters.time_range };
 
-    if (startTime) {
-      timeRange.start = startTime;
+    if (value) {
+      timeRange[key] = value;
     } else {
-      delete timeRange.start;
+      delete timeRange[key];
     }
 
     if (timeRange.start || timeRange.end) {
@@ -21040,39 +21045,12 @@ class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _handleTimeRangeStartChanged(ev) {
+    this._updateTimeRangeConfig('start', ev.target.value || null);
+  }
+
   _handleTimeRangeEndChanged(ev) {
-    const endTime = ev.target.value || null;
-
-    const filters = { ...this._config.filters };
-    const timeRange = { ...filters.time_range };
-
-    if (endTime) {
-      timeRange.end = endTime;
-    } else {
-      delete timeRange.end;
-    }
-
-    if (timeRange.start || timeRange.end) {
-      filters.time_range = timeRange;
-    } else {
-      delete filters.time_range;
-    }
-
-    delete filters.time_start;
-    delete filters.time_end;
-
-    if (Object.keys(filters).length === 0) {
-      const newConfig = { ...this._config };
-      delete newConfig.filters;
-      this._config = newConfig;
-    } else {
-      this._config = {
-        ...this._config,
-        filters: filters
-      };
-    }
-
-    this._fireConfigChanged();
+    this._updateTimeRangeConfig('end', ev.target.value || null);
   }
 
   _getTimeRangeDescription() {

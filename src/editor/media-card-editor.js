@@ -531,16 +531,14 @@ export class MediaCardEditor extends LitElement {
     return '';
   }
 
-  _handleTimeRangeStartChanged(ev) {
-    const startTime = ev.target.value || null;
-
+  _updateTimeRangeConfig(key, value) {
     const filters = { ...this._config.filters };
     const timeRange = { ...filters.time_range };
 
-    if (startTime) {
-      timeRange.start = startTime;
+    if (value) {
+      timeRange[key] = value;
     } else {
-      delete timeRange.start;
+      delete timeRange[key];
     }
 
     if (timeRange.start || timeRange.end) {
@@ -566,39 +564,12 @@ export class MediaCardEditor extends LitElement {
     this._fireConfigChanged();
   }
 
+  _handleTimeRangeStartChanged(ev) {
+    this._updateTimeRangeConfig('start', ev.target.value || null);
+  }
+
   _handleTimeRangeEndChanged(ev) {
-    const endTime = ev.target.value || null;
-
-    const filters = { ...this._config.filters };
-    const timeRange = { ...filters.time_range };
-
-    if (endTime) {
-      timeRange.end = endTime;
-    } else {
-      delete timeRange.end;
-    }
-
-    if (timeRange.start || timeRange.end) {
-      filters.time_range = timeRange;
-    } else {
-      delete filters.time_range;
-    }
-
-    delete filters.time_start;
-    delete filters.time_end;
-
-    if (Object.keys(filters).length === 0) {
-      const newConfig = { ...this._config };
-      delete newConfig.filters;
-      this._config = newConfig;
-    } else {
-      this._config = {
-        ...this._config,
-        filters: filters
-      };
-    }
-
-    this._fireConfigChanged();
+    this._updateTimeRangeConfig('end', ev.target.value || null);
   }
 
   _getTimeRangeDescription() {

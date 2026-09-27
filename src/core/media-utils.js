@@ -46,22 +46,31 @@ export const MediaUtils = {
     return (hours * 60) + minutes;
   },
 
-  parseTimestamp(value) {
+  getTimeOfDayMinutes(value) {
     if (value === null || value === undefined || value === '') return null;
 
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      const timeMatch = trimmed.match(/(?:T|\s|^)(\d{2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?$/);
+      if (timeMatch) {
+        return (Number(timeMatch[1]) * 60) + Number(timeMatch[2]);
+      }
+    }
+
     if (typeof value === 'number') {
-      return new Date(value > 9999999999 ? value : value * 1000);
+      const date = new Date(value > 9999999999 ? value : value * 1000);
+      return (date.getHours() * 60) + date.getMinutes();
     }
 
     if (value instanceof Date) {
-      return new Date(value.getTime());
+      return (value.getHours() * 60) + value.getMinutes();
     }
 
     if (typeof value === 'string') {
       const normalized = value.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
       const parsed = new Date(normalized);
       if (!isNaN(parsed.getTime())) {
-        return parsed;
+        return (parsed.getHours() * 60) + parsed.getMinutes();
       }
     }
 
@@ -71,14 +80,12 @@ export const MediaUtils = {
   matchesTimeOfDayRange(value, timeStart, timeEnd) {
     if (!timeStart && !timeEnd) return true;
 
-    const timestamp = MediaUtils.parseTimestamp(value);
-    if (!timestamp) return false;
-
     const startMinutes = MediaUtils.parseTimeOfDay(timeStart);
     const endMinutes = MediaUtils.parseTimeOfDay(timeEnd);
-    const currentMinutes = (timestamp.getHours() * 60) + timestamp.getMinutes();
+    const currentMinutes = MediaUtils.getTimeOfDayMinutes(value);
 
     if (startMinutes === null && endMinutes === null) return true;
+    if (currentMinutes === null) return false;
     if (startMinutes === null) return currentMinutes <= endMinutes;
     if (endMinutes === null) return currentMinutes >= startMinutes;
     if (startMinutes === endMinutes) return true;

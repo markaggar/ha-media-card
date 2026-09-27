@@ -147,14 +147,14 @@ export class MediaIndexProvider extends MediaProvider {
       if (startMinutes === endMinutes) {
         activeMinutes = 1440;
       } else if (startMinutes < endMinutes) {
-        activeMinutes = endMinutes - startMinutes;
+        activeMinutes = (endMinutes - startMinutes) + 1;
       } else {
-        activeMinutes = (1440 - startMinutes) + endMinutes;
+        activeMinutes = (1440 - startMinutes) + endMinutes + 1;
       }
     } else if (startMinutes !== null) {
       activeMinutes = 1440 - startMinutes;
     } else if (endMinutes !== null) {
-      activeMinutes = endMinutes;
+      activeMinutes = endMinutes + 1;
     }
 
     const coverage = Math.max(activeMinutes / 1440, 0.1);
