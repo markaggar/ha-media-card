@@ -11248,10 +11248,10 @@ class MediaCard extends LitElement {
   
   // V4: Metadata display methods
   _renderMetadataOverlay() {
-    // Only show if metadata is configured and available.
-    // Prefer pending metadata when mid-navigation so the overlay updates at the same
-    // time as the visual transition rather than lagging until _onMediaLoaded fires.
-    const activeMetadata = this._pendingMetadata || this._currentMetadata;
+    // Only show if metadata is configured and available for the media that is
+    // currently displayed. Pending metadata is intentionally excluded so metadata
+    // does not appear before a slow-loading image/video is actually visible.
+    const activeMetadata = this._currentMetadata;
     if (!this.config.metadata || !activeMetadata) {
       return html``;
     }
