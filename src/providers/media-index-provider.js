@@ -711,25 +711,40 @@ export class MediaIndexProvider extends MediaProvider {
         console.warn('[MediaIndexProvider] 📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
       }
       
-      const wsResponse = await this.hass.callWS(wsCall);
-      
-      // V4 CODE: Log the raw response (only in debug mode)
-      if (this.config?.debug_queue_mode) {
-        console.warn('[MediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
-      }
+      const shouldRetryForTimeRange = !!(timeFrom || timeTo);
+      const excludedPatterns = this.card?._excludedPathPatterns;
+      const seenMediaIds = new Set();
+      const collectedItems = [];
+      let attempts = 0;
+      let stagnantAttempts = 0;
+      const maxAttempts = shouldRetryForTimeRange ? 5 : 1;
 
-      // V4 CODE: WebSocket response can be wrapped in different ways
-      // - { response: { items: [...] } }  (standard WebSocket format)
-      // - { service_response: { items: [...] } }  (REST API format)
-      // Try both formats for maximum compatibility
-      const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
-
-      if (response && response.items && Array.isArray(response.items)) {
-        this._log('✅ Received', response.items.length, 'items from media_index');
+      while (collectedItems.length < count && attempts < maxAttempts && stagnantAttempts < 2) {
+        attempts++;
+        const wsResponse = await this.hass.callWS(wsCall);
         
-        // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
-        // Read patterns from card instance (not config) - config must stay as plain data
-        const excludedPatterns = this.card?._excludedPathPatterns;
+        // V4 CODE: Log the raw response (only in debug mode)
+        if (this.config?.debug_queue_mode) {
+          console.warn('[MediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+        }
+
+        // V4 CODE: WebSocket response can be wrapped in different ways
+        // - { response: { items: [...] } }  (standard WebSocket format)
+        // - { service_response: { items: [...] } }  (REST API format)
+        // Try both formats for maximum compatibility
+        const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
+
+        if (!response || !response.items || !Array.isArray(response.items)) {
+          console.warn('[MediaIndexProvider] ⚠️ No items in response:', response);
+          return null;
+        }
+
+        this._log(`✅ Received ${response.items.length} items from media_index (attempt ${attempts}/${maxAttempts})`);
+
+        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
+        // can use the unfiltered count to determine if the collection is genuinely small
+        this.lastRawQueryCount = response.items.length;
+
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {
@@ -763,17 +778,34 @@ export class MediaIndexProvider extends MediaProvider {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
         }
         
-        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
-        // can use the unfiltered count to determine if the collection is genuinely small
-        this.lastRawQueryCount = response.items.length;
-        
-        // V4 CODE: Transform items to include resolved URLs
         const timeFilteredItems = this._applyTimeRangeFilter(filteredItems, timeFrom, timeTo);
         if (timeFilteredItems.length < filteredItems.length) {
           this._log(`🕒 Filtered ${filteredItems.length - timeFilteredItems.length} items by time of day (${timeFilteredItems.length} remaining)`);
         }
 
-        const items = await Promise.all(timeFilteredItems.slice(0, count).map(async (item) => {
+        const uniqueItems = timeFilteredItems.filter(item => {
+          const mediaId = item.media_source_uri || item.path;
+          if (seenMediaIds.has(mediaId)) {
+            return false;
+          }
+          seenMediaIds.add(mediaId);
+          return true;
+        });
+
+        if (uniqueItems.length === 0) {
+          stagnantAttempts++;
+          this._log(`🔁 No new unique time-matched items found on attempt ${attempts} (${stagnantAttempts} stagnant attempt(s))`);
+        } else {
+          stagnantAttempts = 0;
+          collectedItems.push(...uniqueItems);
+        }
+
+        if (response.items.length < sampleCount) {
+          break;
+        }
+      }
+
+      const items = await Promise.all(collectedItems.slice(0, count).map(async (item) => {
           // V5 URI: Use media_source_uri for URL resolution when available
           // Backend provides both path (filesystem) and media_source_uri (Media Index v1.1.0+)
           const mediaId = item.media_source_uri || item.path;
@@ -799,20 +831,16 @@ export class MediaIndexProvider extends MediaProvider {
             // Favorite status
             is_favorited: item.is_favorited || false
           };
-        }));
-        
-        this._log(`QUERY RESULT: Received ${items.length} items from database`);
-        if (this.config?.debug_mode) {
-          items.slice(0, 3).forEach((item, idx) => {
-            this._log(`Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
-          });
-        }
-        
-        return items;
-      } else {
-        console.warn('[MediaIndexProvider] ⚠️ No items in response:', response);
-        return null;
+      }));
+      
+      this._log(`QUERY RESULT: Received ${items.length} items from database after ${attempts} attempt(s)`);
+      if (this.config?.debug_mode) {
+        items.slice(0, 3).forEach((item, idx) => {
+          this._log(`Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
+        });
       }
+      
+      return items;
     } catch (error) {
       console.error('[MediaIndexProvider] ❌ Error querying media_index:', error);
       return null;

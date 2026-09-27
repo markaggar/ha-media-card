@@ -51,7 +51,7 @@ export const MediaUtils = {
 
     if (typeof value === 'string') {
       const trimmed = value.trim();
-      const timeMatch = trimmed.match(/(?:T|\s|^)(\d{2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?$/);
+      const timeMatch = trimmed.match(/(?:T|\s|^)(\d{1,2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?$/);
       if (timeMatch) {
         return (Number(timeMatch[1]) * 60) + Number(timeMatch[2]);
       }
