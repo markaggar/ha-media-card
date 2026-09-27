@@ -20,13 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Time-of-day filtering for Media Index playback** (`filters.time_range.start` / `.end`, or shorthand `filters.time_start` / `filters.time_end`): Restricts playback to a recurring daily time window (e.g. `22:00`–`06:00` for an overnight range), composing with the existing date-range filter. Available in both the visual Filter & Playback dialog and YAML. Applies to both random and sequential Media Index modes; random mode oversamples/retries to reduce underfilled results when the window is narrow. Queue statistics now include the active time-filter state.
+
+## v5.12.0 - 2026-06-30
+
+### Added
+
 - **`card_height_fill` config option**: New boolean option (default `false`) that, when used together with `card_height`, switches the image/video scaling from `contain` (letterboxed, shows full image) to `cover` (fills the fixed-height container, cropping the edges). Useful when you want a fixed-height card that always looks fully "filled" — e.g. a 400 px banner card — without black bars for portrait images. Exposed as a "Fill Height" checkbox in the visual editor beneath the Card Height field (under Image Options). Has no effect unless `card_height` is also set.
 
 - **`disable_cache_busting` config option**: New boolean option (default `false`) that prevents the card from appending a `?t=<timestamp>` query parameter to image URLs, allowing the browser to serve repeated views of the same image from its cache. Useful for slideshow folders with static files where bandwidth or load time matters. For `media-source://` and `/media/` paths the resolved `authSig` URL is also cached and reused (keyed by `media_content_id`, TTL driven by HA's `expires` field, shared with the thumbnail URL cache) so the URL stays stable between navigation visits and the browser cache can actually be used. Manual refresh always evicts the cached URL entry and fetches a fresh `authSig`. Exposed as a toggle in the visual editor under the Auto-Refresh Interval field.
 
 - **Refresh action button tap/hold behavior (folder mode)**: The refresh button now has two explicit actions in folder mode. Tap refresh reloads only the current image/video in place (fresh URL/auth token and metadata refresh), while holding for 600 ms performs a full queue rebuild to pick up newly added or removed files, then refreshes the current display. Tooltip text now hints at this gesture (`Tap: reload image · Hold: rebuild queue`).
-
-- **Time-of-day filtering for Media Index playback** (`filters.time_range.start` / `.end`, or shorthand `filters.time_start` / `filters.time_end`): Restricts playback to a recurring daily time window (e.g. `22:00`–`06:00` for an overnight range), composing with the existing date-range filter. Available in both the visual Filter & Playback dialog and YAML. Applies to both random and sequential Media Index modes; random mode oversamples/retries to reduce underfilled results when the window is narrow. Queue statistics now include the active time-filter state.
 
 ## v5.11.1 - 2026-06-06
 
