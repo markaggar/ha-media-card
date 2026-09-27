@@ -8692,6 +8692,8 @@ export class MediaCard extends LitElement {
       favorites:    'Favorites only',
       date_from:    'Date from',
       date_to:      'Date to',
+      time_from:    'Time from',
+      time_to:      'Time to',
       auto_advance: 'Auto-advance (seconds)',
       video_max_dur:'Video max duration',
       video_muted:  'Video muted',
@@ -8710,6 +8712,7 @@ export class MediaCard extends LitElement {
   _extractBlockingConfigFields(cfg) {
     if (!cfg) return null;
     const n = v => (v === undefined ? null : (v ?? null));
+    const timeRange = this._getTimeRangeConfig(cfg);
     return {
       entity_id:    n(cfg.media_index?.entity_id),
       folder_path:  n(cfg.folder?.path),
@@ -8718,6 +8721,8 @@ export class MediaCard extends LitElement {
       favorites:    n(cfg.filters?.favorites),
       date_from:    n(cfg.filters?.date_range?.start),
       date_to:      n(cfg.filters?.date_range?.end),
+      time_from:    n(timeRange.start),
+      time_to:      n(timeRange.end),
       auto_advance: n(cfg.auto_advance_seconds),
       video_max_dur:n(cfg.video_max_duration),
       video_muted:  n(cfg.video_muted),
@@ -8731,11 +8736,14 @@ export class MediaCard extends LitElement {
   _extractQueueScopeFields(cfg) {
     if (!cfg) return null;
     const n = v => (v === undefined || v === 'all' ? null : (v ?? null));
+    const timeRange = this._getTimeRangeConfig(cfg);
     return {
       folder_path: n(cfg.folder?.path),
       media_type:  n(cfg.media_type),
       date_from:   n(cfg.filters?.date_range?.start),
       date_to:     n(cfg.filters?.date_range?.end),
+      time_from:   n(timeRange.start),
+      time_to:     n(timeRange.end),
     };
   }
 
@@ -8747,6 +8755,13 @@ export class MediaCard extends LitElement {
       mode:      n(cfg.folder?.mode),
       order_by:  n(cfg.folder?.sequential?.order_by),
       order_dir: n(cfg.folder?.sequential?.order_direction),
+    };
+  }
+
+  _getTimeRangeConfig(cfg) {
+    return {
+      start: cfg?.filters?.time_range?.start ?? cfg?.filters?.time_start ?? null,
+      end: cfg?.filters?.time_range?.end ?? cfg?.filters?.time_end ?? null
     };
   }
 
@@ -8887,6 +8902,19 @@ export class MediaCard extends LitElement {
       if (!overrides.date_to)   delete mergedFilters.date_range.end;
     } else {
       delete mergedFilters.date_range;
+    }
+    delete mergedFilters.time_start;
+    delete mergedFilters.time_end;
+    if (overrides.time_from || overrides.time_to) {
+      mergedFilters.time_range = {
+        ...(baseFilters.time_range || {}),
+        ...(overrides.time_from ? { start: overrides.time_from } : {}),
+        ...(overrides.time_to   ? { end:   overrides.time_to } : {}),
+      };
+      if (!overrides.time_from) delete mergedFilters.time_range.start;
+      if (!overrides.time_to)   delete mergedFilters.time_range.end;
+    } else {
+      delete mergedFilters.time_range;
     }
     merged.filters = mergedFilters;
 
@@ -9040,10 +9068,13 @@ export class MediaCard extends LitElement {
 
     const activeOverride = this._sessionOverride || {};
     const baseCfg = this._baseConfig || this.config;
+    const baseTimeRange = this._getTimeRangeConfig(baseCfg);
     const currentFolder  = activeOverride.folder_path  ?? (baseCfg.folder?.path || '');
     const currentType    = activeOverride.media_type   ?? (baseCfg.media_type || 'all');
     const currentDateFrom = activeOverride.date_from   ?? (baseCfg.filters?.date_range?.start || '');
     const currentDateTo  = activeOverride.date_to      ?? (baseCfg.filters?.date_range?.end   || '');
+    const currentTimeFrom = activeOverride.time_from   ?? (baseTimeRange.start || '');
+    const currentTimeTo  = activeOverride.time_to      ?? (baseTimeRange.end || '');
     const currentFavs    = activeOverride.favorites    ?? (baseCfg.filters?.favorites === true);
     const currentMode    = activeOverride.mode         ?? (baseCfg.folder?.mode || 'random');
     const currentPlayToEnd = activeOverride.video_play_to_end ??
@@ -9093,6 +9124,15 @@ export class MediaCard extends LitElement {
             <input type="date" class="filter-picker-date" id="fp-date-from">
             <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
             <input type="date" class="filter-picker-date" id="fp-date-to">
+          </div>
+        </div>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Time of Day</span>
+          <div class="filter-picker-date-row">
+            <input type="time" class="filter-picker-date" id="fp-time-from">
+            <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
+            <input type="time" class="filter-picker-date" id="fp-time-to">
           </div>
         </div>
 
@@ -9186,6 +9226,8 @@ export class MediaCard extends LitElement {
     dialog.querySelectorAll('[name="fp-mt"]').forEach(r => { r.checked = (r.value === currentType); });
     dialog.querySelector('#fp-date-from').value = currentDateFrom;
     dialog.querySelector('#fp-date-to').value   = currentDateTo;
+    dialog.querySelector('#fp-time-from').value = currentTimeFrom;
+    dialog.querySelector('#fp-time-to').value   = currentTimeTo;
     dialog.querySelector('#fp-favorites').checked = currentFavs;
     dialog.querySelector('#fp-play-to-end').checked = currentPlayToEnd;
     dialog.querySelector('#fp-unmuted').checked     = currentUnmuted;
@@ -9256,6 +9298,8 @@ export class MediaCard extends LitElement {
       const mt       = [...dialog.querySelectorAll('[name="fp-mt"]')].find(r => r.checked)?.value || 'all';
       const dateFrom = dialog.querySelector('#fp-date-from').value || null;
       const dateTo   = dialog.querySelector('#fp-date-to').value   || null;
+      const timeFrom = dialog.querySelector('#fp-time-from').value || null;
+      const timeTo   = dialog.querySelector('#fp-time-to').value   || null;
       const favs     = dialog.querySelector('#fp-favorites').checked;
       const playEnd  = dialog.querySelector('#fp-play-to-end').checked;
       const unmuted  = dialog.querySelector('#fp-unmuted').checked;
@@ -9279,6 +9323,8 @@ export class MediaCard extends LitElement {
         media_type:              mt,
         date_from:               dateFrom,
         date_to:                 dateTo,
+        time_from:               timeFrom,
+        time_to:                 timeTo,
         favorites:               favs,
         mode:                    mode,
         sort_by:                 sortBy,

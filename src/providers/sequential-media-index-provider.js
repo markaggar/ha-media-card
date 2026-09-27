@@ -44,6 +44,18 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
   }
+
+  _getTimeRangeFilter(filters = this.config.filters || {}) {
+    const normalizeTime = (value) => {
+      if (typeof value !== 'string') return value || null;
+      const normalized = value.trim().split(':').slice(0, 2).join(':');
+      return MediaUtils.parseTimeOfDay(normalized) !== null ? normalized : value;
+    };
+    return {
+      start: normalizeTime(filters.time_range?.start || filters.time_start || null),
+      end: normalizeTime(filters.time_range?.end || filters.time_end || null)
+    };
+  }
   
   /**
    * Convert a date value to Unix timestamp (seconds).
@@ -298,6 +310,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       };
       const dateFrom = _resolveDateFilter(this.config.filters?.date_range?.start);
       const dateTo = _resolveDateFilter(this.config.filters?.date_range?.end);
+      const timeRange = this._getTimeRangeFilter(this.config.filters || {});
       // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
       // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
@@ -418,13 +431,21 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           seenPaths.add(item.path);
           return true;
         });
+        const timeFilteredItems = filteredItems.filter(item => MediaUtils.matchesTimeOfDayRange(
+          item.date_taken || item.created_time,
+          timeRange.start,
+          timeRange.end
+        ));
         
         if (filteredItems.length < response.items.length) {
-          this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining in this batch)`);
+          this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining before time filter)`);
+        }
+        if (timeFilteredItems.length < filteredItems.length) {
+          this._log(`🕒 Filtered ${filteredItems.length - timeFilteredItems.length} items by time of day (${timeFilteredItems.length} remaining in this batch)`);
         }
         
         // Add filtered items to our accumulated result
-        allFilteredItems.push(...filteredItems);
+        allFilteredItems.push(...timeFilteredItems);
         
         // Update compound cursor using the LAST item in the batch
         // The backend now uses (sort_field, id) compound ordering, so using the last item
@@ -462,7 +483,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         // Track consecutive fully-excluded batches (all items filtered out)
         // This is the only escape valve now - keeps going through large excluded folders
         // but stops if config excludes literally everything in the database
-        const validFromThisBatch = filteredItems.length;
+        const validFromThisBatch = timeFilteredItems.length;
         if (validFromThisBatch === 0 && response.items.length > 0) {
           consecutiveAllExcludedBatches++;
           if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
@@ -866,4 +887,3 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     }
   }
 }
-

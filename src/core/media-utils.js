@@ -30,5 +30,62 @@ export const MediaUtils = {
     }
     
     return null;
+  },
+
+  parseTimeOfDay(value) {
+    if (typeof value !== 'string') return null;
+
+    const trimmed = value.trim();
+    const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!match) return null;
+
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+    return (hours * 60) + minutes;
+  },
+
+  parseTimestamp(value) {
+    if (value === null || value === undefined || value === '') return null;
+
+    if (typeof value === 'number') {
+      return new Date(value > 9999999999 ? value : value * 1000);
+    }
+
+    if (value instanceof Date) {
+      return new Date(value.getTime());
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+      const parsed = new Date(normalized);
+      if (!isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+
+    return null;
+  },
+
+  matchesTimeOfDayRange(value, timeStart, timeEnd) {
+    if (!timeStart && !timeEnd) return true;
+
+    const timestamp = MediaUtils.parseTimestamp(value);
+    if (!timestamp) return false;
+
+    const startMinutes = MediaUtils.parseTimeOfDay(timeStart);
+    const endMinutes = MediaUtils.parseTimeOfDay(timeEnd);
+    const currentMinutes = (timestamp.getHours() * 60) + timestamp.getMinutes();
+
+    if (startMinutes === null && endMinutes === null) return true;
+    if (startMinutes === null) return currentMinutes <= endMinutes;
+    if (endMinutes === null) return currentMinutes >= startMinutes;
+    if (startMinutes === endMinutes) return true;
+    if (startMinutes < endMinutes) {
+      return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+    }
+
+    return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
   }
 };

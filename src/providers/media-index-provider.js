@@ -47,9 +47,11 @@ export class MediaIndexProvider extends MediaProvider {
     
     const filters = this.config.filters || {};
     const activeFilters = [];
+    const timeRange = this._getTimeRangeFilter(filters);
     
     if (filters.favorites) activeFilters.push('favorites');
     if (filters.date_range?.start || filters.date_range?.end) activeFilters.push('date_range');
+    if (timeRange.start || timeRange.end) activeFilters.push('time_range');
     
     const stats = {
       queue_size: this.queue.length,
@@ -58,7 +60,9 @@ export class MediaIndexProvider extends MediaProvider {
       filter_config: {
         favorites: filters.favorites || null,
         date_from: filters.date_range?.start || null,
-        date_to: filters.date_range?.end || null
+        date_to: filters.date_range?.end || null,
+        time_from: timeRange.start || null,
+        time_to: timeRange.end || null
       },
       timestamp: new Date().toISOString()
     };
@@ -110,6 +114,53 @@ export class MediaIndexProvider extends MediaProvider {
     }
   }
 
+  _getTimeRangeFilter(filters = this.config.filters || {}) {
+    const normalizeTime = (value) => {
+      if (typeof value !== 'string') return value || null;
+      const normalized = value.trim().split(':').slice(0, 2).join(':');
+      return MediaUtils.parseTimeOfDay(normalized) !== null ? normalized : value;
+    };
+    return {
+      start: normalizeTime(filters.time_range?.start || filters.time_start || null),
+      end: normalizeTime(filters.time_range?.end || filters.time_end || null)
+    };
+  }
+
+  _applyTimeRangeFilter(items, timeStart, timeEnd) {
+    if (!timeStart && !timeEnd) return items;
+
+    return items.filter(item => MediaUtils.matchesTimeOfDayRange(
+      item.date_taken || item.created_time,
+      timeStart,
+      timeEnd
+    ));
+  }
+
+  _estimateRandomSampleCount(count, timeStart, timeEnd) {
+    if (!timeStart && !timeEnd) return count;
+
+    const startMinutes = MediaUtils.parseTimeOfDay(timeStart);
+    const endMinutes = MediaUtils.parseTimeOfDay(timeEnd);
+    let activeMinutes = 1440;
+
+    if (startMinutes !== null && endMinutes !== null) {
+      if (startMinutes === endMinutes) {
+        activeMinutes = 1440;
+      } else if (startMinutes < endMinutes) {
+        activeMinutes = endMinutes - startMinutes;
+      } else {
+        activeMinutes = (1440 - startMinutes) + endMinutes;
+      }
+    } else if (startMinutes !== null) {
+      activeMinutes = 1440 - startMinutes;
+    } else if (endMinutes !== null) {
+      activeMinutes = endMinutes;
+    }
+
+    const coverage = Math.max(activeMinutes / 1440, 0.1);
+    return Math.min(Math.max(count, Math.ceil(count / coverage)), 500);
+  }
+
   /**
    * Resolve filter value - supports both direct values and entity references
    * @param {*} configValue - Value from config (direct value or entity_id)
@@ -129,6 +180,10 @@ export class MediaIndexProvider extends MediaProvider {
     // Check if it looks like an entity_id (contains a dot)
     if (!configValue.includes('.')) {
       // Direct string value (e.g., date string "2024-01-01")
+      if (expectedType === 'time') {
+        const normalizedTime = configValue.trim().split(':').slice(0, 2).join(':');
+        return MediaUtils.parseTimeOfDay(normalizedTime) !== null ? normalizedTime : configValue;
+      }
       return configValue;
     }
     
@@ -150,6 +205,11 @@ export class MediaIndexProvider extends MediaProvider {
       case 'input_datetime':
         // Can be date-only or datetime
         // state.state format: "2024-01-01" or "2024-01-01 12:00:00"
+        if (expectedType === 'time') {
+          const timeValue = state.state.split(/[T ]/)[1] || state.state;
+          const normalizedTime = timeValue.split(':').slice(0, 2).join(':');
+          return MediaUtils.parseTimeOfDay(normalizedTime) !== null ? normalizedTime : null;
+        }
         const dateValue = state.state.split(' ')[0]; // Extract date part
         return dateValue || null;
       
@@ -166,9 +226,12 @@ export class MediaIndexProvider extends MediaProvider {
           return state.state === 'on' || state.state === 'true' || state.state === '1';
         } else if (expectedType === 'number') {
           return parseFloat(state.state) || null;
-        } else {
-          return state.state || null;
-        }
+         } else if (expectedType === 'time') {
+           const normalizedTime = state.state.split(':').slice(0, 2).join(':');
+           return MediaUtils.parseTimeOfDay(normalizedTime) !== null ? normalizedTime : null;
+         } else {
+           return state.state || null;
+         }
       
       default:
         this._log(`⚠️ Unsupported entity domain for filter: ${domain}`);
@@ -204,13 +267,17 @@ export class MediaIndexProvider extends MediaProvider {
       const hasFavoritesFilter = filters.favorites === true || (typeof filters.favorites === 'string' && filters.favorites.trim().length > 0);
       const hasDateFromFilter = filters.date_range?.start && filters.date_range.start.trim().length > 0;
       const hasDateToFilter = filters.date_range?.end && filters.date_range.end.trim().length > 0;
-      const hasFilters = hasFavoritesFilter || hasDateFromFilter || hasDateToFilter;
+      const timeRange = this._getTimeRangeFilter(filters);
+      const hasTimeFromFilter = typeof timeRange.start === 'string' && timeRange.start.trim().length > 0;
+      const hasTimeToFilter = typeof timeRange.end === 'string' && timeRange.end.trim().length > 0;
+      const hasFilters = hasFavoritesFilter || hasDateFromFilter || hasDateToFilter || hasTimeFromFilter || hasTimeToFilter;
       
       if (hasFilters) {
         // Filters are active - this is expected behavior, not an error
         console.warn('[MediaIndexProvider] ⚠️ No items match filter criteria:', {
           favorites: filters.favorites || false,
-          date_range: filters.date_range || 'none'
+          date_range: filters.date_range || 'none',
+          time_range: timeRange.start || timeRange.end ? timeRange : 'none'
         });
         console.warn('[MediaIndexProvider] 💡 Try adjusting your filters or verify files match criteria');
         // Still return false to prevent display, but with clear user feedback
@@ -260,6 +327,13 @@ export class MediaIndexProvider extends MediaProvider {
     if (filters.date_range?.end && typeof filters.date_range.end === 'string' && filters.date_range.end.includes('.')) {
       entityIds.push(filters.date_range.end);
     }
+    const timeRange = this._getTimeRangeFilter(filters);
+    if (timeRange.start && typeof timeRange.start === 'string' && timeRange.start.includes('.')) {
+      entityIds.push(timeRange.start);
+    }
+    if (timeRange.end && typeof timeRange.end === 'string' && timeRange.end.includes('.')) {
+      entityIds.push(timeRange.end);
+    }
     
     if (entityIds.length === 0) {
       this._log('No filter entities to subscribe to');
@@ -273,7 +347,9 @@ export class MediaIndexProvider extends MediaProvider {
     this._lastFilterValues = {
       favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
       date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
-      date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+      date_to: await this._resolveFilterValue(filters.date_range?.end, 'date'),
+      time_from: await this._resolveFilterValue(timeRange.start, 'time'),
+      time_to: await this._resolveFilterValue(timeRange.end, 'time')
     };
     
     this._log('📝 Initial filter values:', this._lastFilterValues);
@@ -311,6 +387,16 @@ export class MediaIndexProvider extends MediaProvider {
               filters.date_range?.end, 
               'date',
               filters.date_range?.end === changedEntityId ? newState : null
+            ),
+            time_from: await this._resolveFilterValue(
+              timeRange.start,
+              'time',
+              timeRange.start === changedEntityId ? newState : null
+            ),
+            time_to: await this._resolveFilterValue(
+              timeRange.end,
+              'time',
+              timeRange.end === changedEntityId ? newState : null
             )
           };
           
@@ -320,7 +406,9 @@ export class MediaIndexProvider extends MediaProvider {
           const filtersChanged = 
             currentFilters.favorites !== this._lastFilterValues.favorites ||
             currentFilters.date_from !== this._lastFilterValues.date_from ||
-            currentFilters.date_to !== this._lastFilterValues.date_to;
+            currentFilters.date_to !== this._lastFilterValues.date_to ||
+            currentFilters.time_from !== this._lastFilterValues.time_from ||
+            currentFilters.time_to !== this._lastFilterValues.time_to;
           
           if (filtersChanged) {
             this._log('✨ Filter values changed, reloading queue:', currentFilters);
@@ -567,12 +655,19 @@ export class MediaIndexProvider extends MediaProvider {
       const favoritesOnly = await this._resolveFilterValue(filters.favorites, 'boolean');
       const dateFrom = await this._resolveFilterValue(filters.date_range?.start, 'date');
       const dateTo = await this._resolveFilterValue(filters.date_range?.end, 'date');
+      const timeRange = this._getTimeRangeFilter(filters);
+      const timeFrom = await this._resolveFilterValue(timeRange.start, 'time');
+      const timeTo = await this._resolveFilterValue(timeRange.end, 'time');
+      const sampleCount = this._estimateRandomSampleCount(count, timeFrom, timeTo);
       
-      if (favoritesOnly || dateFrom || dateTo) {
+      if (favoritesOnly || dateFrom || dateTo || timeFrom || timeTo) {
         this._log('🔍 Active filters:', {
           favorites_only: favoritesOnly,
           date_from: dateFrom,
-          date_to: dateTo
+          date_to: dateTo,
+          time_from: timeFrom,
+          time_to: timeTo,
+          sample_count: sampleCount
         });
       }
       
@@ -582,7 +677,7 @@ export class MediaIndexProvider extends MediaProvider {
         domain: 'media_index',
         service: 'get_random_items',
         service_data: {
-          count: count,
+          count: sampleCount,
           folder: folderFilter,
           recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
@@ -673,7 +768,12 @@ export class MediaIndexProvider extends MediaProvider {
         this.lastRawQueryCount = response.items.length;
         
         // V4 CODE: Transform items to include resolved URLs
-        const items = await Promise.all(filteredItems.map(async (item) => {
+        const timeFilteredItems = this._applyTimeRangeFilter(filteredItems, timeFrom, timeTo);
+        if (timeFilteredItems.length < filteredItems.length) {
+          this._log(`🕒 Filtered ${filteredItems.length - timeFilteredItems.length} items by time of day (${timeFilteredItems.length} remaining)`);
+        }
+
+        const items = await Promise.all(timeFilteredItems.slice(0, count).map(async (item) => {
           // V5 URI: Use media_source_uri for URL resolution when available
           // Backend provides both path (filesystem) and media_source_uri (Media Index v1.1.0+)
           const mediaId = item.media_source_uri || item.path;

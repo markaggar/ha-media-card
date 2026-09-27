@@ -99,7 +99,50 @@ filters:
     end: "2024-06-30"
 ```
 
-### 3. Combined Filters
+### 3. Time of Day Filter
+
+Filter by the time portion of EXIF `date_taken` (falls back to `created_time` if no EXIF data).
+
+**Recommended Configuration:**
+```yaml
+filters:
+  time_range:
+    start: "22:00"  # HH:MM, 24-hour format
+    end: "06:00"
+```
+
+**Shorthand YAML Aliases Also Supported:**
+```yaml
+filters:
+  time_start: "22:00"
+  time_end: "06:00"
+```
+
+**Behavior:**
+- Omit `start` for "everything before end time each day"
+- Omit `end` for "everything after start time each day"
+- If `start` is later than `end`, the range wraps across midnight
+- Uses the same timestamp source as date filtering: EXIF when available, otherwise `created_time`
+
+**Use Cases:**
+
+**Overnight Motion Snapshots:**
+```yaml
+filters:
+  time_range:
+    start: "22:00"
+    end: "06:00"
+```
+
+**Business Hours Only:**
+```yaml
+filters:
+  time_range:
+    start: "09:00"
+    end: "17:00"
+```
+
+### 4. Combined Filters
 
 Combine multiple filters for more specific selections.
 
@@ -118,6 +161,17 @@ filters:
   favorites: true
   date_range:
     start: "2025-11-01"  # Adjust to current month
+```
+
+**Night Photos from 2024:**
+```yaml
+filters:
+  date_range:
+    start: "2024-01-01"
+    end: "2024-12-31"
+  time_range:
+    start: "22:00"
+    end: "06:00"
 ```
 
 ## Complete Example Configuration

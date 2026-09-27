@@ -177,12 +177,13 @@ export class FolderProvider extends MediaProvider {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
         this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.mediaIndexProvider.initialize();
-        
+          
         if (!success) {
           // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
           const filters = this.config.filters || {};
-          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
-          
+          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end ||
+            filters.time_range?.start || filters.time_range?.end || filters.time_start || filters.time_end;
+            
           if (hasFilters) {
             console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
             console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
@@ -544,4 +545,3 @@ export class FolderProvider extends MediaProvider {
   }
 
 }
-

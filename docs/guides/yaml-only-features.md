@@ -291,6 +291,27 @@ filters:
 
 ---
 
+## Time of Day Filter
+
+The card also supports filtering by the time portion of `date_taken` / `created_time`, including overnight windows that cross midnight.
+
+```yaml
+filters:
+  time_range:
+    start: "22:00"
+    end: "06:00"
+```
+
+Shorthand aliases are also accepted:
+
+```yaml
+filters:
+  time_start: "22:00"
+  time_end: "06:00"
+```
+
+---
+
 ## Full Example with YAML-Only Options
 
 ```yaml
@@ -321,6 +342,9 @@ filters:
   date_range:
     start: "2023-01-01"                # YYYY-MM-DD string or HA entity ID
     end: input_datetime.photo_end_date # entity state is read at query time
+  time_range:
+    start: "22:00"                     # HH:MM, supports crossing midnight
+    end: "06:00"
 
 # ── Live Photo playback ───────────────────────────────────────────────────────
 live_photo:
