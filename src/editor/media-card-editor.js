@@ -531,6 +531,65 @@ export class MediaCardEditor extends LitElement {
     return '';
   }
 
+  _updateTimeRangeConfig(key, value) {
+    const filters = { ...this._config.filters };
+    const timeRange = { ...filters.time_range };
+
+    if (value) {
+      timeRange[key] = value;
+    } else {
+      delete timeRange[key];
+    }
+
+    if (timeRange.start || timeRange.end) {
+      filters.time_range = timeRange;
+    } else {
+      delete filters.time_range;
+    }
+
+    delete filters.time_start;
+    delete filters.time_end;
+
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+
+    this._fireConfigChanged();
+  }
+
+  _handleTimeRangeStartChanged(ev) {
+    this._updateTimeRangeConfig('start', ev.target.value || null);
+  }
+
+  _handleTimeRangeEndChanged(ev) {
+    this._updateTimeRangeConfig('end', ev.target.value || null);
+  }
+
+  _getTimeRangeDescription() {
+    const filters = this._config.filters || {};
+    const start = filters.time_range?.start || filters.time_start;
+    const end = filters.time_range?.end || filters.time_end;
+
+    if (start && end) {
+      if (start > end) {
+        return `🕒 Showing media from ${start} to ${end} (crosses midnight)`;
+      }
+      return `🕒 Showing media from ${start} to ${end}`;
+    } else if (start) {
+      return `🕒 Showing media from ${start} onwards each day`;
+    } else if (end) {
+      return `🕒 Showing media up to ${end} each day`;
+    }
+    return '';
+  }
+
   _parsePriorityFolders(text) {
     // NOT USED - keeping for backward compatibility
     if (!text || text.trim() === '') return [];
@@ -2991,6 +3050,45 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               ${this._config.filters?.date_range?.start || this._config.filters?.date_range?.end ? html`
                 <div style="margin-top: 8px; padding: 8px; background: var(--info-color, #e3f2fd); border-radius: 4px; font-size: 12px;">
                   ${this._getDateRangeDescription()}
+                </div>
+              ` : ''}
+            </div>
+
+            <div style="margin-top: 16px;">
+              <div style="font-weight: 500; margin-bottom: 8px;">🕒 Time of Day Filter</div>
+              <p style="margin: 4px 0 12px 0; font-size: 12px; color: var(--secondary-text-color, #666);">
+                Filter by the time portion of EXIF date_taken (falls back to created_time). Supports overnight ranges like 22:00 to 06:00.
+              </p>
+
+              <div class="config-row">
+                <label>Start Time</label>
+                <div>
+                  <input
+                    type="time"
+                    .value=${this._config.filters?.time_range?.start || this._config.filters?.time_start || ''}
+                    @input=${this._handleTimeRangeStartChanged}
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media from this time onwards each day (leave empty for no lower limit)</div>
+                </div>
+              </div>
+
+              <div class="config-row">
+                <label>End Time</label>
+                <div>
+                  <input
+                    type="time"
+                    .value=${this._config.filters?.time_range?.end || this._config.filters?.time_end || ''}
+                    @input=${this._handleTimeRangeEndChanged}
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media up to this time each day (leave empty for no upper limit)</div>
+                </div>
+              </div>
+
+              ${this._config.filters?.time_range?.start || this._config.filters?.time_range?.end || this._config.filters?.time_start || this._config.filters?.time_end ? html`
+                <div style="margin-top: 8px; padding: 8px; background: var(--info-color, #e3f2fd); border-radius: 4px; font-size: 12px;">
+                  ${this._getTimeRangeDescription()}
                 </div>
               ` : ''}
             </div>

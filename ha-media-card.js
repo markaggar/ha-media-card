@@ -79,6 +79,71 @@ const MediaUtils = {
     }
     
     return null;
+  },
+
+  parseTimeOfDay(value) {
+    if (typeof value !== 'string') return null;
+
+    const trimmed = value.trim();
+    const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!match) return null;
+
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+    return (hours * 60) + minutes;
+  },
+
+  getTimeOfDayMinutes(value) {
+    if (value === null || value === undefined || value === '') return null;
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      const timeMatch = trimmed.match(/(?:T|\s|^)(\d{1,2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?$/);
+      if (timeMatch) {
+        const extractedTime = `${timeMatch[1]}:${timeMatch[2]}`;
+        return MediaUtils.parseTimeOfDay(extractedTime);
+      }
+    }
+
+    if (typeof value === 'number') {
+      const date = new Date(value > 9999999999 ? value : value * 1000);
+      return (date.getHours() * 60) + date.getMinutes();
+    }
+
+    if (value instanceof Date) {
+      return (value.getHours() * 60) + value.getMinutes();
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+      const parsed = new Date(normalized);
+      if (!isNaN(parsed.getTime())) {
+        return (parsed.getHours() * 60) + parsed.getMinutes();
+      }
+    }
+
+    return null;
+  },
+
+  matchesTimeOfDayRange(value, timeStart, timeEnd) {
+    if (!timeStart && !timeEnd) return true;
+
+    const startMinutes = MediaUtils.parseTimeOfDay(timeStart);
+    const endMinutes = MediaUtils.parseTimeOfDay(timeEnd);
+    const currentMinutes = MediaUtils.getTimeOfDayMinutes(value);
+
+    if (startMinutes === null && endMinutes === null) return true;
+    if (currentMinutes === null) return false;
+    if (startMinutes === null) return currentMinutes <= endMinutes;
+    if (endMinutes === null) return currentMinutes >= startMinutes;
+    if (startMinutes === endMinutes) return true;
+    if (startMinutes < endMinutes) {
+      return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+    }
+
+    return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
   }
 };
 
@@ -1101,12 +1166,13 @@ class FolderProvider extends MediaProvider {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
         this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.mediaIndexProvider.initialize();
-        
+          
         if (!success) {
           // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
           const filters = this.config.filters || {};
-          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
-          
+          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end ||
+            filters.time_range?.start || filters.time_range?.end || filters.time_start || filters.time_end;
+            
           if (hasFilters) {
             console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
             console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
@@ -3083,9 +3149,11 @@ class MediaIndexProvider extends MediaProvider {
     
     const filters = this.config.filters || {};
     const activeFilters = [];
+    const timeRange = this._getTimeRangeFilter(filters);
     
     if (filters.favorites) activeFilters.push('favorites');
     if (filters.date_range?.start || filters.date_range?.end) activeFilters.push('date_range');
+    if (timeRange.start || timeRange.end) activeFilters.push('time_range');
     
     const stats = {
       queue_size: this.queue.length,
@@ -3094,7 +3162,9 @@ class MediaIndexProvider extends MediaProvider {
       filter_config: {
         favorites: filters.favorites || null,
         date_from: filters.date_range?.start || null,
-        date_to: filters.date_range?.end || null
+        date_to: filters.date_range?.end || null,
+        time_from: timeRange.start || null,
+        time_to: timeRange.end || null
       },
       timestamp: new Date().toISOString()
     };
@@ -3146,6 +3216,53 @@ class MediaIndexProvider extends MediaProvider {
     }
   }
 
+  _getTimeRangeFilter(filters = this.config.filters || {}) {
+    const normalizeTime = (value) => {
+      if (typeof value !== 'string') return value || null;
+      const normalized = value.trim().split(':').slice(0, 2).join(':');
+      return MediaUtils.parseTimeOfDay(normalized) !== null ? normalized : value;
+    };
+    return {
+      start: normalizeTime(filters.time_range?.start || filters.time_start || null),
+      end: normalizeTime(filters.time_range?.end || filters.time_end || null)
+    };
+  }
+
+  _applyTimeRangeFilter(items, timeStart, timeEnd) {
+    if (!timeStart && !timeEnd) return items;
+
+    return items.filter(item => MediaUtils.matchesTimeOfDayRange(
+      item.date_taken || item.created_time,
+      timeStart,
+      timeEnd
+    ));
+  }
+
+  _estimateRandomSampleCount(count, timeStart, timeEnd) {
+    if (!timeStart && !timeEnd) return count;
+
+    const startMinutes = MediaUtils.parseTimeOfDay(timeStart);
+    const endMinutes = MediaUtils.parseTimeOfDay(timeEnd);
+    let activeMinutes = 1440;
+
+    if (startMinutes !== null && endMinutes !== null) {
+      if (startMinutes === endMinutes) {
+        activeMinutes = 1440;
+      } else if (startMinutes < endMinutes) {
+        activeMinutes = (endMinutes - startMinutes) + 1;
+      } else {
+        activeMinutes = (1440 - startMinutes) + endMinutes + 1;
+      }
+    } else if (startMinutes !== null) {
+      activeMinutes = 1440 - startMinutes;
+    } else if (endMinutes !== null) {
+      activeMinutes = endMinutes + 1;
+    }
+
+    const coverage = Math.max(activeMinutes / 1440, 0.1);
+    return Math.min(Math.max(count, Math.ceil(count / coverage)), 500);
+  }
+
   /**
    * Resolve filter value - supports both direct values and entity references
    * @param {*} configValue - Value from config (direct value or entity_id)
@@ -3165,6 +3282,10 @@ class MediaIndexProvider extends MediaProvider {
     // Check if it looks like an entity_id (contains a dot)
     if (!configValue.includes('.')) {
       // Direct string value (e.g., date string "2024-01-01")
+      if (expectedType === 'time') {
+        const normalizedTime = configValue.trim().split(':').slice(0, 2).join(':');
+        return MediaUtils.parseTimeOfDay(normalizedTime) !== null ? normalizedTime : configValue;
+      }
       return configValue;
     }
     
@@ -3186,6 +3307,11 @@ class MediaIndexProvider extends MediaProvider {
       case 'input_datetime':
         // Can be date-only or datetime
         // state.state format: "2024-01-01" or "2024-01-01 12:00:00"
+        if (expectedType === 'time') {
+          const timeValue = state.state.split(/[T ]/)[1] || state.state;
+          const normalizedTime = timeValue.split(':').slice(0, 2).join(':');
+          return MediaUtils.parseTimeOfDay(normalizedTime) !== null ? normalizedTime : null;
+        }
         const dateValue = state.state.split(' ')[0]; // Extract date part
         return dateValue || null;
       
@@ -3202,9 +3328,12 @@ class MediaIndexProvider extends MediaProvider {
           return state.state === 'on' || state.state === 'true' || state.state === '1';
         } else if (expectedType === 'number') {
           return parseFloat(state.state) || null;
-        } else {
-          return state.state || null;
-        }
+         } else if (expectedType === 'time') {
+           const normalizedTime = state.state.split(':').slice(0, 2).join(':');
+           return MediaUtils.parseTimeOfDay(normalizedTime) !== null ? normalizedTime : null;
+         } else {
+           return state.state || null;
+         }
       
       default:
         this._log(`⚠️ Unsupported entity domain for filter: ${domain}`);
@@ -3240,13 +3369,17 @@ class MediaIndexProvider extends MediaProvider {
       const hasFavoritesFilter = filters.favorites === true || (typeof filters.favorites === 'string' && filters.favorites.trim().length > 0);
       const hasDateFromFilter = filters.date_range?.start && filters.date_range.start.trim().length > 0;
       const hasDateToFilter = filters.date_range?.end && filters.date_range.end.trim().length > 0;
-      const hasFilters = hasFavoritesFilter || hasDateFromFilter || hasDateToFilter;
+      const timeRange = this._getTimeRangeFilter(filters);
+      const hasTimeFromFilter = typeof timeRange.start === 'string' && timeRange.start.trim().length > 0;
+      const hasTimeToFilter = typeof timeRange.end === 'string' && timeRange.end.trim().length > 0;
+      const hasFilters = hasFavoritesFilter || hasDateFromFilter || hasDateToFilter || hasTimeFromFilter || hasTimeToFilter;
       
       if (hasFilters) {
         // Filters are active - this is expected behavior, not an error
         console.warn('[MediaIndexProvider] ⚠️ No items match filter criteria:', {
           favorites: filters.favorites || false,
-          date_range: filters.date_range || 'none'
+          date_range: filters.date_range || 'none',
+          time_range: timeRange.start || timeRange.end ? timeRange : 'none'
         });
         console.warn('[MediaIndexProvider] 💡 Try adjusting your filters or verify files match criteria');
         // Still return false to prevent display, but with clear user feedback
@@ -3296,6 +3429,13 @@ class MediaIndexProvider extends MediaProvider {
     if (filters.date_range?.end && typeof filters.date_range.end === 'string' && filters.date_range.end.includes('.')) {
       entityIds.push(filters.date_range.end);
     }
+    const timeRange = this._getTimeRangeFilter(filters);
+    if (timeRange.start && typeof timeRange.start === 'string' && timeRange.start.includes('.')) {
+      entityIds.push(timeRange.start);
+    }
+    if (timeRange.end && typeof timeRange.end === 'string' && timeRange.end.includes('.')) {
+      entityIds.push(timeRange.end);
+    }
     
     if (entityIds.length === 0) {
       this._log('No filter entities to subscribe to');
@@ -3309,7 +3449,9 @@ class MediaIndexProvider extends MediaProvider {
     this._lastFilterValues = {
       favorites: await this._resolveFilterValue(filters.favorites, 'boolean'),
       date_from: await this._resolveFilterValue(filters.date_range?.start, 'date'),
-      date_to: await this._resolveFilterValue(filters.date_range?.end, 'date')
+      date_to: await this._resolveFilterValue(filters.date_range?.end, 'date'),
+      time_from: await this._resolveFilterValue(timeRange.start, 'time'),
+      time_to: await this._resolveFilterValue(timeRange.end, 'time')
     };
     
     this._log('📝 Initial filter values:', this._lastFilterValues);
@@ -3347,6 +3489,16 @@ class MediaIndexProvider extends MediaProvider {
               filters.date_range?.end, 
               'date',
               filters.date_range?.end === changedEntityId ? newState : null
+            ),
+            time_from: await this._resolveFilterValue(
+              timeRange.start,
+              'time',
+              timeRange.start === changedEntityId ? newState : null
+            ),
+            time_to: await this._resolveFilterValue(
+              timeRange.end,
+              'time',
+              timeRange.end === changedEntityId ? newState : null
             )
           };
           
@@ -3356,7 +3508,9 @@ class MediaIndexProvider extends MediaProvider {
           const filtersChanged = 
             currentFilters.favorites !== this._lastFilterValues.favorites ||
             currentFilters.date_from !== this._lastFilterValues.date_from ||
-            currentFilters.date_to !== this._lastFilterValues.date_to;
+            currentFilters.date_to !== this._lastFilterValues.date_to ||
+            currentFilters.time_from !== this._lastFilterValues.time_from ||
+            currentFilters.time_to !== this._lastFilterValues.time_to;
           
           if (filtersChanged) {
             this._log('✨ Filter values changed, reloading queue:', currentFilters);
@@ -3604,12 +3758,19 @@ class MediaIndexProvider extends MediaProvider {
       const favoritesOnly = await this._resolveFilterValue(filters.favorites, 'boolean');
       const dateFrom = await this._resolveFilterValue(filters.date_range?.start, 'date');
       const dateTo = await this._resolveFilterValue(filters.date_range?.end, 'date');
+      const timeRange = this._getTimeRangeFilter(filters);
+      const timeFrom = await this._resolveFilterValue(timeRange.start, 'time');
+      const timeTo = await this._resolveFilterValue(timeRange.end, 'time');
+      const sampleCount = this._estimateRandomSampleCount(count, timeFrom, timeTo);
       
-      if (favoritesOnly || dateFrom || dateTo) {
+      if (favoritesOnly || dateFrom || dateTo || timeFrom || timeTo) {
         this._log('🔍 Active filters:', {
           favorites_only: favoritesOnly,
           date_from: dateFrom,
-          date_to: dateTo
+          date_to: dateTo,
+          time_from: timeFrom,
+          time_to: timeTo,
+          sample_count: sampleCount
         });
       }
       
@@ -3619,7 +3780,7 @@ class MediaIndexProvider extends MediaProvider {
         domain: 'media_index',
         service: 'get_random_items',
         service_data: {
-          count: count,
+          count: sampleCount,
           folder: folderFilter,
           recursive: this.config.folder?.recursive !== false,
           // Use configured media type preference
@@ -3653,25 +3814,46 @@ class MediaIndexProvider extends MediaProvider {
         console.warn('[MediaIndexProvider] 📤 WebSocket call:', JSON.stringify(wsCall, null, 2));
       }
       
-      const wsResponse = await this.hass.callWS(wsCall);
-      
-      // V4 CODE: Log the raw response (only in debug mode)
-      if (this.config?.debug_queue_mode) {
-        console.warn('[MediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
-      }
+      const shouldRetryForTimeRange = !!(timeFrom || timeTo);
+      const excludedPatterns = this.card?._excludedPathPatterns;
+      const seenMediaIds = new Set();
+      const collectedItems = [];
+      let attempts = 0;
+      let stagnantAttempts = 0;
+      const maxAttempts = shouldRetryForTimeRange ? 5 : 1;
+      const retryCountStep = Math.max(1, Math.ceil(count / 4));
 
-      // V4 CODE: WebSocket response can be wrapped in different ways
-      // - { response: { items: [...] } }  (standard WebSocket format)
-      // - { service_response: { items: [...] } }  (REST API format)
-      // Try both formats for maximum compatibility
-      const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
-
-      if (response && response.items && Array.isArray(response.items)) {
-        this._log('✅ Received', response.items.length, 'items from media_index');
+      while (collectedItems.length < count && attempts < maxAttempts && stagnantAttempts < 2) {
+        attempts++;
+        const currentSampleCount = !shouldRetryForTimeRange ? sampleCount :
+          (sampleCount >= 500
+            ? Math.max(count, 500 - ((attempts - 1) * retryCountStep))
+            : Math.min(500, sampleCount + ((attempts - 1) * retryCountStep)));
+        wsCall.service_data.count = currentSampleCount;
+        const wsResponse = await this.hass.callWS(wsCall);
         
-        // V4 CODE: Filter out excluded files (moved to _Junk/_Edit) AND unsupported formats BEFORE processing
-        // Read patterns from card instance (not config) - config must stay as plain data
-        const excludedPatterns = this.card?._excludedPathPatterns;
+        // V4 CODE: Log the raw response (only in debug mode)
+        if (this.config?.debug_queue_mode) {
+          console.warn('[MediaIndexProvider] 📥 WebSocket response:', JSON.stringify(wsResponse, null, 2));
+        }
+
+        // V4 CODE: WebSocket response can be wrapped in different ways
+        // - { response: { items: [...] } }  (standard WebSocket format)
+        // - { service_response: { items: [...] } }  (REST API format)
+        // Try both formats for maximum compatibility
+        const response = wsResponse?.response || wsResponse?.service_response || wsResponse;
+
+        if (!response || !response.items || !Array.isArray(response.items)) {
+          console.warn('[MediaIndexProvider] ⚠️ No items in response:', response);
+          return null;
+        }
+
+        this._log(`✅ Received ${response.items.length} items from media_index (attempt ${attempts}/${maxAttempts})`);
+
+        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
+        // can use the unfiltered count to determine if the collection is genuinely small
+        this.lastRawQueryCount = response.items.length;
+
         const filteredItems = response.items.filter(item => {
           const isExcluded = this.excludedFiles.has(item.path);
           if (isExcluded) {
@@ -3705,12 +3887,34 @@ class MediaIndexProvider extends MediaProvider {
           this._log(`📝 Filtered ${response.items.length - filteredItems.length} excluded files (${filteredItems.length} remaining)`);
         }
         
-        // Track raw DB count BEFORE local path exclusions so _preloadSmallCollection
-        // can use the unfiltered count to determine if the collection is genuinely small
-        this.lastRawQueryCount = response.items.length;
-        
-        // V4 CODE: Transform items to include resolved URLs
-        const items = await Promise.all(filteredItems.map(async (item) => {
+        const timeFilteredItems = this._applyTimeRangeFilter(filteredItems, timeFrom, timeTo);
+        if (timeFilteredItems.length < filteredItems.length) {
+          this._log(`🕒 Filtered ${filteredItems.length - timeFilteredItems.length} items by time of day (${timeFilteredItems.length} remaining)`);
+        }
+
+        const uniqueItems = timeFilteredItems.filter(item => {
+          const mediaId = item.media_source_uri || item.path;
+          if (seenMediaIds.has(mediaId)) {
+            return false;
+          }
+          seenMediaIds.add(mediaId);
+          return true;
+        });
+
+        if (uniqueItems.length === 0) {
+          stagnantAttempts++;
+          this._log(`🔁 No new unique time-matched items found on attempt ${attempts} (${stagnantAttempts} stagnant attempt(s))`);
+        } else {
+          stagnantAttempts = 0;
+          collectedItems.push(...uniqueItems);
+        }
+
+        if (response.items.length < currentSampleCount) {
+          break;
+        }
+      }
+
+      const items = await Promise.all(collectedItems.slice(0, count).map(async (item) => {
           // V5 URI: Use media_source_uri for URL resolution when available
           // Backend provides both path (filesystem) and media_source_uri (Media Index v1.1.0+)
           const mediaId = item.media_source_uri || item.path;
@@ -3737,20 +3941,16 @@ class MediaIndexProvider extends MediaProvider {
             // Favorite status
             is_favorited: item.is_favorited || false
           };
-        }));
-        
-        this._log(`QUERY RESULT: Received ${items.length} items from database`);
-        if (this.config?.debug_mode) {
-          items.slice(0, 3).forEach((item, idx) => {
-            this._log(`Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
-          });
-        }
-        
-        return items;
-      } else {
-        console.warn('[MediaIndexProvider] ⚠️ No items in response:', response);
-        return null;
+      }));
+      
+      this._log(`QUERY RESULT: Received ${items.length} items from database after ${attempts} attempt(s)`);
+      if (this.config?.debug_mode) {
+        items.slice(0, 3).forEach((item, idx) => {
+          this._log(`Item ${idx}: path="${item.path}", is_favorited=${item.is_favorited}`, item);
+        });
       }
+      
+      return items;
     } catch (error) {
       console.error('[MediaIndexProvider] ❌ Error querying media_index:', error);
       return null;
@@ -3861,6 +4061,18 @@ class SequentialMediaIndexProvider extends MediaProvider {
       const cardId = this.card?._cardId || 'unknown-card';
       console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
+  }
+
+  _getTimeRangeFilter(filters = this.config.filters || {}) {
+    const normalizeTime = (value) => {
+      if (typeof value !== 'string') return value || null;
+      const normalized = value.trim().split(':').slice(0, 2).join(':');
+      return MediaUtils.parseTimeOfDay(normalized) !== null ? normalized : value;
+    };
+    return {
+      start: normalizeTime(filters.time_range?.start || filters.time_start || null),
+      end: normalizeTime(filters.time_range?.end || filters.time_end || null)
+    };
   }
   
   /**
@@ -4117,6 +4329,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
       };
       const dateFrom = _resolveDateFilter(this.config.filters?.date_range?.start);
       const dateTo = _resolveDateFilter(this.config.filters?.date_range?.end);
+      const timeRange = this._getTimeRangeFilter(this.config.filters || {});
       // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
       // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
@@ -4237,13 +4450,21 @@ class SequentialMediaIndexProvider extends MediaProvider {
           seenPaths.add(item.path);
           return true;
         });
+        const timeFilteredItems = filteredItems.filter(item => MediaUtils.matchesTimeOfDayRange(
+          item.date_taken || item.created_time,
+          timeRange.start,
+          timeRange.end
+        ));
         
         if (filteredItems.length < response.items.length) {
-          this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining in this batch)`);
+          this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining before time filter)`);
+        }
+        if (timeFilteredItems.length < filteredItems.length) {
+          this._log(`🕒 Filtered ${filteredItems.length - timeFilteredItems.length} items by time of day (${timeFilteredItems.length} remaining in this batch)`);
         }
         
         // Add filtered items to our accumulated result
-        allFilteredItems.push(...filteredItems);
+        allFilteredItems.push(...timeFilteredItems);
         
         // Update compound cursor using the LAST item in the batch
         // The backend now uses (sort_field, id) compound ordering, so using the last item
@@ -4281,7 +4502,7 @@ class SequentialMediaIndexProvider extends MediaProvider {
         // Track consecutive fully-excluded batches (all items filtered out)
         // This is the only escape valve now - keeps going through large excluded folders
         // but stops if config excludes literally everything in the database
-        const validFromThisBatch = filteredItems.length;
+        const validFromThisBatch = timeFilteredItems.length;
         if (validFromThisBatch === 0 && response.items.length > 0) {
           consecutiveAllExcludedBatches++;
           if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
@@ -13439,6 +13660,8 @@ class MediaCard extends LitElement {
       favorites:    'Favorites only',
       date_from:    'Date from',
       date_to:      'Date to',
+      time_from:    'Time from',
+      time_to:      'Time to',
       auto_advance: 'Auto-advance (seconds)',
       video_max_dur:'Video max duration',
       video_muted:  'Video muted',
@@ -13457,6 +13680,7 @@ class MediaCard extends LitElement {
   _extractBlockingConfigFields(cfg) {
     if (!cfg) return null;
     const n = v => (v === undefined ? null : (v ?? null));
+    const timeRange = this._getTimeRangeConfig(cfg);
     return {
       entity_id:    n(cfg.media_index?.entity_id),
       folder_path:  n(cfg.folder?.path),
@@ -13465,6 +13689,8 @@ class MediaCard extends LitElement {
       favorites:    n(cfg.filters?.favorites),
       date_from:    n(cfg.filters?.date_range?.start),
       date_to:      n(cfg.filters?.date_range?.end),
+      time_from:    n(timeRange.start),
+      time_to:      n(timeRange.end),
       auto_advance: n(cfg.auto_advance_seconds),
       video_max_dur:n(cfg.video_max_duration),
       video_muted:  n(cfg.video_muted),
@@ -13478,11 +13704,14 @@ class MediaCard extends LitElement {
   _extractQueueScopeFields(cfg) {
     if (!cfg) return null;
     const n = v => (v === undefined || v === 'all' ? null : (v ?? null));
+    const timeRange = this._getTimeRangeConfig(cfg);
     return {
       folder_path: n(cfg.folder?.path),
       media_type:  n(cfg.media_type),
       date_from:   n(cfg.filters?.date_range?.start),
       date_to:     n(cfg.filters?.date_range?.end),
+      time_from:   n(timeRange.start),
+      time_to:     n(timeRange.end),
     };
   }
 
@@ -13494,6 +13723,13 @@ class MediaCard extends LitElement {
       mode:      n(cfg.folder?.mode),
       order_by:  n(cfg.folder?.sequential?.order_by),
       order_dir: n(cfg.folder?.sequential?.order_direction),
+    };
+  }
+
+  _getTimeRangeConfig(cfg) {
+    return {
+      start: cfg?.filters?.time_range?.start ?? cfg?.filters?.time_start ?? null,
+      end: cfg?.filters?.time_range?.end ?? cfg?.filters?.time_end ?? null
     };
   }
 
@@ -13634,6 +13870,19 @@ class MediaCard extends LitElement {
       if (!overrides.date_to)   delete mergedFilters.date_range.end;
     } else {
       delete mergedFilters.date_range;
+    }
+    delete mergedFilters.time_start;
+    delete mergedFilters.time_end;
+    if (overrides.time_from || overrides.time_to) {
+      mergedFilters.time_range = {
+        ...(baseFilters.time_range || {}),
+        ...(overrides.time_from ? { start: overrides.time_from } : {}),
+        ...(overrides.time_to   ? { end:   overrides.time_to } : {}),
+      };
+      if (!overrides.time_from) delete mergedFilters.time_range.start;
+      if (!overrides.time_to)   delete mergedFilters.time_range.end;
+    } else {
+      delete mergedFilters.time_range;
     }
     merged.filters = mergedFilters;
 
@@ -13787,10 +14036,13 @@ class MediaCard extends LitElement {
 
     const activeOverride = this._sessionOverride || {};
     const baseCfg = this._baseConfig || this.config;
+    const baseTimeRange = this._getTimeRangeConfig(baseCfg);
     const currentFolder  = activeOverride.folder_path  ?? (baseCfg.folder?.path || '');
     const currentType    = activeOverride.media_type   ?? (baseCfg.media_type || 'all');
     const currentDateFrom = activeOverride.date_from   ?? (baseCfg.filters?.date_range?.start || '');
     const currentDateTo  = activeOverride.date_to      ?? (baseCfg.filters?.date_range?.end   || '');
+    const currentTimeFrom = activeOverride.time_from   ?? (baseTimeRange.start || '');
+    const currentTimeTo  = activeOverride.time_to      ?? (baseTimeRange.end || '');
     const currentFavs    = activeOverride.favorites    ?? (baseCfg.filters?.favorites === true);
     const currentMode    = activeOverride.mode         ?? (baseCfg.folder?.mode || 'random');
     const currentPlayToEnd = activeOverride.video_play_to_end ??
@@ -13840,6 +14092,15 @@ class MediaCard extends LitElement {
             <input type="date" class="filter-picker-date" id="fp-date-from">
             <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
             <input type="date" class="filter-picker-date" id="fp-date-to">
+          </div>
+        </div>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Time of Day</span>
+          <div class="filter-picker-date-row">
+            <input type="time" class="filter-picker-date" id="fp-time-from">
+            <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
+            <input type="time" class="filter-picker-date" id="fp-time-to">
           </div>
         </div>
 
@@ -13933,6 +14194,8 @@ class MediaCard extends LitElement {
     dialog.querySelectorAll('[name="fp-mt"]').forEach(r => { r.checked = (r.value === currentType); });
     dialog.querySelector('#fp-date-from').value = currentDateFrom;
     dialog.querySelector('#fp-date-to').value   = currentDateTo;
+    dialog.querySelector('#fp-time-from').value = currentTimeFrom;
+    dialog.querySelector('#fp-time-to').value   = currentTimeTo;
     dialog.querySelector('#fp-favorites').checked = currentFavs;
     dialog.querySelector('#fp-play-to-end').checked = currentPlayToEnd;
     dialog.querySelector('#fp-unmuted').checked     = currentUnmuted;
@@ -14003,6 +14266,8 @@ class MediaCard extends LitElement {
       const mt       = [...dialog.querySelectorAll('[name="fp-mt"]')].find(r => r.checked)?.value || 'all';
       const dateFrom = dialog.querySelector('#fp-date-from').value || null;
       const dateTo   = dialog.querySelector('#fp-date-to').value   || null;
+      const timeFrom = dialog.querySelector('#fp-time-from').value || null;
+      const timeTo   = dialog.querySelector('#fp-time-to').value   || null;
       const favs     = dialog.querySelector('#fp-favorites').checked;
       const playEnd  = dialog.querySelector('#fp-play-to-end').checked;
       const unmuted  = dialog.querySelector('#fp-unmuted').checked;
@@ -14026,6 +14291,8 @@ class MediaCard extends LitElement {
         media_type:              mt,
         date_from:               dateFrom,
         date_to:                 dateTo,
+        time_from:               timeFrom,
+        time_to:                 timeTo,
         favorites:               favs,
         mode:                    mode,
         sort_by:                 sortBy,
@@ -20847,6 +21114,65 @@ class MediaCardEditor extends LitElement {
     return '';
   }
 
+  _updateTimeRangeConfig(key, value) {
+    const filters = { ...this._config.filters };
+    const timeRange = { ...filters.time_range };
+
+    if (value) {
+      timeRange[key] = value;
+    } else {
+      delete timeRange[key];
+    }
+
+    if (timeRange.start || timeRange.end) {
+      filters.time_range = timeRange;
+    } else {
+      delete filters.time_range;
+    }
+
+    delete filters.time_start;
+    delete filters.time_end;
+
+    if (Object.keys(filters).length === 0) {
+      const newConfig = { ...this._config };
+      delete newConfig.filters;
+      this._config = newConfig;
+    } else {
+      this._config = {
+        ...this._config,
+        filters: filters
+      };
+    }
+
+    this._fireConfigChanged();
+  }
+
+  _handleTimeRangeStartChanged(ev) {
+    this._updateTimeRangeConfig('start', ev.target.value || null);
+  }
+
+  _handleTimeRangeEndChanged(ev) {
+    this._updateTimeRangeConfig('end', ev.target.value || null);
+  }
+
+  _getTimeRangeDescription() {
+    const filters = this._config.filters || {};
+    const start = filters.time_range?.start || filters.time_start;
+    const end = filters.time_range?.end || filters.time_end;
+
+    if (start && end) {
+      if (start > end) {
+        return `🕒 Showing media from ${start} to ${end} (crosses midnight)`;
+      }
+      return `🕒 Showing media from ${start} to ${end}`;
+    } else if (start) {
+      return `🕒 Showing media from ${start} onwards each day`;
+    } else if (end) {
+      return `🕒 Showing media up to ${end} each day`;
+    }
+    return '';
+  }
+
   _parsePriorityFolders(text) {
     // NOT USED - keeping for backward compatibility
     if (!text || text.trim() === '') return [];
@@ -23307,6 +23633,45 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
               ${this._config.filters?.date_range?.start || this._config.filters?.date_range?.end ? html`
                 <div style="margin-top: 8px; padding: 8px; background: var(--info-color, #e3f2fd); border-radius: 4px; font-size: 12px;">
                   ${this._getDateRangeDescription()}
+                </div>
+              ` : ''}
+            </div>
+
+            <div style="margin-top: 16px;">
+              <div style="font-weight: 500; margin-bottom: 8px;">🕒 Time of Day Filter</div>
+              <p style="margin: 4px 0 12px 0; font-size: 12px; color: var(--secondary-text-color, #666);">
+                Filter by the time portion of EXIF date_taken (falls back to created_time). Supports overnight ranges like 22:00 to 06:00.
+              </p>
+
+              <div class="config-row">
+                <label>Start Time</label>
+                <div>
+                  <input
+                    type="time"
+                    .value=${this._config.filters?.time_range?.start || this._config.filters?.time_start || ''}
+                    @input=${this._handleTimeRangeStartChanged}
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media from this time onwards each day (leave empty for no lower limit)</div>
+                </div>
+              </div>
+
+              <div class="config-row">
+                <label>End Time</label>
+                <div>
+                  <input
+                    type="time"
+                    .value=${this._config.filters?.time_range?.end || this._config.filters?.time_end || ''}
+                    @input=${this._handleTimeRangeEndChanged}
+                    style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                  />
+                  <div class="help-text">Show media up to this time each day (leave empty for no upper limit)</div>
+                </div>
+              </div>
+
+              ${this._config.filters?.time_range?.start || this._config.filters?.time_range?.end || this._config.filters?.time_start || this._config.filters?.time_end ? html`
+                <div style="margin-top: 8px; padding: 8px; background: var(--info-color, #e3f2fd); border-radius: 4px; font-size: 12px;">
+                  ${this._getTimeRangeDescription()}
                 </div>
               ` : ''}
             </div>
