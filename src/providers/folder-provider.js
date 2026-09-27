@@ -46,6 +46,15 @@ export class FolderProvider extends MediaProvider {
     };
   }
 
+  /**
+   * Forwards the empty-result reason ('filtered' | 'empty_collection' | null) from whichever
+   * underlying media_index-backed provider is active, so the card can distinguish a
+   * legitimate empty-filter result from a real initialization failure.
+   */
+  get emptyReason() {
+    return this.sequentialProvider?.emptyReason || this.mediaIndexProvider?.emptyReason || null;
+  }
+
   _adaptConfigForV4() {
     // V4 SubfolderQueue expects: card.config.subfolder_queue and card.config.media_path
     // V5 has: config.folder.path, config.folder.priority_folders, config.slideshow_window
@@ -177,16 +186,19 @@ export class FolderProvider extends MediaProvider {
         this.cardAdapter._log('Using MediaIndexProvider for discovery');
         this.mediaIndexProvider = new MediaIndexProvider(this.config, this.hass, this.card);
         const success = await this.mediaIndexProvider.initialize();
-        
-        if (!success) {
-          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled
-          const filters = this.config.filters || {};
-          const hasFilters = filters.favorites || filters.date_range?.start || filters.date_range?.end;
           
-          if (hasFilters) {
-            console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
-            console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
-            throw new Error('No items match filter criteria. Try adjusting your filters.');
+        if (!success) {
+          // V5.3: NEVER fallback silently - always show error when Media Index explicitly enabled.
+          // Rely on the provider's own emptyReason (not a locally re-derived hasFilters check) so
+          // a legitimate empty result — filtered or an empty collection — never gets converted
+          // into a fatal error; only a real service failure (emptyReason still null) should throw.
+          const emptyReason = this.mediaIndexProvider.emptyReason;
+          if (emptyReason === 'filtered' || emptyReason === 'empty_collection') {
+            console.error(`[FolderProvider] ❌ Media Index returned no items (${emptyReason})`);
+            if (emptyReason === 'filtered') {
+              console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
+            }
+            return false;
           } else {
             console.error('[FolderProvider] ❌ Media Index initialization failed');
             console.error('[FolderProvider] 💡 Check Media Index entity exists and is populated, or set use_media_index_for_discovery: false');
@@ -370,11 +382,12 @@ export class FolderProvider extends MediaProvider {
                 location_city: exif.location_city,
                 location_state: exif.location_state,
                 location_country: exif.location_country,
+                location_country_code: exif.location_country_code,
                 location_name: exif.location_name,
                 latitude: exif.latitude,
                 longitude: exif.longitude,
-                has_coordinates: exif.has_coordinates || false,
-                is_geocoded: exif.is_geocoded || false
+                has_coordinates: exif.latitude != null && exif.longitude != null,
+                is_geocoded: !!(exif.is_geocoded || exif.location_city || exif.location_state || exif.location_country)
               };
               this.cardAdapter._log('✅ Enriched item with media_index metadata:', item.metadata);
             } else {
@@ -544,4 +557,3 @@ export class FolderProvider extends MediaProvider {
   }
 
 }
-

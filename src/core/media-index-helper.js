@@ -65,7 +65,7 @@ export class MediaIndexHelper {
           location_name: exif.location_name,
           
           // Geocoding status - infer from presence of data
-          has_coordinates: !!(exif.latitude && exif.longitude),
+          has_coordinates: exif.latitude != null && exif.longitude != null,
           is_geocoded: !!(exif.location_city || exif.location_state || exif.location_country),
           
           // Camera info (from nested exif object)
@@ -121,9 +121,9 @@ export class MediaIndexHelper {
       location_country_code: item.location_country_code,
       location_name: item.location_name,
       
-      // Geocoding status
-      has_coordinates: item.has_coordinates || false,
-      is_geocoded: item.is_geocoded || false,
+      // Geocoding status — compute from raw data to handle DB flag inconsistencies
+      has_coordinates: item.latitude != null && item.longitude != null,
+      is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
       
       // Camera info
       camera_make: item.camera_make,

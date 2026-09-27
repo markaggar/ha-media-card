@@ -26,6 +26,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
     this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+    // Set by initialize() when it returns false due to an empty (not erroneous) result —
+    // 'filtered' (active filters excluded everything) or 'empty_collection' (no filters,
+    // nothing in the library). Lets the card distinguish this from a real init failure.
+    this.emptyReason = null;
 
     // Resume from a saved cursor when the user clears a runtime filter — the card stores
     // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
@@ -43,6 +47,18 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       const cardId = this.card?._cardId || 'unknown-card';
       console.log(`[SequentialMediaIndexProvider:${cardId}]`, ...args);
     }
+  }
+
+  _getTimeRangeFilter(filters = this.config.filters || {}) {
+    const normalizeTime = (value) => {
+      if (typeof value !== 'string') return value || null;
+      const normalized = value.trim().split(':').slice(0, 2).join(':');
+      return MediaUtils.parseTimeOfDay(normalized) !== null ? normalized : value;
+    };
+    return {
+      start: normalizeTime(filters.time_range?.start || filters.time_start || null),
+      end: normalizeTime(filters.time_range?.end || filters.time_end || null)
+    };
   }
   
   /**
@@ -96,6 +112,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this._log('Order by:', this.orderBy, this.orderDirection);
     this._log('Recursive:', this.recursive);
     
+    this.emptyReason = null;
+
     // Check if media_index is configured
     if (!MediaProvider.isMediaIndexActive(this.config)) {
       console.warn('[SequentialMediaIndexProvider] Media index not configured');
@@ -105,8 +123,28 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     // Initial query to fill queue
     const items = await this._queryOrderedFiles();
     
-    if (!items || items.length === 0) {
-      console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+    if (items === null) {
+      // Service call failed (malformed/unavailable response, or an exception) - a real error
+      console.error('[SequentialMediaIndexProvider] ❌ Media Index service call failed');
+      return false;
+    }
+    
+    if (items.length === 0) {
+      const filters = this.config.filters || {};
+      const timeRange = this._getTimeRangeFilter(filters);
+      const hasFilters = !!(filters.favorites || filters.date_range?.start || filters.date_range?.end ||
+        timeRange.start || timeRange.end);
+      if (hasFilters) {
+        console.warn('[SequentialMediaIndexProvider] ⚠️ No items match filter criteria:', {
+          favorites: filters.favorites || false,
+          date_range: filters.date_range || 'none',
+          time_range: timeRange.start || timeRange.end ? timeRange : 'none'
+        });
+        this.emptyReason = 'filtered';
+      } else {
+        console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+        this.emptyReason = 'empty_collection';
+      }
       return false;
     }
     
@@ -226,9 +264,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           location_city: item.location_city,
           location_state: item.location_state,
           location_country: item.location_country,
+          location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: item.has_coordinates || false,
-          is_geocoded: item.is_geocoded || false,
+          has_coordinates: item.latitude != null && item.longitude != null,
+          is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
           is_favorited: item.is_favorited || false
@@ -275,6 +314,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       let localCursor = this.lastSeenValue;
       let localCursorId = this.lastSeenId;  // Secondary cursor for tie-breaking
       let allFilteredItems = [];
+      // Set when the WebSocket response itself is malformed/unavailable — a real service
+      // failure, as opposed to a well-formed response that simply matched zero items.
+      let serviceFailure = false;
       let seenPaths = new Set(); // Track paths we've already added to avoid duplicates
       let iteration = 0;
 
@@ -298,6 +340,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       };
       const dateFrom = _resolveDateFilter(this.config.filters?.date_range?.start);
       const dateTo = _resolveDateFilter(this.config.filters?.date_range?.end);
+      const timeRange = this._getTimeRangeFilter(this.config.filters || {});
       // Track consecutive batches where ALL items were excluded - used as a safety escape valve.
       // Resets to 0 whenever a batch yields at least one valid item, so a single large excluded
       // folder won't halt iteration; only a pathological config (everything excluded) will stop it.
@@ -375,6 +418,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         if (!response || !response.items || !Array.isArray(response.items)) {
           this._log('⚠️ No items in response - database exhausted');
           this.hasMore = false;
+          // Only the very first page returning a malformed response indicates a real
+          // service failure; on later pages this is the normal end-of-results signal.
+          if (iteration === 1) serviceFailure = true;
           break; // Exit loop - no more items available
         }
         
@@ -418,13 +464,21 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           seenPaths.add(item.path);
           return true;
         });
+        const timeFilteredItems = filteredItems.filter(item => MediaUtils.matchesTimeOfDayRange(
+          item.date_taken || item.created_time,
+          timeRange.start,
+          timeRange.end
+        ));
         
         if (filteredItems.length < response.items.length) {
-          this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining in this batch)`);
+          this._log(`📝 Filtered ${response.items.length - filteredItems.length} files (${filteredItems.length} remaining before time filter)`);
+        }
+        if (timeFilteredItems.length < filteredItems.length) {
+          this._log(`🕒 Filtered ${filteredItems.length - timeFilteredItems.length} items by time of day (${timeFilteredItems.length} remaining in this batch)`);
         }
         
         // Add filtered items to our accumulated result
-        allFilteredItems.push(...filteredItems);
+        allFilteredItems.push(...timeFilteredItems);
         
         // Update compound cursor using the LAST item in the batch
         // The backend now uses (sort_field, id) compound ordering, so using the last item
@@ -462,7 +516,7 @@ export class SequentialMediaIndexProvider extends MediaProvider {
         // Track consecutive fully-excluded batches (all items filtered out)
         // This is the only escape valve now - keeps going through large excluded folders
         // but stops if config excludes literally everything in the database
-        const validFromThisBatch = filteredItems.length;
+        const validFromThisBatch = timeFilteredItems.length;
         if (validFromThisBatch === 0 && response.items.length > 0) {
           consecutiveAllExcludedBatches++;
           if (consecutiveAllExcludedBatches >= DB_CLEANUP_WARNING_THRESHOLD && !this._dbCleanupWarningShown) {
@@ -496,7 +550,9 @@ export class SequentialMediaIndexProvider extends MediaProvider {
       if (allFilteredItems.length === 0) {
         this._log('⚠️ No valid items after filtering across all batches');
         this.hasMore = false;
-        return null;
+        // null = real service failure; [] = well-formed response that matched nothing
+        // (lets initialize() distinguish a filtered/empty result from a genuine failure).
+        return serviceFailure ? null : [];
       }
       
       this._log(`📊 Total items after ${iteration} iteration(s): ${allFilteredItems.length}`);
@@ -549,9 +605,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
           location_city: item.location_city,
           location_state: item.location_state,
           location_country: item.location_country,
+          location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: item.has_coordinates || false,
-          is_geocoded: item.is_geocoded || false,
+          has_coordinates: item.latitude != null && item.longitude != null,
+          is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
           is_favorited: item.is_favorited || false
@@ -847,9 +904,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
             location_city: item.location_city,
             location_state: item.location_state,
             location_country: item.location_country,
+            location_country_code: item.location_country_code,
             location_name: item.location_name,
-            has_coordinates: item.has_coordinates || false,
-            is_geocoded: item.is_geocoded || false,
+            has_coordinates: item.latitude != null && item.longitude != null,
+            is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
             is_favorited: item.is_favorited || false
@@ -866,4 +924,3 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     }
   }
 }
-

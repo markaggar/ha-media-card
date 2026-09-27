@@ -157,7 +157,10 @@ export class MediaCard extends LitElement {
     this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
     this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
+    this._locationRetryCount = new Map(); // Track location metadata retry attempts per media path (for videos missing GPS)
+    this._locationRetryTimers = new Map(); // setTimeout handles for pending location metadata retries, keyed by media path
     this._errorState = null; // V4 error state tracking
+    this._noResultsReason = null; // 'filtered' | 'empty_collection' — set when init found zero items but it's not a hard failure
     this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
     this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
     this._localConfigFields = null;       // extracted blocking fields from current base config
@@ -1316,6 +1319,11 @@ export class MediaCard extends LitElement {
     // aborts instead of racing the newer one to set shared state.
     const generation = ++this._initGeneration;
 
+    // Reset error/no-results state (fresh check on each init) so a prior failure or empty
+    // result doesn't linger on screen while this new attempt (e.g. after a filter change) runs.
+    this._errorState = null;
+    this._noResultsReason = null;
+
     // Reset config-mismatch state (fresh check on each init) and capture this card's
     // blocking fields so write paths and mismatch checks are based on the current config.
     this._configMismatchDetected = false;
@@ -1517,8 +1525,18 @@ export class MediaCard extends LitElement {
           });
         }
       } else {
-        console.error('[MediaViewerCard] Provider initialization failed');
-        this._errorState = 'Provider initialization failed';
+        const reason = this.provider?.emptyReason;
+        if (reason === 'filtered' || reason === 'empty_collection') {
+          // Not a real error — the query legitimately found no matches. Show the
+          // friendly "no media" placeholder (with filter controls) instead of trapping
+          // the user behind a fatal error banner with no way to adjust filters.
+          this._log(`Provider found no items (${reason})`);
+          this._noResultsReason = reason;
+          this.currentMedia = null;
+        } else {
+          console.error('[MediaViewerCard] Provider initialization failed');
+          this._errorState = 'Provider initialization failed';
+        }
       }
     } catch (error) {
       console.error('[MediaViewerCard] Error initializing provider:', error);
@@ -1675,9 +1693,10 @@ export class MediaCard extends LitElement {
             location_city: rawItem.location_city,
             location_state: rawItem.location_state,
             location_country: rawItem.location_country,
+            location_country_code: rawItem.location_country_code,
             location_name: rawItem.location_name,
-            has_coordinates: rawItem.has_coordinates || false,
-            is_geocoded: rawItem.is_geocoded || false,
+            has_coordinates: rawItem.latitude != null && rawItem.longitude != null,
+            is_geocoded: !!(rawItem.is_geocoded || rawItem.location_city || rawItem.location_state || rawItem.location_country),
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,
             is_favorited: rawItem.is_favorited || false,
@@ -1701,6 +1720,8 @@ export class MediaCard extends LitElement {
     // Clear suppress-lookahead flag on first forward navigation after a shared-queue restore.
     // This ensures _fillLookahead() is a no-op during init but works normally thereafter.
     this._suppressLookaheadFill = false;
+    // Clear any pending location retry timers from the previous item
+    this._clearLocationRetryTimers();
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadNext
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -2061,6 +2082,8 @@ export class MediaCard extends LitElement {
 }
 
   async _loadPrevious() {
+    // Clear any pending location retry timers from the previous item
+    this._clearLocationRetryTimers();
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadPrevious
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -3327,10 +3350,58 @@ export class MediaCard extends LitElement {
         // When a favorite from a burst group is confirmed by the DB, there is nothing
         // further to do on the card side — the backend already filtered out non-favorites
         // before they reached the queue (auto_select_burst_favorite param to get_random_items).
+
+        // For video files missing GPS/location data, schedule automatic retries in case the
+        // backend processes GPS extraction and geocoding asynchronously after initial indexing.
+        // This is particularly relevant for newly-indexed videos where the backend may not have
+        // finished extracting EXIF GPS data at the time the item first appeared in the queue.
+        const LOCATION_RETRY_DELAY_FIRST = 15000;  // 15 s — covers fast async processing
+        const LOCATION_RETRY_DELAY_SECOND = 60000; // 60 s — covers slower background scans
+        const cleanPath = targetPath ? targetPath.split('?')[0] : '';
+        const isVideoPath = cleanPath && MediaUtils.detectFileType(cleanPath) === 'video';
+        // Only retry when ALL location fields are absent — skip if any partial data is available
+        const missingGps = freshMetadata &&
+          !freshMetadata.has_coordinates &&
+          !freshMetadata.location_city &&
+          !freshMetadata.location_state &&
+          !freshMetadata.location_country &&
+          !freshMetadata.location_country_code &&
+          !freshMetadata.location_name;
+
+        if (isVideoPath && missingGps && MediaProvider.isMediaIndexActive(this.config)) {
+          const retryCount = this._locationRetryCount.get(targetPath) || 0;
+          if (retryCount < 2) {
+            this._locationRetryCount.set(targetPath, retryCount + 1);
+            const delay = retryCount === 0 ? LOCATION_RETRY_DELAY_FIRST : LOCATION_RETRY_DELAY_SECOND;
+            // Cancel any existing timer for this specific path before scheduling a new one
+            clearTimeout(this._locationRetryTimers.get(targetPath));
+            const timer = setTimeout(async () => {
+              this._locationRetryTimers.delete(targetPath);
+              // Navigation guard: _clearLocationRetryTimers() cancels in-flight timers via
+              // clearTimeout on navigation, so this callback only fires for the current item.
+              // As an extra safety check, verify the path still matches the active media.
+              const stillActive = this._pendingMediaPath === targetPath ||
+                                  this._currentMediaPath === targetPath;
+              if (stillActive) {
+                this._log('\uD83D\uDD04 Retrying location metadata fetch for video:', targetPath);
+                await this._refreshMetadata();
+              }
+            }, delay);
+            this._locationRetryTimers.set(targetPath, timer);
+          }
+        }
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
     }
+  }
+
+  // Clear all pending location retry timers (called on navigation to prevent stale timers)
+  _clearLocationRetryTimers() {
+    for (const timer of this._locationRetryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this._locationRetryTimers.clear();
   }
 
   // V5.6.6: Check if file exists via provider (delegates to media_index service if available)
@@ -6568,10 +6639,10 @@ export class MediaCard extends LitElement {
   
   // V4: Metadata display methods
   _renderMetadataOverlay() {
-    // Only show if metadata is configured and available.
-    // Prefer pending metadata when mid-navigation so the overlay updates at the same
-    // time as the visual transition rather than lagging until _onMediaLoaded fires.
-    const activeMetadata = this._pendingMetadata || this._currentMetadata;
+    // Only show if metadata is configured and available for the media that is
+    // currently displayed. Pending metadata is intentionally excluded so metadata
+    // does not appear before a slow-loading image/video is actually visible.
+    const activeMetadata = this._currentMetadata;
     if (!this.config.metadata || !activeMetadata) {
       return html``;
     }
@@ -6692,7 +6763,7 @@ export class MediaCard extends LitElement {
     
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
-      if (metadata.location_city || metadata.location_country) {
+      if (metadata.location_city || metadata.location_country || metadata.location_country_code || metadata.location_name) {
         // Get server's country from Home Assistant config (ISO code like "US")
         const serverCountryCode = this.hass?.config?.country || null;
         
@@ -6772,16 +6843,19 @@ export class MediaCard extends LitElement {
           locationText += locationText ? `, ${metadata.location_state}` : metadata.location_state;
         }
         
-        // Only show country if we have a server country AND it doesn't match
+        // Only show country if we have a server country AND it doesn't match.
+        // Fall back to location_country_code (ISO code) when location_country full name is absent.
         // Compare ISO code and all country name variations
-        if (metadata.location_country) {
+        const countryDisplay = metadata.location_country || metadata.location_country_code;
+        if (countryDisplay) {
           const countryMatches = serverCountryCode && (
-            metadata.location_country === serverCountryCode ||
-            (serverCountryNames && serverCountryNames.includes(metadata.location_country))
+            countryDisplay === serverCountryCode ||
+            metadata.location_country_code === serverCountryCode ||
+            (serverCountryNames && serverCountryNames.includes(countryDisplay))
           );
           
           if (!countryMatches) {
-            locationText += locationText ? `, ${metadata.location_country}` : metadata.location_country;
+            locationText += locationText ? `, ${countryDisplay}` : countryDisplay;
           }
         }
         
@@ -6791,6 +6865,9 @@ export class MediaCard extends LitElement {
           // Has GPS but no city/state/country text yet - geocoding pending
           parts.push(`📍 Loading location...`);
         }
+      } else if (metadata.has_coordinates) {
+        // Has GPS coordinates but no geocoded location data yet — geocoding pending
+        parts.push(`📍 Loading location...`);
       }
     }
     
@@ -8692,6 +8769,8 @@ export class MediaCard extends LitElement {
       favorites:    'Favorites only',
       date_from:    'Date from',
       date_to:      'Date to',
+      time_from:    'Time from',
+      time_to:      'Time to',
       auto_advance: 'Auto-advance (seconds)',
       video_max_dur:'Video max duration',
       video_muted:  'Video muted',
@@ -8710,6 +8789,7 @@ export class MediaCard extends LitElement {
   _extractBlockingConfigFields(cfg) {
     if (!cfg) return null;
     const n = v => (v === undefined ? null : (v ?? null));
+    const timeRange = this._getTimeRangeConfig(cfg);
     return {
       entity_id:    n(cfg.media_index?.entity_id),
       folder_path:  n(cfg.folder?.path),
@@ -8718,6 +8798,8 @@ export class MediaCard extends LitElement {
       favorites:    n(cfg.filters?.favorites),
       date_from:    n(cfg.filters?.date_range?.start),
       date_to:      n(cfg.filters?.date_range?.end),
+      time_from:    n(timeRange.start),
+      time_to:      n(timeRange.end),
       auto_advance: n(cfg.auto_advance_seconds),
       video_max_dur:n(cfg.video_max_duration),
       video_muted:  n(cfg.video_muted),
@@ -8731,11 +8813,14 @@ export class MediaCard extends LitElement {
   _extractQueueScopeFields(cfg) {
     if (!cfg) return null;
     const n = v => (v === undefined || v === 'all' ? null : (v ?? null));
+    const timeRange = this._getTimeRangeConfig(cfg);
     return {
       folder_path: n(cfg.folder?.path),
       media_type:  n(cfg.media_type),
       date_from:   n(cfg.filters?.date_range?.start),
       date_to:     n(cfg.filters?.date_range?.end),
+      time_from:   n(timeRange.start),
+      time_to:     n(timeRange.end),
     };
   }
 
@@ -8747,6 +8832,13 @@ export class MediaCard extends LitElement {
       mode:      n(cfg.folder?.mode),
       order_by:  n(cfg.folder?.sequential?.order_by),
       order_dir: n(cfg.folder?.sequential?.order_direction),
+    };
+  }
+
+  _getTimeRangeConfig(cfg) {
+    return {
+      start: cfg?.filters?.time_range?.start ?? cfg?.filters?.time_start ?? null,
+      end: cfg?.filters?.time_range?.end ?? cfg?.filters?.time_end ?? null
     };
   }
 
@@ -8887,6 +8979,19 @@ export class MediaCard extends LitElement {
       if (!overrides.date_to)   delete mergedFilters.date_range.end;
     } else {
       delete mergedFilters.date_range;
+    }
+    delete mergedFilters.time_start;
+    delete mergedFilters.time_end;
+    if (overrides.time_from || overrides.time_to) {
+      mergedFilters.time_range = {
+        ...(baseFilters.time_range || {}),
+        ...(overrides.time_from ? { start: overrides.time_from } : {}),
+        ...(overrides.time_to   ? { end:   overrides.time_to } : {}),
+      };
+      if (!overrides.time_from) delete mergedFilters.time_range.start;
+      if (!overrides.time_to)   delete mergedFilters.time_range.end;
+    } else {
+      delete mergedFilters.time_range;
     }
     merged.filters = mergedFilters;
 
@@ -9040,10 +9145,13 @@ export class MediaCard extends LitElement {
 
     const activeOverride = this._sessionOverride || {};
     const baseCfg = this._baseConfig || this.config;
+    const baseTimeRange = this._getTimeRangeConfig(baseCfg);
     const currentFolder  = activeOverride.folder_path  ?? (baseCfg.folder?.path || '');
     const currentType    = activeOverride.media_type   ?? (baseCfg.media_type || 'all');
     const currentDateFrom = activeOverride.date_from   ?? (baseCfg.filters?.date_range?.start || '');
     const currentDateTo  = activeOverride.date_to      ?? (baseCfg.filters?.date_range?.end   || '');
+    const currentTimeFrom = activeOverride.time_from   ?? (baseTimeRange.start || '');
+    const currentTimeTo  = activeOverride.time_to      ?? (baseTimeRange.end || '');
     const currentFavs    = activeOverride.favorites    ?? (baseCfg.filters?.favorites === true);
     const currentMode    = activeOverride.mode         ?? (baseCfg.folder?.mode || 'random');
     const currentPlayToEnd = activeOverride.video_play_to_end ??
@@ -9093,6 +9201,15 @@ export class MediaCard extends LitElement {
             <input type="date" class="filter-picker-date" id="fp-date-from">
             <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
             <input type="date" class="filter-picker-date" id="fp-date-to">
+          </div>
+        </div>
+
+        <div class="filter-picker-section">
+          <span class="filter-picker-label">Time of Day</span>
+          <div class="filter-picker-date-row">
+            <input type="time" class="filter-picker-date" id="fp-time-from">
+            <span style="color:rgba(255,255,255,0.5);font-size:12px">to</span>
+            <input type="time" class="filter-picker-date" id="fp-time-to">
           </div>
         </div>
 
@@ -9186,6 +9303,8 @@ export class MediaCard extends LitElement {
     dialog.querySelectorAll('[name="fp-mt"]').forEach(r => { r.checked = (r.value === currentType); });
     dialog.querySelector('#fp-date-from').value = currentDateFrom;
     dialog.querySelector('#fp-date-to').value   = currentDateTo;
+    dialog.querySelector('#fp-time-from').value = currentTimeFrom;
+    dialog.querySelector('#fp-time-to').value   = currentTimeTo;
     dialog.querySelector('#fp-favorites').checked = currentFavs;
     dialog.querySelector('#fp-play-to-end').checked = currentPlayToEnd;
     dialog.querySelector('#fp-unmuted').checked     = currentUnmuted;
@@ -9256,6 +9375,8 @@ export class MediaCard extends LitElement {
       const mt       = [...dialog.querySelectorAll('[name="fp-mt"]')].find(r => r.checked)?.value || 'all';
       const dateFrom = dialog.querySelector('#fp-date-from').value || null;
       const dateTo   = dialog.querySelector('#fp-date-to').value   || null;
+      const timeFrom = dialog.querySelector('#fp-time-from').value || null;
+      const timeTo   = dialog.querySelector('#fp-time-to').value   || null;
       const favs     = dialog.querySelector('#fp-favorites').checked;
       const playEnd  = dialog.querySelector('#fp-play-to-end').checked;
       const unmuted  = dialog.querySelector('#fp-unmuted').checked;
@@ -9279,6 +9400,8 @@ export class MediaCard extends LitElement {
         media_type:              mt,
         date_from:               dateFrom,
         date_to:                 dateTo,
+        time_from:               timeFrom,
+        time_to:                 timeTo,
         favorites:               favs,
         mode:                    mode,
         sort_by:                 sortBy,
@@ -13000,6 +13123,13 @@ export class MediaCard extends LitElement {
       opacity: 1;
     }
 
+    /* Error / no-results placeholders have no media to hover over — keep the
+       action buttons (e.g. Filter & Playback) always visible so the user always
+       has a way to recover without reloading the dashboard. */
+    .placeholder-actions .action-buttons {
+      opacity: 1;
+    }
+
     /* Positioning options */
     .action-buttons-top-right {
       top: 8px;
@@ -14638,6 +14768,7 @@ export class MediaCard extends LitElement {
               <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Media Loading Error</div>
               <div>${errorMessage}</div>
             </div>
+            <div class="placeholder-actions">${this._renderActionButtons()}</div>
           </div>
         </ha-card>
       `;
@@ -14653,6 +14784,29 @@ export class MediaCard extends LitElement {
       // nothing to show.
       if (!this.provider) {
         return html`<ha-card><div class="card"></div></ha-card>`;
+      }
+
+      // V5.12: Active filters (or an empty collection) legitimately returned zero items —
+      // not an error. Surface a clear message and keep the Filter & Playback button
+      // reachable so the user can adjust or clear the filter without reloading the dashboard.
+      if (this._noResultsReason === 'filtered' || this._noResultsReason === 'empty_collection') {
+        const message = this._noResultsReason === 'filtered'
+          ? 'No media matches the current filter'
+          : 'No media found in this collection';
+        const hint = this._noResultsReason === 'filtered'
+          ? 'Tap the filter icon above to adjust or clear your filters'
+          : '';
+        return html`
+          <ha-card>
+            <div class="card">
+              <div class="placeholder">
+                <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
+                ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
+              </div>
+              <div class="placeholder-actions">${this._renderActionButtons()}</div>
+            </div>
+          </ha-card>
+        `;
       }
 
       // Show helpful message based on media_type filter
@@ -14675,10 +14829,12 @@ export class MediaCard extends LitElement {
               <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
               ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
             </div>
+            <div class="placeholder-actions">${this._renderActionButtons()}</div>
           </div>
         </ha-card>
       `;
     }
+
 
     // V5.6: Set transition duration CSS variable (default 300ms)
     const transitionDuration = this.config.transition?.duration ?? 300;

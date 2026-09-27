@@ -14,6 +14,9 @@ filters:
   date_range:
     start: input_datetime.slideshow_start       # Auto-reloads when changed
     end: input_datetime.slideshow_end           # Auto-reloads when changed
+  time_range:
+    start: input_text.slideshow_time_start      # Auto-reloads when changed
+    end: input_text.slideshow_time_end          # Auto-reloads when changed
 ```
 
 **Behavior:**
@@ -28,7 +31,7 @@ filters:
 ```
 [MediaIndexProvider] 📡 Subscribing to filter entities: ["input_boolean.slideshow_favorites"]
 [MediaIndexProvider] 🔄 Filter entity changed: input_boolean.slideshow_favorites → on
-[MediaIndexProvider] ✨ Filter values changed, reloading queue: {favorites: true, date_from: null, date_to: null}
+[MediaIndexProvider] ✨ Filter values changed, reloading queue: {favorites: true, date_from: null, date_to: null, time_from: null, time_to: null}
 [MediaIndexProvider] 🗑️ Clearing card history due to filter change
 [MediaIndexProvider] ✅ Queue reloaded with 45 items
 ```
@@ -44,11 +47,13 @@ The card fires `media_card_queue_stats` events through Home Assistant's event bu
   detail: {
     queue_size: 45,              // Current number of items in queue
     queue_capacity: 100,         // Maximum queue size (slideshow_window)
-    filters_active: ["favorites", "date_range"],  // Active filter types
+    filters_active: ["favorites", "date_range", "time_range"],  // Active filter types
     filter_config: {
       favorites: true,           // Current favorites filter value
       date_from: "2024-01-01",  // Current date range start
-      date_to: "2024-12-31"      // Current date range end
+      date_to: "2024-12-31",     // Current date range end
+      time_from: "22:00",        // Current time-of-day start
+      time_to: "06:00"           // Current time-of-day end
     },
     timestamp: "2025-11-21T10:30:00.000Z"  // Event timestamp
   }
@@ -102,8 +107,13 @@ template:
           date_range_active: >
             {{ trigger.event.data.filter_config.date_from != null or 
                trigger.event.data.filter_config.date_to != null }}
+          time_range_active: >
+            {{ trigger.event.data.filter_config.time_from != null or
+               trigger.event.data.filter_config.time_to != null }}
           date_from: "{{ trigger.event.data.filter_config.date_from }}"
           date_to: "{{ trigger.event.data.filter_config.date_to }}"
+          time_from: "{{ trigger.event.data.filter_config.time_from }}"
+          time_to: "{{ trigger.event.data.filter_config.time_to }}"
 ```
 
 ### Queue Health Sensor

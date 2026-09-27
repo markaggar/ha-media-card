@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v5.12.0 - 2026-06-15
+## v5.13.0 - 2026-09-26
+
+### Fixed
+
+- **Location info missing for new videos (HA 2026.7.x)**: Location/GPS data was not shown for newly-indexed video files when using Media Index. Three complementary fixes are applied:
+  1. **Consistent `has_coordinates` computation** — all providers now derive `has_coordinates` directly from the presence of `latitude`/`longitude` values rather than trusting the DB boolean flag. This handles cases where the backend stores coordinate data but the flag is stale or incorrect (common for video files whose EXIF metadata is processed asynchronously).
+  2. **`location_country_code` fallback** — the metadata overlay now uses `location_country_code` (ISO-3166 code, e.g. `"DE"`) as a fallback when `location_country` is absent, and the outer display condition also checks `location_name` so a place name alone is sufficient to show the `📍` indicator.
+  3. **Automatic location retry for videos** — when a video displays without any GPS/location data and Media Index is active, the card schedules up to two silent retries (at 15 s and 60 s after initial load) to re-fetch metadata from the backend. This covers the case where the backend finishes extracting EXIF GPS from video files slightly after the item first appears in the queue.
+
+- **Metadata overlay could show stale info during slow media loads**: The metadata overlay was rendered from `_pendingMetadata || _currentMetadata`, so on slow loads the overlay could update to the *next* item's metadata before that item was actually visible on screen, desynchronizing the displayed text from the displayed media (most noticeable in kiosk/slideshow use). The overlay now renders only from `_currentMetadata`, which is only committed once the corresponding media has finished loading.
+
+- **A filter matching zero items trapped the user behind a fatal error with no way to recover**: If a date/time (or favorites) filter matched no items, the provider layer reported this identically to a real initialization failure, and the card showed a permanent "Media Loading Error — Provider initialization failed" screen with no controls, no filter button, and no way to change or clear the filter short of reloading the entire dashboard. `MediaIndexProvider` and `SequentialMediaIndexProvider` now report *why* zero items were returned (`filtered` vs. `empty_collection`) instead of a bare failure, and `FolderProvider` forwards this reason instead of throwing. The card now shows a friendly "No media matches the current filter" message in this case, and — for this and any other error state — keeps the action button bar (including Filter & Playback) reachable so the user can always adjust or clear filters without a page reload.
+
+### Added
+
+- **Time-of-day filtering for Media Index playback** (`filters.time_range.start` / `.end`, or shorthand `filters.time_start` / `filters.time_end`): Restricts playback to a recurring daily time window (e.g. `22:00`–`06:00` for an overnight range), composing with the existing date-range filter. Available in both the visual Filter & Playback dialog and YAML. Applies to both random and sequential Media Index modes; random mode oversamples/retries to reduce underfilled results when the window is narrow. Queue statistics now include the active time-filter state.
+
+## v5.12.0 - 2026-06-30
 
 ### Added
 
