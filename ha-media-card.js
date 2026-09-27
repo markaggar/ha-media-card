@@ -102,7 +102,8 @@ const MediaUtils = {
       const trimmed = value.trim();
       const timeMatch = trimmed.match(/(?:T|\s|^)(\d{1,2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?$/);
       if (timeMatch) {
-        return (Number(timeMatch[1]) * 60) + Number(timeMatch[2]);
+        const extractedTime = `${timeMatch[1]}:${timeMatch[2]}`;
+        return MediaUtils.parseTimeOfDay(extractedTime);
       }
     }
 
@@ -3818,9 +3819,15 @@ class MediaIndexProvider extends MediaProvider {
       let attempts = 0;
       let stagnantAttempts = 0;
       const maxAttempts = shouldRetryForTimeRange ? 5 : 1;
+      const retryCountStep = Math.max(1, Math.ceil(count / 4));
 
       while (collectedItems.length < count && attempts < maxAttempts && stagnantAttempts < 2) {
         attempts++;
+        const currentSampleCount = !shouldRetryForTimeRange ? sampleCount :
+          (sampleCount >= 500
+            ? Math.max(count, 500 - ((attempts - 1) * retryCountStep))
+            : Math.min(500, sampleCount + ((attempts - 1) * retryCountStep)));
+        wsCall.service_data.count = currentSampleCount;
         const wsResponse = await this.hass.callWS(wsCall);
         
         // V4 CODE: Log the raw response (only in debug mode)
@@ -3900,7 +3907,7 @@ class MediaIndexProvider extends MediaProvider {
           collectedItems.push(...uniqueItems);
         }
 
-        if (response.items.length < sampleCount) {
+        if (response.items.length < currentSampleCount) {
           break;
         }
       }

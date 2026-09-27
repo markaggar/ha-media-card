@@ -718,9 +718,15 @@ export class MediaIndexProvider extends MediaProvider {
       let attempts = 0;
       let stagnantAttempts = 0;
       const maxAttempts = shouldRetryForTimeRange ? 5 : 1;
+      const retryCountStep = Math.max(1, Math.ceil(count / 4));
 
       while (collectedItems.length < count && attempts < maxAttempts && stagnantAttempts < 2) {
         attempts++;
+        const currentSampleCount = !shouldRetryForTimeRange ? sampleCount :
+          (sampleCount >= 500
+            ? Math.max(count, 500 - ((attempts - 1) * retryCountStep))
+            : Math.min(500, sampleCount + ((attempts - 1) * retryCountStep)));
+        wsCall.service_data.count = currentSampleCount;
         const wsResponse = await this.hass.callWS(wsCall);
         
         // V4 CODE: Log the raw response (only in debug mode)
@@ -800,7 +806,7 @@ export class MediaIndexProvider extends MediaProvider {
           collectedItems.push(...uniqueItems);
         }
 
-        if (response.items.length < sampleCount) {
+        if (response.items.length < currentSampleCount) {
           break;
         }
       }
