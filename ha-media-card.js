@@ -1,5 +1,5 @@
 /** 
- * Media Viewer Card v5.12.0
+ * Media Viewer Card v5.13.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -25155,7 +25155,7 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
 }
 
 console.info(
-  '%c  MEDIA-VIEWER-CARD  %c  v5.12.0 Loaded  ',
+  '%c  MEDIA-VIEWER-CARD  %c  v5.13.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );
