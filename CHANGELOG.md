@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v5.12.0 - 2026-06-15
 
+### Fixed
+
+- **Location info missing for new videos (HA 2026.7.x)**: Location/GPS data was not shown for newly-indexed video files when using Media Index. Three complementary fixes are applied:
+  1. **Consistent `has_coordinates` computation** — all providers now derive `has_coordinates` directly from the presence of `latitude`/`longitude` values rather than trusting the DB boolean flag. This handles cases where the backend stores coordinate data but the flag is stale or incorrect (common for video files whose EXIF metadata is processed asynchronously).
+  2. **`location_country_code` fallback** — the metadata overlay now uses `location_country_code` (ISO-3166 code, e.g. `"DE"`) as a fallback when `location_country` is absent, and the outer display condition also checks `location_name` so a place name alone is sufficient to show the `📍` indicator.
+  3. **Automatic location retry for videos** — when a video displays without any GPS/location data and Media Index is active, the card schedules up to two silent retries (at 15 s and 60 s after initial load) to re-fetch metadata from the backend. This covers the case where the backend finishes extracting EXIF GPS from video files slightly after the item first appears in the queue.
+
 ### Added
 
 - **`card_height_fill` config option**: New boolean option (default `false`) that, when used together with `card_height`, switches the image/video scaling from `contain` (letterboxed, shows full image) to `cover` (fills the fixed-height container, cropping the edges). Useful when you want a fixed-height card that always looks fully "filled" — e.g. a 400 px banner card — without black bars for portrait images. Exposed as a "Fill Height" checkbox in the visual editor beneath the Card Height field (under Image Options). Has no effect unless `card_height` is also set.

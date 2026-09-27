@@ -157,6 +157,8 @@ export class MediaCard extends LitElement {
     this._cardId = 'card-' + Math.random().toString(36).substr(2, 9);
     this._retryAttempts = new Map(); // Track retry attempts per URL (V4)
     this._videoTransientFailures = new Map(); // V5.8: Track per-item video failure count (handles transient 400s from Reolink etc.)
+    this._locationRetryCount = new Map(); // Track location metadata retry attempts per media path (for videos missing GPS)
+    this._locationRetryTimers = new Map(); // setTimeout handles for pending location metadata retries, keyed by media path
     this._errorState = null; // V4 error state tracking
     this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
     this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
@@ -1675,9 +1677,10 @@ export class MediaCard extends LitElement {
             location_city: rawItem.location_city,
             location_state: rawItem.location_state,
             location_country: rawItem.location_country,
+            location_country_code: rawItem.location_country_code,
             location_name: rawItem.location_name,
-            has_coordinates: rawItem.has_coordinates || false,
-            is_geocoded: rawItem.is_geocoded || false,
+            has_coordinates: !!(rawItem.latitude && rawItem.longitude),
+            is_geocoded: !!(rawItem.is_geocoded || rawItem.location_city || rawItem.location_state || rawItem.location_country),
             latitude: rawItem.latitude,
             longitude: rawItem.longitude,
             is_favorited: rawItem.is_favorited || false,
@@ -1701,6 +1704,8 @@ export class MediaCard extends LitElement {
     // Clear suppress-lookahead flag on first forward navigation after a shared-queue restore.
     // This ensures _fillLookahead() is a no-op during init but works normally thereafter.
     this._suppressLookaheadFill = false;
+    // Clear any pending location retry timers from the previous item
+    this._clearLocationRetryTimers();
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadNext
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -2061,6 +2066,8 @@ export class MediaCard extends LitElement {
 }
 
   async _loadPrevious() {
+    // Clear any pending location retry timers from the previous item
+    this._clearLocationRetryTimers();
     // V5.6.7: Re-entrance guard - prevent concurrent calls to _loadPrevious
     if (this._isLoadingNext) {
       if (!this._isManualNavigation) {
@@ -3327,10 +3334,58 @@ export class MediaCard extends LitElement {
         // When a favorite from a burst group is confirmed by the DB, there is nothing
         // further to do on the card side — the backend already filtered out non-favorites
         // before they reached the queue (auto_select_burst_favorite param to get_random_items).
+
+        // For video files missing GPS/location data, schedule automatic retries in case the
+        // backend processes GPS extraction and geocoding asynchronously after initial indexing.
+        // This is particularly relevant for newly-indexed videos where the backend may not have
+        // finished extracting EXIF GPS data at the time the item first appeared in the queue.
+        const LOCATION_RETRY_DELAY_FIRST = 15000;  // 15 s — covers fast async processing
+        const LOCATION_RETRY_DELAY_SECOND = 60000; // 60 s — covers slower background scans
+        const cleanPath = targetPath ? targetPath.split('?')[0] : '';
+        const isVideoPath = cleanPath && MediaUtils.detectFileType(cleanPath) === 'video';
+        // Only retry when ALL location fields are absent — skip if any partial data is available
+        const missingGps = freshMetadata &&
+          !freshMetadata.has_coordinates &&
+          !freshMetadata.location_city &&
+          !freshMetadata.location_state &&
+          !freshMetadata.location_country &&
+          !freshMetadata.location_country_code &&
+          !freshMetadata.location_name;
+
+        if (isVideoPath && missingGps && MediaProvider.isMediaIndexActive(this.config)) {
+          const retryCount = this._locationRetryCount.get(targetPath) || 0;
+          if (retryCount < 2) {
+            this._locationRetryCount.set(targetPath, retryCount + 1);
+            const delay = retryCount === 0 ? LOCATION_RETRY_DELAY_FIRST : LOCATION_RETRY_DELAY_SECOND;
+            // Cancel any existing timer for this specific path before scheduling a new one
+            clearTimeout(this._locationRetryTimers.get(targetPath));
+            const timer = setTimeout(async () => {
+              this._locationRetryTimers.delete(targetPath);
+              // Navigation guard: _clearLocationRetryTimers() cancels in-flight timers via
+              // clearTimeout on navigation, so this callback only fires for the current item.
+              // As an extra safety check, verify the path still matches the active media.
+              const stillActive = this._pendingMediaPath === targetPath ||
+                                  this._currentMediaPath === targetPath;
+              if (stillActive) {
+                this._log('\uD83D\uDD04 Retrying location metadata fetch for video:', targetPath);
+                await this._refreshMetadata();
+              }
+            }, delay);
+            this._locationRetryTimers.set(targetPath, timer);
+          }
+        }
       }
     } catch (error) {
       this._log('⚠️ Failed to refresh metadata:', error);
     }
+  }
+
+  // Clear all pending location retry timers (called on navigation to prevent stale timers)
+  _clearLocationRetryTimers() {
+    for (const timer of this._locationRetryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this._locationRetryTimers.clear();
   }
 
   // V5.6.6: Check if file exists via provider (delegates to media_index service if available)
@@ -6692,7 +6747,7 @@ export class MediaCard extends LitElement {
     
     // Show geocoded location if available (from media_index)
     if (this.config.metadata.show_location) {
-      if (metadata.location_city || metadata.location_country) {
+      if (metadata.location_city || metadata.location_country || metadata.location_country_code || metadata.location_name) {
         // Get server's country from Home Assistant config (ISO code like "US")
         const serverCountryCode = this.hass?.config?.country || null;
         
@@ -6772,16 +6827,19 @@ export class MediaCard extends LitElement {
           locationText += locationText ? `, ${metadata.location_state}` : metadata.location_state;
         }
         
-        // Only show country if we have a server country AND it doesn't match
+        // Only show country if we have a server country AND it doesn't match.
+        // Fall back to location_country_code (ISO code) when location_country full name is absent.
         // Compare ISO code and all country name variations
-        if (metadata.location_country) {
+        const countryDisplay = metadata.location_country || metadata.location_country_code;
+        if (countryDisplay) {
           const countryMatches = serverCountryCode && (
-            metadata.location_country === serverCountryCode ||
-            (serverCountryNames && serverCountryNames.includes(metadata.location_country))
+            countryDisplay === serverCountryCode ||
+            metadata.location_country_code === serverCountryCode ||
+            (serverCountryNames && serverCountryNames.includes(countryDisplay))
           );
           
           if (!countryMatches) {
-            locationText += locationText ? `, ${metadata.location_country}` : metadata.location_country;
+            locationText += locationText ? `, ${countryDisplay}` : countryDisplay;
           }
         }
         
@@ -6791,6 +6849,9 @@ export class MediaCard extends LitElement {
           // Has GPS but no city/state/country text yet - geocoding pending
           parts.push(`📍 Loading location...`);
         }
+      } else if (metadata.has_coordinates) {
+        // Has GPS coordinates but no geocoded location data yet — geocoding pending
+        parts.push(`📍 Loading location...`);
       }
     }
     

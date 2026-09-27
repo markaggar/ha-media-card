@@ -507,9 +507,10 @@ export class MediaIndexProvider extends MediaProvider {
           location_city: item.location_city,
           location_state: item.location_state,
           location_country: item.location_country,
+          location_country_code: item.location_country_code,
           location_name: item.location_name,
-          has_coordinates: item.has_coordinates || false,
-          is_geocoded: item.is_geocoded || false,
+          has_coordinates: !!(item.latitude && item.longitude),
+          is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
           latitude: item.latitude,
           longitude: item.longitude,
           is_favorited: item.is_favorited || false,
@@ -690,10 +691,11 @@ export class MediaIndexProvider extends MediaProvider {
             location_city: item.location_city,
             location_state: item.location_state,
             location_country: item.location_country,
+            location_country_code: item.location_country_code,
             location_name: item.location_name,
-            // Geocoding status
-            has_coordinates: item.has_coordinates || false,
-            is_geocoded: item.is_geocoded || false,
+            // Geocoding status — compute from raw data to handle DB flag inconsistencies
+            has_coordinates: !!(item.latitude && item.longitude),
+            is_geocoded: !!(item.is_geocoded || item.location_city || item.location_state || item.location_country),
             latitude: item.latitude,
             longitude: item.longitude,
             // Favorite status
