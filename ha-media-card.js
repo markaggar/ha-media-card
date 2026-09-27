@@ -1035,6 +1035,15 @@ class FolderProvider extends MediaProvider {
     };
   }
 
+  /**
+   * Forwards the empty-result reason ('filtered' | 'empty_collection' | null) from whichever
+   * underlying media_index-backed provider is active, so the card can distinguish a
+   * legitimate empty-filter result from a real initialization failure.
+   */
+  get emptyReason() {
+    return this.sequentialProvider?.emptyReason || this.mediaIndexProvider?.emptyReason || null;
+  }
+
   _adaptConfigForV4() {
     // V4 SubfolderQueue expects: card.config.subfolder_queue and card.config.media_path
     // V5 has: config.folder.path, config.folder.priority_folders, config.slideshow_window
@@ -1176,7 +1185,9 @@ class FolderProvider extends MediaProvider {
           if (hasFilters) {
             console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
             console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
-            throw new Error('No items match filter criteria. Try adjusting your filters.');
+            // Not a hard error — mediaIndexProvider.emptyReason is already 'filtered', which the
+            // card uses to show a friendly "no matches" message with filter controls still available.
+            return false;
           } else {
             console.error('[FolderProvider] ❌ Media Index initialization failed');
             console.error('[FolderProvider] 💡 Check Media Index entity exists and is populated, or set use_media_index_for_discovery: false');
@@ -3125,6 +3136,11 @@ class MediaIndexProvider extends MediaProvider {
     this._entitySubscriptions = []; // Track subscribed entity IDs
     this._entityUnsubscribe = null; // Unsubscribe function
     this._lastFilterValues = {}; // Track last known filter values for change detection
+
+    // Set by initialize() when it returns false due to an empty (not erroneous) result —
+    // 'filtered' (active filters excluded everything) or 'empty_collection' (no filters,
+    // nothing in the library). Lets the card distinguish this from a real init failure.
+    this.emptyReason = null;
   }
   
   // V5.6.7: checkFileExists is inherited from base MediaProvider class
@@ -3343,6 +3359,7 @@ class MediaIndexProvider extends MediaProvider {
 
   async initialize() {
     this._log('Initializing...');
+    this.emptyReason = null;
     
     // Check if media_index is configured
     if (!MediaProvider.isMediaIndexActive(this.config)) {
@@ -3383,10 +3400,12 @@ class MediaIndexProvider extends MediaProvider {
         });
         console.warn('[MediaIndexProvider] 💡 Try adjusting your filters or verify files match criteria');
         // Still return false to prevent display, but with clear user feedback
+        this.emptyReason = 'filtered';
         return false;
       } else {
         // No filters but still no items - collection might be empty
         console.warn('[MediaIndexProvider] ⚠️ No items in collection (no filters active)');
+        this.emptyReason = 'empty_collection';
         return false;
       }
     }
@@ -4044,6 +4063,10 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
     this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+    // Set by initialize() when it returns false due to an empty (not erroneous) result —
+    // 'filtered' (active filters excluded everything) or 'empty_collection' (no filters,
+    // nothing in the library). Lets the card distinguish this from a real init failure.
+    this.emptyReason = null;
 
     // Resume from a saved cursor when the user clears a runtime filter — the card stores
     // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
@@ -4126,6 +4149,8 @@ class SequentialMediaIndexProvider extends MediaProvider {
     this._log('Order by:', this.orderBy, this.orderDirection);
     this._log('Recursive:', this.recursive);
     
+    this.emptyReason = null;
+
     // Check if media_index is configured
     if (!MediaProvider.isMediaIndexActive(this.config)) {
       console.warn('[SequentialMediaIndexProvider] Media index not configured');
@@ -4136,7 +4161,21 @@ class SequentialMediaIndexProvider extends MediaProvider {
     const items = await this._queryOrderedFiles();
     
     if (!items || items.length === 0) {
-      console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+      const filters = this.config.filters || {};
+      const timeRange = this._getTimeRangeFilter(filters);
+      const hasFilters = !!(filters.favorites || filters.date_range?.start || filters.date_range?.end ||
+        timeRange.start || timeRange.end);
+      if (hasFilters) {
+        console.warn('[SequentialMediaIndexProvider] ⚠️ No items match filter criteria:', {
+          favorites: filters.favorites || false,
+          date_range: filters.date_range || 'none',
+          time_range: timeRange.start || timeRange.end ? timeRange : 'none'
+        });
+        this.emptyReason = 'filtered';
+      } else {
+        console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+        this.emptyReason = 'empty_collection';
+      }
       return false;
     }
     
@@ -5067,6 +5106,7 @@ class MediaCard extends LitElement {
     this._locationRetryCount = new Map(); // Track location metadata retry attempts per media path (for videos missing GPS)
     this._locationRetryTimers = new Map(); // setTimeout handles for pending location metadata retries, keyed by media path
     this._errorState = null; // V4 error state tracking
+    this._noResultsReason = null; // 'filtered' | 'empty_collection' — set when init found zero items but it's not a hard failure
     this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
     this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
     this._localConfigFields = null;       // extracted blocking fields from current base config
@@ -6225,6 +6265,11 @@ class MediaCard extends LitElement {
     // aborts instead of racing the newer one to set shared state.
     const generation = ++this._initGeneration;
 
+    // Reset error/no-results state (fresh check on each init) so a prior failure or empty
+    // result doesn't linger on screen while this new attempt (e.g. after a filter change) runs.
+    this._errorState = null;
+    this._noResultsReason = null;
+
     // Reset config-mismatch state (fresh check on each init) and capture this card's
     // blocking fields so write paths and mismatch checks are based on the current config.
     this._configMismatchDetected = false;
@@ -6426,8 +6471,18 @@ class MediaCard extends LitElement {
           });
         }
       } else {
-        console.error('[MediaViewerCard] Provider initialization failed');
-        this._errorState = 'Provider initialization failed';
+        const reason = this.provider?.emptyReason;
+        if (reason === 'filtered' || reason === 'empty_collection') {
+          // Not a real error — the query legitimately found no matches. Show the
+          // friendly "no media" placeholder (with filter controls) instead of trapping
+          // the user behind a fatal error banner with no way to adjust filters.
+          this._log(`Provider found no items (${reason})`);
+          this._noResultsReason = reason;
+          this.currentMedia = null;
+        } else {
+          console.error('[MediaViewerCard] Provider initialization failed');
+          this._errorState = 'Provider initialization failed';
+        }
       }
     } catch (error) {
       console.error('[MediaViewerCard] Error initializing provider:', error);
@@ -18014,6 +18069,13 @@ class MediaCard extends LitElement {
       opacity: 1;
     }
 
+    /* Error / no-results placeholders have no media to hover over — keep the
+       action buttons (e.g. Filter & Playback) always visible so the user always
+       has a way to recover without reloading the dashboard. */
+    .placeholder-actions .action-buttons {
+      opacity: 1;
+    }
+
     /* Positioning options */
     .action-buttons-top-right {
       top: 8px;
@@ -19652,6 +19714,7 @@ class MediaCard extends LitElement {
               <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Media Loading Error</div>
               <div>${errorMessage}</div>
             </div>
+            <div class="placeholder-actions">${this._renderActionButtons()}</div>
           </div>
         </ha-card>
       `;
@@ -19667,6 +19730,29 @@ class MediaCard extends LitElement {
       // nothing to show.
       if (!this.provider) {
         return html`<ha-card><div class="card"></div></ha-card>`;
+      }
+
+      // V5.12: Active filters (or an empty collection) legitimately returned zero items —
+      // not an error. Surface a clear message and keep the Filter & Playback button
+      // reachable so the user can adjust or clear the filter without reloading the dashboard.
+      if (this._noResultsReason === 'filtered' || this._noResultsReason === 'empty_collection') {
+        const message = this._noResultsReason === 'filtered'
+          ? 'No media matches the current filter'
+          : 'No media found in this collection';
+        const hint = this._noResultsReason === 'filtered'
+          ? 'Tap the filter icon above to adjust or clear your filters'
+          : '';
+        return html`
+          <ha-card>
+            <div class="card">
+              <div class="placeholder">
+                <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
+                ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
+              </div>
+              <div class="placeholder-actions">${this._renderActionButtons()}</div>
+            </div>
+          </ha-card>
+        `;
       }
 
       // Show helpful message based on media_type filter
@@ -19689,10 +19775,12 @@ class MediaCard extends LitElement {
               <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
               ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
             </div>
+            <div class="placeholder-actions">${this._renderActionButtons()}</div>
           </div>
         </ha-card>
       `;
     }
+
 
     // V5.6: Set transition duration CSS variable (default 300ms)
     const transitionDuration = this.config.transition?.duration ?? 300;

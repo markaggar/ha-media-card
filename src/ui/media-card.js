@@ -160,6 +160,7 @@ export class MediaCard extends LitElement {
     this._locationRetryCount = new Map(); // Track location metadata retry attempts per media path (for videos missing GPS)
     this._locationRetryTimers = new Map(); // setTimeout handles for pending location metadata retries, keyed by media path
     this._errorState = null; // V4 error state tracking
+    this._noResultsReason = null; // 'filtered' | 'empty_collection' — set when init found zero items but it's not a hard failure
     this._configMismatchDetected = false; // true when this card's blocking config differs from the active shared queue
     this._configMismatchDiff = null;      // [{key, label, mine, theirs}] for display in error banner
     this._localConfigFields = null;       // extracted blocking fields from current base config
@@ -1318,6 +1319,11 @@ export class MediaCard extends LitElement {
     // aborts instead of racing the newer one to set shared state.
     const generation = ++this._initGeneration;
 
+    // Reset error/no-results state (fresh check on each init) so a prior failure or empty
+    // result doesn't linger on screen while this new attempt (e.g. after a filter change) runs.
+    this._errorState = null;
+    this._noResultsReason = null;
+
     // Reset config-mismatch state (fresh check on each init) and capture this card's
     // blocking fields so write paths and mismatch checks are based on the current config.
     this._configMismatchDetected = false;
@@ -1519,8 +1525,18 @@ export class MediaCard extends LitElement {
           });
         }
       } else {
-        console.error('[MediaViewerCard] Provider initialization failed');
-        this._errorState = 'Provider initialization failed';
+        const reason = this.provider?.emptyReason;
+        if (reason === 'filtered' || reason === 'empty_collection') {
+          // Not a real error — the query legitimately found no matches. Show the
+          // friendly "no media" placeholder (with filter controls) instead of trapping
+          // the user behind a fatal error banner with no way to adjust filters.
+          this._log(`Provider found no items (${reason})`);
+          this._noResultsReason = reason;
+          this.currentMedia = null;
+        } else {
+          console.error('[MediaViewerCard] Provider initialization failed');
+          this._errorState = 'Provider initialization failed';
+        }
       }
     } catch (error) {
       console.error('[MediaViewerCard] Error initializing provider:', error);
@@ -13107,6 +13123,13 @@ export class MediaCard extends LitElement {
       opacity: 1;
     }
 
+    /* Error / no-results placeholders have no media to hover over — keep the
+       action buttons (e.g. Filter & Playback) always visible so the user always
+       has a way to recover without reloading the dashboard. */
+    .placeholder-actions .action-buttons {
+      opacity: 1;
+    }
+
     /* Positioning options */
     .action-buttons-top-right {
       top: 8px;
@@ -14745,6 +14768,7 @@ export class MediaCard extends LitElement {
               <div style="font-weight: bold; margin-bottom: 8px;">⚠️ Media Loading Error</div>
               <div>${errorMessage}</div>
             </div>
+            <div class="placeholder-actions">${this._renderActionButtons()}</div>
           </div>
         </ha-card>
       `;
@@ -14760,6 +14784,29 @@ export class MediaCard extends LitElement {
       // nothing to show.
       if (!this.provider) {
         return html`<ha-card><div class="card"></div></ha-card>`;
+      }
+
+      // V5.12: Active filters (or an empty collection) legitimately returned zero items —
+      // not an error. Surface a clear message and keep the Filter & Playback button
+      // reachable so the user can adjust or clear the filter without reloading the dashboard.
+      if (this._noResultsReason === 'filtered' || this._noResultsReason === 'empty_collection') {
+        const message = this._noResultsReason === 'filtered'
+          ? 'No media matches the current filter'
+          : 'No media found in this collection';
+        const hint = this._noResultsReason === 'filtered'
+          ? 'Tap the filter icon above to adjust or clear your filters'
+          : '';
+        return html`
+          <ha-card>
+            <div class="card">
+              <div class="placeholder">
+                <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
+                ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
+              </div>
+              <div class="placeholder-actions">${this._renderActionButtons()}</div>
+            </div>
+          </ha-card>
+        `;
       }
 
       // Show helpful message based on media_type filter
@@ -14782,10 +14829,12 @@ export class MediaCard extends LitElement {
               <div style="font-weight: 500; margin-bottom: 8px;">${message}</div>
               ${hint ? html`<div style="font-size: 0.9em; opacity: 0.7;">${hint}</div>` : ''}
             </div>
+            <div class="placeholder-actions">${this._renderActionButtons()}</div>
           </div>
         </ha-card>
       `;
     }
+
 
     // V5.6: Set transition duration CSS variable (default 300ms)
     const transitionDuration = this.config.transition?.duration ?? 300;

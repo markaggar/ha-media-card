@@ -23,6 +23,11 @@ export class MediaIndexProvider extends MediaProvider {
     this._entitySubscriptions = []; // Track subscribed entity IDs
     this._entityUnsubscribe = null; // Unsubscribe function
     this._lastFilterValues = {}; // Track last known filter values for change detection
+
+    // Set by initialize() when it returns false due to an empty (not erroneous) result —
+    // 'filtered' (active filters excluded everything) or 'empty_collection' (no filters,
+    // nothing in the library). Lets the card distinguish this from a real init failure.
+    this.emptyReason = null;
   }
   
   // V5.6.7: checkFileExists is inherited from base MediaProvider class
@@ -241,6 +246,7 @@ export class MediaIndexProvider extends MediaProvider {
 
   async initialize() {
     this._log('Initializing...');
+    this.emptyReason = null;
     
     // Check if media_index is configured
     if (!MediaProvider.isMediaIndexActive(this.config)) {
@@ -281,10 +287,12 @@ export class MediaIndexProvider extends MediaProvider {
         });
         console.warn('[MediaIndexProvider] 💡 Try adjusting your filters or verify files match criteria');
         // Still return false to prevent display, but with clear user feedback
+        this.emptyReason = 'filtered';
         return false;
       } else {
         // No filters but still no items - collection might be empty
         console.warn('[MediaIndexProvider] ⚠️ No items in collection (no filters active)');
+        this.emptyReason = 'empty_collection';
         return false;
       }
     }

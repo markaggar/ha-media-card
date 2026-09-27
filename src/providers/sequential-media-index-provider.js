@@ -26,6 +26,10 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this.reachedEnd = false;
     this.disableAutoLoop = false; // V5.3: Prevent auto-loop during pre-load
     this._dbCleanupWarningShown = false; // Show DB cleanup warning at most once per session
+    // Set by initialize() when it returns false due to an empty (not erroneous) result —
+    // 'filtered' (active filters excluded everything) or 'empty_collection' (no filters,
+    // nothing in the library). Lets the card distinguish this from a real init failure.
+    this.emptyReason = null;
 
     // Resume from a saved cursor when the user clears a runtime filter — the card stores
     // the pre-filter cursor in _pendingProviderCursor; we consume it here (once) so that
@@ -108,6 +112,8 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     this._log('Order by:', this.orderBy, this.orderDirection);
     this._log('Recursive:', this.recursive);
     
+    this.emptyReason = null;
+
     // Check if media_index is configured
     if (!MediaProvider.isMediaIndexActive(this.config)) {
       console.warn('[SequentialMediaIndexProvider] Media index not configured');
@@ -118,7 +124,21 @@ export class SequentialMediaIndexProvider extends MediaProvider {
     const items = await this._queryOrderedFiles();
     
     if (!items || items.length === 0) {
-      console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+      const filters = this.config.filters || {};
+      const timeRange = this._getTimeRangeFilter(filters);
+      const hasFilters = !!(filters.favorites || filters.date_range?.start || filters.date_range?.end ||
+        timeRange.start || timeRange.end);
+      if (hasFilters) {
+        console.warn('[SequentialMediaIndexProvider] ⚠️ No items match filter criteria:', {
+          favorites: filters.favorites || false,
+          date_range: filters.date_range || 'none',
+          time_range: timeRange.start || timeRange.end ? timeRange : 'none'
+        });
+        this.emptyReason = 'filtered';
+      } else {
+        console.warn('[SequentialMediaIndexProvider] No items returned from media_index');
+        this.emptyReason = 'empty_collection';
+      }
       return false;
     }
     

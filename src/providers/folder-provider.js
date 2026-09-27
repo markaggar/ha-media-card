@@ -46,6 +46,15 @@ export class FolderProvider extends MediaProvider {
     };
   }
 
+  /**
+   * Forwards the empty-result reason ('filtered' | 'empty_collection' | null) from whichever
+   * underlying media_index-backed provider is active, so the card can distinguish a
+   * legitimate empty-filter result from a real initialization failure.
+   */
+  get emptyReason() {
+    return this.sequentialProvider?.emptyReason || this.mediaIndexProvider?.emptyReason || null;
+  }
+
   _adaptConfigForV4() {
     // V4 SubfolderQueue expects: card.config.subfolder_queue and card.config.media_path
     // V5 has: config.folder.path, config.folder.priority_folders, config.slideshow_window
@@ -187,7 +196,9 @@ export class FolderProvider extends MediaProvider {
           if (hasFilters) {
             console.error('[FolderProvider] ❌ Media Index returned no items due to active filters');
             console.error('[FolderProvider] 💡 Adjust your filters or set use_media_index_for_discovery: false');
-            throw new Error('No items match filter criteria. Try adjusting your filters.');
+            // Not a hard error — mediaIndexProvider.emptyReason is already 'filtered', which the
+            // card uses to show a friendly "no matches" message with filter controls still available.
+            return false;
           } else {
             console.error('[FolderProvider] ❌ Media Index initialization failed');
             console.error('[FolderProvider] 💡 Check Media Index entity exists and is populated, or set use_media_index_for_discovery: false');
