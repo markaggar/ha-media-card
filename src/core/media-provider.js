@@ -594,14 +594,24 @@ export class MediaProvider {
     } catch (e) {
       // Keep original if decode fails
     }
+
+    if (normalizedPath.includes('|')) {
+      const lastPipeIndex = normalizedPath.lastIndexOf('|');
+      const afterLastPipe = normalizedPath.substring(lastPipeIndex + 1);
+      if (afterLastPipe.includes('/')) {
+        normalizedPath = normalizedPath.substring(0, lastPipeIndex).replace(/\|/g, '/');
+      } else {
+        normalizedPath = normalizedPath.replace(/\|/g, '/');
+      }
+    }
     
-    // Extract folder path (dirname) - we match against folder, not filename
+    // Match folder patterns against the parent path and file patterns against the full path.
     const lastSlash = normalizedPath.lastIndexOf('/');
     const folderPath = lastSlash > 0 ? normalizedPath.substring(0, lastSlash) : normalizedPath;
     
     // Test against each compiled pattern
     for (const compiled of compiledPatterns) {
-      if (compiled.regex.test(folderPath)) {
+      if (compiled.regex.test(folderPath) || compiled.regex.test(normalizedPath)) {
         return { excluded: true, matchedPattern: compiled.pattern };
       }
     }
