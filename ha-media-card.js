@@ -1,5 +1,5 @@
 /** 
- * Media Viewer Card v5.13.0
+ * Media Viewer Card v5.14.0
  */
 
 // Async wrapper for dynamic Lit loading (supports offline mode)
@@ -516,19 +516,28 @@ class MediaProvider {
     if (!input || !formatPattern) return null;
     
     try {
-      // Convert format pattern to regex, capturing each component
-      // YYYY -> (\d{4}), MM/DD/HH/mm/ss -> (\d{2})
-      let regexPattern = formatPattern
-        .replace(/YYYY/g, '(\\d{4})')
-        .replace(/MM|DD|HH|mm|ss/g, '(\\d{2})');
-      
-      // Escape special regex characters that might be in the pattern
-      regexPattern = regexPattern.replace(/[.*+?^${}()|[\]\\]/g, (match) => {
-        // Don't escape our capture groups
-        if (match === '(' || match === ')' || match === '\\') return match;
-        return '\\' + match;
-      });
-      
+      // Build the regex from literal separators + numeric tokens, preserving
+      // the generated capture groups that parse YYYY/MM/DD/HH/mm/ss values.
+      let regexPattern = '';
+      let lastIndex = 0;
+      const tokenRegex = /(YYYY|MM|DD|HH|mm|ss)/g;
+
+      for (const tokenMatch of formatPattern.matchAll(tokenRegex)) {
+        const token = tokenMatch[0];
+        const tokenIndex = tokenMatch.index;
+
+        regexPattern += formatPattern
+          .slice(lastIndex, tokenIndex)
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        regexPattern += token === 'YYYY' ? '(\\d{4})' : '(\\d{2})';
+        lastIndex = tokenIndex + token.length;
+      }
+
+      regexPattern += formatPattern
+        .slice(lastIndex)
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
       const regex = new RegExp(regexPattern);
       const match = input.match(regex);
       
@@ -740,14 +749,24 @@ class MediaProvider {
     } catch (e) {
       // Keep original if decode fails
     }
+
+    if (normalizedPath.includes('|')) {
+      const lastPipeIndex = normalizedPath.lastIndexOf('|');
+      const afterLastPipe = normalizedPath.substring(lastPipeIndex + 1);
+      if (afterLastPipe.includes('/')) {
+        normalizedPath = normalizedPath.substring(0, lastPipeIndex).replace(/\|/g, '/');
+      } else {
+        normalizedPath = normalizedPath.replace(/\|/g, '/');
+      }
+    }
     
-    // Extract folder path (dirname) - we match against folder, not filename
+    // Match folder patterns against the parent path and file patterns against the full path.
     const lastSlash = normalizedPath.lastIndexOf('/');
     const folderPath = lastSlash > 0 ? normalizedPath.substring(0, lastSlash) : normalizedPath;
     
     // Test against each compiled pattern
     for (const compiled of compiledPatterns) {
-      if (compiled.regex.test(folderPath)) {
+      if (compiled.regex.test(folderPath) || compiled.regex.test(normalizedPath)) {
         return { excluded: true, matchedPattern: compiled.pattern };
       }
     }
@@ -23959,12 +23978,15 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
           <!-- excluded_paths callout - always shown for folder mode -->
           <div style="grid-column: 1 / -1; margin-top: 8px; padding: 12px 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--info-color, #4ba3e3);">
-            <div style="font-weight: 500; margin-bottom: 6px; color: var(--primary-text-color);">📁 Exclude Subfolders (YAML only)</div>
-            <div style="color: var(--secondary-text-color); font-size: 0.9em; line-height: 1.5; margin-bottom: 8px;">Use <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 1px 4px; border-radius: 3px;">excluded_paths</code> in YAML to skip specific subfolders. Supports glob patterns:</div>
+            <div style="font-weight: 500; margin-bottom: 6px; color: var(--primary-text-color);">📁 Exclude Folders or Files (YAML only)</div>
+            <div style="color: var(--secondary-text-color); font-size: 0.9em; line-height: 1.5; margin-bottom: 8px;">Use <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 1px 4px; border-radius: 3px;">excluded_paths</code> in YAML to skip subfolders or match filenames by wildcard:</div>
             <pre style="margin: 0 0 8px 0; padding: 8px; background: var(--code-background-color, rgba(0,0,0,0.15)); border-radius: 4px; font-size: 0.8em; overflow-x: auto; color: var(--primary-text-color);">excluded_paths:
   - "Burst/**"           # folder + all contents
   - "**/Thumbnails/**"   # any depth
-  - "**/.thumbnails/**"</pre>
+  - "**/.thumbnails/**"
+  - "*.vob"              # files with this extension
+  - "*.avi"              # files with this extension
+  - "thumb*.*"            # filenames beginning with "thumb"</pre>
             <a href="https://github.com/markaggar/ha-media-card/blob/master/docs/guides/yaml-only-features.md#excluded_paths" target="_blank" rel="noopener noreferrer" style="color: var(--primary-color); font-size: 0.85em;">View full pattern syntax →</a>
           </div>
         ` : ''}
@@ -25169,7 +25191,7 @@ if (!window.customCards.some(card => card?.type === 'media-viewer-card')) {
 }
 
 console.info(
-  '%c  MEDIA-VIEWER-CARD  %c  v5.13.0 Loaded  ',
+  '%c  MEDIA-VIEWER-CARD  %c  v5.14.0 Loaded  ',
   'color: lime; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: green'
 );

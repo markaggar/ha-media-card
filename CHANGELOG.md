@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v5.14.0 - 2026-11-11
+
+### Added
+
+- **Wildcard filename exclusions in `excluded_paths`**: Exclusion patterns can now match against full media file paths as well as folder paths, so wildcard filename filters such as `*.vob`, `*.avi`, and `thumb*.*` work in folder playback without having to list each folder.
+
+### Fixed
+
+- **Custom filename date parsing broke for numeric patterns**: `custom_datetime_format.filename_pattern` was escaping the capture groups it generated, turning patterns like `YYYYMMDDHHmmss` into `(\d\{4\})`-style regexes that never matched real filenames. The parser now preserves the generated numeric capture groups so timestamp-based filenames match correctly again.
+
+- **`show_time` metadata config was unclear**: The metadata overlay time toggle is configured under `metadata:` (for example `metadata.show_time: true`), and the docs now spell that out to match the actual config structure.
+
 ## v5.13.0 - 2026-09-26
 
 ### Fixed
