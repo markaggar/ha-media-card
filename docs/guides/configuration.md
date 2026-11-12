@@ -259,13 +259,13 @@ folder:
 
 ## Path Exclusion Filtering
 
-Exclude media from specific folder paths using glob-style patterns. This is useful for filtering out folders containing screenshots, temporary files, or other unwanted content.
+Exclude media from specific folder paths or filenames using glob-style patterns. This is useful for filtering out folders containing screenshots, temporary files, unsupported video types, or other unwanted content.
 
 ### Configuration (YAML only)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `excluded_paths` | array | `[]` | List of folder path patterns to exclude |
+| `excluded_paths` | array | `[]` | List of folder path or filename patterns to exclude |
 
 ### Pattern Syntax
 
@@ -276,6 +276,8 @@ Exclude media from specific folder paths using glob-style patterns. This is usef
 | `**/Screenshots` | Any folder named "Screenshots" at any depth | `/A/B/Screenshots/`, `/Screenshots/` |
 | `**/Screenshots/**` | Any folder named "Screenshots" at any depth, plus subfolders | All of the above |
 | `/2024-??-*` | Folders matching pattern (? = single char, * = any chars) | `/2024-01-vacation/`, `/2024-12-christmas/` |
+| `*.vob` | Any filename ending in `.vob` | `movie.vob` in any folder |
+| `thumb*.*` | Filenames beginning with `thumb` | `thumb.jpg`, `thumbnail.png` in any folder |
 
 ### Example Configurations
 
@@ -318,7 +320,7 @@ excluded_paths:
 ### Behavior Notes
 
 - Patterns are **case-insensitive**
-- Patterns match against the **folder path**, not the filename
+- Folder patterns match against the folder path; filename patterns match against the full media path
 - Items matching excluded patterns are silently skipped during navigation
 - Exclusions are logged at INFO level on card initialization for verification
 - Individual excluded items are logged at DEBUG level (enable `debug_mode: true`)

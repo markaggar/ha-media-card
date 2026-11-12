@@ -13,13 +13,16 @@ To edit YAML in Home Assistant:
 
 ### `excluded_paths`
 
-Exclude media from specific subfolder paths using glob-style patterns. Useful for filtering out burst shots, thumbnails, temp folders, etc.
+Exclude media from specific subfolder paths or filenames using glob-style patterns. Useful for filtering out burst shots, thumbnails, temp folders, or unsupported file types.
 
 ```yaml
 excluded_paths:
   - "Burst/**"           # Exclude a specific subfolder and all its contents
   - "**/Thumbnails/**"   # Exclude any folder named "Thumbnails" at any depth
   - "**/_Junk/**"        # Exclude any hidden/junk folders
+  - "*.vob"              # Exclude files with the .vob extension
+  - "*.avi"              # Exclude files with the .avi extension
+  - "thumb*.*"           # Exclude files whose names start with "thumb"
   - "/Archive/Old/**"    # Matches any "Archive/Old" segment at any depth (see note below)
 ```
 
@@ -33,7 +36,7 @@ excluded_paths:
 
 > **Note on leading `/`**: A pattern like `/Screenshots` is **not** strictly anchored to the root of your media folder. It matches any folder named `Screenshots` at any path-segment boundary — the same as writing `**/Screenshots`. The leading `/` is just a visual convention. To narrow the match, use a longer path, e.g. `/PhotoLibrary/Screenshots/**`.
 
-Patterns are **case-insensitive** and matched against the **folder path**, not the filename.
+Patterns are **case-insensitive** and matched against the folder path and full media path, so filename patterns can exclude individual files.
 
 See [configuration.md — Path Exclusion Filtering](configuration.md#path-exclusion-filtering) for full documentation.
 

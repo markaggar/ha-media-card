@@ -3274,12 +3274,15 @@ Tip: Check your Home Assistant media folder in Settings > System > Storage`;
 
           <!-- excluded_paths callout - always shown for folder mode -->
           <div style="grid-column: 1 / -1; margin-top: 8px; padding: 12px 16px; background: var(--secondary-background-color); border-radius: 8px; border-left: 4px solid var(--info-color, #4ba3e3);">
-            <div style="font-weight: 500; margin-bottom: 6px; color: var(--primary-text-color);">📁 Exclude Subfolders (YAML only)</div>
-            <div style="color: var(--secondary-text-color); font-size: 0.9em; line-height: 1.5; margin-bottom: 8px;">Use <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 1px 4px; border-radius: 3px;">excluded_paths</code> in YAML to skip specific subfolders. Supports glob patterns:</div>
+            <div style="font-weight: 500; margin-bottom: 6px; color: var(--primary-text-color);">📁 Exclude Folders or Files (YAML only)</div>
+            <div style="color: var(--secondary-text-color); font-size: 0.9em; line-height: 1.5; margin-bottom: 8px;">Use <code style="background: var(--code-background-color, rgba(0,0,0,0.1)); padding: 1px 4px; border-radius: 3px;">excluded_paths</code> in YAML to skip subfolders or match filenames by wildcard:</div>
             <pre style="margin: 0 0 8px 0; padding: 8px; background: var(--code-background-color, rgba(0,0,0,0.15)); border-radius: 4px; font-size: 0.8em; overflow-x: auto; color: var(--primary-text-color);">excluded_paths:
   - "Burst/**"           # folder + all contents
   - "**/Thumbnails/**"   # any depth
-  - "**/.thumbnails/**"</pre>
+  - "**/.thumbnails/**"
+  - "*.vob"              # files with this extension
+  - "*.avi"              # files with this extension
+  - "thumb*.*"            # filenames beginning with "thumb"</pre>
             <a href="https://github.com/markaggar/ha-media-card/blob/master/docs/guides/yaml-only-features.md#excluded_paths" target="_blank" rel="noopener noreferrer" style="color: var(--primary-color); font-size: 0.85em;">View full pattern syntax →</a>
           </div>
         ` : ''}
